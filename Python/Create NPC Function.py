@@ -1,7 +1,7 @@
 import openai
 import json
 
-openai.api_key = "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"
+openai.api_key = ""
 directions = [
     {"role": "system", "content": "You are describing a city for a Dungeon and Dragons campaign."},
 ]

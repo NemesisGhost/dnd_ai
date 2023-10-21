@@ -1,6 +1,6 @@
 import psycopg2, json, openai
 
-openai.api_key = "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"
+openai.api_key = ""
 openai_model = "gpt-3.5-turbo-0613"
 token_totals = {'prompt': 0, 'response': 0}
 
