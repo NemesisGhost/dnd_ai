@@ -64,7 +64,7 @@ class my_app:
         documents, file_name = self.process_file(file)
         #Load embeddings model
         embeddings = OpenAIEmbeddings(openai_api_key=self.OPENAI_API_KEY) 
-        pdfsearch = Chroma.from_documents(documents, embeddings, collection_name= file_name,)
+        pdfsearch = Chroma.from_documents(documents, embeddings, collection_name= file_name) #,client=self.chroma_client())
         chain = ConversationalRetrievalChain.from_llm(
                 ChatOpenAI(temperature=0.0, openai_api_key=self.OPENAI_API_KEY), 
                 retriever=pdfsearch.as_retriever(search_kwargs={"k": 1}),
