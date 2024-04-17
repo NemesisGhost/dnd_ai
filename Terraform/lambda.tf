@@ -21,7 +21,7 @@ resource "aws_lambda_layer_version" "discord_openai_layer" {
 
 resource "aws_lambda_function" "discord_openai_lambda_function" {
   function_name = "discord_openai_lambda_function"
-  handler       = "lambda.main"
+  handler       = "interactions.lambda_handler"
   runtime       = "python3.9"
   filename      = data.archive_file.discord_openai_interactions_function.output_path
   source_code_hash = data.archive_file.discord_openai_interactions_function.output_base64sha256

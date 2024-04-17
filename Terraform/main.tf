@@ -19,6 +19,6 @@ resource "null_resource" "pip_install_discord_openai" {
   }
 
   provisioner "local-exec" {
-    command = "pip install -r python_reqs.txt -t ${path.module}/layers/discord_openai_layer"
+    command = " -pip install -r python_reqs.txtt ${path.module}/layers/discord_openai_layer"
   }
 }
