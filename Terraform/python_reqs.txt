@@ -2,3 +2,4 @@ langchain
 openai
 anyio==3.7.1
 dataclasses_json==0.5.14
+PyNaCl
