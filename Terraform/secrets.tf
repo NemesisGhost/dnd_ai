@@ -1,7 +1,7 @@
 # Discord Bot Token
 variable "discord_bot_token" {
   type = string
-  description = "AWS Access Key"
+  description = "Discord Secret Key"
 }
 
 resource "aws_secretsmanager_secret" "discord_bot_token" {
@@ -21,7 +21,7 @@ resource "aws_secretsmanager_secret_version" "discord_bot_token" {
 # OpenAI API Key
 variable "openai_apikey" {
   type = string
-  description = "AWS Secret Key"
+  description = "OpenAI Secret Key"
 }
 
 resource "aws_secretsmanager_secret" "openai_apikey" {
