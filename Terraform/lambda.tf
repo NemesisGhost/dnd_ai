@@ -15,14 +15,14 @@ resource "aws_lambda_layer_version" "discord_openai_layer" {
     layer_name          = "discord_openai_layer"
     filename            = data.archive_file.discord_openai_layer_file.output_path
     source_code_hash    = data.archive_file.discord_openai_layer_file.output_base64sha256
-    compatible_runtimes = ["python3.9"]
+    compatible_runtimes = ["python3.12"]
     compatible_architectures = ["x86_64"]
 }
 
 resource "aws_lambda_function" "discord_openai_lambda_function" {
   function_name = "discord_openai_lambda_function"
   handler       = "interactions.lambda_handler"
-  runtime       = "python3.9"
+  runtime       = "python3.12"
   filename      = data.archive_file.discord_openai_interactions_function.output_path
   source_code_hash = data.archive_file.discord_openai_interactions_function.output_base64sha256
   role          = aws_iam_role.discord_openai_interactions_role.arn
