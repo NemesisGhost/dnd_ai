@@ -1,0 +1,109 @@
+# =====================================================
+# Database Module Outputs
+# =====================================================
+
+output "database_instance_id" {
+  description = "RDS instance identifier"
+  value       = aws_db_instance.main.identifier
+}
+
+output "database_endpoint" {
+  description = "RDS instance endpoint"
+  value       = aws_db_instance.main.endpoint
+}
+
+output "database_port" {
+  description = "RDS instance port"
+  value       = aws_db_instance.main.port
+}
+
+output "database_name" {
+  description = "Database name"
+  value       = aws_db_instance.main.db_name
+}
+
+output "database_username" {
+  description = "Database master username"
+  value       = aws_db_instance.main.username
+  sensitive   = true
+}
+
+output "database_arn" {
+  description = "RDS instance ARN"
+  value       = aws_db_instance.main.arn
+}
+
+output "database_security_group_id" {
+  description = "Security group ID for database access"
+  value       = aws_security_group.db.id
+}
+
+output "database_subnet_group_name" {
+  description = "Database subnet group name"
+  value       = aws_db_subnet_group.main.name
+}
+
+output "secrets_manager_arn" {
+  description = "ARN of the secrets manager secret containing database credentials"
+  value       = aws_secretsmanager_secret.db_credentials.arn
+}
+
+output "secrets_manager_secret_name" {
+  description = "Name of the secrets manager secret containing database credentials"
+  value       = aws_secretsmanager_secret.db_credentials.name
+}
+
+output "kms_key_id" {
+  description = "KMS key ID used for database encryption"
+  value       = aws_kms_key.db_encryption.key_id
+}
+
+output "kms_key_arn" {
+  description = "KMS key ARN used for database encryption"
+  value       = aws_kms_key.db_encryption.arn
+}
+
+output "vpc_id" {
+  description = "VPC ID where database is deployed"
+  value       = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs where database is deployed"
+  value       = aws_subnet.private[*].id
+}
+
+output "public_subnet_ids" {
+  description = "Public subnet IDs (if VPC was created)"
+  value       = var.vpc_id == null ? aws_subnet.public[*].id : []
+}
+
+output "connection_string" {
+  description = "PostgreSQL connection string"
+  value       = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
+  sensitive   = true
+}
+
+# Note: Database initialization Lambda function has been removed
+# Database schema deployment now handled via separate migration process
+
+# Networking outputs
+output "vpc_endpoints" {
+  description = "VPC endpoint details"
+  value = var.create_vpc_endpoints ? {
+    secretsmanager = {
+      id           = aws_vpc_endpoint.secretsmanager[0].id
+      dns_names    = aws_vpc_endpoint.secretsmanager[0].dns_entry[*].dns_name
+    }
+    kms = {
+      id           = aws_vpc_endpoint.kms[0].id
+      dns_names    = aws_vpc_endpoint.kms[0].dns_entry[*].dns_name
+    }
+  } : null
+}
+
+output "nat_gateway_id" {
+  description = "NAT Gateway ID (if created)"
+  value       = var.use_nat_gateway && var.vpc_id == null ? aws_nat_gateway.main[0].id : null
+}
+

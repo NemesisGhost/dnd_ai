@@ -1,0 +1,18 @@
+# =====================================================
+# Development Environment Configuration
+# Sample terraform.tfvars file - customize for your environment
+# =====================================================
+
+# AWS Configuration
+aws_region = "us-east-1"
+
+# Owner Information
+owner_name = "developer"  # Replace with your name
+
+# Network Security
+# Replace with your actual IP address for secure database access
+# Get your IP with: (Invoke-RestMethod -Uri "https://ifconfig.me").Trim()
+my_ip_cidr = "0.0.0.0/0"  # WARNING: Allows access from anywhere - replace with your IP
+
+# Database Access
+enable_public_access = false  # Set to true only for development if needed
