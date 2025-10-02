@@ -146,3 +146,116 @@ module "lambda" {
   # Additional tags
   additional_tags = var.additional_tags
 }
+
+# DB Runner (SSM-managed EC2 for running SQL)
+module "db_runner" {
+  source = "../../modules/db_runner"
+
+  vpc_id                = module.database.vpc_id
+  private_subnet_ids    = module.database.private_subnet_ids
+  rds_security_group_id = module.database.database_security_group_id
+
+  db_secret_arn = module.database.secrets_manager_arn
+  sql_bucket    = var.sql_bucket
+  sql_prefix    = var.sql_prefix
+}
+
+# Compute a content hash of local SQL files to trigger apply when changed
+locals {
+  sql_files = sort(fileset("${path.module}/../../Database/sql", "*.sql"))
+  sql_hash  = sha1(join("", [for f in local.sql_files : filesha1("${path.module}/../../Database/sql/${f}")]))
+}
+
+# On-demand SQL application via SSM to instances tagged Role=db-runner
+resource "null_resource" "apply_sql_now" {
+  # Ensure the database is fully created before attempting to run migrations
+  depends_on = [module.database]
+
+  triggers = {
+    sql_hash = local.sql_hash
+    db_id    = module.database.database_instance_id
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-lc"]
+    command     = <<-EOT
+      set -euo pipefail
+      export AWS_DEFAULT_REGION="${var.aws_region}"
+
+      # Sync local SQL to S3 (mirror directory)
+      aws s3 sync "${path.module}/../../Database/sql" "s3://${var.sql_bucket}/${var.sql_prefix}" --delete
+
+      # Build parameters for the SSM document
+      PARAMS=$(cat <<JSON
+      {
+        "S3Bucket": ["${var.sql_bucket}"],
+        "S3Prefix": ["${var.sql_prefix}"],
+        "SecretArn": ["${module.database.secrets_manager_arn}"],
+        "Host": ["${module.database.database_endpoint}"],
+        "DbName": ["${module.database.database_name}"],
+        "Port": ["${module.database.database_port}"]
+      }
+JSON
+      )
+
+      # Trigger the command against Role=db-runner instances
+      OUT=$(aws ssm send-command \
+        --document-name "ApplyPostgresSql" \
+        --targets Key=tag:Role,Values=db-runner \
+        --parameters "$PARAMS" \
+        --comment "Apply SQL to ${module.database.database_name}" \
+        --output json)
+      CID=$(echo "$OUT" | jq -r .Command.CommandId)
+      echo "SSM CommandId: $CID"
+
+      # Poll for completion with exponential backoff up to 30 minutes
+      START=$(date +%s)
+      BACKOFF=10
+      MAX_SECONDS=$((30*60))
+      while true; do
+        NOW=$(date +%s)
+        ELAPSED=$((NOW - START))
+        if [ $ELAPSED -ge $MAX_SECONDS ]; then
+          echo "Timeout waiting for SSM command $CID" >&2
+          exit 1
+        fi
+
+        # Attempt to fetch status with transient error retries
+        RET=0
+        for i in 1 2 3; do
+          STATUS_JSON=$(aws ssm list-command-invocations --command-id "$CID" --details --output json 2>/dev/null) && { RET=0; break; } || RET=$?
+          sleep 2
+        done
+        if [ $RET -ne 0 ]; then
+          echo "Failed to fetch command status, retrying..." >&2
+          sleep $BACKOFF
+          BACKOFF=$((BACKOFF<60 ? BACKOFF*2 : 60))
+          continue
+        fi
+
+  STATUS=$(echo "$STATUS_JSON" | jq -r '.CommandInvocations[0].Status // empty')
+  echo "Status: $${STATUS:-unknown}"
+
+        case "$STATUS" in
+          Success)
+            echo "SSM command $CID completed successfully."
+            exit 0
+            ;;
+          Cancelled|TimedOut|Failed|Cancelling)
+            echo "SSM command $CID ended with status: $STATUS" >&2
+            echo "$STATUS_JSON" | jq -r '.CommandInvocations[0].CommandPlugins[-1].Output // empty'
+            exit 1
+            ;;
+          Pending|InProgress|Delayed|Delivered|Scheduled|Running|Downloading|Copying)
+            sleep $BACKOFF
+            BACKOFF=$((BACKOFF<60 ? BACKOFF*2 : 60))
+            ;;
+          *)
+            sleep $BACKOFF
+            BACKOFF=$((BACKOFF<60 ? BACKOFF*2 : 60))
+            ;;
+        esac
+      done
+    EOT
+  }
+}

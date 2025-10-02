@@ -107,3 +107,24 @@ output "deployment_summary" {
     }
   }
 }
+
+# DB Runner Outputs
+output "runner_instance_id" {
+  description = "EC2 instance ID of the SQL runner"
+  value       = module.db_runner.runner_instance_id
+}
+
+output "runner_sg_id" {
+  description = "Security group ID of the SQL runner"
+  value       = module.db_runner.runner_sg_id
+}
+
+output "rds_address" {
+  description = "Address of the PostgreSQL RDS instance"
+  value       = module.database.database_endpoint
+}
+
+output "sql_s3_uri" {
+  description = "S3 URI where SQL files are synced"
+  value       = "s3://${var.sql_bucket}/${var.sql_prefix}"
+}
