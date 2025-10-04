@@ -1,18 +1,35 @@
-# =====================================================
-# Development Environment Configuration
-# Sample terraform.tfvars file - customize for your environment
-# =====================================================
+# Development environment variables (example)
+# Copy to terraform.tfvars and fill in secrets locally. This example file is safe to commit.
 
-# AWS Configuration
+# AWS
 aws_region = "us-east-1"
+owner_name = "YOUR_NAME"
 
-# Owner Information
-owner_name = "developer"  # Replace with your name
+# Network access
+# Use your current IP in CIDR format to allow temporary DB access when enable_public_access = true
+my_ip_cidr          = "203.0.113.42/32"
+enable_public_access = false
 
-# Network Security
-# Replace with your actual IP address for secure database access
-# Get your IP with: (Invoke-RestMethod -Uri "https://ifconfig.me").Trim()
-my_ip_cidr = "0.0.0.0/0"  # WARNING: Allows access from anywhere - replace with your IP
+# OpenAI (optional but recommended to create the secret automatically)
+# WARNING: If set here and applied, the secret value will be stored in Terraform state.
+# For higher security, leave blank and set the secret value post-apply via AWS CLI.
+openai_api_key          = ""
+openai_organization_id  = ""  # optional
+openai_model            = "gpt-4"
+max_tokens              = 4000
+temperature             = 0.7
 
-# Database Access
-enable_public_access = false  # Set to true only for development if needed
+# Discord (optional but recommended to create the secret automatically)
+# WARNING: Same state storage caveat as above.
+discord_bot_token     = ""
+discord_application_id = ""   # not secret but kept here for convenience
+discord_public_key     = ""   # not secret but kept here for convenience
+
+# DB Runner (defaults are fine; bucket name is auto-generated)
+sql_prefix = "dnd/sql"
+
+# Extra tags (optional)
+additional_tags = {
+  CostCenter = "DEV-1234"
+  Purpose    = "dnd-ai-dev"
+}

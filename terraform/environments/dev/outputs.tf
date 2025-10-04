@@ -116,7 +116,7 @@ output "runner_instance_id" {
 
 output "runner_sg_id" {
   description = "Security group ID of the SQL runner"
-  value       = module.db_runner.runner_sg_id
+  value       = module.db_runner.runner_security_group_id
 }
 
 output "rds_address" {
@@ -126,5 +126,10 @@ output "rds_address" {
 
 output "sql_s3_uri" {
   description = "S3 URI where SQL files are synced"
-  value       = "s3://${var.sql_bucket}/${var.sql_prefix}"
+  value       = "s3://${module.db_runner.sql_bucket_name}/${var.sql_prefix}"
+}
+
+output "sql_bucket_name" {
+  description = "The S3 bucket name created for SQL files"
+  value       = module.db_runner.sql_bucket_name
 }

@@ -237,25 +237,48 @@ def handler(event, context):
 def get_sql_content(file_path):
     """
     Get SQL content for a given file path.
-    In production, this would read from embedded files or S3.
-    For now, returns the timestamp function as an example.
+    Priority:
+      1) Look for the SQL file next to this Lambda under ./sql/
+      2) Look for the SQL file in the repo Database/ directory (for local/dev use)
+      3) Fallback to legacy embedded SQL for backwards compatibility
     """
-    
+
+    # 1) Local sql directory next to the Lambda file (ideal for packaging into Lambda)
+    local_sql_dir = (Path(__file__).parent / "sql").resolve()
+    # 2) Repository Database directory (useful when running locally)
+    repo_db_sql_dir = (Path(__file__).resolve().parents[2] / "Database").resolve()
+
+    for base_dir in [local_sql_dir, repo_db_sql_dir]:
+        try:
+            candidate = (base_dir / file_path).resolve()
+            # Prevent path traversal outside the base_dir
+            candidate.relative_to(base_dir)
+        except Exception:
+            # Either resolve failed or path escapes base_dir, skip
+            continue
+
+        if candidate.exists():
+            try:
+                content = candidate.read_text(encoding="utf-8")
+                print(f"Loaded SQL from file: {candidate}")
+                return content
+            except Exception as e:
+                print(f"Failed to read SQL file {candidate}: {e}")
+
+    # 3) Fallback: legacy embedded SQL for the timestamp function
     if file_path == "create_timestamp_function.sql":
-        return """
-        -- Create the update_timestamp function used by triggers
-        CREATE OR REPLACE FUNCTION update_timestamp()
-        RETURNS TRIGGER AS $$
-        BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-        """
-    
-    # For now, return None for other files
-    # In a real implementation, you would either:
-    # 1. Embed all SQL files in the Lambda deployment package
-    # 2. Store SQL files in S3 and read them here
-    # 3. Use AWS Systems Manager Parameter Store
+        return (
+            """
+            -- Create the update_timestamp function used by triggers
+            CREATE OR REPLACE FUNCTION update_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
+        )
+
+    # If not found, return None and let the caller handle the warning/logging
     return None

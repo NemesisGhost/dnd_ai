@@ -89,6 +89,7 @@ variable "additional_tags" {
 variable "sql_bucket" {
   description = "S3 bucket name containing SQL files for the db runner"
   type        = string
+  default     = ""
 }
 
 variable "sql_prefix" {
@@ -101,24 +102,29 @@ variable "sql_prefix" {
 variable "vpc_id" {
   description = "VPC ID to deploy supporting resources (if overriding module-provided VPC)"
   type        = string
+  default     = ""
 }
 
 variable "private_subnet_ids" {
   description = "List of private subnet IDs for placing the SQL runner EC2 (if overriding module outputs)"
   type        = list(string)
+  default     = []
 }
 
 variable "rds_security_group_id" {
   description = "Security Group ID attached to the PostgreSQL RDS instance to open 5432 from the runner"
   type        = string
+  default     = ""
 }
 
 variable "db_secret_arn" {
   description = "Secrets Manager ARN containing JSON {username,password} for DB access"
   type        = string
+  default     = ""
 }
 
 variable "db_name" {
   description = "Target PostgreSQL database name for migrations"
   type        = string
+  default     = ""
 }
