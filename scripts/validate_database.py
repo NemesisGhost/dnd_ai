@@ -1,25 +1,42 @@
 #!/usr/bin/env python3
 """
-Database Schema Validation Script
-This script validates that the D&D AI database was created correctly.
-Run after Terraform deployment to verify the Lambda function executed successfully.
+Database Schema Validation Script (Local)
+This script validates that the D&D AI database was created correctly by connecting directly
+using credentials from a local JSON file (e.g., terraform/environments/<env>/secrets.local.json).
+
+No AWS calls are required; this is suitable for local validation or MCP-style direct access.
 """
 
-import boto3
 import psycopg2
 import json
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple
 
-def get_database_credentials(secret_name: str) -> Dict:
-    """Get database credentials from AWS Secrets Manager."""
+def load_local_secrets(secrets_file: Path) -> Dict:
+    """Load secrets from a local JSON file."""
     try:
-        secrets_client = boto3.client('secretsmanager')
-        response = secrets_client.get_secret_value(SecretId=secret_name)
-        return json.loads(response['SecretString'])
-    except Exception as e:
-        print(f"Error getting database credentials: {e}")
+        data = json.loads(secrets_file.read_text(encoding="utf-8"))
+        return data
+    except FileNotFoundError:
+        print(f"Secrets file not found: {secrets_file}")
         sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON in secrets file {secrets_file}: {e}")
+        sys.exit(1)
+
+def get_database_credentials_from_local(secrets: Dict) -> Dict:
+    """Extract DB credentials from the local secrets structure."""
+    db = secrets.get("database")
+    if not db:
+        print("Missing 'database' section in secrets file. See secrets.local.json.example for structure.")
+        sys.exit(1)
+    required = ["host", "port", "username", "password", "dbname"]
+    missing = [k for k in required if k not in db or db[k] in (None, "")]
+    if missing:
+        print(f"Missing required database fields in secrets file: {', '.join(missing)}")
+        sys.exit(1)
+    return db
 
 def connect_to_database(credentials: Dict):
     """Connect to the PostgreSQL database."""
@@ -228,7 +245,7 @@ def validate_triggers(cursor) -> bool:
         print(f"✗ Error checking triggers: {e}")
         return False
 
-def run_database_validation(secret_name: str):
+def run_database_validation(db_credentials: Dict):
     """Run all database validation checks."""
     print("=" * 60)
     print("D&D AI Database Schema Validation")
@@ -237,8 +254,7 @@ def run_database_validation(secret_name: str):
     # Get credentials and connect
     print("\n1. Database Connection")
     print("-" * 30)
-    credentials = get_database_credentials(secret_name)
-    conn = connect_to_database(credentials)
+    conn = connect_to_database(db_credentials)
     cursor = conn.cursor()
     
     # Run validation tests
@@ -290,11 +306,14 @@ def run_database_validation(secret_name: str):
         return False
 
 if __name__ == "__main__":
+    # Usage: python validate_database.py <path-to-secrets.local.json>
     if len(sys.argv) != 2:
-        print("Usage: python validate_database.py <secrets_manager_secret_name>")
-        print("Example: python validate_database.py dnd-ai/dev/database/credentials")
+        print("Usage: python validate_database.py <path-to-secrets.local.json>")
+        print("Example: python validate_database.py ./terraform/environments/dev/secrets.local.json")
         sys.exit(1)
-    
-    secret_name = sys.argv[1]
-    success = run_database_validation(secret_name)
+
+    secrets_path = Path(sys.argv[1]).resolve()
+    secrets = load_local_secrets(secrets_path)
+    db_credentials = get_database_credentials_from_local(secrets)
+    success = run_database_validation(db_credentials)
     sys.exit(0 if success else 1)

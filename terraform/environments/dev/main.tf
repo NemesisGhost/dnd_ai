@@ -63,25 +63,13 @@ module "secrets" {
 
   kms_key_arn = module.database.kms_key_arn
 
-  # OpenAI
-  openai_api_key         = var.openai_api_key
-  openai_organization_id = var.openai_organization_id
-  openai_model           = var.openai_model
-  max_tokens             = var.max_tokens
-  temperature            = var.temperature
-
-  # Discord
-  discord_bot_token    = var.discord_bot_token
-  discord_application_id = var.discord_application_id
-  discord_public_key     = var.discord_public_key
-
   additional_tags = var.additional_tags
 }
 
 # -----------------------------------------------------
 # Module: Lambda (Discord bot, AI query)
 # -----------------------------------------------------
-module "lambda" {
+/* module "lambda" {
   source = "../../modules/lambda"
 
   project_name = local.project_name
@@ -104,7 +92,7 @@ module "lambda" {
 
   additional_tags = var.additional_tags
 }
-
+ */
 # -----------------------------------------------------
 # Module: DB Runner (SSM-driven SQL migrations from S3)
 # -----------------------------------------------------
@@ -114,7 +102,8 @@ module "db_runner" {
   vpc_id              = module.database.vpc_id
   private_subnet_ids  = module.database.private_subnet_ids
   rds_security_group_id = module.database.database_security_group_id
-  db_secret_arn       = module.database.secrets_manager_arn
+  db_secret_arn       = module.database.rds_master_user_secret_arn
+  db_name             = module.database.database_name
 
   # Let the module generate a unique bucket name in dev; only pass the prefix
   # sql_bucket_name   = ""  # optional

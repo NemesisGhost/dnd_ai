@@ -43,15 +43,11 @@ output "database_subnet_group_name" {
   value       = aws_db_subnet_group.main.name
 }
 
-output "secrets_manager_arn" {
-  description = "ARN of the secrets manager secret containing database credentials"
-  value       = aws_secretsmanager_secret.db_credentials.arn
+output "rds_master_user_secret_arn" {
+  description = "ARN of the AWS-managed secret for the RDS master user"
+  value       = aws_db_instance.main.master_user_secret[0].secret_arn
 }
 
-output "secrets_manager_secret_name" {
-  description = "Name of the secrets manager secret containing database credentials"
-  value       = aws_secretsmanager_secret.db_credentials.name
-}
 
 output "kms_key_id" {
   description = "KMS key ID used for database encryption"
@@ -78,11 +74,7 @@ output "public_subnet_ids" {
   value       = var.vpc_id == null ? aws_subnet.public[*].id : []
 }
 
-output "connection_string" {
-  description = "PostgreSQL connection string"
-  value       = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
-  sensitive   = true
-}
+# Intentionally do not output a connection string to avoid exposing passwords
 
 # Note: Database initialization Lambda function has been removed
 # Database schema deployment now handled via separate migration process

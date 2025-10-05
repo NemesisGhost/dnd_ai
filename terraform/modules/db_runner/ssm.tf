@@ -21,6 +21,11 @@ resource "aws_ssm_document" "apply_postgres_sql" {
         description = "Secrets Manager ARN containing DB credentials"
         default     = var.db_secret_arn
       }
+      DBName = {
+        type        = "String"
+        description = "Target PostgreSQL database name (fallback if not in secret)"
+        default     = var.db_name
+      }
     }
     mainSteps     = [{
       action = "aws:runShellScript"
@@ -37,7 +42,12 @@ resource "aws_ssm_document" "apply_postgres_sql" {
           "export PGPORT=$(echo \"$SECRET_JSON\" | jq -r .port)",
           "export PGUSER=$(echo \"$SECRET_JSON\" | jq -r .username)",
           "export PGPASSWORD=$(echo \"$SECRET_JSON\" | jq -r .password)",
-          "export PGDATABASE=$(echo \"$SECRET_JSON\" | jq -r .dbname)",
+          "DB_IN_SECRET=$(echo \"$SECRET_JSON\" | jq -r '.dbname // empty')",
+          "if [ -n \"$DB_IN_SECRET\" ]; then",
+          "  export PGDATABASE=\"$DB_IN_SECRET\"",
+          "else",
+          "  export PGDATABASE='{{ DBName }}'",
+          "fi",
           "echo \"Connecting to $PGUSER@$PGHOST:$PGPORT/$PGDATABASE\"",
           # Execute files in the order specified in order.txt
           "while read sql_file; do",

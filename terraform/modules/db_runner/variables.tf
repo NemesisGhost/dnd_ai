@@ -18,6 +18,12 @@ variable "db_secret_arn" {
   type        = string
 }
 
+variable "db_name" {
+  description = "Target PostgreSQL database name (if not included in secret)"
+  type        = string
+  default     = ""
+}
+
 variable "sql_bucket_name" {
   description = "Name of the S3 bucket to store SQL files. Leave empty to let Terraform generate a unique name."
   type        = string

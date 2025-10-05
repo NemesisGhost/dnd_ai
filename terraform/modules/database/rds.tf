@@ -46,7 +46,8 @@ resource "aws_db_instance" "main" {
   # Database configuration
   db_name  = var.database_name
   username = var.master_username
-  password = random_password.db_password.result
+  manage_master_user_password = true
+  master_user_secret_kms_key_id = aws_kms_key.db_encryption.arn
   port     = 5432
 
   # Network configuration

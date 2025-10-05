@@ -7,23 +7,16 @@ This directory contains the Terraform infrastructure code for the D&D AI project
 ```
 terraform/
 ├── modules/
-│   └── database/                 # Reusable database module
-│       ├── main.tf              # Main infrastructure code
-│       ├── variables.tf         # Input variables
-│       ├── outputs.tf           # Output values
-│       ├── versions.tf          # Provider requirements
-│       ├── db_init_lambda.py    # Database initialization Lambda
-│       └── db_init_lambda.zip   # Lambda deployment package (generated)
+│   ├── database/                 # RDS, networking, KMS
+│   ├── db_runner/                # SSM-based SQL runner (S3 sync + psql)
+│   └── secrets/                  # Secrets metadata (no values)
 ├── environments/
-│   └── dev/                     # Development environment
-│       ├── main.tf              # Environment-specific configuration
-│       ├── variables.tf         # Environment variables
-│       └── outputs.tf           # Environment outputs
+│   └── dev/                      # Development environment
+│       ├── main.tf               # Environment-specific configuration
+│       ├── variables.tf          # Environment variables
+│       └── outputs.tf            # Environment outputs
 └── scripts/
-    ├── deploy.ps1               # Deployment script
-    ├── destroy.ps1              # Destruction script
-    ├── set-env.ps1              # Environment variables
-    └── prepare_lambda.py        # Lambda package preparation
+  └── upsert-secrets.ps1        # Upsert local secrets to AWS Secrets Manager
 ```
 
 ## Features
@@ -33,9 +26,9 @@ terraform/
 - **RDS PostgreSQL** instance with encryption at rest
 - **VPC and networking** setup (can use existing or create new)
 - **Security groups** with configurable access rules
-- **Secrets Manager** integration for credential storage
+- **Secrets Manager** integration for credential storage (values populated post-deploy)
 - **KMS encryption** for database and secrets
-- **Database initialization** via Lambda function
+- **Database initialization** via SSM-based DB runner (no Lambda)
 - **Monitoring and logging** with CloudWatch
 - **Backup and maintenance** scheduling
 - **Parameter groups** for PostgreSQL optimization
@@ -52,15 +45,14 @@ terraform/
 
 1. **AWS CLI** configured with appropriate credentials
 2. **Terraform** >= 1.5 installed
-3. **Python 3.x** for Lambda package preparation
-4. **PowerShell** for deployment scripts
-5. **AWS IAM permissions** for:
+3. **PowerShell** (Windows) for the root build script (or use Terraform manually)
+4. **AWS IAM permissions** for:
    - RDS instance management
    - VPC and networking
    - Secrets Manager
    - KMS key management
-   - Lambda function deployment
-   - IAM role creation
+  - SSM Run Command and EC2
+  - IAM role creation
 
 ## Quick Start
 
@@ -75,18 +67,18 @@ $env:TF_VAR_my_ip_cidr = "YOUR_IP_ADDRESS/32"
 
 ### 2. Deploy Development Environment
 
+Preferred (root build script):
+
 ```powershell
-# Navigate to the terraform directory
-cd terraform
+./build.ps1 -Environment dev -Action apply -AutoApprove
+```
 
-# Deploy (with confirmation prompts)
-.\scripts\deploy.ps1 -Environment dev
+Manual alternative:
 
-# Or deploy automatically
-.\scripts\deploy.ps1 -Environment dev -AutoApprove
-
-# Or just plan without applying
-.\scripts\deploy.ps1 -Environment dev -PlanOnly
+```powershell
+terraform -chdir="./terraform/environments/dev" init
+terraform -chdir="./terraform/environments/dev" plan -out tfplan
+terraform -chdir="./terraform/environments/dev" apply tfplan
 ```
 
 ### 3. Connect to Database
@@ -103,15 +95,7 @@ aws secretsmanager get-secret-value --secret-id dnd-ai/dev/database/credentials
 
 ### 4. Verify Database Initialization
 
-The database should be automatically initialized with all tables and lookup data. Check the Lambda function logs:
-
-```powershell
-# Check Lambda function logs
-aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/dnd-ai-dev-db-init"
-
-# View recent logs
-aws logs filter-log-events --log-group-name "/aws/lambda/dnd-ai-dev-db-init-XXXXX"
-```
+Schema application is handled by the SSM-based DB runner. Re-run apply to trigger when SQL changes. See `docs/terraform/VERIFICATION_GUIDE.md` for end-to-end checks, connection tests, and how to find the SSM Document and command results.
 
 ## Configuration
 
@@ -167,8 +151,7 @@ The Lambda function executes SQL files in dependency order:
 - **Storage**: 20GB GP3 (~$2/month)
 - **KMS**: ~$1/month
 - **Secrets Manager**: ~$0.40/month
-- **Lambda**: Minimal (free tier)
-- **CloudWatch**: Minimal logs
+- **CloudWatch/SSM**: Minimal logs
 
 **Total estimated cost**: ~$20/month for development
 
@@ -194,7 +177,7 @@ For production deployment:
 
 ## Monitoring and Maintenance
 
-- **CloudWatch logs** for database and Lambda
+- **CloudWatch logs** for database/runner
 - **Performance Insights** (configurable)
 - **Enhanced monitoring** (configurable)
 - **Automated backups** with configurable retention
@@ -243,23 +226,21 @@ The module is designed for reusability. You can:
 
 ### Common Issues
 
-1. **Lambda timeout**: Increase timeout for large schema initialization
+1. **Runner issues**: Check SSM command history and runner instance logs
 2. **Network connectivity**: Check security groups and VPC configuration
-3. **Permission errors**: Verify IAM roles and policies
-4. **SQL errors**: Check Lambda logs for detailed error messages
+3. **Permission errors**: Verify IAM roles and policies (Secrets/KMS)
+4. **SQL errors**: Validate SQL ordering; test individual files with psql
 
 ### Debugging
 
 ```powershell
 # View Terraform plan
-terraform plan
+terraform -chdir="./terraform/environments/dev" plan
 
 # Check AWS resources
 aws rds describe-db-instances
 aws secretsmanager list-secrets
-
-# View Lambda logs
-aws logs tail /aws/lambda/dnd-ai-dev-db-init --follow
+aws ssm list-documents --filters Key=Name,Values="dnd-ai-*apply-postgres-sql*"
 ```
 
 ## Cleanup
@@ -267,10 +248,7 @@ aws logs tail /aws/lambda/dnd-ai-dev-db-init --follow
 To destroy all resources:
 
 ```powershell
-.\scripts\destroy.ps1 -Environment dev
-
-# Or automatically
-.\scripts\destroy.ps1 -Environment dev -AutoApprove
+./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
 **Warning**: This will permanently delete the database and all data. Ensure you have backups if needed.

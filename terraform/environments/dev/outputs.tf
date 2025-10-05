@@ -20,7 +20,7 @@ output "database_name" {
 
 output "database_secret_name" {
   description = "Name of the secrets manager secret containing database credentials"
-  value       = module.database.secrets_manager_secret_name
+  value       = module.database.rds_master_user_secret_arn
 }
 
 output "vpc_id" {
@@ -46,11 +46,11 @@ output "discord_secret_name" {
 
 output "app_config_secret_name" {
   description = "Name of the application configuration secret"
-  value       = module.secrets.app_config_secret_name
+  value       = ""
 }
 
 # Lambda Outputs
-output "lambda_execution_role_arn" {
+/* output "lambda_execution_role_arn" {
   description = "ARN of the Lambda execution role"
   value       = module.lambda.lambda_execution_role_arn
 }
@@ -63,7 +63,7 @@ output "discord_bot_function_name" {
 output "ai_query_function_name" {
   description = "Name of the AI query Lambda function"
   value       = module.lambda.ai_query_function_name
-}
+} */
 
 # Connection Information
 output "connection_command" {
@@ -72,7 +72,7 @@ output "connection_command" {
   value       = <<-EOT
     # Get database credentials from Secrets Manager
     aws secretsmanager get-secret-value \
-      --secret-id "${module.database.secrets_manager_secret_name}" \
+  --secret-id "${module.database.rds_master_user_secret_arn}" \
       --query SecretString --output text | jq -r .password > /tmp/db_password
     
     # Connect using psql
@@ -96,15 +96,15 @@ output "deployment_summary" {
       name     = module.database.database_name
     }
     secrets = {
-      database_secret = module.database.secrets_manager_secret_name
+  rds_master_user_secret = module.database.rds_master_user_secret_arn
       openai_secret   = module.secrets.openai_api_key_secret_name
       discord_secret  = module.secrets.discord_bot_token_secret_name
-      app_config      = module.secrets.app_config_secret_name
+      app_config      = null
     }
-    lambda_functions = {
+/*     lambda_functions = {
       discord_bot = module.lambda.discord_bot_function_name
       ai_query    = module.lambda.ai_query_function_name
-    }
+    } */
   }
 }
 

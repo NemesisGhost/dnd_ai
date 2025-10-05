@@ -1,286 +1,224 @@
 # Database Deployment Verification Checklist
 
 ## Overview
-This document provides a step-by-step verification process for the D&D AI database deployment using Terraform and SQL script execution.
+This guide verifies the current D&D AI infrastructure: Terraform-driven RDS deployment, Secrets Manager, and the SSM-based DB runner that applies SQL from S3. It reflects the latest state: no Lambda-based DB init and no Terraform-managed DB secret values.
 
 ## Prerequisites
 
-### Required Tools
+### Required tools
 - [ ] Terraform v1.5+ installed
 - [ ] AWS CLI v2.0+ installed and configured
-- [ ] Python 3.8+ (for validation scripts)
+- [ ] jq (for parsing JSON in CLI examples)
 - [ ] psql client (optional, for manual testing)
 
-### Required AWS Permissions
+### Required AWS permissions
 - [ ] RDS instance creation and management
 - [ ] VPC, subnet, and security group management
-- [ ] Secrets Manager read/write access
-- [ ] Lambda function creation and execution
-- [ ] KMS key creation and usage
+- [ ] Secrets Manager read/write access (PutSecretValue, GetSecretValue)
+- [ ] KMS key creation and usage (Encrypt/Decrypt)
+- [ ] SSM send-command permissions and EC2 basic access
 - [ ] CloudWatch logs access
 
-### Required Python Packages (for validation)
-```bash
-pip install boto3 psycopg2-binary
+Example IAM policy snippets for a compute role (EC2/SSM runner or Lambda) to read secrets and decrypt:
+
+Secrets Manager access (scoped to your project secrets):
+
+```json
+{
+     "Version": "2012-10-17",
+     "Statement": [
+          {
+               "Effect": "Allow",
+               "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret"
+               ],
+               "Resource": [
+                    "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:dnd-ai/*"
+               ]
+          }
+     ]
+}
 ```
 
-## Deployment Steps
+KMS decrypt on your Secrets KMS key (replace with your key ARN):
 
-### 1. Pre-deployment Validation
+```json
+{
+     "Version": "2012-10-17",
+     "Statement": [
+          {
+               "Effect": "Allow",
+               "Action": [
+                    "kms:Decrypt"
+               ],
+               "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID"
+          }
+     ]
+}
+```
 
-#### Check Terraform Configuration
-```bash
-cd terraform/environments/dev
-terraform init
-terraform validate
-terraform fmt -recursive
+## Deployment steps
+
+### 1) Pre-deployment validation
+
+PowerShell (Windows):
+```powershell
+terraform -chdir="./terraform/environments/dev" init
+terraform -chdir="./terraform/environments/dev" validate
+terraform -chdir="./terraform/environments/dev" fmt -recursive
 ```
 
 Expected output:
 - ✅ "Terraform has been successfully initialized!"
 - ✅ "Success! The configuration is valid."
 
-#### Review Variables
-```bash
-cat terraform.tfvars
+Check variables in `terraform/environments/dev/terraform.tfvars`:
+- [ ] `my_ip_cidr` matches your IP (avoid 0.0.0.0/0 unless necessary in dev)
+- [ ] `owner_name` is set
+- [ ] `aws_region` is correct
+
+### 2) Plan and apply
+
+Use the root build script (recommended):
+```powershell
+./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-Verify:
-- [ ] `my_ip_cidr` is set to your actual IP address (not 0.0.0.0/0)
-- [ ] `owner_name` is set to your name
-- [ ] `aws_region` is correct for your deployment
-
-### 2. Generate Deployment Plan
-
-```bash
-terraform plan -out=tfplan
+Or run manually:
+```powershell
+terraform -chdir="./terraform/environments/dev" plan -out tfplan
+terraform -chdir="./terraform/environments/dev" apply tfplan
 ```
 
-Expected resources to be created:
-- [ ] 1 VPC with public and private subnets
-- [ ] 1 RDS PostgreSQL instance (db.t3.micro)
-- [ ] 1 Security group with PostgreSQL access
-- [ ] 1 KMS key for encryption
-- [ ] 1 Secrets Manager secret
-- [ ] 1 Lambda function for database initialization
-- [ ] Various IAM roles and policies
+Expected resources:
+- [ ] VPC with private (and public if created) subnets
+- [ ] RDS PostgreSQL instance (default db.t3.micro)
+- [ ] Security group for PostgreSQL
+- [ ] KMS key for encryption
+- [ ] Secrets Manager secrets (names/metadata for OpenAI/Discord)
+- [ ] SSM Document and EC2 runner for DB schema application
 
-Estimated cost: ~$15-20/month for development
+Estimated dev cost: ~$20/month (see README for breakdown)
 
-### 3. Deploy Infrastructure
+### 3) Upsert secrets (local → AWS)
 
-```bash
-terraform apply "tfplan"
+Secrets values are not in Terraform. Create and upsert from a local JSON file:
+```powershell
+# Use the example file and fill in your values
+Copy-Item ./terraform/environments/dev/secrets.local.json.example ./terraform/environments/dev/secrets.local.json
+
+# Upsert to AWS Secrets Manager
+./terraform/scripts/upsert-secrets.ps1 -Environment dev -Region us-east-1 -File ./terraform/environments/dev/secrets.local.json
 ```
 
-Monitor the deployment progress:
-- [ ] VPC and subnets created (~2 minutes)
-- [ ] RDS instance creation started (~15-20 minutes)
-- [ ] Lambda function deployed
-- [ ] Secrets Manager secret created
+### 4) Check Terraform outputs
 
-### 4. Post-deployment Verification
-
-#### Check Terraform Outputs
-```bash
-terraform output
+```powershell
+terraform -chdir="./terraform/environments/dev" output
 ```
 
-Expected outputs:
-- [ ] `database_endpoint` - RDS endpoint URL
-- [ ] `database_port` - 5432
-- [ ] `database_name` - "dnd_ai_dev"
-- [ ] `secrets_manager_secret_name` - Secret name for credentials
-- [ ] `vpc_id` - VPC ID where resources are deployed
+Expected outputs include:
+- [ ] `database_endpoint`
+- [ ] `database_port`
+- [ ] `database_name`
+- [ ] `rds_master_user_secret_arn`
+- [ ] `vpc_id`
+- [ ] `runner_instance_id`, `runner_sg_id`, `sql_bucket_name`
 
-#### Verify RDS Instance Status
-```bash
+### 5) Verify RDS instance status
+
+```powershell
 aws rds describe-db-instances --db-instance-identifier dnd-ai-dev-db
 ```
 
-Check that:
-- [ ] `DBInstanceStatus` is "available"
-- [ ] `Engine` is "postgres"
-- [ ] `EngineVersion` is "15.4"
+Check:
+- [ ] `DBInstanceStatus` is `available`
+- [ ] `Engine` is `postgres`
+- [ ] Version matches module default (e.g., 15.x)
 
-#### Check Lambda Function
-```bash
-aws lambda get-function --function-name dnd-ai-dev-db-init
+### 6) Trigger the DB runner to apply schema
+
+The module automatically syncs `Database/` SQL and sends an SSM command when content changes. To trigger manually:
+```powershell
+# Re-sync SQL and trigger command (from local-exec behavior) — re-run apply if needed
+terraform -chdir="./terraform/environments/dev" apply -auto-approve
+
+# Or send SSM command directly to the runner instance by tag (Role=db-runner-...)
+# See the created SSM document name:
+terraform -chdir="./terraform/environments/dev" output apply_postgres_sql_document
 ```
 
-Verify:
-- [ ] Function exists
-- [ ] Runtime is "python3.11"
-- [ ] State is "Active"
+Look for successful execution in the SSM command result and/or instance logs. The document retrieves the DB secret at runtime and runs psql for each file in `Database/order.txt`.
 
-### 5. Database Schema Validation
+### 7) Manual database connection test
 
-#### Run Automated Validation
-```bash
-cd terraform/scripts
-python validate_database.py dnd-ai/dev/database/credentials
+Fetch the AWS-managed password and connect:
+```powershell
+$secretArn = (terraform -chdir="./terraform/environments/dev" output -raw rds_master_user_secret_arn)
+$pw = aws secretsmanager get-secret-value --secret-id $secretArn --query SecretString --output text | jq -r .password
+
+psql -h (terraform -chdir="./terraform/environments/dev" output -raw database_endpoint) `
+     -p (terraform -chdir="./terraform/environments/dev" output -raw database_port) `
+     -U (terraform -chdir="./terraform/environments/dev" output -raw database_username) `
+     -d (terraform -chdir="./terraform/environments/dev" output -raw database_name) \
+     -w
 ```
 
-Expected validation results:
-- [ ] ✅ Database connection successful
-- [ ] ✅ update_timestamp() function exists
-- [ ] ✅ All lookup tables have data
-- [ ] ✅ Core entity tables exist
-- [ ] ✅ Foreign key relationships established
-- [ ] ✅ Database indexes created
-- [ ] ✅ Update triggers configured
-
-#### Manual Database Connection Test
-```bash
-# Get database password from Secrets Manager
-aws secretsmanager get-secret-value \
-  --secret-id "dnd-ai/dev/database/credentials" \
-  --query SecretString --output text | jq -r .password
-
-# Connect with psql (replace with actual endpoint and password)
-PGPASSWORD="<password>" psql \
-  -h <rds-endpoint> \
-  -p 5432 \
-  -U dnd_admin \
-  -d dnd_ai_dev
-```
-
-Test queries:
+Sample queries:
 ```sql
--- Check database version
+-- Version and tables
 SELECT version();
-
--- Verify tables exist
 \dt public.*
 
--- Check sample data
-SELECT name FROM public.tag_categories;
+-- Sample data checks (adjust to available lookups)
+SELECT name FROM public.tag_categories LIMIT 5;
 SELECT name FROM public.races LIMIT 5;
-
--- Test relationships
-SELECT n.name, r.name as race 
-FROM public.npcs n 
-JOIN public.races r ON n.race_id = r.race_id 
-LIMIT 5;
 ```
-
-### 6. Lambda Function Testing
-
-#### Invoke Database Initialization Function
-```bash
-aws lambda invoke \
-  --function-name dnd-ai-dev-db-init \
-  --payload '{}' \
-  response.json
-
-cat response.json
-```
-
-Expected response:
-```json
-{
-  "statusCode": 200,
-  "body": "{\"message\": \"Database initialization completed\", \"executed_files\": 20, \"total_files\": 20, \"failed_files\": [], \"status\": \"success\"}"
-}
-```
-
-#### Check Lambda Logs
-```bash
-aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/dnd-ai-dev-db-init"
-
-aws logs get-log-events \
-  --log-group-name "/aws/lambda/dnd-ai-dev-db-init" \
-  --log-stream-name "$(aws logs describe-log-streams \
-    --log-group-name "/aws/lambda/dnd-ai-dev-db-init" \
-    --order-by LastEventTime --descending \
-    --max-items 1 --query 'logStreams[0].logStreamName' --output text)"
-```
-
-Look for:
-- [ ] "Connected to database successfully"
-- [ ] "Successfully executed" messages for each SQL file
-- [ ] No error messages or failed files
 
 ## Troubleshooting
 
-### Common Issues
+### RDS not accessible
+- Ensure the database SG allows your IP or your app SG.
+- Verify RDS status is `available` and subnet routes are correct.
 
-#### RDS Instance Not Accessible
-**Problem**: Cannot connect to database
-**Solutions**:
-- Check security group allows access from your IP
-- Verify RDS instance is in "available" state
-- Confirm VPC and subnet configuration
+### Secrets access issues
+- Confirm IAM permissions for Secrets Manager and KMS decrypt on the key used.
+- Ensure the secret ARN is correct and exists in your account/region.
 
-#### Lambda Function Timeout
-**Problem**: Database initialization takes too long
-**Solutions**:
-- Check Lambda timeout setting (should be 900 seconds)
-- Verify Lambda has VPC access to RDS
-- Check CloudWatch logs for specific errors
+### DB runner didn’t apply SQL
+- Check SSM command history and the runner instance system logs.
+- Ensure S3 sync completed and `Database/order.txt` is present.
+- Re-run `terraform apply` in dev to force the null_resource to trigger when hashes change.
 
-#### SQL Script Execution Errors
-**Problem**: Some tables not created
-**Solutions**:
-- Check dependency order in Lambda function
-- Verify all required lookup tables exist
-- Review Lambda execution logs for SQL errors
+### SQL errors
+- Validate SQL ordering in `Database/order.txt`.
+- Test a single file manually with `psql --set=ON_ERROR_STOP=1`.
 
-#### Permission Errors
-**Problem**: Access denied errors
-**Solutions**:
-- Verify IAM roles have necessary permissions
-- Check KMS key permissions for encryption
-- Confirm Secrets Manager access
+## Success criteria
 
-### Recovery Commands
+- [ ] Terraform resources created without errors
+- [ ] RDS instance running and reachable
+- [ ] RDS master user secret retrievable and valid
+- [ ] DB runner applied schema without failures
+- [ ] Expected core tables exist and basic queries succeed
 
-#### Redeploy Lambda Function
-```bash
-cd terraform/modules/database
-python build_lambda.py
-cd ../../environments/dev
-terraform apply -target=module.database.aws_lambda_function.db_init
-```
+## Cost management
 
-#### Force Database Recreation
-```bash
-terraform taint module.database.aws_db_instance.main
-terraform apply
-```
+Development environment costs (rough estimates):
+- RDS db.t3.micro: ~$12–15/month
+- Storage (20GB): ~$2–3/month
+- KMS key: ~$1/month
+- Secrets Manager: ~$0.40/month
+- EC2 runner + minimal traffic: low
 
-#### Clean Up (Destroy Everything)
-```bash
-terraform destroy
-```
+Important: Run `terraform destroy` when not developing to avoid ongoing costs.
 
-## Success Criteria
+## Next steps
 
-The deployment is successful when:
-- [ ] All Terraform resources created without errors
-- [ ] RDS instance is running and accessible
-- [ ] Database schema validation passes all tests
-- [ ] Lambda function executes successfully
-- [ ] All expected tables and relationships exist
-- [ ] Sample queries return expected results
-
-## Cost Management
-
-Development environment costs:
-- **RDS db.t3.micro**: ~$12-15/month
-- **Storage (20GB)**: ~$2.30/month  
-- **KMS key**: $1/month
-- **Secrets Manager**: ~$0.40/month
-- **Lambda/VPC**: Minimal
-
-**Important**: Run `terraform destroy` when not actively developing to avoid ongoing costs.
-
-## Next Steps
-
-After successful verification:
-1. Document any customizations made
+1. Document any local changes and environment settings
 2. Create sample data for testing
-3. Set up monitoring and alerting
+3. Set up monitoring/alerts
 4. Configure automated backups
 5. Plan staging environment deployment
-6. Begin application development and testing
+6. Begin application development and integration

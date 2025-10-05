@@ -69,3 +69,6 @@ logs/
 tmp/
 temp/
 lambda_package/
+
+# Local secrets files (keep out of git)
+**/secrets.local.json
