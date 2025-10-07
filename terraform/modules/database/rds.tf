@@ -57,6 +57,7 @@ resource "aws_db_instance" "main" {
 
   # Parameter and option groups
   parameter_group_name = aws_db_parameter_group.main.name
+  iam_database_authentication_enabled = var.iam_database_authentication_enabled
 
   # Backup configuration
   backup_retention_period = var.backup_retention_period

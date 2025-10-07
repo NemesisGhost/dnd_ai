@@ -47,6 +47,84 @@ This is an AI-powered D&D world management system that integrates AWS cloud infr
 - **Technology**: Terraform, GitHub Actions
 - **Features**: Modular design, environment management, secrets management, monitoring
 
+## Lambda Functions and Layers
+
+### Language
+- Python 3.11 on AWS Lambda (Go support can be added later). Each function is designed to be callable from API Gateway and usable as an MCP tool.
+
+### Repository Layout
+- Functions: `src/lambda-functions/<function_name>/app.py` exposing `handler(event, context)`
+- Function-local Python deps for layers: `src/lambda-functions/<function_name>/layer/requirements.txt`
+- Legacy shared layers (optional): `package/layers/<layer_name>/requirements.txt`
+- Build output: `dist/lambdas/*.zip`, `dist/layers/*.zip`
+
+### Build Scripts (PowerShell)
+- Build a function zip:
+  - `scripts/build_lambda.ps1 -FunctionName <name>`
+- Build a Python layer zip (site-packages under `python/`):
+  - Colocated requirements: `scripts/build_layer.ps1 -FunctionName <name> [-Python python]`
+  - Shared layer: `scripts/build_layer.ps1 -LayerName <layer_name> [-Python python]`
+  - Custom path: `scripts/build_layer.ps1 -RequirementsPath <path-to-requirements.txt> [-Python python]`
+
+### Attach Layers
+- Terraform should publish `dist/layers/<layer>.zip` as `aws_lambda_layer_version` and attach to functions via `layers` attribute.
+
+### Environment Variables Convention
+- DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_SCHEMAS (optional)
+- OPENAI_API_KEY, AWS_REGION, ENVIRONMENT as applicable
+
+### Function: db_schema_introspect
+- Purpose: Return JSON describing all tables in configured PostgreSQL RDS, including columns and comments. Useful for MCP schema discovery.
+- Input: HTTP event, env vars as above
+- Output example:
+  - `{ "ok": true, "engine": "postgres", "schemas": ["public"], "tables": [ { "schema": "public", "name": "npcs", "comment": "...", "columns": [ { "name": "id", "data_type": "uuid", "is_nullable": false, "default": "gen_random_uuid()", "comment": null } ] } ] }`
+- Errors: `{ "ok": false, "error": "<Class>: <message>" }` (HTTP 500)
+
+### Local Testing
+- Set env vars and run module directly: `python src/lambda-functions/db_schema_introspect/app.py`
+- Or create a quick test event via console/API Gateway.
+
+### Terraform Integration
+ DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_SCHEMAS (optional)
+ DB_PASSWORD is optional; preferred pattern is IAM DB authentication (Lambda generates a short‑lived token via AWS SDK)
+ OPENAI_API_KEY, AWS_REGION, ENVIRONMENT as applicable
+- Expose via API Gateway with: API key required, Basic Auth (custom Lambda authorizer), usage plan, and stage.
+- Store API key and Basic Auth credentials in AWS Secrets Manager. Terraform should read and wire them (without storing values in state).
+ Point `aws_lambda_function.filename` to `dist/lambdas/<function>.zip`.
+ Create/publish layer from `dist/layers/<layer>.zip` and attach ARNs to functions.
+- Include `layer/requirements.txt` next to the function. Build layer with `scripts/build_layer.ps1 -FunctionName <name>`.
+- Build function zip with `scripts/build_lambda.ps1 -FunctionName <name>`.
+- Use the reusable Terraform module `terraform/modules/lambda-api` to configure REST API, authorizer, API key, and throttling.
+- Configure secrets as:
+  - API key secret: `{ "api_key": "<key>" }`
+ Builds a Python dependencies Layer (pip install -r requirements.txt into python/ and zips to dist/layers/<function>-python-deps.zip)
+ Publishes the Layer (aws_lambda_layer_version) with content hashing so changes are detected
+ Rebuilds the Lambda zips on source changes using existing PowerShell scripts (scripts/build_lambda.ps1)
+ Wraps the `lambda-api` module to attach the layer, API Gateway, authorizer, API key/plan, VPC, and optional IAM DB auth
+  - Basic auth secret: `{ "username": "<user>", "password": "<pass>" }`
+
+ repo_root: abspath to repo root (e.g., ${abspath(path.root)}/../../../)
+ requirements_path: path to layer requirements.txt
+ function_trigger_files / authorizer_trigger_files: source file(s) to watch; change triggers rebuild
+ build_function_name / build_authorizer_function_name: names passed to scripts/build_lambda.ps1
+ name_prefix, region, function_name, lambda_zip, handler, runtime, timeout, memory_size
+ environment: map of env vars
+ vpc_subnet_ids, vpc_security_group_ids
+ api_path, http_method, stage_name, api_key_value, throttle_* limits
+ authorizer_zip, authorizer_handler, secret_id_basic_auth
+ allow_rds_iam_auth, rds_dbuser_arns (for rds-db:connect)
+### API Gateway and Auth Guidelines (for each Lambda)
+- REST API with a resource and `ANY` or specific method (e.g., `POST`).
+- API key required; create Usage Plan and API Key, link to stage. The key payload should be sourced from Secrets Manager at apply-time.
+- Basic Auth via a Lambda Request Authorizer: compares `Authorization: Basic <base64>` header to credentials retrieved from Secrets Manager.
+- CORS as needed for clients.
+- Enforce throttling via Usage Plan.
+
+### Secrets Management
+- Store API Key under a Secrets Manager secret as JSON, e.g. `{ "api_key": "<key>" }`.
+- Store Basic Auth credentials under another secret as JSON, e.g. `{ "username": "<user>", "password": "<pass>" }`.
+- Terraform should look up these secrets at apply-time (data sources) and wire values without persisting secrets in state.
+
 ## Database Schema Design
 
 ### Design Principles
@@ -90,9 +168,11 @@ This is an AI-powered D&D world management system that integrates AWS cloud infr
 
 #### 4. Organizations (`organizations.sql`)
 - **Focus**: Guilds, factions, religious orders, secret societies
+ Any change to the requirements.txt triggers a pip rebuild, new Layer publish, and Lambda update.
+ Any change to listed source files triggers a zip rebuild and Lambda update.
 - **Key Fields**:
   - Structure and leadership
-  - Purpose and activities
+ Input: HTTP event, env vars as above (with IAM DB token generation; DB_PASSWORD not required)
   - Membership requirements and benefits
   - Geographic presence
   - Relationships with other groups

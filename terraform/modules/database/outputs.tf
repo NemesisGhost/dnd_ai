@@ -33,6 +33,11 @@ output "database_arn" {
   value       = aws_db_instance.main.arn
 }
 
+output "database_resource_id" {
+  description = "RDS instance resource ID used for IAM auth (for rds-db:connect)"
+  value       = aws_db_instance.main.resource_id
+}
+
 output "database_security_group_id" {
   description = "Security group ID for database access"
   value       = aws_security_group.db.id

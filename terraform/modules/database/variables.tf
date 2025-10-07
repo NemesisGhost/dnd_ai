@@ -147,6 +147,13 @@ variable "log_retention_days" {
   default     = 7
 }
 
+# IAM Database Authentication
+variable "iam_database_authentication_enabled" {
+  description = "Enable IAM database authentication on the RDS instance"
+  type        = bool
+  default     = true
+}
+
 # Note: Database initialization is now handled separately
 # via SQL migration scripts rather than Lambda functions
 

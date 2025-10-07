@@ -112,3 +112,4 @@ relationships/organization_territory_control.sql
 relationships/religion_tag_assignments.sql
 relationships/rumor_npc_connections.sql
 relationships/topic_relationships.sql
+security/app_iam_user.sql

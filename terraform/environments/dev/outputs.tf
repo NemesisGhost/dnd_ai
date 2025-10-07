@@ -94,6 +94,7 @@ output "deployment_summary" {
     database = {
       endpoint = module.database.database_endpoint
       name     = module.database.database_name
+      resource_id = module.database.database_resource_id
     }
     secrets = {
   rds_master_user_secret = module.database.rds_master_user_secret_arn
@@ -132,4 +133,16 @@ output "sql_s3_uri" {
 output "sql_bucket_name" {
   description = "The S3 bucket name created for SQL files"
   value       = module.db_runner.sql_bucket_name
+}
+
+# db-schema-introspect API
+output "db_schema_introspect_invoke_url" {
+  description = "Invoke URL for the db-schema-introspect REST API"
+  value       = module.db_schema_introspect_vars.invoke_url
+}
+
+# IAM auth helper output (for reference when granting rds-db:connect)
+output "rds_iam_connect_resource_arn" {
+  description = "The db-user ARN pattern to use in IAM policies for rds-db:connect"
+  value       = "arn:aws:rds-db:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.database.database_resource_id}/*"
 }

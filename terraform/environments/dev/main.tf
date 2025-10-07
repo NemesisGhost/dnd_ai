@@ -30,6 +30,9 @@ locals {
   environment  = "dev"
 }
 
+# Caller identity for helper outputs and wiring
+data "aws_caller_identity" "current" {}
+
 # -----------------------------------------------------
 # Module: Database (VPC, RDS, KMS, DB Secret)
 # -----------------------------------------------------
@@ -108,4 +111,28 @@ module "db_runner" {
   # Let the module generate a unique bucket name in dev; only pass the prefix
   # sql_bucket_name   = ""  # optional
   sql_prefix         = var.sql_prefix
+}
+
+# -----------------------------------------------------
+# Wire db-schema-introspect variables from environment outputs
+# -----------------------------------------------------
+module "db_schema_introspect_vars" {
+  source = "./db-schema-introspect"
+
+  name_prefix = var.name_prefix
+  aws_region  = var.aws_region
+
+  db_host = module.database.database_endpoint
+  db_port = tostring(module.database.database_port)
+  db_name = module.database.database_name
+  db_user = "app_iam_user"  # TODO: set your IAM DB username
+  rds_resource_id = module.database.database_resource_id
+
+  secret_name_api_key   = var.api_secret_name_api_key
+  secret_name_basic_auth = var.api_secret_name_basic_auth
+
+  layer_arns = []
+
+  vpc_subnet_ids         = module.database.private_subnet_ids
+  vpc_security_group_ids = [module.database.database_security_group_id]
 }
