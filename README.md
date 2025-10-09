@@ -59,8 +59,8 @@ PDF Upload → S3 Event → Lambda Processor → OpenAI Embeddings → Vector DB
 - **Request Routing**: Intelligent routing to appropriate services
 - **Webhook Support**: Real-time updates to connected clients
 
-#### 6) Database layer (in progress)
-**AWS Services**: RDS (PostgreSQL)
+#### 6) Database layer (implemented)
+**AWS Services**: RDS (PostgreSQL), KMS, Secrets Manager, VPC
 - **NPC System**: Comprehensive character profiles with personality, relationships, and knowledge
 - **World Building**: Settlements, nations, organizations, businesses, and landmarks
 - **Knowledge Management**: Topic categories, conversation systems, and information tracking
@@ -69,8 +69,8 @@ PDF Upload → S3 Event → Lambda Processor → OpenAI Embeddings → Vector DB
 - **Campaign Data**: Sessions, notes, important decisions
 - **User Management**: Player profiles, permissions, preferences
 
-#### 7) Infrastructure management (in progress)
-**Technology**: Terraform, GitHub Actions
+#### 7) Infrastructure management (implemented for dev)
+**Technology**: Terraform (modular), PowerShell build helpers
 - **Modular Design**: Reusable Terraform modules
 - **Environment Management**: Dev/staging/production deployments
 - **Secrets Management**: AWS Secrets Manager integration
@@ -107,54 +107,21 @@ The D&D AI system uses a comprehensive PostgreSQL database designed specifically
 
 ### Terraform organization
 
-The infrastructure follows a **modular Terraform architecture** with clear separation between reusable components and environment-specific deployments:
+Modular layout with reusable modules and env-specific wiring:
 
-#### modules/ — reusable infrastructure components
-- **Purpose**: Define infrastructure patterns that can be used across multiple environments
-- **Reusability**: One module can be instantiated by multiple environments with different configurations
-- **Versioning**: Modules can be tagged and versioned for stability across deployments
-- Examples:
-  - `modules/database/` — RDS, VPC, security groups, and monitoring
-  - `modules/secrets/` — creates secret metadata (OpenAI, Discord) encrypted with KMS
-  - `modules/db_runner/` — SSM-based SQL runner to apply schema from S3 using the RDS master secret
+- modules/
+  - `database/`: RDS Postgres with KMS encryption, optional VPC creation or reuse, SG, subnet group, VPC endpoints (Secrets Manager, KMS)
+  - `secrets/`: Creates Secrets Manager secret metadata (OpenAI, Discord, API key, Basic Auth), values are set out-of-band
+  - `db_runner/`: SSM-driven EC2 runner that syncs SQL from S3 and applies migrations using the RDS master secret
+  - `lambda-api/` and `lambda-with-build/`: Package and deploy Lambda + API Gateway REST API with authorizer, API key, usage plan
+- environments/
+  - `dev/`: Wires the modules above, exposes two REST endpoints: db-schema-introspect and query-runner
 
-#### environments/ — environment-specific deployments
-- **Purpose**: Deploy modules with specific configurations for different environments (dev/staging/prod)
-- **Isolation**: Each environment has independent Terraform state and AWS resources
-- **Configuration**: Environment-specific variables, instance sizes, backup policies, etc.
-- **Example**: `environments/dev/` uses the database module with development-friendly settings
+Key behavior (networking):
+- Provide `vpc_id` and optionally `private_subnet_ids` to reuse an existing VPC and subnets; if omitted, the module can create a new VPC and subnets.
+- RDS requires at least two subnets in different AZs; if you pass `private_subnet_ids`, ensure they span 2+ AZs.
 
-#### How they work together
-```hcl
-# environments/dev/main.tf
-module "database" {
-  source = "../../modules/database"        # References the reusable module
-  
-  # Development-specific configuration
-  instance_class = "db.t3.micro"          # Small instance for cost savings
-  backup_retention_period = 3             # Short retention for development
-  deletion_protection = false             # Allow easy teardown
-}
-
-# environments/prod/main.tf (future)
-module "database" {
-  source = "../../modules/database"        # Same module, different config
-  
-  # Production-specific configuration  
-  instance_class = "db.r5.large"          # Larger instance for performance
-  backup_retention_period = 30            # Long retention for production
-  deletion_protection = true              # Prevent accidental deletion
-  multi_az = true                          # High availability
-}
-```
-
-This architecture allows you to:
-- **Maintain consistency** across environments using the same infrastructure code
-- **Customize configurations** per environment without duplicating code
-- **Version and test** infrastructure changes safely
-- **Scale efficiently** from development to production
-
-## Project structure
+## Project structure (high-level)
 
 ```
 dnd_ai/
@@ -184,9 +151,8 @@ dnd_ai/
 │       └── VERIFICATION_GUIDE.md # Testing and validation
 ├── src/                       # Application source code
 │   ├── lambda-functions/      # AWS Lambda implementations
-│   │   ├── db_setup.py        # Database initialization
-│   │   ├── interactions.py    # Discord bot interactions
-│   │   └── db_init_lambda.py  # Database schema deployment
+│   │   ├── db_schema_introspect/   # Lists tables/columns via IAM DB auth
+│   │   └── query_runner/           # Validates query spec JSON and executes SQL
 │   ├── discord-bot/           # Discord.py bot implementation (planned)
 │   ├── foundry-module/        # FoundryVTT integration (planned)
 │   └── shared/                # Shared utilities and libraries (planned)
@@ -196,16 +162,16 @@ dnd_ai/
 ## Current development status
 
 ### ✅ Completed
-- **Database Schema**: Complete 228-table PostgreSQL schema for D&D world-building
-- **Terraform Infrastructure**: Reusable modules for RDS, Secrets metadata, and DB runner
-- **Database Module**: RDS with encryption, monitoring, and AWS-managed master user password
-- **Documentation**: Comprehensive setup guides and database documentation
-- **Deployment Scripts**: Automated deployment and management tools
+- Database Schema: Complete PostgreSQL schema for D&D world-building (hundreds of tables)
+- Terraform modules: database, secrets (metadata), db_runner, lambda-api, lambda-with-build
+- Database module: RDS Postgres with KMS, IAM DB auth, log exports, optional VPC endpoints
+- Environment wiring (dev): db-schema-introspect API and query-runner API deployed via API Gateway
+- Tooling: PowerShell scripts to build Lambda zips and dependency layers
 
 ### 🚧 In progress
-- **Lambda Functions**: Document processing and AI query engine
-- **Discord Bot**: Slash commands and NPC interaction system
-- **API Gateway**: RESTful interface for system integration
+- Document processing pipeline (S3/Lambda/embeddings)
+- Discord Bot and FoundryVTT integrations
+- Vector DB and RAG pipeline
 
 ### 📋 Planned
 - **FoundryVTT Module**: In-game AI assistant and NPC dialog system
@@ -222,7 +188,7 @@ dnd_ai/
 - **Python 3.x** for Lambda packaging
 - **PowerShell** (Windows) or Bash (Linux/Mac)
 
-### 1) Deploy infrastructure
+### 1) Deploy infrastructure (dev)
 
 ```powershell
 # Clone and enter repo
@@ -233,7 +199,7 @@ cd dnd_ai
 ./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-### 2) Upsert secrets (OpenAI, Discord)
+### 2) Upsert secrets (OpenAI, Discord, API key, Basic Auth)
 
 Secrets are managed outside of Terraform state. Create a local JSON file and upsert values to AWS Secrets Manager.
 
@@ -279,6 +245,21 @@ psql -h (terraform -chdir="./terraform/environments/dev" output -raw database_en
 SELECT * FROM races LIMIT 5;
 SELECT * FROM tags WHERE category_id = (SELECT category_id FROM tag_categories WHERE name = 'Role') LIMIT 5;
 ```
+
+### 5) Try the APIs
+
+You get two REST endpoints in dev:
+
+- db-schema-introspect
+  - Purpose: return JSON schema of the Postgres DB (schemas, tables, columns, comments)
+  - Auth: Basic Auth (Lambda authorizer) + API key (attached to usage plan)
+  - Body: none
+- query-runner
+  - Purpose: validate a query spec JSON against the bundled schema, compile to SQL, run it, and return rows
+  - Auth: Basic Auth + API key
+  - Body: JSON matching the query schema (see `src/lambda-functions/query_runner/Database/query_json_schema.json`)
+
+Outputs printed by Terraform include both invoke URLs. See `terraform/environments/dev/outputs.tf`.
 
 ### Next steps
 
@@ -378,14 +359,14 @@ terraform plan
 terraform apply
 ```
 
-### **Production Deployment**
+### Production deployment (outline)
 1. Create `terraform/environments/prod/` directory
 2. Copy and modify configuration from dev environment
 3. Increase instance sizes and enable Multi-AZ
 4. Enable enhanced monitoring and backup retention
 5. Configure production security settings
 
-Note: A full deployment guide will be added as services (Discord bot, API, FoundryVTT) are implemented.
+Note: A full production guide will be added as additional services are implemented.
 
 ## Configuration
 
