@@ -36,6 +36,12 @@ variable "private_subnet_cidrs" {
   default     = ["10.0.10.0/24", "10.0.11.0/24"]
 }
 
+variable "private_subnet_ids" {
+  description = "IDs of existing private subnets to use (skip subnet creation when provided)"
+  type        = list(string)
+  default     = []
+}
+
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to connect to the database"
   type        = list(string)

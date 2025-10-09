@@ -1,0 +1,174 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Relational Query Specification",
+  "type": "object",
+  "required": ["source_table", "fields"],
+  "properties": {
+    "source_table": {
+      "type": "string",
+      "description": "Top‑level table to query. Should correspond to a database table name."
+    },
+    "fields": {
+      "type": "array",
+      "description": "List of columns or nested relationship definitions to return.",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "description": "Simple column name from the current table."
+          },
+          {
+            "$ref": "#/definitions/relationship"
+          }
+        ]
+      }
+    },
+    "filter": {
+      "$ref": "#/definitions/filter",
+      "description": "Optional logical conditions used to restrict rows."
+    },
+    "order_by": {
+      "type": "array",
+      "description": "Optional sorting specification.",
+      "items": {
+        "type": "object",
+        "required": ["field", "direction"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Column or expression to order by. Can include table alias prefixes."
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["asc", "desc"],
+            "description": "Sort direction."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum number of rows to return."
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of rows to skip before starting to return rows."
+    }
+  },
+  "definitions": {
+    "relationship": {
+      "type": "object",
+      "description": "Definition for joining a related table and including its fields.",
+      "required": ["fields"],
+      "properties": {
+        "child_table": {
+          "type": "string",
+          "description": "Name of a child (detail) table to join in a one‑to‑many or one‑to‑one relationship."
+        },
+        "lookup_table": {
+          "type": "string",
+          "description": "Name of a lookup (reference) table to resolve a foreign key."
+        },
+        "through_table": {
+          "type": "string",
+          "description": "Name of a bridging table used for many‑to‑many relationships. If present, both ends of the relationship will be joined through this table."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["one_to_many", "many_to_one", "one_to_one", "many_to_many"],
+          "description": "The cardinality of the relationship."
+        },
+        "as": {
+          "type": "string",
+          "description": "Alias to use for the related table in the generated SQL and in the output."
+        },
+        "join_on": {
+          "type": "object",
+          "description": "Mapping of keys for joining. Each property key is a fully qualified column in the parent context and the value is the fully qualified column in the child/lookup/through table.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "fields": {
+          "type": "array",
+          "description": "Columns or nested relationships to include from the related table.",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "description": "Simple column name from the related table."
+              },
+              {
+                "$ref": "#/definitions/relationship"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "filter": {
+      "type": "object",
+      "description": "Logical conditions used to restrict rows.",
+      "required": ["logic", "conditions"],
+      "properties": {
+        "logic": {
+          "type": "string",
+          "enum": ["AND", "OR"],
+          "description": "Logical operator for combining conditions."
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/condition"
+              },
+              {
+                "$ref": "#/definitions/filter"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "condition": {
+      "type": "object",
+      "description": "Single comparison operation.",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Fully qualified column name to compare (may include table alias)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Comparison operator.",
+          "enum": ["=", "!=", ">", "<", ">=", "<=", "in", "like"]
+        },
+        "value": {
+          "description": "Value to compare against. Can be a scalar or array depending on the operator.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array", "items": { "type": ["string", "number", "boolean"] } },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

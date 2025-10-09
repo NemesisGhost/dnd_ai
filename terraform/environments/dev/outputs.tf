@@ -141,6 +141,12 @@ output "db_schema_introspect_invoke_url" {
   value       = module.db_schema_introspect_vars.invoke_url
 }
 
+# query-runner API
+output "query_runner_invoke_url" {
+  description = "Invoke URL for the query-runner REST API"
+  value       = module.query_runner_vars.invoke_url
+}
+
 # IAM auth helper output (for reference when granting rds-db:connect)
 output "rds_iam_connect_resource_arn" {
   description = "The db-user ARN pattern to use in IAM policies for rds-db:connect"

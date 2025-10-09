@@ -1,0 +1,26 @@
+{
+  "source_table": "npcs",
+  "fields": [
+    "id",
+    "name",
+    {
+      "through_table": "npc_tags",
+      "type": "many_to_many",
+      "as": "t",
+      "join_on": {
+        "npcs_.id": "npc_tags_.npc_id",
+        "npc_tags_.tag_id": "t.id"
+      },
+      "fields": [
+        {
+          "lookup_table": "tags",
+          "type": "many_to_one",
+          "as": "t",
+          "join_on": { "npc_tags_.tag_id": "t.id" },
+          "fields": ["name", "category"]
+        }
+      ]
+    }
+  ],
+  "limit": 5
+}

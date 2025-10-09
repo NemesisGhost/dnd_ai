@@ -70,8 +70,13 @@ output "vpc_id" {
 }
 
 output "private_subnet_ids" {
-  description = "Private subnet IDs where database is deployed"
+  description = "Private subnet IDs where database is deployed (created by module)"
   value       = aws_subnet.private[*].id
+}
+
+output "effective_private_subnet_ids" {
+  description = "Private subnet IDs actually used by the DB subnet group (either provided or created)"
+  value       = length(aws_subnet.private[*].id) > 0 ? aws_subnet.private[*].id : var.private_subnet_ids
 }
 
 output "public_subnet_ids" {

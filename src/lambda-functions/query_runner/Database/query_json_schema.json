@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Relational Query Specification",
+  "type": "object",
+  "required": ["source_table", "fields"],
+  "properties": {
+    "source_table": {"type": "string"},
+    "fields": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {"$ref": "#/definitions/relationship"}
+        ]
+      }
+    },
+    "filter": {"$ref": "#/definitions/filter"},
+    "order_by": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "direction"],
+        "properties": {
+          "field": {"type": "string"},
+          "direction": {"type": "string", "enum": ["asc", "desc"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "limit": {"type": "integer", "minimum": 1},
+    "offset": {"type": "integer", "minimum": 0}
+  },
+  "definitions": {
+    "relationship": {
+      "type": "object",
+      "required": ["fields"],
+      "properties": {
+        "child_table": {"type": "string"},
+        "lookup_table": {"type": "string"},
+        "through_table": {"type": "string"},
+        "type": {"type": "string", "enum": ["one_to_many", "many_to_one", "one_to_one", "many_to_many"]},
+        "as": {"type": "string"},
+        "join_on": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}},
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {"$ref": "#/definitions/relationship"}
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "filter": {
+      "type": "object",
+      "required": ["logic", "conditions"],
+      "properties": {
+        "logic": {"type": "string", "enum": ["AND", "OR"]},
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"oneOf": [{"$ref": "#/definitions/condition"}, {"$ref": "#/definitions/filter"}]}
+        }
+      },
+      "additionalProperties": false
+    },
+    "condition": {
+      "type": "object",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {"type": "string"},
+        "operator": {"type": "string", "enum": ["=", "!=", ">", "<", ">=", "<=", "in", "like"]},
+        "value": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "number"},
+            {"type": "boolean"},
+            {"type": "array", "items": {"type": ["string", "number", "boolean"]}},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

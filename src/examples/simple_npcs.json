@@ -1,0 +1,15 @@
+{
+  "source_table": "npcs",
+  "fields": [
+    "id",
+    "name"
+  ],
+  "filter": {
+    "logic": "AND",
+    "conditions": [
+      { "field": "npcs_.is_active", "operator": "=", "value": true }
+    ]
+  },
+  "order_by": [{ "field": "npcs_.name", "direction": "asc" }],
+  "limit": 5
+}

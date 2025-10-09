@@ -1,0 +1,33 @@
+{
+  "source_table": "npcs",
+  "fields": [
+    "id",
+    "name",
+    {
+      "lookup_table": "lookups.races",
+      "type": "many_to_one",
+      "as": "race",
+      "join_on": { "npcs_.race_id": "race.id" },
+      "fields": ["name"]
+    },
+    {
+      "child_table": "npc_organization_memberships",
+      "type": "one_to_many",
+      "as": "memb",
+      "join_on": { "npcs_.id": "memb.npc_id" },
+      "fields": [
+        "role"
+      ]
+    }
+  ],
+  "filter": {
+    "logic": "AND",
+    "conditions": [
+      { "field": "npcs_.name", "operator": "like", "value": "%smith%" },
+      { "field": "npcs_.is_active", "operator": "=", "value": true }
+    ]
+  },
+  "order_by": [{ "field": "npcs_.name", "direction": "asc" }],
+  "limit": 10,
+  "offset": 0
+}

@@ -33,6 +33,32 @@ locals {
 # Caller identity for helper outputs and wiring
 data "aws_caller_identity" "current" {}
 
+# Import default VPC and its subnets
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# If a specific VPC ID is provided via var.vpc_id, fetch its details for CIDR lookups
+data "aws_vpc" "selected" {
+  count = var.vpc_id != "" ? 1 : 0
+  id    = var.vpc_id
+}
+
+data "aws_subnets" "selected_subnets" {
+  count = var.vpc_id != "" ? 1 : 0
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+}
+
 # -----------------------------------------------------
 # Module: Database (VPC, RDS, KMS, DB Secret)
 # -----------------------------------------------------
@@ -43,14 +69,18 @@ module "database" {
   environment  = local.environment
 
   # Networking & access
-  publicly_accessible      = var.enable_public_access
-  allowed_cidr_blocks      = var.enable_public_access ? [var.my_ip_cidr] : ["10.0.0.0/16"]
+  # Use provided VPC and subnets when set; otherwise fall back to default VPC discovery
+  vpc_id = var.vpc_id != "" ? var.vpc_id : data.aws_vpc.default.id
+  private_subnet_ids = length(var.private_subnet_ids) > 0 ? var.private_subnet_ids : (var.vpc_id != "" ? data.aws_subnets.selected_subnets[0].ids : data.aws_subnets.default_subnets.ids)
+
+  publicly_accessible        = var.enable_public_access
+  allowed_cidr_blocks        = var.enable_public_access ? [var.my_ip_cidr] : [var.vpc_id != "" ? data.aws_vpc.selected[0].cidr_block : data.aws_vpc.default.cidr_block]
   allowed_security_group_ids = []
 
   # DB sizing (dev-friendly defaults are already set in the module)
 
-  # Networking defaults (module will create a VPC if none provided)
-  # vpc_id = null
+  # Avoid creating VPC endpoints in default VPC until SG rule uses actual CIDR (now fixed in module)
+  create_vpc_endpoints = true
 
   additional_tags = var.additional_tags
 }
@@ -103,7 +133,7 @@ module "db_runner" {
   source = "../../modules/db_runner"
 
   vpc_id              = module.database.vpc_id
-  private_subnet_ids  = module.database.private_subnet_ids
+  private_subnet_ids  = module.database.effective_private_subnet_ids
   rds_security_group_id = module.database.database_security_group_id
   db_secret_arn       = module.database.rds_master_user_secret_arn
   db_name             = module.database.database_name
@@ -128,11 +158,43 @@ module "db_schema_introspect_vars" {
   db_user = "app_iam_user"  # TODO: set your IAM DB username
   rds_resource_id = module.database.database_resource_id
 
-  secret_name_api_key   = var.api_secret_name_api_key
-  secret_name_basic_auth = var.api_secret_name_basic_auth
+  secret_name_api_key    = module.secrets.api_gateway_api_key_secret_name
+  secret_name_basic_auth = module.secrets.basic_auth_secret_name
+  api_key_value          = jsondecode(file("${path.module}/secrets.local.json")).api.api_key
+  secret_arn_basic_auth  = module.secrets.basic_auth_secret_arn
 
   layer_arns = []
 
-  vpc_subnet_ids         = module.database.private_subnet_ids
+  vpc_subnet_ids         = module.database.effective_private_subnet_ids
   vpc_security_group_ids = [module.database.database_security_group_id]
+}
+
+# -----------------------------------------------------
+# Wire query-runner variables from environment outputs
+# -----------------------------------------------------
+module "query_runner_vars" {
+  source = "./query-runner"
+
+  name_prefix = var.name_prefix
+  aws_region  = var.aws_region
+
+  db_host = module.database.database_endpoint
+  db_port = tostring(module.database.database_port)
+  db_name = module.database.database_name
+  db_user = "app_iam_user"  # TODO: set your IAM DB username
+  rds_resource_id = module.database.database_resource_id
+
+  secret_name_api_key    = module.secrets.api_gateway_api_key_secret_name
+  secret_name_basic_auth = module.secrets.basic_auth_secret_name
+  api_key_value          = jsondecode(file("${path.module}/secrets.local.json")).api.api_key
+  secret_arn_basic_auth  = module.secrets.basic_auth_secret_arn
+
+  layer_arns = []
+
+  vpc_subnet_ids          = module.database.effective_private_subnet_ids
+  vpc_security_group_ids  = [module.database.database_security_group_id]
+
+  api_path    = "query"
+  http_method = "POST"
+  stage_name  = "dev"
 }

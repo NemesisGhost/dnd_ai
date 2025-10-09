@@ -27,6 +27,16 @@ variable "stage_name" {
 variable "secret_name_api_key" { type = string }
 variable "secret_name_basic_auth" { type = string }
 
+# Optional direct wiring to avoid plan-time data source lookups
+variable "api_key_value" {
+	type    = string
+	default = ""
+}
+variable "secret_arn_basic_auth" {
+	type    = string
+	default = ""
+}
+
 variable "throttle_burst_limit" {
 	type    = number
 	default = 10

@@ -71,4 +71,16 @@ if ($json.discord) {
   Set-SecretJson -Name $name -Object $json.discord
 }
 
+# API Gateway API key secret payload: { "api_key": "<key>" }
+if ($json.api) {
+  $name = "$project/$Environment/api-key"
+  Set-SecretJson -Name $name -Object $json.api
+}
+
+# Basic Auth credentials for API Gateway authorizer: { "username": "...", "password": "..." }
+if ($json.basic_auth) {
+  $name = "$project/$Environment/basic-auth"
+  Set-SecretJson -Name $name -Object $json.basic_auth
+}
+
 Write-Host "Secrets upsert complete."

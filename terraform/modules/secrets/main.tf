@@ -34,3 +34,33 @@ resource "aws_secretsmanager_secret" "discord_bot_token" {
     Purpose     = "Discord Bot Authentication"
   })
 }
+
+# Internal API Gateway Usage API Key Secret (metadata only)
+resource "aws_secretsmanager_secret" "api_gateway_api_key" {
+  name                    = "${var.project_name}/${var.environment}/api/api-key"
+  description             = "API Gateway usage plan API key (JSON: {\"api_key\": \"...\"})"
+  recovery_window_in_days = 7
+  kms_key_id              = var.kms_key_arn
+
+  tags = merge(var.additional_tags, {
+    Name        = "${var.project_name}-${var.environment}-api-key"
+    Project     = var.project_name
+    Environment = var.environment
+    Purpose     = "API Gateway API Key"
+  })
+}
+
+# Basic Auth credentials for API Gateway Authorizer (metadata only)
+resource "aws_secretsmanager_secret" "basic_auth" {
+  name                    = "${var.project_name}/${var.environment}/basic-auth"
+  description             = "Basic Auth credentials (JSON: {\"username\":\"...\",\"password\":\"...\"})"
+  recovery_window_in_days = 7
+  kms_key_id              = var.kms_key_arn
+
+  tags = merge(var.additional_tags, {
+    Name        = "${var.project_name}-${var.environment}-basic-auth"
+    Project     = var.project_name
+    Environment = var.environment
+    Purpose     = "API Gateway Basic Auth"
+  })
+}

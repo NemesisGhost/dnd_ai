@@ -2,9 +2,15 @@
 # Networking Resources (VPC, Subnets, Security Groups)
 # =====================================================
 
-# Data source for availability zones
+# Data sources
 data "aws_availability_zones" "available" {
   state = "available"
+}
+
+# If an existing VPC is provided, fetch its details (CIDR, etc.)
+data "aws_vpc" "existing" {
+  count  = var.vpc_id != null ? 1 : 0
+  id     = var.vpc_id
 }
 
 # VPC for database (if not provided)
@@ -35,11 +41,17 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# Private subnets for database
-resource "aws_subnet" "private" {
-  count = 2
+locals {
+  effective_vpc_id   = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  effective_vpc_cidr = var.vpc_id != null ? data.aws_vpc.existing[0].cidr_block : var.vpc_cidr
+  use_existing_private_subnets = length(var.private_subnet_ids) > 0
+}
 
-  vpc_id            = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+# Private subnets for database (create only when not using existing ones)
+resource "aws_subnet" "private" {
+  count = local.use_existing_private_subnets ? 0 : 2
+
+  vpc_id            = local.effective_vpc_id
   cidr_block        = var.vpc_id != null ? var.private_subnet_cidrs[count.index] : cidrsubnet(var.vpc_cidr, 8, count.index + 10)
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
@@ -99,7 +111,7 @@ resource "aws_nat_gateway" "main" {
 
 # Route table for private subnets
 resource "aws_route_table" "private" {
-  vpc_id = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  vpc_id = local.effective_vpc_id
 
   # Add route to NAT Gateway for internet access (if creating VPC and NAT Gateway enabled)
   dynamic "route" {
@@ -119,9 +131,9 @@ resource "aws_route_table" "private" {
 
 # Route table associations for private subnets
 resource "aws_route_table_association" "private" {
-  count = 2
+  count = local.use_existing_private_subnets ? length(var.private_subnet_ids) : 2
 
-  subnet_id      = aws_subnet.private[count.index].id
+  subnet_id      = local.use_existing_private_subnets ? var.private_subnet_ids[count.index] : aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private.id
 }
 
@@ -154,7 +166,7 @@ resource "aws_route_table_association" "public" {
 # DB subnet group
 resource "aws_db_subnet_group" "main" {
   name       = "${var.project_name}-${var.environment}-db-subnet-group"
-  subnet_ids = aws_subnet.private[*].id
+  subnet_ids = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
 
   tags = {
     Name        = "${var.project_name}-${var.environment}-db-subnet-group"
@@ -166,7 +178,7 @@ resource "aws_db_subnet_group" "main" {
 # Security group for database
 resource "aws_security_group" "db" {
   name_prefix = "${var.project_name}-${var.environment}-db-"
-  vpc_id      = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  vpc_id      = local.effective_vpc_id
 
   ingress {
     from_port   = 5432
@@ -211,10 +223,10 @@ resource "aws_security_group" "db" {
 resource "aws_vpc_endpoint" "secretsmanager" {
   count = var.create_vpc_endpoints ? 1 : 0
 
-  vpc_id              = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  vpc_id              = local.effective_vpc_id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = aws_subnet.private[*].id
+  subnet_ids          = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
 
   private_dns_enabled = true
@@ -229,10 +241,10 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 resource "aws_vpc_endpoint" "kms" {
   count = var.create_vpc_endpoints ? 1 : 0
 
-  vpc_id              = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  vpc_id              = local.effective_vpc_id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.kms"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = aws_subnet.private[*].id
+  subnet_ids          = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
 
   private_dns_enabled = true
@@ -249,13 +261,13 @@ resource "aws_security_group" "vpc_endpoints" {
   count = var.create_vpc_endpoints ? 1 : 0
 
   name_prefix = "${var.project_name}-${var.environment}-vpc-endpoints-"
-  vpc_id      = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  vpc_id      = local.effective_vpc_id
 
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_id != null ? "10.0.0.0/16" : var.vpc_cidr]
+    cidr_blocks = [local.effective_vpc_cidr]
     description = "HTTPS access from VPC"
   }
 
