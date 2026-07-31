@@ -1,5 +1,38 @@
 # Persistent World Platform Implementation Plan
 
+## Table of Contents
+
+- [1. Purpose](#1-purpose)
+- [2. Architectural decisions](#2-architectural-decisions)
+- [3. PostgreSQL schema organization](#3-postgresql-schema-organization)
+- [4. Foundation implementation](#4-foundation-implementation)
+- [5. World, timeline, campaign, party, and session implementation](#5-world-timeline-campaign-party-and-session-implementation)
+- [6. Ruleset implementation](#6-ruleset-implementation)
+- [7. Shared character implementation](#7-shared-character-implementation)
+- [8. NPC world-management implementation](#8-npc-world-management-implementation)
+- [9. Geography and dungeon implementation](#9-geography-and-dungeon-implementation)
+- [10. Universal relationship implementation](#10-universal-relationship-implementation)
+- [11. Organization, government, business, and religion implementation](#11-organization-government-business-and-religion-implementation)
+- [12. Items, inventory, ownership, and treasure implementation](#12-items-inventory-ownership-and-treasure-implementation)
+- [13. Event implementation](#13-event-implementation)
+- [14. Quest and narrative implementation](#14-quest-and-narrative-implementation)
+- [15. Knowledge, belief, rumor, and discovery implementation](#15-knowledge-belief-rumor-and-discovery-implementation)
+- [16. Interaction and resolution implementation](#16-interaction-and-resolution-implementation)
+- [17. Encounter and combat implementation](#17-encounter-and-combat-implementation)
+- [18. AI-agent implementation](#18-ai-agent-implementation)
+- [19. Effective-state resolution](#19-effective-state-resolution)
+- [20. Transaction and command model](#20-transaction-and-command-model)
+- [21. Audit and validation implementation](#21-audit-and-validation-implementation)
+- [22. Future import implementation](#22-future-import-implementation)
+- [23. Delivery phases](#23-delivery-phases)
+- [24. Vertical-slice acceptance scenario](#24-vertical-slice-acceptance-scenario)
+- [25. Testing strategy](#25-testing-strategy)
+- [26. Operational strategy](#26-operational-strategy)
+- [27. Deferred decisions](#27-deferred-decisions)
+- [28. Definition of implementation success](#28-definition-of-implementation-success)
+
+---
+
 ## 1. Purpose
 
 This document defines the implementation plan for a new PostgreSQL-backed persistent tabletop roleplaying world platform. The database is being designed from scratch. No existing production data needs to be migrated during the initial implementation.

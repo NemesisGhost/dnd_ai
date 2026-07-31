@@ -1,460 +1,781 @@
-# D&D AI — Intelligent Campaign Management System
+# D&D AI World Platform
 
-An AI-powered toolkit for Dungeon Masters that uses AWS and OpenAI to deliver an interactive world: talk to NPCs, query world knowledge, and keep persistent state via Discord and FoundryVTT integrations.
+## Vision
 
-## System architecture
+The D&D AI World Platform is a persistent world simulation engine designed to power tabletop role-playing campaigns using AI-assisted world management.
 
-### Overview
-This system creates an intelligent D&D world by:
-- Processing D&D source books, world documents, and NPC records into a searchable knowledge base
-- Providing real-time AI-powered interactions through Discord Bot and FoundryVTT
-- Maintaining persistent world state and character progression
-- Enabling easy content updates and knowledge base expansion
+Rather than treating each campaign as an isolated data set, the platform manages persistent game worlds that can support:
 
-### Core components
+- Multiple simultaneous campaigns
+- Shared or branching timelines
+- Persistent NPCs, locations, organizations, quests, and history
+- AI-assisted GM workflows
+- AI-controlled or AI-assisted NPC portrayal
+- FoundryVTT and Discord integration
+- Retrieval-Augmented Generation (RAG)
+- Long-term structured memory
+- Future support for additional tabletop rulesets
 
-#### 1) Document processing pipeline (planned)
-**AWS Services**: S3, Lambda, SQS, EventBridge
-- **Document Ingestion**: S3 bucket with event-driven processing
-- **PDF Processing**: Lambda functions using PyPDF2/pdfplumber for text extraction
-- **Content Chunking**: Intelligent text segmentation for optimal embedding
-- **Embedding Generation**: OpenAI API integration for vector embeddings
-- **Vector Storage**: Amazon OpenSearch/Pinecone for similarity search
+The initial rules implementation targets Dungeons & Dragons 5e (2024), but the platform is intended to remain ruleset-aware rather than tightly coupled to one game system.
 
+---
+
+## Current Status
+
+The project is in the architecture and domain-modeling stage. This is a restart, not an incremental evolution of the prior implementation.
+
+The repository still contains database schema, Lambda functions, Terraform modules, and prototype scripts from an earlier iteration of the platform. That code predates the persistent-world model described in this document and will be replaced rather than extended or migrated. It has not yet been removed from the repository.
+
+Before implementation proceeds:
+
+- Any existing database content will be dropped, not migrated.
+- No legacy schema or API compatibility is required.
+- Existing infrastructure, Lambda functions, and prototype code will be rebuilt against this design rather than adapted in place.
+
+Existing campaign material (notes, PDFs, prior session content) will still be imported later through a staged, reviewed import process. Imported content will not become canonical world data until it has been validated and approved.
+
+---
+
+## Table of Contents
+
+- [Current Status](#current-status)
+- [Project Goals](#project-goals)
+- [Design Philosophy](#design-philosophy)
+- [Core Concepts](#core-concepts)
+- [System Architecture](#system-architecture)
+- [World, Timeline, and Campaign Model](#world-timeline-and-campaign-model)
+- [Entity Model](#entity-model)
+- [PostgreSQL Inheritance Strategy](#postgresql-inheritance-strategy)
+- [Character Model](#character-model)
+- [State and Event Model](#state-and-event-model)
+- [Knowledge Model](#knowledge-model)
+- [Quest and Dungeon Progression](#quest-and-dungeon-progression)
+- [AI Design](#ai-design)
+- [PostgreSQL Domain Layout](#postgresql-domain-layout)
+- [Repository Structure](#repository-structure)
+- [Development Roadmap](#development-roadmap)
+- [Documentation](#documentation)
+- [License](#license)
+
+---
+
+## Project Goals
+
+The platform should provide:
+
+- Persistent game worlds
+- Multiple campaigns sharing one world
+- Multiple campaigns sharing one timeline
+- Alternate and branching timelines
+- Shared mechanical models for NPCs and player characters
+- Persistent locations, dungeons, organizations, items, and quests
+- Event-driven world evolution
+- Queryable world history
+- Party-specific discovery and knowledge
+- AI-assisted NPC simulation
+- AI-assisted GM tools
+- Controlled AI proposals rather than unrestricted AI mutation
+- FoundryVTT integration
+- Discord integration
+- REST and service APIs
+- MCP integration for AI coding assistants
+- Retrieval-Augmented Generation
+- Long-term structured memory
+- Future campaign-data importing
+- Support for additional tabletop rulesets
+
+---
+
+## Design Philosophy
+
+### PostgreSQL is the source of truth
+
+Structured PostgreSQL data is authoritative.
+
+AI prompts, embeddings, search indexes, summaries, Discord responses, Foundry displays, caches, and generated documents are derived from that structured data.
+
+### AI does not own world state
+
+AI agents may:
+
+- Read approved world data
+- Assemble context
+- Generate dialogue
+- Summarize sessions
+- Suggest consequences
+- Propose new facts or state changes
+- Detect inconsistencies
+
+AI agents do not directly mutate canonical world state.
+
+High-impact changes must pass through validation and, where required, GM approval.
+
+### Definitions and state are separate
+
+The platform distinguishes between:
+
+- What an entity is
+- What its current timeline state is
+- What happened to produce that state
+- Who knows about it
+- What different entities believe about it
+
+### History is preserved
+
+Narratively meaningful changes should retain their cause, source, and effective world time.
+
+The platform uses typed current-state tables for efficient reads and events for history and causality. This is an event-assisted state model, not pure event sourcing.
+
+### Rules definitions and world instances are separate
+
+Examples:
+
+- `Longsword` is a rules definition.
+- `The Blade of Saint Orra` is a world entity and item instance.
+- `Goblin` is a species or creature definition.
+- `Grik the Gatekeeper` is a character entity.
+
+---
+
+## Core Concepts
+
+### World
+
+A persistent setting containing entities, calendars, ruleset configuration, history, and timelines.
+
+A world is not owned by a campaign.
+
+### Timeline
+
+One evolving version of a world.
+
+A timeline contains persistent state and events. Multiple campaigns may share the same timeline and therefore observe the consequences of one another's actions.
+
+A timeline may branch from another timeline at a specific event or world-time point.
+
+### Campaign
+
+A game being played within a timeline.
+
+A campaign organizes:
+
+- Participants
+- Parties
+- Sessions
+- Permissions
+- Player-facing notes
+- Campaign-specific knowledge views
+- Quest participation
+
+A campaign does not normally own a separate copy of world state.
+
+### Session
+
+A period of play within a campaign.
+
+A session may produce interactions, checks, events, discoveries, quest progress, and persistent timeline changes.
+
+### Party
+
+A collection of participating characters whose membership can change over time.
+
+### Entity
+
+A significant world object with a stable UUID and a declared type.
+
+Examples:
+
+- NPC
+- Player character
+- Monster
+- Organization
+- Settlement
+- Dungeon
+- Room
+- Item instance
+- Artifact
+- Event
+- Quest
+- Knowledge item
+
+Entities belong to worlds and may participate in relationships, events, knowledge, tags, provenance, and timeline state.
+
+The entity model is not an Entity-Attribute-Value replacement. Shared identity belongs in the base entity table; domain-specific attributes belong in typed subtype tables.
+
+### Interaction
+
+A meaningful attempted action, such as:
+
+- Search a room
+- Pick a lock
+- Attack
+- Cast a spell
+- Persuade an NPC
+- Read an inscription
+- Activate a mechanism
+- Travel
+- Rest
+
+Interactions may produce checks, events, discoveries, or state changes.
+
+### Event
+
+A narratively meaningful occurrence that explains why timeline state changed.
+
+Examples:
+
+- A bridge collapses
+- A dungeon door opens
+- An NPC dies
+- A party activates a pylon
+- An organization seizes a city
+- A quest objective is completed
+
+### Knowledge Item
+
+A structured statement that may represent:
+
+- Fact
+- Rumor
+- Secret
+- Theory
+- Belief
+- Prophecy
+- Misconception
+- Memory
+- Doctrine
+
+Knowledge is tracked separately from objective truth and separately for each knower.
+
+### Canon and provenance
+
+Records may carry a lifecycle such as:
+
+- Draft
+- Proposed
+- Approved
+- Canon
+- Superseded
+- Rejected
+
+Sources may include:
+
+- GM-authored
+- Player-authored
+- AI-generated
+- Imported
+- FoundryVTT
+- Discord
+- Rulebook
+- Session transcript
+- Administrative correction
+
+---
+
+## System Architecture
+
+```mermaid
+flowchart TB
+    F[FoundryVTT Module]
+    D[Discord Bot]
+    W[Web or Admin Client]
+    MCP[MCP Clients and Coding Assistants]
+
+    API[REST and Application API]
+
+    SVC[Application Services]
+    NPC[NPC and Character Engine]
+    QUEST[Quest Engine]
+    RULES[Rules Engine]
+    TIME[Timeline and State Engine]
+    KNOW[Knowledge Engine]
+    AI[AI Orchestration]
+
+    DB[(PostgreSQL)]
+    VEC[(Vector Index and Embeddings)]
+    PROVIDER[AI Model Providers]
+
+    F --> API
+    D --> API
+    W --> API
+    MCP --> API
+
+    API --> SVC
+
+    SVC --> NPC
+    SVC --> QUEST
+    SVC --> RULES
+    SVC --> TIME
+    SVC --> KNOW
+    SVC --> AI
+
+    NPC --> DB
+    QUEST --> DB
+    RULES --> DB
+    TIME --> DB
+    KNOW --> DB
+    AI --> DB
+    AI --> VEC
+    AI --> PROVIDER
 ```
-PDF Upload → S3 Event → Lambda Processor → OpenAI Embeddings → Vector DB
+
+Client integrations should communicate through application services rather than writing directly to database tables.
+
+---
+
+## World, Timeline, and Campaign Model
+
+```mermaid
+flowchart LR
+    W[World] --> E[Entities]
+    W --> T1[Primary Timeline]
+    W --> T2[Alternate Timeline]
+
+    T1 --> C1[Campaign A]
+    T1 --> C2[Campaign B]
+    T2 --> C3[Campaign C]
+
+    T1 --> EV1[Shared Events]
+    T1 --> ST1[Shared Timeline State]
+
+    C1 --> S1[Sessions]
+    C2 --> S2[Sessions]
+    C3 --> S3[Sessions]
+
+    C1 --> K1[Campaign and Party Knowledge]
+    C2 --> K2[Campaign and Party Knowledge]
+    C3 --> K3[Campaign and Party Knowledge]
 ```
 
-#### 2) AI knowledge base & query engine (planned)
-**AWS Services**: OpenSearch, Lambda, API Gateway
-- **Vector Search**: Semantic search across all ingested content
-- **Context Assembly**: Retrieval-Augmented Generation (RAG) pipeline
-- **Response Generation**: OpenAI GPT integration with custom prompts
-- **Caching Layer**: ElastiCache for frequently accessed content
+Two campaigns attached to the same timeline share persistent consequences.
 
-#### 3) Discord bot (planned)
-**Technology**: Discord.py, AWS Lambda, API Gateway
-- **Slash Commands**: 
-  - `/ask [question]` - Query the knowledge base
-  - `/npc [name] [message]` - Interact with specific NPCs
-  - `/roll [dice]` - Enhanced dice rolling with context
-  - `/character [action]` - Character sheet management
-- **NPC Interactions**: Context-aware conversations with personality persistence
-- **Campaign Management**: Session notes, world state updates
-- **Player Authentication**: Discord OAuth integration
+Example:
 
-#### 4) FoundryVTT module (planned)
-**Technology**: JavaScript ES6, FoundryVTT API
-- **AI Assistant Panel**: In-game interface for DM queries
-- **NPC Dialog System**: Click-to-talk AI NPC interactions
-- **World State Sync**: Real-time synchronization with knowledge base
-- **Combat Integration**: AI-powered tactical suggestions
-- **Character Sheet Integration**: Automatic stat queries and rule lookups
+- Campaign A opens a sealed vault.
+- Campaign B later finds that vault open.
+- Campaign C, on a timeline branched before the vault opened, still finds it sealed.
 
-#### 5) API gateway & orchestration (planned)
-**AWS Services**: API Gateway, Lambda, Cognito
-- **REST API**: Unified interface for all system interactions
-- **Authentication**: JWT tokens with role-based access
-- **Rate Limiting**: Per-user API quotas to manage OpenAI costs
-- **Request Routing**: Intelligent routing to appropriate services
-- **Webhook Support**: Real-time updates to connected clients
+### Effective campaign view
 
-#### 6) Database layer (implemented)
-**AWS Services**: RDS (PostgreSQL), KMS, Secrets Manager, VPC
-- **NPC System**: Comprehensive character profiles with personality, relationships, and knowledge
-- **World Building**: Settlements, nations, organizations, businesses, and landmarks
-- **Knowledge Management**: Topic categories, conversation systems, and information tracking
-- **Event System**: Significant events with complex relationships and player knowledge tracking
-- **Occupational Framework**: Job categories and skill associations
-- **Campaign Data**: Sessions, notes, important decisions
-- **User Management**: Player profiles, permissions, preferences
-
-#### 7) Infrastructure management (implemented for dev)
-**Technology**: Terraform (modular), PowerShell build helpers
-- **Modular Design**: Reusable Terraform modules
-- **Environment Management**: Dev/staging/production deployments
-- **Secrets Management**: AWS Secrets Manager integration
-- **Monitoring**: CloudWatch, X-Ray tracing
-- **Cost Optimization**: Auto-scaling, scheduled shutdowns
-
-## Database schema
-
-The D&D AI system uses a comprehensive PostgreSQL database designed specifically for world-building and AI integration. The schema emphasizes narrative elements over mechanical D&D stats, creating a rich knowledge base for intelligent storytelling.
-
-### Key features
-- **228 SQL tables** with normalized, 3NF-compliant design
-- **AI-friendly structure** with JSONB fields for flexible data
-- **Complex relationship modeling** for realistic NPC interactions
-- **Full-text search optimization** for natural language queries
-- **Player knowledge management** with information asymmetry support
-
-### Core entity types
-- **NPCs**: Detailed personality profiles with conversation styles and AI prompts
-- **World Entities**: Settlements, nations, organizations, businesses, landmarks
-- **Knowledge System**: Topics, conversation flows, and information networks
-- **Relationships**: Complex social connections and event histories
-- **Lookup Tables**: 25+ reference tables for consistent data
-
-### AI integration points
-- **Personality Prompts**: Custom ChatGPT instructions per NPC
-- **Interaction History**: JSONB logs of AI conversations for continuity
-- **Knowledge Confidence**: Tracking how certain NPCs are about information
-- **Conversation Triggers**: Automatic topic transitions and dialogue hooks
-
-**📋 For complete database documentation, see [Database/DATABASE_SCHEMA.md](Database/DATABASE_SCHEMA.md)**
-
-## Infrastructure architecture
-
-### Terraform organization
-
-Modular layout with reusable modules and env-specific wiring:
-
-- modules/
-  - `database/`: RDS Postgres with KMS encryption, optional VPC creation or reuse, SG, subnet group, VPC endpoints (Secrets Manager, KMS)
-  - `secrets/`: Creates Secrets Manager secret metadata (OpenAI, Discord, API key, Basic Auth), values are set out-of-band
-  - `db_runner/`: SSM-driven EC2 runner that syncs SQL from S3 and applies migrations using the RDS master secret
-  - `lambda-api/` and `lambda-with-build/`: Package and deploy Lambda + API Gateway REST API with authorizer, API key, usage plan
-- environments/
-  - `dev/`: Wires the modules above, exposes two REST endpoints: db-schema-introspect and query-runner
-
-Key behavior (networking):
-- Provide `vpc_id` and optionally `private_subnet_ids` to reuse an existing VPC and subnets; if omitted, the module can create a new VPC and subnets.
-- RDS requires at least two subnets in different AZs; if you pass `private_subnet_ids`, ensure they span 2+ AZs.
-
-## Project structure (high-level)
-
-```
-dnd_ai/
-├── README.md                   # Project overview and setup guide
-├── Database/                   # PostgreSQL schema (228 SQL files)
-│   ├── DATABASE_SCHEMA.md      # Complete database documentation
-│   ├── lookups/               # Reference tables (25 files)
-│   ├── npcs/                  # NPC system (14 files)
-│   ├── settlements/           # Settlement data (7 files)
-│   ├── organizations/         # Organizations (10 files)
-│   ├── business/              # Business entities (7 files)
-│   ├── locations/             # Location system (3 files)
-│   ├── nations/               # Nations and politics (2 files)
-│   ├── religions/             # Religious systems (3 files)
-│   ├── relationships/         # Cross-entity relationships (25+ files)
-│   └── world/                 # World-level entities
-├── terraform/                 # Infrastructure as Code
-│   ├── modules/               # Reusable infrastructure modules (database, secrets, db_runner)
-│   ├── environments/          # Environment-specific deployments (currently dev)
-│   └── scripts/               # Terraform helper scripts (e.g., upsert-secrets.ps1)
-├── build.ps1                  # Root build/deploy script (init/plan/apply + post-deploy)
-├── scripts/                   # App build/deployment utilities (future)
-├── docs/                      # Documentation
-│   └── terraform/             # Infrastructure documentation
-│       ├── README.md          # Detailed infrastructure guide
-│       ├── DEPLOYMENT_GUIDE.md # Step-by-step deployment
-│       └── VERIFICATION_GUIDE.md # Testing and validation
-├── src/                       # Application source code
-│   ├── lambda-functions/      # AWS Lambda implementations
-│   │   ├── db_schema_introspect/   # Lists tables/columns via IAM DB auth
-│   │   └── query_runner/           # Validates query spec JSON and executes SQL
-│   ├── discord-bot/           # Discord.py bot implementation (planned)
-│   ├── foundry-module/        # FoundryVTT integration (planned)
-│   └── shared/                # Shared utilities and libraries (planned)
-└── tests/                     # Test files
+```text
+World definitions
++ inherited timeline history
++ current timeline state
++ campaign participation and permissions
++ party or character knowledge
+= effective campaign view
 ```
 
-## Current development status
+Campaigns should not usually create independent copies of locations, NPCs, organizations, or dungeon state.
 
-### ✅ Completed
-- Database Schema: Complete PostgreSQL schema for D&D world-building (hundreds of tables)
-- Terraform modules: database, secrets (metadata), db_runner, lambda-api, lambda-with-build
-- Database module: RDS Postgres with KMS, IAM DB auth, log exports, optional VPC endpoints
-- Environment wiring (dev): db-schema-introspect API and query-runner API deployed via API Gateway
-- Tooling: PowerShell scripts to build Lambda zips and dependency layers
+---
 
-### 🚧 In progress
-- Document processing pipeline (S3/Lambda/embeddings)
-- Discord Bot and FoundryVTT integrations
-- Vector DB and RAG pipeline
+## Entity Model
 
-### 📋 Planned
-- **FoundryVTT Module**: In-game AI assistant and NPC dialog system
-- **Document Processing Pipeline**: PDF ingestion and embedding generation
-- **Vector Database**: OpenSearch integration for semantic search
-- **Frontend Interface**: Web-based campaign management tools
+```mermaid
+classDiagram
+    Entity <|-- Character
+    Entity <|-- Organization
+    Entity <|-- Location
+    Entity <|-- ItemInstance
+    Entity <|-- Event
+    Entity <|-- Quest
+    Entity <|-- KnowledgeItem
 
-## Quick start
+    Character <|-- NPC
+    Character <|-- PlayerCharacter
 
-### Prerequisites
-- **AWS Account** with appropriate IAM permissions
-- **AWS CLI** configured with credentials
-- **Terraform** >= 1.5 installed
-- **Python 3.x** for Lambda packaging
-- **PowerShell** (Windows) or Bash (Linux/Mac)
+    Location <|-- Settlement
+    Location <|-- Building
+    Location <|-- Dungeon
+    Location <|-- DungeonArea
 
-### 1) Deploy infrastructure (dev)
+    Organization <|-- Government
+    Organization <|-- Business
+    Organization <|-- ReligiousOrganization
 
-```powershell
-# Clone and enter repo
-git clone https://github.com/NemesisGhost/dnd_ai.git
-cd dnd_ai
-
-# Quick deploy for an environment (dev|staging|prod)
-./build.ps1 -Environment dev -Action apply -AutoApprove
+    Entity : UUID entity_id
+    Entity : UUID world_id
+    Entity : entity_type
+    Entity : canonical_name
+    Entity : canon_status
+    Entity : source
 ```
 
-### 2) Upsert secrets (OpenAI, Discord, API key, Basic Auth)
+Every important world object receives a base entity record. Domain-specific subtype tables contain the attributes unique to that entity type.
 
-Secrets are managed outside of Terraform state. Create a local JSON file and upsert values to AWS Secrets Manager.
+---
 
-1. Create `terraform/environments/dev/secrets.local.json` from the example:
-  - `terraform/environments/dev/secrets.local.json.example`
-2. Fill in your values:
-  - `openai.api_key`, optional `organization_id`
-  - `discord.bot_token`, optional `application_id`, `public_key`
-3. Run the upsert script:
+## PostgreSQL Inheritance Strategy
 
-```powershell
-./terraform/scripts/upsert-secrets.ps1 -Environment dev -Region us-east-1 -File ./terraform/environments/dev/secrets.local.json
+The platform uses class-table inheritance for major domain objects.
+
+Example:
+
+```text
+core.entities
+└── character.characters
+    ├── character.npcs
+    └── character.player_characters
 ```
 
-The Terraform module creates the secret metadata; this script writes values without exposing them to Terraform state.
-
-### 3) Verify database setup
-
-```powershell
-# In the environment folder
-terraform -chdir="./terraform/environments/dev" output
-
-# Fetch the AWS-managed RDS master user password
-$secretArn = (terraform -chdir="./terraform/environments/dev" output -raw rds_master_user_secret_arn)
-aws secretsmanager get-secret-value --secret-id $secretArn --query SecretString --output text | jq -r .password > $env:TEMP\db_pw.txt
-
-# Connect with psql (install psql locally)
-$pw = Get-Content $env:TEMP\db_pw.txt
-psql -h (terraform -chdir="./terraform/environments/dev" output -raw database_endpoint) `
-  -p (terraform -chdir="./terraform/environments/dev" output -raw database_port) `
-  -U (terraform -chdir="./terraform/environments/dev" output -raw database_username) `
-  -d (terraform -chdir="./terraform/environments/dev" output -raw database_name) `
-  -w
-```
-
-### 4) Verify database schema
+Each subtype uses the same UUID as its parent:
 
 ```sql
--- Check that tables were created
-\dt
+CREATE TABLE core.entities (
+    entity_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    world_id UUID NOT NULL REFERENCES core.worlds(world_id),
+    entity_type_id UUID NOT NULL REFERENCES core.entity_types(entity_type_id),
+    canonical_name TEXT NOT NULL,
+    summary TEXT,
+    canon_status_id UUID NOT NULL,
+    source_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at TIMESTAMPTZ
+);
 
--- Verify sample data
-SELECT * FROM races LIMIT 5;
-SELECT * FROM tags WHERE category_id = (SELECT category_id FROM tag_categories WHERE name = 'Role') LIMIT 5;
+CREATE TABLE character.characters (
+    character_id UUID PRIMARY KEY
+        REFERENCES core.entities(entity_id)
+        ON DELETE CASCADE,
+
+    species_id UUID,
+    size_id UUID,
+    origin_location_id UUID
+);
+
+CREATE TABLE character.npcs (
+    npc_id UUID PRIMARY KEY
+        REFERENCES character.characters(character_id)
+        ON DELETE CASCADE,
+
+    importance SMALLINT CHECK (importance BETWEEN 1 AND 10),
+    simulation_level_id UUID,
+    default_portrayal_profile_id UUID
+);
 ```
 
-### 5) Try the APIs
+Native PostgreSQL `INHERITS` is not the default for the core model because it complicates:
 
-You get two REST endpoints in dev:
+- Foreign-key behavior
+- Cross-table uniqueness
+- Migration tooling
+- ORM support
+- Type enforcement
+- Parent-child integrity
 
-- db-schema-introspect
-  - Purpose: return JSON schema of the Postgres DB (schemas, tables, columns, comments)
-  - Auth: Basic Auth (Lambda authorizer) + API key (attached to usage plan)
-  - Body: none
-- query-runner
-  - Purpose: validate a query spec JSON against the bundled schema, compile to SQL, run it, and return rows
-  - Auth: Basic Auth + API key
-  - Body: JSON matching the query schema (see `src/lambda-functions/query_runner/Database/query_json_schema.json`)
+Native inheritance or partitioning may still be used later for narrowly defined append-only or operational data where it provides a measurable benefit.
 
-Outputs printed by Terraform include both invoke URLs. See `terraform/environments/dev/outputs.tf`.
+---
 
-### Next steps
+## Character Model
 
-1. **API Development**: Build Lambda functions for AI integration
-2. **Discord Bot**: Implement slash commands and NPC interactions
-3. **FoundryVTT Module**: Create in-game AI assistant
-4. **Content Loading**: Add your campaign data to the database
+NPCs and player characters share the same mechanical foundation.
 
-## Key features
+```mermaid
+flowchart TB
+    C[Character]
 
-### For Dungeon Masters
-- **Intelligent Rule Lookup**: Instant access to any D&D rule or mechanic
-- **Dynamic NPC Interactions**: AI-powered NPCs with consistent personalities and detailed backgrounds
-- **World State Management**: Automatic tracking of campaign events and changes
-- **Content Integration**: Easy addition of custom world documents and house rules
-- **Session Planning**: AI-assisted encounter and story suggestions
-- **Relationship Tracking**: Complex NPC networks with realistic information flow
-- **Event Management**: Sophisticated tracking of significant events and their ongoing impact
+    C --> A[Ability Scores]
+    C --> SK[Skills and Saving Throws]
+    C --> CL[Classes and Levels]
+    C --> F[Features and Feats]
+    C --> SP[Spellcasting]
+    C --> INV[Inventory and Equipment]
+    C --> HP[Hit Points and Resources]
+    C --> COND[Conditions]
+    C --> MOVE[Movement and Senses]
+    C --> PROF[Proficiencies]
 
-### For Players
-- **Natural Language Queries**: Ask questions in plain English about rules, lore, or characters
-- **Character Assistance**: Rules clarification and optimization suggestions
-- **NPC Conversations**: Engaging interactions with world characters who remember past conversations
-- **Lore Discovery**: Deep dive into world history with intelligent information management
-- **Relationship Building**: Meaningful connections with NPCs based on shared experiences and knowledge
+    C --> NPC[NPC Extension]
+    C --> PC[Player Character Extension]
 
-### System administration
-- **Easy Deployment**: One-command infrastructure setup
-- **Cost Management**: Usage monitoring and budget alerts
-- **Content Updates**: Hot-swappable knowledge base updates
-- **Multi-Campaign Support**: Isolated environments per campaign
+    NPC --> PERS[Portrayal Profile]
+    NPC --> GOAL[Goals]
+    NPC --> ROUT[Routine]
+    NPC --> BEL[Beliefs and Knowledge]
+    NPC --> REL[Relationships and Perspectives]
+    NPC --> DISC[Disclosure Rules]
+    NPC --> AGENT[AI Agent Assignment]
 
-## Infrastructure costs (estimates)
-
-### Current implementation (dev)
-
-#### Development environment
-- **RDS PostgreSQL (db.t3.micro)**: ~$15/month
-- **Storage (20GB GP3, auto-scaling to 100GB)**: ~$2-10/month
-- **KMS Key**: ~$1/month
-- **Secrets Manager**: ~$0.40/month
-- **Lambda Functions**: Free tier covers initialization
-- **CloudWatch Logs**: ~$1/month
-- **Total**: ~$20/month
-
-#### Future production (estimated)
-- **RDS PostgreSQL (db.r5.large, Multi-AZ)**: ~$180/month
-- **Lambda Functions**: ~$20/month
-- **API Gateway**: ~$15/month
-- **OpenSearch (for vector search)**: ~$200/month
-- **S3 Storage**: ~$10/month
-- **CloudWatch**: ~$15/month
-- **Total**: ~$440/month
-
-### External service costs
-- **OpenAI API**: Variable based on usage (~$20-100/month typical)
-- **Discord**: Free
-- **FoundryVTT**: One-time $50 license fee
-
-### Cost optimization features
-- **Auto-scaling storage**: Pay only for what you use
-- **Development lifecycle**: Easy teardown/rebuild for cost control
-- **Resource tagging**: Track costs by environment and feature
-- **Terraform automation**: Consistent deployments reduce waste
-
-## Getting started
-
-### For Dungeon Masters
-1. **Deploy the database infrastructure** using the provided Terraform modules
-2. **Explore the pre-loaded schema** with D&D races, tags, and lookup tables
-3. **Add your campaign data** using the normalized database structure
-4. **Plan Discord bot integration** for player interactions
-5. **Design FoundryVTT integration** for in-game AI assistance
-
-### For Developers
-1. **Review the database schema** in `Database/DATABASE_SCHEMA.md`
-2. **Deploy the development environment** using Terraform
-3. **Explore the infrastructure code** in `terraform/modules/database/`
-4. **Contribute to Lambda functions** and API development
-5. **Help build Discord bot** and FoundryVTT integrations
-
-### For Infrastructure Engineers
-1. **Study the Terraform modules** for AWS best practices
-2. **Customize the database configuration** for your requirements
-3. **Extend the infrastructure** with additional AWS services
-4. **Implement monitoring** and alerting solutions
-5. **Optimize costs** and performance for your use case
-
-## Deployment guide
-
-### Manual deployment (alternative)
-For step-by-step control instead of build.ps1:
-```powershell
-cd terraform\environments\dev
-terraform init
-terraform plan
-terraform apply
+    PC --> OWNER[Player Ownership]
+    PC --> PERM[Permissions]
+    PC --> CAMP[Campaign Participation]
 ```
 
-### Production deployment (outline)
-1. Create `terraform/environments/prod/` directory
-2. Copy and modify configuration from dev environment
-3. Increase instance sizes and enable Multi-AZ
-4. Enable enhanced monitoring and backup retention
-5. Configure production security settings
+NPCs should be capable of the same level of mechanical detail as player characters when needed.
 
-Note: A full production guide will be added as additional services are implemented.
+Not every NPC requires full simulation. NPCs may use simulation levels such as:
 
-## Configuration
+- Background
+- Minor
+- Supporting
+- Major
+- Central
+- Fully simulated
 
-### Environment variables (Terraform)
-- `TF_VAR_owner_name`: Your name for resource tagging
-- `TF_VAR_aws_region`: AWS deployment region (default: us-east-1)
-- `TF_VAR_my_ip_cidr`: Your IP address for database access
-- `TF_VAR_enable_public_access`: Enable public database access (dev only)
+This allows the system to represent both a passing tavern patron and a recurring campaign villain without forcing equal detail.
 
-### Customization options
-- **Database Configuration**: Modify instance sizes, storage, and backup settings
-- **Security Settings**: Configure access controls and encryption
-- **Monitoring Levels**: Adjust CloudWatch logging and Performance Insights
-- **Cost Controls**: Set up budget alerts and auto-scaling policies
+---
 
-## API documentation (planned)
+## State and Event Model
 
-### **Core Endpoints (Planned)**
-- `POST /api/v1/query` - Submit knowledge base queries
-- `POST /api/v1/npc/interact` - Interact with NPCs
-- `GET /api/v1/character/{id}` - Retrieve character information
-- `POST /api/v1/documents/upload` - Add new content to knowledge base
-- `GET /api/v1/campaign/state` - Get current world state
+The platform uses typed state tables for current reads and events for history and causality.
 
-### **Webhook Support**
-- Discord message events
-- FoundryVTT state changes
-- Campaign progression updates
+```mermaid
+flowchart LR
+    I[Interaction] --> R[Resolution]
+    R --> E[Event]
+    E --> S[Typed Timeline State]
+    E --> K[Knowledge and Discovery]
+    E --> Q[Quest Progress]
+    E --> REL[Relationships and Goals]
+    S --> CTX[Current Context]
+    K --> CTX
+    Q --> CTX
+    REL --> CTX
+    CTX --> AI[AI and GM Tools]
+    AI --> P[Proposed Change]
+    P --> V[Validation or Approval]
+    V --> E
+```
 
-## Contributing
+### Typed state examples
 
-We welcome contributions! Please see our contributing guidelines and submit pull requests for:
-- Additional Terraform modules
-- Database schema enhancements
-- Lambda function implementations
-- Discord bot commands
-- FoundryVTT feature enhancements
-- Documentation improvements
+- `campaign.character_state`
+- `campaign.location_state`
+- `campaign.area_connection_state`
+- `campaign.organization_state`
+- `campaign.relationship_state`
+- `campaign.item_state`
+- `campaign.quest_state`
+- `campaign.objective_state`
+
+### Event rules
+
+- Significant persistent state changes should reference a causal event or explicit administrative source.
+- Events and resulting state updates should commit atomically.
+- Events should record world time and system recording time where relevant.
+- Not every low-level action must become a permanent narrative event.
+- Combat details may remain interaction or encounter records, while significant outcomes become events.
+
+---
+
+## Knowledge Model
+
+```mermaid
+flowchart LR
+    T[Objective Truth Status] --> K[Knowledge Item]
+    K --> EK[Entity Knowledge]
+    EK --> B[Belief Strength]
+    EK --> C[Confidence]
+    EK --> I[Interpretation]
+    EK --> S[Source]
+    EK --> SH[Sharing Policy]
+    EK --> CONV[Conversation and Decisions]
+```
+
+The system distinguishes:
+
+- What is objectively true
+- Whether an entity is aware of a claim
+- Whether the entity believes it
+- How confident the entity is
+- How the entity interprets it
+- Where the entity learned it
+- Whether the entity can or will share it
+- Whether a party or player has discovered it
+- Whether it is publicly known
+
+Different entities may hold contradictory beliefs about the same knowledge item.
+
+The AI should reason from the beliefs and knowledge available to the entity it is portraying, not from unrestricted world truth.
+
+---
+
+## Quest and Dungeon Progression
+
+Dungeon exploration is the first major end-to-end vertical slice for the platform.
+
+```mermaid
+sequenceDiagram
+    participant P as Player
+    participant V as FoundryVTT
+    participant A as Application Service
+    participant R as Rules Engine
+    participant DB as PostgreSQL
+    participant Q as Quest Engine
+    participant AI as AI Agent
+
+    P->>V: Search the room
+    V->>A: PerformInteraction
+    A->>R: Resolve Investigation check
+    R-->>A: Success
+    A->>DB: Record interaction
+    A->>DB: Record discovery event
+    A->>DB: Reveal hidden feature
+    A->>Q: Evaluate objectives
+    Q->>DB: Advance quest progress
+    A->>AI: Refresh available context
+```
+
+A playable dungeon flow should support:
+
+1. A party enters a dungeon area.
+2. Character locations update.
+3. The party examines a room or interactable.
+4. The rules engine resolves a check.
+5. Existing hidden information becomes discovered.
+6. A trap, door, mechanism, or hazard changes state.
+7. An event records the cause of the change.
+8. Quest objectives advance when completion rules are satisfied.
+9. NPC goals, knowledge, and relationships may react.
+10. Other campaigns on the same timeline observe persistent consequences.
+11. Campaigns on alternate timelines remain unaffected after their branch points.
+
+This workflow should remain a central architectural test for database and service-layer decisions.
+
+---
+
+## AI Design
+
+AI agents are consumers of structured world context and producers of proposals.
+
+Possible agent roles include:
+
+- NPC portrayal agent
+- Dungeon-state assistant
+- Quest manager
+- Rules assistant
+- Session summarizer
+- Rumor propagation agent
+- Lore consistency checker
+- Import extraction agent
+
+### AI mutation flow
+
+```text
+Structured context
+→ AI output
+→ Proposed change
+→ Validation
+→ Automatic policy or GM approval
+→ Event
+→ Typed state update
+→ Audit record
+```
+
+Low-risk changes may be eligible for automatic validation, such as:
+
+- Adding conversational memory
+- Revealing an already-authored feature after a successful check
+- Updating objective progress from one of three to two of three
+
+High-impact changes should normally require explicit approval, such as:
+
+- Killing a major NPC
+- Destroying an artifact
+- Changing control of a city
+- Creating a new deity
+- Permanently failing a major quest
+- Declaring generated lore canonical
+
+Factual AI claims about established world state should be traceable to structured records or approved source material.
+
+---
+
+## PostgreSQL Domain Layout
+
+The database will use bounded PostgreSQL schemas:
+
+| Schema | Responsibility |
+|---|---|
+| `core` | Worlds, entities, names, sources, statuses, tags, calendars, world time |
+| `security` | Users, roles, permissions, access-control policies |
+| `rules` | Rulesets and reusable mechanical definitions |
+| `character` | Shared character mechanics plus NPC and PC extensions |
+| `world` | Locations, organizations, items, relationships, economies, religions |
+| `campaign` | Timelines, campaigns, parties, sessions, effective mutable state |
+| `narrative` | Events, quests, objectives, encounters, story arcs |
+| `knowledge` | Facts, rumors, beliefs, discoveries, expertise, information transfer |
+| `interaction` | Player, GM, Foundry, Discord, and AI actions and resolutions |
+| `ai` | Agents, context assembly, prompt fragments, embeddings, proposals |
+| `audit` | Change history, approvals, validation errors, agent activity |
+| `import` | Staging and review for future campaign-data imports |
+| `integration` | External-system identifiers, sync state, webhook or polling metadata |
+
+---
+
+## Repository Structure
+
+```text
+.
+├── README.md
+├── CLAUDE.md
+├── .github/
+│   └── copilot-instructions.md
+├── docs/
+│   ├── PLAN.md
+│   ├── DOMAIN_MODEL.md
+│   ├── DEVELOPMENT.md
+│   ├── DATABASE_CONVENTIONS.md
+│   ├── architecture/
+│   │   ├── SYSTEM_ARCHITECTURE.md
+│   │   ├── DATABASE_MODEL.md
+│   │   ├── DUNGEON_FLOW.md
+│   │   └── diagrams/
+│   └── adr/
+│       ├── 0001-use-postgresql.md
+│       ├── 0002-use-class-table-inheritance.md
+│       ├── 0003-separate-world-timeline-and-campaign.md
+│       ├── 0004-use-event-assisted-state.md
+│       ├── 0005-separate-rules-definitions-from-world-instances.md
+│       ├── 0006-ai-proposes-but-does-not-own-canon.md
+│       └── 0007-separate-knowledge-from-truth.md
+├── database/
+│   ├── migrations/
+│   ├── seeds/
+│   ├── functions/
+│   └── tests/
+├── src/
+└── tests/
+```
+
+`CLAUDE.md` should contain Claude Code operating instructions.
+
+`.github/copilot-instructions.md` should contain concise repository-wide coding and architecture rules for GitHub Copilot.
+
+`docs/PLAN.md` and the rest of the design and process documentation live under `docs/`; this README remains the high-level project entry point.
+
+This tree is the target layout, not the current one. The repository still contains pre-restart directories (`Database/`, `terraform/`, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, `scripts/`) that predate this design — see [Current Status](#current-status). They will be removed or rebuilt under this structure as implementation proceeds, rather than migrated as-is.
+
+---
+
+## Development Roadmap
+
+[docs/PLAN.md](docs/PLAN.md) is the source of truth for the implementation roadmap: phases, deliverables, and acceptance criteria. It is not duplicated here, to avoid the two documents drifting apart.
+
+The first major vertical slice should prove that a party can navigate a dungeon, discover hidden information, alter persistent state, advance a quest, and leave consequences visible to another campaign sharing the same timeline.
+
+---
+
+## Documentation
+
+Planned supporting documents:
+
+- `docs/PLAN.md` — source of truth for implementation phases, dependencies, deliverables, and acceptance criteria
+- `docs/DOMAIN_MODEL.md` — authoritative vocabulary and ownership rules
+- `docs/DATABASE_CONVENTIONS.md` — PostgreSQL naming, UUIDs, migrations, constraints, and testing
+- `docs/architecture/SYSTEM_ARCHITECTURE.md` — application and integration architecture
+- `docs/architecture/DATABASE_MODEL.md` — detailed logical database model and domain diagrams
+- `docs/architecture/DUNGEON_FLOW.md` — end-to-end dungeon and quest progression example
+- `docs/adr/` — individual architecture decision records
+- `CLAUDE.md` — Claude Code development instructions
+- `.github/copilot-instructions.md` — GitHub Copilot repository instructions
+
+---
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Support
-
-- **Documentation**: Check the `/docs` folder and `Database/DATABASE_SCHEMA.md` for detailed guides
-- **Issues**: Report bugs via GitHub Issues
-- **Discussions**: Join our community discussions
-- **Infrastructure**: See `terraform/README.md` for deployment help
-
----
-
-*Built with ❤️ for the D&D community*
-
----
-
-## README quality rubric (used for this document)
-
-Weights in parentheses; total 100.
-
-1) Audience clarity and TL;DR (10)
-- Clear value proposition, who it’s for, and what it does in 3–5 lines.
-
-2) Setup speed-to-value (15)
-- Minimal steps, copy-pasteable commands, environment-agnostic notes.
-
-3) Fidelity to repo/state of code (15)
-- Commands, paths, and modules match the current tree and features.
-
-4) Architecture comprehension (10)
-- Components, data flow, and responsibilities are understandable at a glance.
-
-5) Security and secrets hygiene (10)
-- Explains how secrets are handled and kept out of git/state and how consumers access them.
-
-6) Reproducibility and env management (10)
-- Clear environment separation, state isolation, and how to switch environments.
-
-7) Project structure and navigation (10)
-- Up-to-date tree; pointers to docs and key modules.
-
-8) Operational guidance (10)
-- Verification, troubleshooting starters, and costs overview.
-
-9) Roadmap/status (5)
-- What’s done, in progress, and planned.
-
-10) Contribution and licensing (5)
-- How to contribute and under what license.
-
-Applying the rubric before this update, the README scored well on architecture and schema depth, but lost points on setup speed, accuracy vs repo (deprecated scripts), and secrets hygiene. This revision addresses those gaps: uses the root build.ps1, documents the new secrets workflow, aligns modules/outputs, and preserves a friendly quick start.
+TBD
