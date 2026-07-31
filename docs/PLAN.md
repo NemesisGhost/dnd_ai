@@ -1139,9 +1139,9 @@ Imported text must not directly create canon without review.
 
 Deliver:
 
-- `plan.md`
-- `DOMAIN_MODEL.md`
-- `DATABASE_CONVENTIONS.md`
+- `docs/PLAN.md`
+- `docs/DOMAIN_MODEL.md`
+- `docs/DATABASE_CONVENTIONS.md`
 - later entity relationship diagrams
 - command/API specifications
 - state-resolution specification
