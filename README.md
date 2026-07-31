@@ -24,13 +24,13 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 The project is in the architecture and domain-modeling stage. This is a restart, not an incremental evolution of the prior implementation.
 
-The repository still contains database schema, Lambda functions, Terraform modules, and prototype scripts from an earlier iteration of the platform. That code predates the persistent-world model described in this document and will be replaced rather than extended or migrated. It has not yet been removed from the repository.
+The repository previously contained database schema, Lambda functions, and prototype scripts from an earlier iteration of the platform (`Database/`, `DirectAPICalls/`, `PDFChatBot/`, `src/lambda-functions/`, and related build scripts). That code predated the persistent-world model described in this document and has been removed rather than extended or migrated. The Terraform configuration was trimmed to match: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) remain, while the modules and environment wiring built specifically for the old schema and Lambda functions (`db_runner`, `lambda-api`, `lambda-with-build`, and their environment configs) were removed.
 
 Before implementation proceeds:
 
 - Any existing database content will be dropped, not migrated.
 - No legacy schema or API compatibility is required.
-- Existing infrastructure, Lambda functions, and prototype code will be rebuilt against this design rather than adapted in place.
+- Infrastructure, application services, and integrations will be built fresh against this design rather than adapted from prior code.
 
 Existing campaign material (notes, PDFs, prior session content) will still be imported later through a staged, reviewed import process. Imported content will not become canonical world data until it has been validated and approved.
 
@@ -755,7 +755,7 @@ The database will use bounded PostgreSQL schemas:
 
 `docs/PLAN.md` and the rest of the design and process documentation live under `docs/`; this README remains the high-level project entry point.
 
-This tree is the target layout, not the current one. The repository still contains pre-restart directories (`Database/`, `terraform/`, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, `scripts/`) that predate this design — see [Current Status](#current-status). They will be removed or rebuilt under this structure as implementation proceeds, rather than migrated as-is.
+This tree is the target layout, not the current one — `database/`, `src/`, and `tests/` don't exist yet and will be created as implementation proceeds. Pre-restart application code and orphaned Terraform wiring have been removed; see [Current Status](#current-status) for what was cleaned up and what was intentionally kept (the generic `terraform/modules/database` and `terraform/modules/secrets` modules).
 
 ---
 
@@ -778,12 +778,12 @@ Current project and architecture documents:
 - [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — application, service, AI, integration and deployment architecture
 - [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — full logical database model and domain diagrams
 - [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) — end-to-end dungeon and quest progression diagrams and acceptance scenario
+- [CLAUDE.md](CLAUDE.md) — Claude Code operating instructions: tech stack, architectural rules, and documentation map
 
 Planned supporting documents:
 
 - `docs/DEVELOPMENT.md` — local development and contribution workflow
 - `docs/adr/` — individual architecture decision records
-- `CLAUDE.md` — Claude Code development instructions
 - `.github/copilot-instructions.md` — GitHub Copilot repository instructions
 
 ---

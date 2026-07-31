@@ -25,9 +25,6 @@ discord_bot_token     = ""
 discord_application_id = ""   # not secret but kept here for convenience
 discord_public_key     = ""   # not secret but kept here for convenience
 
-# DB Runner (defaults are fine; bucket name is auto-generated)
-sql_prefix = "dnd/sql"
-
 # Extra tags (optional)
 additional_tags = {
   CostCenter = "DEV-1234"

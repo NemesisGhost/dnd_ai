@@ -1,1 +1,0 @@
-# Intentionally empty; AWS Lambda Python runtime includes boto3

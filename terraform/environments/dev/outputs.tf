@@ -49,22 +49,6 @@ output "app_config_secret_name" {
   value       = ""
 }
 
-# Lambda Outputs
-/* output "lambda_execution_role_arn" {
-  description = "ARN of the Lambda execution role"
-  value       = module.lambda.lambda_execution_role_arn
-}
-
-output "discord_bot_function_name" {
-  description = "Name of the Discord bot Lambda function"
-  value       = module.lambda.discord_bot_function_name
-}
-
-output "ai_query_function_name" {
-  description = "Name of the AI query Lambda function"
-  value       = module.lambda.ai_query_function_name
-} */
-
 # Connection Information
 output "connection_command" {
   description = "Command to connect to the database (requires AWS CLI and jq)"
@@ -102,49 +86,12 @@ output "deployment_summary" {
       discord_secret  = module.secrets.discord_bot_token_secret_name
       app_config      = null
     }
-/*     lambda_functions = {
-      discord_bot = module.lambda.discord_bot_function_name
-      ai_query    = module.lambda.ai_query_function_name
-    } */
   }
-}
-
-# DB Runner Outputs
-output "runner_instance_id" {
-  description = "EC2 instance ID of the SQL runner"
-  value       = module.db_runner.runner_instance_id
-}
-
-output "runner_sg_id" {
-  description = "Security group ID of the SQL runner"
-  value       = module.db_runner.runner_security_group_id
 }
 
 output "rds_address" {
   description = "Address of the PostgreSQL RDS instance"
   value       = module.database.database_endpoint
-}
-
-output "sql_s3_uri" {
-  description = "S3 URI where SQL files are synced"
-  value       = "s3://${module.db_runner.sql_bucket_name}/${var.sql_prefix}"
-}
-
-output "sql_bucket_name" {
-  description = "The S3 bucket name created for SQL files"
-  value       = module.db_runner.sql_bucket_name
-}
-
-# db-schema-introspect API
-output "db_schema_introspect_invoke_url" {
-  description = "Invoke URL for the db-schema-introspect REST API"
-  value       = module.db_schema_introspect_vars.invoke_url
-}
-
-# query-runner API
-output "query_runner_invoke_url" {
-  description = "Invoke URL for the query-runner REST API"
-  value       = module.query_runner_vars.invoke_url
 }
 
 # IAM auth helper output (for reference when granting rds-db:connect)

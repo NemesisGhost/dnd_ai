@@ -1,1 +1,0 @@
-"""Query runner Lambda package."""
