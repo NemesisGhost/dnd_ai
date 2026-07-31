@@ -270,6 +270,8 @@ Sources may include:
 - Session transcript
 - Administrative correction
 
+The complete creation, approval, mutation, branching, archival and deletion rules are defined in [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md).
+
 ---
 
 ## System Architecture
@@ -320,6 +322,8 @@ flowchart TB
 ```
 
 Client integrations should communicate through application services rather than writing directly to database tables.
+
+The detailed application, service, transaction, AI, integration and deployment architecture is defined in [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md).
 
 ---
 
@@ -403,6 +407,8 @@ classDiagram
 ```
 
 Every important world object receives a base entity record. Domain-specific subtype tables contain the attributes unique to that entity type.
+
+The complete logical database model and domain diagrams are defined in [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md).
 
 ---
 
@@ -634,7 +640,7 @@ A playable dungeon flow should support:
 10. Other campaigns on the same timeline observe persistent consequences.
 11. Campaigns on alternate timelines remain unaffected after their branch points.
 
-This workflow should remain a central architectural test for database and service-layer decisions.
+This workflow should remain a central architectural test for database and service-layer decisions. The detailed scenario, diagrams, transaction boundaries and acceptance criteria are defined in [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md).
 
 ---
 
@@ -718,8 +724,9 @@ The database will use bounded PostgreSQL schemas:
 ├── docs/
 │   ├── PLAN.md
 │   ├── DOMAIN_MODEL.md
-│   ├── DEVELOPMENT.md
 │   ├── DATABASE_CONVENTIONS.md
+│   ├── ENTITY_LIFECYCLE.md
+│   ├── DEVELOPMENT.md
 │   ├── architecture/
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
@@ -762,14 +769,19 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ## Documentation
 
+Current project and architecture documents:
+
+- [docs/PLAN.md](docs/PLAN.md) — source of truth for implementation phases, dependencies, deliverables, and acceptance criteria
+- [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) — authoritative vocabulary and domain ownership rules
+- [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) — PostgreSQL naming, UUIDs, migrations, constraints and testing conventions
+- [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) — entity creation, approval, mutation, timeline, archival and deletion rules
+- [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — application, service, AI, integration and deployment architecture
+- [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — full logical database model and domain diagrams
+- [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) — end-to-end dungeon and quest progression diagrams and acceptance scenario
+
 Planned supporting documents:
 
-- `docs/PLAN.md` — source of truth for implementation phases, dependencies, deliverables, and acceptance criteria
-- `docs/DOMAIN_MODEL.md` — authoritative vocabulary and ownership rules
-- `docs/DATABASE_CONVENTIONS.md` — PostgreSQL naming, UUIDs, migrations, constraints, and testing
-- `docs/architecture/SYSTEM_ARCHITECTURE.md` — application and integration architecture
-- `docs/architecture/DATABASE_MODEL.md` — detailed logical database model and domain diagrams
-- `docs/architecture/DUNGEON_FLOW.md` — end-to-end dungeon and quest progression example
+- `docs/DEVELOPMENT.md` — local development and contribution workflow
 - `docs/adr/` — individual architecture decision records
 - `CLAUDE.md` — Claude Code development instructions
 - `.github/copilot-instructions.md` — GitHub Copilot repository instructions
