@@ -1153,6 +1153,32 @@ A phase's exit criteria below are therefore necessary but not sufficient. A phas
 
 "It passes locally" is not a verification claim this project accepts for anything touching the database or a deployable.
 
+### 23.1 Phase exit review
+
+Every phase ends with a review, before the next one starts. Phase 1 produced six defects that no amount of offline checking would have found, and several of them were latent for days because the exit criteria could be marked done without evidence. This section is the correction.
+
+**Write down what was actually verified.** Each phase produces `docs/PHASEn_VERIFICATION.md`, following the shape of [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md): what was run and against what, the bugs found and fixed, and what remains outstanding. "Verified" means a command was run and its output observed — not that the code looks right. State the method next to the claim, so a reader can tell `alembic --sql` output from a live run.
+
+**Re-check the recurring obligations.** These can regress silently in any phase that touches schema, and several are invisible until something downstream breaks:
+
+| Obligation | Why it needs re-checking |
+|---|---|
+| Object ownership | Tables must end up owned by `migration_owner` ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)). If `SET ROLE` stops holding, ownership silently moves to the connecting user |
+| Default privileges | `ALTER DEFAULT PRIVILEGES` only fires for objects created *by* `migration_owner`. Verify by connecting as `app_read_write`/`app_read_only`, not by reading grant statements |
+| Seed idempotency | Seeding twice must be a no-op ([DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing)) |
+| Constraint tests | Positive *and* negative per [§32.1](DATABASE_CONVENTIONS.md#321-constraint-tests). An untested `CHECK` is an unverified rule |
+| Comments and FK indexes | [§31](DATABASE_CONVENTIONS.md#31-documentation-conventions) and [§19.1](DATABASE_CONVENTIONS.md#191-foreign-key-indexes), in the same revision that creates the object |
+| Downgrade | Round trip to `base` and back, against `dev`. Phase 1's downgrade was broken for weeks while looking fine |
+| CI green | On a real push, not locally |
+
+**Review the next phase before starting it.** Ask three questions and amend [§23](#23-delivery-phases) with the answers:
+
+1. **What does this phase do for the first time?** First tables, first subtype, first seed content, first deployable, first cross-schema transaction. First-time mechanisms are where Phase 1's defects clustered, and they deserve an explicit exit criterion rather than an assumption.
+2. **Which deferred items come due?** Deferrals recorded elsewhere ("add this when X exists") have to be swept up by whichever phase makes X exist, or they are never done.
+3. **Are the exit criteria falsifiable?** "X is enforceable" is not checkable. "The constraint rejects Y, and a test proves it" is. Rewrite any criterion that could be marked done by inspection alone.
+
+**Fold what you learned back into the conventions.** A bug caused by a convention being wrong or incomplete is a documentation defect, not just a code defect — fix both, in the same change. ADRs [0008](adr/0008-aws-first-deployment-and-verification.md) and [0009](adr/0009-separate-owning-role-from-login-roles.md) both came out of Phase 1 this way.
+
 ### Phase 0: Documentation and decision records
 
 Deliver:
@@ -1197,7 +1223,7 @@ Exit criteria:
 - Schema validation runs in CI.
 - A migration can be applied end-to-end against a deployed AWS RDS instance using only Terraform-managed infrastructure (no manual console steps).
 
-A step-by-step walkthrough of this phase — project skeleton, Alembic scaffold, bootstrap revision, shared domains, seed infrastructure, CI, migration runner — is in [DEVELOPMENT.md §5](DEVELOPMENT.md#5-phase-1-walkthrough).
+**Complete.** All four criteria closed with live-AWS evidence; see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md) for what was verified, the six defects that verification uncovered, and what remains outstanding. The step-by-step walkthrough — project skeleton, Alembic scaffold, bootstrap revision, shared domains, seed infrastructure, CI — is kept in [DEVELOPMENT.md §5](DEVELOPMENT.md#5-phase-1-walkthrough-complete) as the reference every later phase builds on.
 
 ### Phase 2: Core world platform
 
@@ -1214,10 +1240,22 @@ Deliver:
 - users and basic security
 - audit log
 
+The table list is [§4.3](#43-foundation-tables); the canon statuses to seed are [§4.4](#44-canon-lifecycle); provenance requirements are [§4.5](#45-provenance).
+
 Exit criteria:
 
-- A world and arbitrary entity can be created with provenance.
-- Entity subtype consistency is enforceable.
+- A world and an arbitrary entity can be created with provenance — the entity references a source, a canon status, and a lifecycle status, and `audit.change_log` records the creation.
+- Creating an entity whose `entity_type_id` does not match its world, or whose canon status is not a seeded value, is rejected by the database, with a negative test proving it.
+- `app_read_write` can read and write every table this phase creates; `app_read_only` can read them and is refused on write. Verified by connecting as those roles — not by reading grant statements.
+- Re-running the phase's seeds produces no change: same rows, same values, no error. The seed-idempotency CI step is wired up and green.
+- Every new table and non-obvious column carries a comment, and every foreign key is indexed.
+
+First-time obligations (per [§23.1](#231-phase-exit-review)):
+
+- **First phase to create tables**, so the first real test of the ownership chain in [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md). `ALTER DEFAULT PRIVILEGES FOR ROLE migration_owner` has never actually fired — Phase 1 created the entries but no tables to apply them to. If `SET ROLE migration_owner` is not holding, the tables come out owned by the connecting user and the application roles receive nothing. **This fails silently**: migrations succeed, tests using the admin connection pass, and only the application notices, much later. The third exit criterion above is what catches it, and it is the single most important check in this phase.
+- **First phase to seed real lookup content**, so `apply_seed()` executes for the first time. It was rewritten during Phase 1 (bound parameters, JSON adaptation) but never once run. The seed-idempotency CI step deferred in [DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration) comes due here.
+- **Establishes the class-table inheritance root.** `core.entities` is the parent every later subtype hangs off, so the PK/FK pattern chosen here propagates to Phases 4, 5, 8, and 9. Note that Phase 2 delivers no subtypes of its own — the mechanism can be built and unit-tested here, but it is not fully exercised until Phase 4 (see that phase's first-time obligations).
+- **First use of `audit.change_log`.** Phase 2 only needs creation events recorded; the causal-event rule (rule 6 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules)) is not fully exercised until Phase 6.
 
 ### Phase 3: Timelines and campaigns
 
@@ -1255,6 +1293,12 @@ Exit criteria:
 
 - NPC and PC use the same mechanical model.
 - A character sheet can be assembled from structured data.
+- A subtype row cannot exist without its parent `core.entities` row, cannot use a primary key of its own, and cannot attach to a parent of the wrong entity type — each rejected by the database, each with a negative test.
+
+First-time obligations (per [§23.1](#231-phase-exit-review)):
+
+- **First real class-table inheritance subtypes** (`character.characters` → `character.npcs` / `character.player_characters`), so this is where the mechanism Phase 2 could only build in the abstract is actually exercised. Phase 2's "entity subtype consistency is enforceable" claim is only fully settled here. Get it right before Phases 5, 8, and 9 inherit the pattern.
+- **First substantial seed content** (the initial D&D ruleset), which is a much larger idempotency surface than Phase 2's lookup tables and the first seed data with real structure rather than flat codes.
 
 ### Phase 5: Locations and dungeon play
 
@@ -1291,6 +1335,12 @@ Exit criteria:
 
 - A player action can resolve into an event and atomic state changes.
 - Current state and event history remain consistent.
+- A failure partway through a multi-domain command leaves no partial write — proven by a test that forces the failure, not by inspecting the transaction boundary.
+
+First-time obligations (per [§23.1](#231-phase-exit-review)):
+
+- **First full exercise of rule 6** (state changes need a causal event, committing atomically — [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules)) and of the transaction boundary in [SYSTEM_ARCHITECTURE.md §7](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary). Phase 2 records creation events; this is where the atomicity guarantee itself is on the line.
+- **Likely the first deployable**, if outbox processing lands here — which brings [§30.8](#308-per-phase-deployment-expectations) into force for the first time (a service actually running on Fargate in `dev`, not just migrations).
 
 ### Phase 7: Quests and knowledge
 

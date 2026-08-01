@@ -12,7 +12,7 @@ This document covers the **mechanics** — toolchain, layout, commands, workflow
 - [2. Repository layout](#2-repository-layout)
 - [3. Local setup](#3-local-setup)
 - [4. Database and migrations](#4-database-and-migrations)
-- [5. Phase 1 walkthrough](#5-phase-1-walkthrough)
+- [5. Phase 1 walkthrough (complete)](#5-phase-1-walkthrough-complete)
 - [6. Testing](#6-testing)
 - [7. Code quality](#7-code-quality)
 - [8. Continuous integration](#8-continuous-integration)
@@ -177,9 +177,13 @@ Against a deployed environment, migrations do **not** run from a laptop — the 
 
 ---
 
-## 5. Phase 1 walkthrough
+## 5. Phase 1 walkthrough (complete)
 
-[PLAN.md §23 Phase 1](PLAN.md#23-delivery-phases) is the current target. Its exit criteria are: an empty database can be created reproducibly, migrations run up and down in development, schema validation runs in CI, and a migration can be applied end-to-end against deployed AWS RDS using only Terraform-managed infrastructure.
+**Phase 1 is done.** All four exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), which also records the six defects that verification uncovered. The current target is [PLAN.md §23 Phase 2](PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
+
+This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
+
+Its exit criteria were: an empty database can be created reproducibly, migrations run up and down in development, schema validation runs in CI, and a migration can be applied end-to-end against deployed AWS RDS using only Terraform-managed infrastructure.
 
 Concretely, in order:
 
@@ -194,10 +198,12 @@ Concretely, in order:
    It must be idempotent and re-runnable. Treat it as a revision, not an untracked script, so it is versioned like everything else.
 4. **Shared domains** — `core.rating_1_10`, `core.percentage_0_100`, `core.nonnegative_integer` per [PLAN.md §4.2](PLAN.md#42-shared-domains).
 5. **Seed infrastructure** — the mechanism for idempotent lookup seeding (§25.4), not yet the seed content.
-6. **CI workflow** — see §8 below.
-7. **Migration runner** — `terraform/modules/db_migration_runner/`, per [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism). This is what closes the final exit criterion.
+6. **CI workflow** — see §8 below, plus `terraform/modules/github_actions_ci` for the OIDC role it assumes.
+7. **`dev` deployed and reachable** — `terraform/environments/dev` applied, with migrations run against the live instance per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism).
 
-Steps 1–6 need no AWS access to *write*. Verifying them — actually running the migrations and the test suite — does, per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy): both go against the deployed `dev` RDS instance, reached per [§3](#3-local-setup). Step 7 (the migration runner) is additionally what closes Phase 1's own AWS exit criterion for *deployed* migrations specifically — it's a distinct mechanism from the day-to-day test/dev reachability in §29.9, reserved for `staging`/`prod` where public access is never opened.
+Steps 1–6 need no AWS access to *write*. Verifying them — actually running the migrations and the test suite — does, per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy): both go against the deployed `dev` RDS instance, reached per [§3](#3-local-setup).
+
+> **What actually closed the AWS exit criterion.** This step originally read "Migration runner — `terraform/modules/db_migration_runner/`". That module was never built and turned out not to be needed: `dev` is directly reachable via the session-scoped ingress mechanism in [§29.9](PLAN.md#299-aws-first-verification-mechanism), so migrations run against it the same way they run anywhere else, and CI does the same with an OIDC-assumed role. The SSM-based runner in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) remains the plan for `staging`/`prod`, where public access is never opened — it is deferred, not cancelled, and comes due with the first non-`dev` environment.
 
 ---
 
@@ -252,7 +258,7 @@ Run all three before committing. CI runs them without `--fix`.
 - the full pytest suite against that same ephemeral database
 - drop the ephemeral database and revoke the ingress rule — in a step that always runs, including on job failure, so a broken run doesn't leave a stale allowlist entry or an orphaned database behind
 
-Seed idempotency (seeding twice yields the same state) is not yet a CI step — `apply_seed()` in `src/dnd_ai/persistence/seeds.py` exists, but no revision calls it with real seed content yet. Add that check to the workflow in the same change that introduces the first seed file.
+Seed idempotency (seeding twice yields the same state) is not yet a CI step — `apply_seed()` in `src/dnd_ai/persistence/seeds.py` exists, but no revision calls it with real seed content yet. **This comes due in Phase 2**, which seeds the canon and lifecycle statuses from [PLAN.md §4.4](PLAN.md#44-canon-lifecycle); add the check in the same change that introduces the first seed file. Note that `apply_seed()` has never executed even once — it was rewritten during Phase 1 but only ever verified by inspection.
 
 A pull request that changes schema without a green migration job should not merge.
 
@@ -291,3 +297,4 @@ Before opening a pull request:
 - [ ] If the change adds or alters a deployable, it runs in `dev` on ECS Fargate and was exercised there ([PLAN.md §30.8](PLAN.md#308-per-phase-deployment-expectations))
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later
+- [ ] If this change completes a phase, the phase exit review in [PLAN.md §23.1](PLAN.md#231-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended

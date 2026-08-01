@@ -75,10 +75,11 @@ Full rules are in the linked docs — don't treat this as complete.
 
 ## 7. Before implementing a feature
 
-1. Check [docs/PLAN.md](docs/PLAN.md) for the current phase and that feature's exit criteria.
+1. Check [docs/PLAN.md](docs/PLAN.md) for the current phase, that feature's exit criteria, and the phase's **first-time obligations** — the mechanisms a phase exercises for the first time are where defects cluster ([§23.1](docs/PLAN.md#231-phase-exit-review)).
 2. Look up the relevant concepts in [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and their schema in [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — don't invent new domain vocabulary without checking it doesn't already exist under a different name.
 3. If it creates, mutates, or removes an entity, follow the matching command/workflow in [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md).
 4. Write schema per [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md); check §34 (anti-patterns) before finishing.
 5. Place the code in the correct architectural layer per [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — don't let API handlers embed domain rules or let domain services bypass the command/transaction pattern.
 6. Follow the mechanics in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — Alembic revision requirements, test layers, and the definition-of-done checklist in §10.
 7. If the change introduces a new cross-cutting concept, update the relevant doc under `docs/` in the same change — these documents are meant to stay current, not drift from the implementation.
+8. If the change **completes a phase**, run the phase exit review in [docs/PLAN.md §23.1](docs/PLAN.md#231-phase-exit-review): write `docs/PHASEn_VERIFICATION.md`, re-check the recurring obligations, and review the next phase against what this one taught before starting it. A bug caused by a convention being wrong is a documentation defect too — fix both.
