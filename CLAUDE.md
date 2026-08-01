@@ -42,7 +42,7 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, definition of done. Read before writing code. |
 | [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) | Infrastructure reference — variables, outputs, secrets, verification, teardown, and known gaps in the current Terraform. Deployment path is [docs/QUICKSTART.md](docs/QUICKSTART.md), pre-flight is [docs/CHECKLIST.md](docs/CHECKLIST.md), onboarding is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). The plan for what it should become is [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql). |
 | [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | Long-form version of this file: worked examples, anti-patterns, decision trees. This file is the summary; that one has the detail. |
-| [docs/adr/](docs/adr/) | One record per architectural decision. Most are stubs pointing back at PLAN.md §2; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) is written in full and governs where code runs and is verified. |
+| [docs/adr/](docs/adr/) | One record per architectural decision. Most are stubs pointing back at PLAN.md §2. [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) governs where code runs and is verified; [ADR 0009](docs/adr/0009-separate-owning-role-from-login-roles.md) governs the database role model — read it before touching roles, grants, or object ownership. |
 
 ## 5. Non-negotiable architectural rules
 

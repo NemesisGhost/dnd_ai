@@ -212,7 +212,8 @@ terraform -chdir=terraform/environments/dev output
 | `vpc_id` | VPC the instance lives in |
 | `database_security_group_id` | For granting other services ingress |
 | `openai_secret_name` / `discord_secret_name` | Names of the value-less secret entries |
-| `rds_iam_connect_resource_arn` | The `dbuser` ARN pattern for `rds-db:connect` IAM policies |
+| `rds_iam_connect_resource_arn` | The wildcard `dbuser` ARN pattern for `rds-db:connect` IAM policies — convenient for exploration, too broad for a real policy |
+| `rds_iam_connect_arns` | Per-role `dbuser` ARNs keyed by database role name; prefer these when writing an actual policy |
 | `connection_command` | A ready-made psql snippet (marked `sensitive`) |
 
 Retrieving credentials and connecting:
@@ -272,7 +273,7 @@ For a compute role that needs to read project secrets:
 }
 ```
 
-For a role connecting with IAM database authentication, scope `rds-db:connect` to the ARN from the `rds_iam_connect_resource_arn` output, narrowing `/*` to the specific database user.
+For a role connecting with IAM database authentication, scope `rds-db:connect` to the specific entry it needs from the `rds_iam_connect_arns` output — the migration task to `migration_runner`, the API and worker to `app_read_write`, and so on ([PLAN.md §30.5](PLAN.md#305-identity-and-secrets)). `migration_owner` deliberately has no entry: it is `NOLOGIN` and cannot authenticate ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
 
 ---
 
@@ -365,5 +366,5 @@ Documented so they get fixed rather than rediscovered. These are **code** issues
 5. **The `secrets` module exposes `api_gateway_api_key_secret_*` and `basic_auth_secret_*`** outputs that belong to the removed pre-restart Lambda API. Confirm whether the current architecture needs them; if not, remove.
 6. **No remote state.** Local state blocks any second operator and risks loss. Bootstrap per [PLAN.md §29.2](PLAN.md#292-remote-terraform-state) before `staging` exists.
 7. **No `multi_az` variable**, required before `prod` per [PLAN.md §29.8](PLAN.md#298-open-items).
-8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) needs a role that can create and drop databases on `dev`; the current bootstrap revision's five roles are scoped to schema-level DDL/DML only, none with `CREATEDB`. Add one (or grant it narrowly to `migration_owner`) before wiring up CI's use of this mechanism.
+8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) needs a role that can create and drop databases on `dev`; the bootstrap revision's six roles are scoped to schema-level DDL/DML only, none with `CREATEDB`. Add one as a **login** role before wiring up CI's use of this mechanism — not by granting `CREATEDB` to `migration_owner`, which is `NOLOGIN` and nothing connects as ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
 9. **`scripts/aws-db-allow-my-ip.sh` and the CI IP-allowlist step don't exist yet**, nor does the IAM policy scoping who may call `ec2:AuthorizeSecurityGroupIngress`/`RevokeSecurityGroupIngress` on the `dev` security group specifically. Needed before [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) is more than a design.

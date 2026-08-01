@@ -7,21 +7,23 @@ Create Date: 2026-07-31 00:00:00.000000
 Purpose:
     Bootstrap the database with essential infrastructure required before any domain
     tables can be created: PostgreSQL extensions, the thirteen bounded schemas, public
-    schema protection, and five database roles.
+    schema protection, and the six database roles.
 
 Forward migration:
     - Enable pgcrypto and pg_trgm extensions (vector deferred until embeddings)
     - Create thirteen bounded schemas per docs/PLAN.md §3
     - Revoke public schema CREATE privilege per docs/DATABASE_CONVENTIONS.md §3.1
-    - Create five database roles per docs/DATABASE_CONVENTIONS.md §27.1:
-      * migration_owner — owns schema objects; DDL only
-      * app_read_write — application runtime; DML only
-      * app_read_only — reporting and read models
-      * integration_worker — scoped for Foundry/Discord/import services
-      * admin_maintenance — break-glass human access
-    - Grant rds_iam to all five roles (including migration_owner, per
-      docs/PLAN.md §29.6) for IAM database authentication, where the rds_iam
-      role exists (RDS only — skipped on local/CI PostgreSQL)
+    - Create six database roles per docs/DATABASE_CONVENTIONS.md §27.1, split
+      into one owning role and five login roles:
+      * migration_owner   — NOLOGIN. Owns every schema object. Never authenticates.
+      * migration_runner  — LOGIN. Runs migrations as a member of migration_owner.
+      * app_read_write    — LOGIN. Application runtime; DML only
+      * app_read_only     — LOGIN. Reporting and read models
+      * integration_worker — LOGIN. Scoped for Foundry/Discord/import services
+      * admin_maintenance — LOGIN. Break-glass human access
+    - Grant rds_iam to the five LOGIN roles only, where rds_iam exists (RDS
+      only — skipped on local/CI PostgreSQL). migration_owner is deliberately
+      excluded; see the role-model note in section 4 below.
     - Set up schema ownership and default privileges
 
 Rollback:
@@ -100,25 +102,48 @@ def upgrade() -> None:
     # ==========================================================================
     # 4. Database roles
     # ==========================================================================
-    # Five roles per docs/DATABASE_CONVENTIONS.md §27.1, each created WITH LOGIN
-    # and granted rds_iam for IAM database authentication — including
-    # migration_owner, per docs/PLAN.md §29.6: the migration runner's IAM
-    # instance role connects as migration_owner via `rds-db:connect`, not a
-    # stored password.
+    # Six roles per docs/DATABASE_CONVENTIONS.md §27.1, split into one role that
+    # OWNS objects and five roles that LOG IN. See ADR 0009 for the full
+    # rationale; the short version, because it is easy to "simplify" back into
+    # a bug:
     #
-    # rds_iam only exists on RDS. Locally and in CI (plain postgres:15) the
-    # role is absent, so the grant is conditional rather than failing the
-    # bootstrap on non-RDS PostgreSQL.
+    #   On RDS, granting `rds_iam` to a role forces IAM authentication for that
+    #   role and permanently disables password auth for it. Role membership is
+    #   transitive, so if migration_owner held rds_iam, then granting
+    #   migration_owner to the RDS master user (which the ownership transfer in
+    #   section 5 below requires) would silently lock the master user out of
+    #   password authentication — every subsequent connection failing with
+    #   "PAM authentication failed". That is not hypothetical: it happened on a
+    #   real instance and is what motivated this split.
     #
-    # Role hierarchy:
-    #   migration_owner: Owns all schema objects; DDL only
-    #   app_read_write: Application runtime; DML on owned schemas
-    #   app_read_only: SELECT only
-    #   integration_worker: Scoped to integration schema plus minimal others
-    #   admin_maintenance: Break-glass, all privileges
+    #   Keeping migration_owner NOLOGIN and rds_iam-free makes it a pure
+    #   ownership anchor that can be granted to anyone safely, because there is
+    #   no authentication behavior to inherit.
+    #
+    # Role model:
+    #   migration_owner    NOLOGIN. Owns every schema object. Never authenticates.
+    #   migration_runner   LOGIN. Member of migration_owner; runs migrations.
+    #   app_read_write     LOGIN. Application runtime; DML on owned schemas
+    #   app_read_only      LOGIN. SELECT only
+    #   integration_worker LOGIN. Scoped to integration schema plus minimal others
+    #   admin_maintenance  LOGIN. Break-glass, all privileges
 
+    # The owning role: no LOGIN, and deliberately never granted rds_iam.
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'migration_owner') THEN
+                CREATE ROLE migration_owner WITH NOLOGIN;
+            END IF;
+        END
+        $$;
+    """)
+
+    # The login roles. rds_iam only exists on RDS; locally and in CI (plain
+    # postgres:15) the role is absent, so the grant is conditional rather than
+    # failing the bootstrap on non-RDS PostgreSQL.
     for role_name in (
-        "migration_owner",
+        "migration_runner",
         "app_read_write",
         "app_read_only",
         "integration_worker",
@@ -143,13 +168,22 @@ def upgrade() -> None:
             $$;
         """)
 
-    # The connecting role (the RDS master user, or `postgres` locally) must be
-    # a member of migration_owner before it can transfer schema ownership to
-    # it or set default privileges "FOR ROLE migration_owner" below — neither
-    # statement is permitted otherwise, even for the RDS master user (which is
-    # rds_superuser, not a true superuser, and gets no implicit membership in
-    # roles it creates). Verified against a real RDS instance: this failed
-    # with "must be member of role migration_owner" without this grant.
+    # migration_runner executes migrations but must not own what it creates —
+    # objects are owned by migration_owner so that a compromised or rotated
+    # runner identity never owns canon (§27.2). env.py issues SET ROLE
+    # migration_owner after connecting to make that happen.
+    op.execute("GRANT migration_owner TO migration_runner;")
+
+    # The connecting role (the RDS master user, or `postgres` locally) also
+    # needs membership before it can transfer schema ownership to
+    # migration_owner or set default privileges "FOR ROLE migration_owner"
+    # below — neither statement is permitted otherwise, even for the RDS master
+    # user, which is rds_superuser rather than a true superuser and gets no
+    # implicit membership in roles it creates. Verified against a real RDS
+    # instance: without this, section 5 fails with
+    # "must be member of role migration_owner".
+    #
+    # This grant is only safe because migration_owner carries no rds_iam.
     op.execute("GRANT migration_owner TO CURRENT_USER;")
 
     # ==========================================================================
@@ -203,12 +237,31 @@ def upgrade() -> None:
             GRANT ALL PRIVILEGES ON SEQUENCES TO admin_maintenance;
         """)
 
+    # ==========================================================================
+    # 6. Become migration_owner for the rest of this run
+    # ==========================================================================
+    # PostgreSQL assigns ownership from the CURRENT role, not from inherited
+    # membership — so without this, every object created by later revisions in
+    # this same `alembic upgrade` would be owned by whoever connected, and the
+    # ALTER DEFAULT PRIVILEGES entries above (which are keyed to
+    # migration_owner) would never fire.
+    #
+    # env.py issues the same SET ROLE on connect for runs where this revision
+    # has already been applied; this one covers the remainder of a run that
+    # starts from an empty database. downgrade() resets it.
+    op.execute("SET ROLE migration_owner;")
+
 
 def downgrade() -> None:
     """Revert the bootstrap migration."""
 
     # WARNING: Only safe on empty development databases
     # Running this on a database with data will CASCADE destroy everything
+
+    # Stop being migration_owner (set either by upgrade() above or by env.py on
+    # connect) — a role cannot be dropped while it is the current role, and the
+    # cleanup below has to run as the connecting user.
+    op.execute("RESET ROLE;")
 
     # Drop schemas (CASCADE removes all contained objects).
     # `core` is deliberately excluded: version_table_schema = "core" (alembic.ini),
@@ -237,15 +290,45 @@ def downgrade() -> None:
     # Restore public schema CREATE privilege
     op.execute("GRANT CREATE ON SCHEMA public TO PUBLIC;")
 
-    # Drop roles
-    # Cannot drop if objects are owned or privileges exist
-    # In practice, downgrade immediately after upgrade is safe
-    # Downgrade after domain migrations requires manual REASSIGN OWNED / DROP OWNED first
+    # `core` survives (see above), so migration_owner still owns it and
+    # admin_maintenance still holds grants on it. PostgreSQL refuses to drop a
+    # role that owns objects or is the grantee of surviving privileges, so both
+    # have to be unwound before the DROP ROLE calls below.
+    op.execute("ALTER SCHEMA core OWNER TO CURRENT_USER;")
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'admin_maintenance') THEN
+                REVOKE ALL PRIVILEGES ON SCHEMA core FROM admin_maintenance;
+            END IF;
+        END
+        $$;
+    """)
+
+    # Clear migration_owner's remaining privilege and default-privilege entries.
+    # REASSIGN first so anything it still owns changes hands rather than being
+    # dropped; DROP OWNED then removes only the grants. Both require membership
+    # in migration_owner, which upgrade() granted to CURRENT_USER.
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'migration_owner') THEN
+                EXECUTE format('REASSIGN OWNED BY migration_owner TO %I', CURRENT_USER);
+                DROP OWNED BY migration_owner;
+            END IF;
+        END
+        $$;
+    """)
+
+    # Drop roles. migration_runner is dropped before migration_owner because it
+    # is a member of it; the login roles hold no surviving grants once the
+    # schemas above are gone.
     roles = [
         "integration_worker",
         "app_read_only",
         "app_read_write",
         "admin_maintenance",
+        "migration_runner",
         "migration_owner",
     ]
     for role in roles:

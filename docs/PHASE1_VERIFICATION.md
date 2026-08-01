@@ -66,24 +66,39 @@ Connect to the database and verify:
 docker exec -it dnd-ai-pg psql -U postgres -d dnd_ai
 
 # In psql:
-\dn+  -- Should show all 13 schemas
+\dn+  -- Should show all 13 schemas, all owned by migration_owner
 \dD core.*  -- Should show three domain types
-\du  -- Should show five roles plus postgres
+\du  -- Should show six roles plus postgres
 SELECT schema_name FROM information_schema.schemata ORDER BY schema_name;
 ```
 
 Expected schemas:
 - ai, audit, campaign, character, core, import, integration, interaction, knowledge, narrative, public, rules, security, world
 
-Expected roles:
-- admin_maintenance, app_read_only, app_read_write, integration_worker, migration_owner, postgres
+Expected roles ([DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles)):
+- admin_maintenance, app_read_only, app_read_write, integration_worker, migration_runner, migration_owner, postgres
+
+`\du` should show `migration_owner` with **"Cannot login"** — that is the point of the split, not a defect. Everything else logs in. Confirm the ownership split took effect:
+
+```sql
+-- migration_owner owns the schemas but cannot authenticate
+SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname LIKE 'migration%';
+SELECT nspname, pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'core';
+
+-- and carries no rds_iam membership (RDS only; returns nothing locally)
+SELECT r.rolname FROM pg_auth_members m
+  JOIN pg_roles r ON m.member = r.oid
+  JOIN pg_roles g ON m.roleid = g.oid
+ WHERE g.rolname = 'rds_iam' ORDER BY 1;
+```
 
 Expected domains in core:
 - rating_1_10, percentage_0_100, nonnegative_integer
 
 `rds_iam` does not exist on local/CI PostgreSQL, so the bootstrap migration
 skips those grants there — this is expected, not a failure. It only grants
-`rds_iam` when that role is present, i.e. on RDS.
+`rds_iam` when that role is present, i.e. on RDS, and only ever to the five
+login roles ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
 
 ### 5. Test downgrade
 

@@ -1606,13 +1606,16 @@ The bootstrap must be idempotent and cover:
 - Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` (`vector` deferred until the embedding subsystem exists).
 - All thirteen schemas from [§3](#3-postgresql-schema-organization): `core`, `security`, `rules`, `character`, `world`, `campaign`, `narrative`, `knowledge`, `interaction`, `ai`, `audit`, `import`, `integration`.
 - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` per [DATABASE_CONVENTIONS.md §3.1](DATABASE_CONVENTIONS.md).
-- The five database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md):
-  - `migration_owner` — owns schema objects; only the migration runner uses it.
+- The six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md), split into one owning role and five login roles:
+  - `migration_owner` — **`NOLOGIN`**. Owns every schema object; never authenticates.
+  - `migration_runner` — executes migrations as a member of `migration_owner`.
   - `app_read_write` — the application's runtime role; DML only, no DDL.
   - `app_read_only` — reporting and read-model queries.
   - `integration_worker` — scoped grants for Foundry/Discord/import-facing services.
   - `admin_maintenance` — break-glass, human use only.
-- Each non-migration role created `WITH LOGIN` and `GRANT rds_iam TO <role>;` so applications authenticate with short-lived IAM tokens rather than static passwords — the instance already has `iam_database_authentication_enabled = true`, so no new Secrets Manager entries are needed for these roles (per rule 10 in [CLAUDE.md](../CLAUDE.md)).
+- Each of the five **login** roles created `WITH LOGIN` and `GRANT rds_iam TO <role>;` so applications authenticate with short-lived IAM tokens rather than static passwords — the instance already has `iam_database_authentication_enabled = true`, so no new Secrets Manager entries are needed for these roles (per rule 10 in [CLAUDE.md](../CLAUDE.md)).
+- `migration_owner` is **excluded** from that grant, and from IAM auth generally. `rds_iam` forces IAM authentication on every role that inherits it, so an owning role carrying it would disable password authentication for the RDS master user the moment the master user is granted the membership that ownership transfer requires. This is not theoretical — it locked a real instance out. See [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md).
+- Migrations issue `SET ROLE migration_owner` after connecting, because PostgreSQL takes object ownership from the current role rather than from inherited membership.
 
 ### 29.6 Migration execution mechanism
 
@@ -1622,7 +1625,7 @@ The bootstrap must be idempotent and cover:
 
 - A small EC2 instance (or an on-demand SSM-managed instance) inside the same private subnets as the database.
 - Invoked via **AWS Systems Manager Run Command** — no bastion, no SSH keys, no public IP, consistent with how `db_runner` worked and with the least-privilege stance in [DATABASE_CONVENTIONS.md §27](DATABASE_CONVENTIONS.md).
-- An IAM instance role scoped to `rds-db:connect` for the `migration_owner` database user only (IAM auth, not a stored password).
+- An IAM instance role scoped to `rds-db:connect` for the `migration_runner` database user only (IAM auth, not a stored password). Not `migration_owner` — that role is `NOLOGIN` and cannot authenticate at all ([§29.5](#295-database-role-schema-and-extension-bootstrap)); the runner connects as `migration_runner` and becomes the owner via `SET ROLE`.
 - Its own security group, attached to the RDS security group via an `aws_security_group_rule` granting itself ingress on 5432 (the same pattern `db_runner` used).
 - An S3 bucket holding the versioned Alembic migrations package (`database/` — Alembic env plus revisions), synced by `build.ps1` or CI before each run.
 
@@ -1671,7 +1674,7 @@ aws ec2 revoke-security-group-ingress --group-id "$SG_ID" \
 
 This reuses infrastructure that already exists rather than adding a new module. It bypasses Terraform for the add/revoke (a `terraform plan` run mid-session will show the rule as drift and is expected to remove it on apply — harmless as long as CI always revokes at job end, including on failure). `enable_public_access` must be `true` for `dev`; `staging` and `prod` stay `publicly_accessible = false` per §29.3 and are never opened this way — their migrations continue to go through the SSM-based migration runner in §29.6, and there is currently no plan to run `tests/database`/`tests/scenario` against them at all (they exist to host real environments, not to be a shared test fixture).
 
-**Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. So each CI run or developer test session creates its own throwaway database on the shared instance (e.g. `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests against it, and drops it — real isolation on shared infrastructure without needing a database-per-environment. This requires a role with `CREATEDB` (the master user, or a narrowly-scoped `test_runner` role using IAM auth) — add this to the bootstrap revision's role list when this mechanism is implemented; it does not exist yet.
+**Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. So each CI run or developer test session creates its own throwaway database on the shared instance (e.g. `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests against it, and drops it — real isolation on shared infrastructure without needing a database-per-environment. This requires a role with `CREATEDB` (the master user, or a narrowly-scoped `test_runner` role using IAM auth) — add this to the bootstrap revision's role list when this mechanism is implemented; it does not exist yet. If added, it belongs with the **login** roles in [§29.5](#295-database-role-schema-and-extension-bootstrap): `WITH LOGIN CREATEDB` plus `rds_iam`, and listed in the `iam_auth_db_users` Terraform variable. `migration_owner` must not gain `CREATEDB` — it is `NOLOGIN` and nothing connects as it.
 
 **What still needs building**: this section describes the target mechanism; as of this writing neither the CI IP-allowlist step nor the ephemeral-database fixture has been exercised against a live `dev` instance (no `dev` environment has been applied yet — see [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)). Treat both as an open task alongside the migration runner in §29.6, not as already-verified infrastructure.
 
@@ -1717,7 +1720,7 @@ All of these share one container image. The entrypoint selects the role, so ther
 ### 30.5 Identity and secrets
 
 - Each service gets its own **task role** (what the application may call) distinct from its **execution role** (what ECS may do to start the task).
-- Database access uses **IAM database authentication** with the roles from [§29.5](#295-database-role-schema-and-extension-bootstrap): the API and worker task roles get `rds-db:connect` for `app_read_write`, read-model-only services get `app_read_only`, and the migration task gets `migration_owner`. No database password is stored for these roles.
+- Database access uses **IAM database authentication** with the login roles from [§29.5](#295-database-role-schema-and-extension-bootstrap): the API and worker task roles get `rds-db:connect` for `app_read_write`, read-model-only services get `app_read_only`, and the migration task gets `migration_runner`. No database password is stored for these roles. Scope each policy to the matching entry in the `rds_iam_connect_arns` Terraform output rather than a `dbuser:.../*` wildcard.
 - External credentials (OpenAI, Discord) come from the Secrets Manager entries the `secrets` module already creates, injected as ECS secrets rather than plaintext environment variables. Per rule 10 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules), no secret enters an image, a task definition, or source control.
 
 ### 30.6 Deployment flow

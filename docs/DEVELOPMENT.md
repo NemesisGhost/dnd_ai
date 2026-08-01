@@ -189,7 +189,7 @@ Concretely, in order:
    - `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `pg_trgm` (`vector` is deferred)
    - all thirteen schemas from [PLAN.md §3](PLAN.md#3-postgresql-schema-organization)
    - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`
-   - the five database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles), each non-migration role created `WITH LOGIN` and granted `rds_iam`
+   - the six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles): `migration_owner` created `NOLOGIN` and never granted `rds_iam`, the five login roles created `WITH LOGIN` and granted `rds_iam`
 
    It must be idempotent and re-runnable. Treat it as a revision, not an untracked script, so it is versioned like everything else.
 4. **Shared domains** — `core.rating_1_10`, `core.percentage_0_100`, `core.nonnegative_integer` per [PLAN.md §4.2](PLAN.md#42-shared-domains).

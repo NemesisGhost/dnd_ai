@@ -1264,17 +1264,27 @@ External commands and integration messages should support idempotency keys.
 
 ### 27.1 Database roles
 
-Use separate roles for:
+Separate the role that **owns** objects from the roles that **log in**. One owning role, five login roles:
 
-- migration owner
-- application read/write
-- read-only reporting
-- integration workers
-- administrative maintenance
+| Role | Logs in | Purpose |
+|---|---|---|
+| `migration_owner` | **No** | Owns every schema object. Never authenticates; exists only as an ownership and default-privilege anchor |
+| `migration_runner` | Yes | Executes migrations as a member of `migration_owner` |
+| `app_read_write` | Yes | Application runtime; DML only, no DDL |
+| `app_read_only` | Yes | Reporting and read-model queries |
+| `integration_worker` | Yes | Scoped grants for Foundry/Discord/import-facing services |
+| `admin_maintenance` | Yes | Break-glass, human use only |
+
+Two rules follow from the split and must not be "simplified" away:
+
+- **`migration_owner` is `NOLOGIN` and is never granted `rds_iam`.** On RDS, granting `rds_iam` to a role forces IAM authentication for it and permanently disables password authentication. Role membership is transitive, so an owning role carrying `rds_iam` silently disables password auth for everyone granted membership in it — including the RDS master user, which must be a member in order to transfer ownership. Keeping the owning role authentication-free makes it safe to grant to anyone.
+- **Object ownership comes from `SET ROLE`, not from membership.** PostgreSQL assigns ownership from the current role, so a session that merely inherits `migration_owner` still creates objects owned by itself, and `ALTER DEFAULT PRIVILEGES FOR ROLE migration_owner` never fires for them. Migrations issue `SET ROLE migration_owner` after connecting.
+
+Rationale and the incident that produced it: [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md).
 
 ### 27.2 Least privilege
 
-Application roles should not own schemas or tables.
+Application roles should not own schemas or tables. Neither should the role that runs migrations — `migration_runner` executes DDL but `migration_owner` owns the result, so rotating or revoking the runner identity never orphans object ownership.
 
 ### 27.3 Secrets
 

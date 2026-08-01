@@ -248,7 +248,7 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 | Document | Purpose |
 |----------|---------|
 | [docs/INFRASTRUCTURE.md](INFRASTRUCTURE.md) | Deploying and operating the AWS infrastructure |
-| [docs/adr/](adr/) | Architecture Decision Records — 0001–0007 are stubs whose decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions); [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) is written in full |
+| [docs/adr/](adr/) | Architecture Decision Records — 0001–0007 are stubs whose decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions); [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) and [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md) (owning vs. login database roles) are written in full |
 | [.github/copilot-instructions.md](../.github/copilot-instructions.md) | GitHub Copilot repository instructions |
 
 ---

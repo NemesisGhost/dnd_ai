@@ -76,15 +76,15 @@ output "deployment_summary" {
   description = "Summary of deployed resources"
   value = {
     database = {
-      endpoint = module.database.database_endpoint
-      name     = module.database.database_name
+      endpoint    = module.database.database_endpoint
+      name        = module.database.database_name
       resource_id = module.database.database_resource_id
     }
     secrets = {
-  rds_master_user_secret = module.database.rds_master_user_secret_arn
-      openai_secret   = module.secrets.openai_api_key_secret_name
-      discord_secret  = module.secrets.discord_bot_token_secret_name
-      app_config      = null
+      rds_master_user_secret = module.database.rds_master_user_secret_arn
+      openai_secret          = module.secrets.openai_api_key_secret_name
+      discord_secret         = module.secrets.discord_bot_token_secret_name
+      app_config             = null
     }
   }
 }
@@ -94,8 +94,16 @@ output "rds_address" {
   value       = module.database.database_endpoint
 }
 
-# IAM auth helper output (for reference when granting rds-db:connect)
+# IAM auth helper outputs (for reference when granting rds-db:connect)
+
+# Wildcard pattern — convenient for exploration, too broad for a real policy.
+# Prefer rds_iam_connect_arns below, which names one role per entry.
 output "rds_iam_connect_resource_arn" {
   description = "The db-user ARN pattern to use in IAM policies for rds-db:connect"
   value       = "arn:aws:rds-db:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.database.database_resource_id}/*"
+}
+
+output "rds_iam_connect_arns" {
+  description = "Per-role dbuser ARNs for rds-db:connect, keyed by database role name"
+  value       = module.database.rds_iam_connect_arns
 }

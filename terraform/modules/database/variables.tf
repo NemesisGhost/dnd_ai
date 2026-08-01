@@ -175,6 +175,33 @@ variable "use_nat_gateway" {
   default     = false
 }
 
+# IAM database authentication
+variable "iam_auth_db_users" {
+  description = <<-EOT
+    Database roles that authenticate with IAM tokens, used to build the
+    rds_iam_connect_arns output for scoping rds-db:connect policies.
+
+    Must match the LOGIN roles granted rds_iam by the bootstrap revision
+    (database/migrations/versions/001_bootstrap.py). Deliberately excludes
+    migration_owner: it is NOLOGIN and never authenticates, and granting it
+    rds_iam would break password auth for every role that inherits it — see
+    docs/adr/0009-separate-owning-role-from-login-roles.md.
+  EOT
+  type        = list(string)
+  default = [
+    "migration_runner",
+    "app_read_write",
+    "app_read_only",
+    "integration_worker",
+    "admin_maintenance",
+  ]
+
+  validation {
+    condition     = !contains(var.iam_auth_db_users, "migration_owner")
+    error_message = "migration_owner must not use IAM auth; it is a NOLOGIN owning role (ADR 0009)."
+  }
+}
+
 # Tags
 variable "additional_tags" {
   description = "Additional tags to apply to all resources"

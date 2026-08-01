@@ -38,6 +38,19 @@ output "database_resource_id" {
   value       = aws_db_instance.main.resource_id
 }
 
+output "rds_iam_connect_arns" {
+  description = <<-EOT
+    Per-role dbuser ARNs for scoping rds-db:connect in IAM policies, keyed by
+    database role name. Prefer these over a wildcard: grant a task role only
+    the entry it needs (the migration task gets migration_runner, the API and
+    worker get app_read_write, and so on — docs/PLAN.md §30.5).
+  EOT
+  value = {
+    for db_user in var.iam_auth_db_users :
+    db_user => "arn:aws:rds-db:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.main.resource_id}/${db_user}"
+  }
+}
+
 output "database_security_group_id" {
   description = "Security group ID for database access"
   value       = aws_security_group.db.id
@@ -94,12 +107,12 @@ output "vpc_endpoints" {
   description = "VPC endpoint details"
   value = var.create_vpc_endpoints ? {
     secretsmanager = {
-      id           = aws_vpc_endpoint.secretsmanager[0].id
-      dns_names    = aws_vpc_endpoint.secretsmanager[0].dns_entry[*].dns_name
+      id        = aws_vpc_endpoint.secretsmanager[0].id
+      dns_names = aws_vpc_endpoint.secretsmanager[0].dns_entry[*].dns_name
     }
     kms = {
-      id           = aws_vpc_endpoint.kms[0].id
-      dns_names    = aws_vpc_endpoint.kms[0].dns_entry[*].dns_name
+      id        = aws_vpc_endpoint.kms[0].id
+      dns_names = aws_vpc_endpoint.kms[0].dns_entry[*].dns_name
     }
   } : null
 }

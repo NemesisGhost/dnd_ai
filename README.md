@@ -743,7 +743,7 @@ The database will use bounded PostgreSQL schemas:
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
 │   │   └── DUNGEON_FLOW.md
-│   └── adr/                        # Decision records (0001-0007 stubs; 0008 full)
+│   └── adr/                        # Decision records (0001-0007 stubs; 0008-0009 full)
 ├── terraform/
 │   ├── modules/{database,secrets}/
 │   ├── environments/dev/
@@ -851,7 +851,7 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) is written in full.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) and [ADR 0009](docs/adr/0009-separate-owning-role-from-login-roles.md) (separating the object-owning database role from the login roles) are written in full.
 
 ---
 
