@@ -14,7 +14,9 @@ from logging.config import fileConfig
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import Connection, MetaData, create_engine, pool, text
+from sqlalchemy import Connection, create_engine, pool, text
+
+from dnd_ai.persistence.tables import metadata as target_metadata
 
 # Load .env from the repo root (or nearest parent) so the workflow in
 # docs/DEVELOPMENT.md §3 — "cp .env.example .env, then edit" — actually takes
@@ -28,11 +30,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Target metadata for autogenerate support.
-# `alembic check` (run in CI) requires a MetaData object even before any table
-# metadata exists — an empty one correctly reports "no diff" until
-# src/dnd_ai/persistence/ starts registering real tables here.
-target_metadata = MetaData()
+# Target metadata for autogenerate support — the real table definitions from
+# src/dnd_ai/persistence/tables.py, imported above.
+#
+# This was an empty MetaData() through Phase 1, which was correct only while
+# the database had no tables: once revision 003 created some, autogenerate
+# compared them against nothing and reported every one as a table to drop.
+# Any table added by a migration must also be declared in tables.py, and CI's
+# `alembic check` step is what enforces that.
 
 
 # Database URL from environment

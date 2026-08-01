@@ -40,6 +40,7 @@ from typing import Any
 import yaml
 from alembic.operations import Operations
 from sqlalchemy import text
+from sqlalchemy.sql.elements import TextClause
 
 # Seed data directory. Alembic (and the migration runner in docs/PLAN.md §29.6)
 # always runs with the repo's `database/` directory as a sibling of the working
@@ -93,37 +94,36 @@ def load_seed_data(schema: str, table: str) -> list[dict[str, Any]]:
     return data
 
 
-def apply_seed(
-    op: Operations,
+def seed_statements(
     schema: str,
     table: str,
     *,
     key_columns: list[str] | None = None,
-) -> None:
+) -> list[TextClause]:
     """
-    Apply seed data to a table idempotently.
+    Build the idempotent INSERT statements for a seed file, without executing.
+
+    Separate from apply_seed so callers that hold a plain Connection — tests,
+    ad-hoc scripts — can run seeds without faking Alembic's `op`. Statements
+    come back fully bound; execute them in order against anything that accepts
+    a SQLAlchemy executable.
 
     Uses PostgreSQL INSERT ... ON CONFLICT DO NOTHING for idempotency, with
     values passed as bound parameters (not string-interpolated) so quoting and
     escaping are handled by the driver rather than by hand.
 
     Args:
-        op: Alembic operations context
         schema: Schema name (e.g., "core")
         table: Table name (e.g., "canon_statuses")
         key_columns: Columns that form the unique key (default: ["code"])
                      Must match a unique constraint or primary key on the table
-
-    Example:
-        apply_seed(op, "core", "canon_statuses")
-        apply_seed(op, "rules", "abilities", key_columns=["code"])
     """
     if key_columns is None:
         key_columns = ["code"]
 
     rows = load_seed_data(schema, table)
     if not rows:
-        return
+        return []
 
     columns = list(rows[0].keys())
     column_list = ", ".join(columns)
@@ -139,9 +139,33 @@ def apply_seed(
         """
     )
 
-    for row in rows:
-        params = {col: _adapt_value(row[col]) for col in columns}
-        op.execute(statement.bindparams(**params))
+    return [
+        statement.bindparams(**{col: _adapt_value(row[col]) for col in columns}) for row in rows
+    ]
+
+
+def apply_seed(
+    op: Operations,
+    schema: str,
+    table: str,
+    *,
+    key_columns: list[str] | None = None,
+) -> None:
+    """
+    Apply seed data to a table idempotently, from inside an Alembic migration.
+
+    Args:
+        op: Alembic operations context
+        schema: Schema name (e.g., "core")
+        table: Table name (e.g., "canon_statuses")
+        key_columns: Columns that form the unique key (default: ["code"])
+
+    Example:
+        apply_seed(op, "core", "canon_statuses")
+        apply_seed(op, "rules", "abilities", key_columns=["code"])
+    """
+    for statement in seed_statements(schema, table, key_columns=key_columns):
+        op.execute(statement)
 
 
 def _adapt_value(value: Any) -> Any:

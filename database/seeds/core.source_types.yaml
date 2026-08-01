@@ -1,0 +1,65 @@
+# Source types — where an authored or imported fact came from.
+# See docs/PLAN.md §4.5 (Provenance).
+#
+# core.sources rows reference one of these; every meaningful authored record
+# should reference a source where practical.
+
+- code: gm_entry
+  display_name: GM Entry
+  description: Authored directly by a game master.
+  sort_order: 10
+  is_active: true
+
+- code: player_entry
+  display_name: Player Entry
+  description: Authored directly by a player.
+  sort_order: 20
+  is_active: true
+
+- code: imported_document
+  display_name: Imported Document
+  description: Extracted from an existing campaign document through the import pipeline.
+  sort_order: 30
+  is_active: true
+
+- code: rulebook
+  display_name: Rulebook or SRD
+  description: Published rules material.
+  sort_order: 40
+  is_active: true
+
+- code: foundry_vtt
+  display_name: FoundryVTT
+  description: Synchronized from a FoundryVTT instance.
+  sort_order: 50
+  is_active: true
+
+- code: discord
+  display_name: Discord
+  description: Captured from Discord interaction.
+  sort_order: 60
+  is_active: true
+
+- code: session_transcript
+  display_name: Session Transcript
+  description: Derived from a recorded or transcribed play session.
+  sort_order: 70
+  is_active: true
+
+- code: ai_proposal
+  display_name: AI-Generated Proposal
+  description: Produced by an AI agent. Never authoritative on its own — see rule 2 in CLAUDE.md.
+  sort_order: 80
+  is_active: true
+
+- code: migration_seed
+  display_name: Migration or Seed Data
+  description: Created by a database migration or seed file rather than by a person.
+  sort_order: 90
+  is_active: true
+
+- code: external_api
+  display_name: External API
+  description: Retrieved from an external service.
+  sort_order: 100
+  is_active: true

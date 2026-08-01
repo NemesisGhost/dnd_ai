@@ -1,0 +1,48 @@
+# Canon status — how authoritative a definition is.
+# See docs/PLAN.md §4.4 and docs/ENTITY_LIFECYCLE.md §2.1.
+#
+# Deliberately separate from lifecycle status (core.lifecycle_statuses):
+# "how authoritative" and "is this usable by the platform" are independent
+# dimensions and must not be collapsed into one field.
+
+- code: draft
+  display_name: Draft
+  description: Authored but not yet submitted for review.
+  sort_order: 10
+  is_active: true
+
+- code: proposed
+  display_name: Proposed
+  description: Submitted for GM or validation review. AI agents normally create records at this status.
+  sort_order: 20
+  is_active: true
+
+- code: approved
+  display_name: Approved
+  description: Reviewed and accepted, but not yet published as authoritative.
+  sort_order: 30
+  is_active: true
+
+- code: canon
+  display_name: Canon
+  description: Authoritative world truth.
+  sort_order: 40
+  is_active: true
+
+- code: superseded
+  display_name: Superseded
+  description: Replaced by a specific newer definition.
+  sort_order: 50
+  is_active: true
+
+- code: rejected
+  display_name: Rejected
+  description: Reviewed and declined. May be explicitly reopened to draft.
+  sort_order: 60
+  is_active: true
+
+- code: deprecated
+  display_name: Deprecated
+  description: Discouraged from new use, with no designated replacement.
+  sort_order: 70
+  is_active: true

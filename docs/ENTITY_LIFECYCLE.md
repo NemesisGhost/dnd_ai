@@ -22,6 +22,9 @@ Recommended values:
 - `canon`
 - `superseded`
 - `rejected`
+- `deprecated`
+
+`superseded` and `deprecated` are distinct: a superseded definition was *replaced* by a specific newer one, while a deprecated definition is discouraged from new use but has no designated replacement. The state diagram in [§3](#3-lifecycle-state-diagram) does not yet draw `deprecated`'s transitions.
 
 ### 2.2 Operational lifecycle status
 

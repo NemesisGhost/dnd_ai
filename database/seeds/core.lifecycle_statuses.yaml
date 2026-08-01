@@ -1,0 +1,35 @@
+# Operational lifecycle status — whether an entity is currently usable by the
+# platform. See docs/ENTITY_LIFECYCLE.md §2.2.
+#
+# Independent of canon status: a `canon` definition can be `archived`, and a
+# `proposed` one can be `pending`.
+
+- code: pending
+  display_name: Pending
+  description: Created but not yet available for use.
+  sort_order: 10
+  is_active: true
+
+- code: active
+  display_name: Active
+  description: Available for normal platform use.
+  sort_order: 20
+  is_active: true
+
+- code: inactive
+  display_name: Inactive
+  description: Temporarily withdrawn from use without being archived.
+  sort_order: 30
+  is_active: true
+
+- code: archived
+  display_name: Archived
+  description: Retired from active use but retained. The normal end state for persistent world entities.
+  sort_order: 40
+  is_active: true
+
+- code: deleted
+  display_name: Deleted
+  description: Controlled administrative deletion. Reserved and expected to be rare — see docs/ENTITY_LIFECYCLE.md §14.
+  sort_order: 50
+  is_active: true

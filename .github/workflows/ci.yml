@@ -102,10 +102,17 @@ jobs:
       - name: Verify migration state
         run: uv run alembic -c database/alembic.ini current --verbose
 
-      - name: Test downgrade (last revision only)
+      - name: Test downgrade (full round trip to base)
         run: |
-          uv run alembic -c database/alembic.ini downgrade -1
+          uv run alembic -c database/alembic.ini downgrade base
           uv run alembic -c database/alembic.ini upgrade head
+
+      - name: Seed idempotency (re-running migrations must not change seeded data)
+        # Required by DATABASE_CONVENTIONS.md §25.6. The round trip above
+        # already re-ran every seed once; this asserts the result is identical
+        # to the seed files, catching a seed that inserts duplicates or drifts
+        # from its YAML source.
+        run: uv run pytest tests/database/test_seed_idempotency.py -q
 
       - name: Schema comparison (autogenerate must produce empty diff)
         run: uv run alembic -c database/alembic.ini check
