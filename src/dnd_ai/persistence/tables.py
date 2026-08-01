@@ -29,6 +29,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     ForeignKey,
@@ -230,6 +231,16 @@ worlds = Table(
         nullable=False,
     ),
     *_timestamps(),
+    # Added by revision 006, once core.calendars existed to point at.
+    Column(
+        "default_calendar_id",
+        UUID(),
+        ForeignKey("core.calendars.calendar_id", ondelete="SET NULL"),
+        comment=(
+            "The calendar to use when none is specified. Nullable: a world need not have "
+            "defined one yet."
+        ),
+    ),
     UniqueConstraint("slug", name="ux_worlds_slug"),
     schema="core",
     comment=(
@@ -524,3 +535,140 @@ Index(
     unique=True,
     postgresql_where=tags.c.world_id.isnot(None),
 )
+
+
+# ---------------------------------------------------------------------------
+# core — calendars and world times (revision 006)
+# ---------------------------------------------------------------------------
+
+world_time_precisions = _lookup_table(
+    "core",
+    "world_time_precisions",
+    "world_time_precision_id",
+    "How precisely a world time is known — see docs/DOMAIN_MODEL.md §6.2.",
+)
+
+calendars = Table(
+    "calendars",
+    metadata,
+    _uuid_pk("calendar_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column("days_per_week", NONNEGATIVE_INTEGER),
+    Column(
+        "epoch_label",
+        Text(),
+        comment='What year zero is counted from, e.g. "Founding of the Republic".',
+    ),
+    *_timestamps(),
+    UniqueConstraint("world_id", "code", name="ux_calendars_world_code"),
+    schema="core",
+    comment=(
+        "A fictional time system belonging to one world (docs/DOMAIN_MODEL.md §6.1). "
+        "Worlds may define several — a common reckoning and an elvish one, say."
+    ),
+)
+
+calendar_months = Table(
+    "calendar_months",
+    metadata,
+    _uuid_pk("calendar_month_id"),
+    Column(
+        "calendar_id",
+        UUID(),
+        ForeignKey("core.calendars.calendar_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "month_number",
+        NONNEGATIVE_INTEGER,
+        nullable=False,
+        comment="Ordinal position within the year, starting at 1. Not a real-world month.",
+    ),
+    Column("name", Text(), nullable=False),
+    Column("day_count", NONNEGATIVE_INTEGER, nullable=False),
+    *_timestamps(),
+    UniqueConstraint("calendar_id", "month_number", name="ux_calendar_months_calendar_number"),
+    UniqueConstraint("calendar_id", "name", name="ux_calendar_months_calendar_name"),
+    schema="core",
+    comment=(
+        "The months of a calendar, ordered by month_number. Both the ordinal and the "
+        "name are unique within a calendar."
+    ),
+)
+
+world_times = Table(
+    "world_times",
+    metadata,
+    _uuid_pk("world_time_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "calendar_id",
+        UUID(),
+        ForeignKey("core.calendars.calendar_id", ondelete="RESTRICT"),
+    ),
+    Column(
+        "world_time_precision_id",
+        UUID(),
+        ForeignKey("core.world_time_precisions.world_time_precision_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "year",
+        Integer(),
+        comment=(
+            "Plain INTEGER, not a non-negative domain: fictional calendars count backwards "
+            "from their epoch as readily as forwards."
+        ),
+    ),
+    Column("month_number", NONNEGATIVE_INTEGER),
+    Column("day", NONNEGATIVE_INTEGER),
+    Column("hour", NONNEGATIVE_INTEGER),
+    Column("minute", NONNEGATIVE_INTEGER),
+    Column(
+        "label",
+        Text(),
+        comment=(
+            'Relative narrative description, e.g. "shortly after the Sundering". Required when '
+            "there is no calendar year."
+        ),
+    ),
+    Column(
+        "sort_key",
+        BigInteger(),
+        nullable=False,
+        comment=(
+            "Orderable position in fictional chronology. NOT NULL because a world time that "
+            "cannot be ordered is useless to timeline and effective-state queries; the caller "
+            "must decide where even an approximate or narrative moment sits. Computation is "
+            "calendar-specific and belongs in the domain layer."
+        ),
+    ),
+    *_timestamps(),
+    schema="core",
+    comment=(
+        "A point or approximate period in fictional chronology (docs/DOMAIN_MODEL.md §6.2). "
+        "Never a real-world timestamp — system time and world time must not be conflated "
+        "(§6.3)."
+    ),
+)
+
+Index("ix_worlds_default_calendar_id", worlds.c.default_calendar_id)
+Index("ix_calendars_world_id", calendars.c.world_id)
+Index("ix_calendar_months_calendar_id", calendar_months.c.calendar_id)
+Index("ix_world_times_world_id", world_times.c.world_id)
+Index("ix_world_times_calendar_id", world_times.c.calendar_id)
+Index("ix_world_times_world_time_precision_id", world_times.c.world_time_precision_id)
+Index("ix_world_times_world_id_sort_key", world_times.c.world_id, world_times.c.sort_key)

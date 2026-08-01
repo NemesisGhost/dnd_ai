@@ -1,0 +1,32 @@
+# How precisely a world time is known.
+# Vocabulary from docs/DOMAIN_MODEL.md §6.2, which lists the forms a world time
+# takes: exact date and time, partial date, approximate date, relative
+# narrative label.
+#
+# Precision is about how well the moment is KNOWN in the fiction, which is not
+# the same as how much a character knows about it — that is knowledge-domain
+# territory (rule 8 in CLAUDE.md).
+
+- code: exact
+  display_name: Exact
+  description: A specific date and time in the calendar.
+  sort_order: 10
+  is_active: true
+
+- code: partial
+  display_name: Partial
+  description: Some components known, coarser ones only — a year, or a year and month.
+  sort_order: 20
+  is_active: true
+
+- code: approximate
+  display_name: Approximate
+  description: Near a known point but not pinned to it — "around the third year of the siege".
+  sort_order: 30
+  is_active: true
+
+- code: narrative
+  display_name: Narrative
+  description: A relative label with no calendar position — "long before the founding".
+  sort_order: 40
+  is_active: true

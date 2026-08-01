@@ -36,6 +36,10 @@ MANAGED_TABLES = [
     ("core", "entity_names"),
     ("core", "tags"),
     ("core", "entity_tags"),
+    ("core", "world_time_precisions"),
+    ("core", "calendars"),
+    ("core", "calendar_months"),
+    ("core", "world_times"),
 ]
 
 # Privileges each application role must hold on every managed table.
