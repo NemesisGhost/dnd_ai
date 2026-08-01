@@ -32,6 +32,9 @@ Rollback:
     it holds Alembic's own version table (version_table_schema = "core").
     DO NOT run downgrade against a database with data — schema CASCADE will destroy it.
 
+    Roles are cluster-wide and are kept, not dropped, when another database on
+    the same instance still references them — see the note in downgrade().
+
 Data implications:
     None. This is the first revision; the database is empty.
 
@@ -336,8 +339,28 @@ def downgrade() -> None:
     """)
 
     # Drop roles. migration_runner is dropped before migration_owner because it
-    # is a member of it; the login roles hold no surviving grants once the
-    # schemas above are gone.
+    # is a member of it.
+    #
+    # These roles are CLUSTER-WIDE, unlike everything else this revision
+    # creates — every database on the instance shares one set of roles, while
+    # schemas, tables, and grants are per-database. So on a shared instance
+    # another database may still own objects or hold grants referencing them,
+    # and PostgreSQL refuses:
+    #
+    #   role "integration_worker" cannot be dropped because some objects
+    #   depend on it
+    #   DETAIL:  1 object in database dnd_ai
+    #
+    # That dependency lives in a *different* database, so the REASSIGN OWNED
+    # and DROP OWNED above cannot clear it — both only ever affect the current
+    # database, and there is no cross-database equivalent. This is exactly the
+    # situation the ephemeral per-run test databases in docs/PLAN.md §29.9
+    # create: CI downgrades its throwaway database to base while dev's main
+    # database is still at head.
+    #
+    # Keeping the role in that case is the correct outcome — it is still in
+    # use. On a single-database instance the drop succeeds and the downgrade
+    # remains a true inverse.
     roles = [
         "integration_worker",
         "app_read_only",
@@ -347,7 +370,18 @@ def downgrade() -> None:
         "migration_owner",
     ]
     for role in roles:
-        op.execute(f"DROP ROLE IF EXISTS {role};")
+        op.execute(f"""
+            DO $$
+            BEGIN
+                DROP ROLE IF EXISTS {role};
+            EXCEPTION
+                WHEN dependent_objects_still_exist THEN
+                    RAISE NOTICE
+                        'Kept cluster-wide role % — still referenced from another database.',
+                        '{role}';
+            END
+            $$;
+        """)
 
     # Drop extensions
     op.execute("DROP EXTENSION IF EXISTS pg_trgm;")

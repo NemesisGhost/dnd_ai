@@ -54,41 +54,51 @@ def get_url() -> str:
     )
 
 
-def _set_role_if_bootstrapped(connection: Connection, role: str) -> None:
+def _set_role_if_usable(connection: Connection, role: str) -> None:
     """
-    SET ROLE to `role`, but only if 001_bootstrap has already completed in the
-    CURRENT database.
+    SET ROLE to `role`, but only if doing so would actually work here.
 
-    `role` (migration_owner) is cluster-wide in PostgreSQL, so checking that it
-    exists and that the current user is a member of it is not enough — both
-    can be true on a database where 001_bootstrap has never run, because every
-    database on the same instance shares the same roles. The ephemeral
-    per-test-run databases in docs/PLAN.md §29.9 are exactly this case: fresh
-    per database, but talking to an instance where migration_owner has already
-    been created for some other database. Switching role there, before
-    granting it anything in *this* database, made Alembic's own
-    CREATE TABLE core.alembic_version fail with "permission denied for schema
-    core" — verified against a real RDS instance.
+    Three things must hold, and each guards a failure seen against real RDS:
 
-    core.alembic_version existing is a reasonable proxy for "bootstrap has run
-    here": Alembic creates it (as whichever role is active at the time, i.e.
-    the connecting user) before any revision executes, so its presence means
-    a prior invocation reached at least that point in this specific database.
+    1. The role exists. It does not before 001_bootstrap first runs, and
+       `pg_has_role` raises rather than returning false for an unknown role.
+    2. The connected user is a member of it, or SET ROLE is refused.
+    3. The role holds USAGE and CREATE on `core` **in this database**.
+
+    (3) is the subtle one, and a plain "has 001_bootstrap run?" check is not a
+    substitute for it. Roles are cluster-wide while schemas and grants are
+    per-database, so `role` can exist — created for some entirely different
+    database on the same instance — while having no privileges at all here.
+    Two situations produce exactly that:
+
+    - A fresh ephemeral test database (docs/PLAN.md §29.9) on an instance
+      where another database is already bootstrapped. Switching role there
+      made Alembic's own CREATE TABLE core.alembic_version fail with
+      "permission denied for schema core".
+    - A database downgraded to base on a shared instance. 001_bootstrap's
+      downgrade revokes the role's privileges and hands `core` back, but now
+      deliberately keeps the role itself when another database still needs it
+      — so the role survives with no access, and the next upgrade would fail
+      the same way.
+
+    Checking the privilege directly covers both, and needs no proxy for
+    migration state.
     """
-    bootstrapped = connection.execute(text("SELECT to_regclass('core.alembic_version')")).scalar()
-    if not bootstrapped:
-        return
-
     exists = connection.execute(
         text("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :role"), {"role": role}
     ).scalar()
     if not exists:
         return
 
-    is_member = connection.execute(
-        text("SELECT pg_has_role(current_user, :role, 'MEMBER')"), {"role": role}
+    usable = connection.execute(
+        text("""
+            SELECT pg_has_role(current_user, :role, 'MEMBER')
+               AND has_schema_privilege(:role, 'core', 'USAGE')
+               AND has_schema_privilege(:role, 'core', 'CREATE')
+        """),
+        {"role": role},
     ).scalar()
-    if is_member:
+    if usable:
         # Role names here are project constants, not user input.
         connection.execute(text(f"SET ROLE {role}"))
 
@@ -147,10 +157,10 @@ def run_migrations_online() -> None:
         # ALTER DEFAULT PRIVILEGES entries keyed to migration_owner actually
         # apply. See docs/adr/0009-separate-owning-role-from-login-roles.md.
         #
-        # Skipped when 001_bootstrap has not yet completed in this database
-        # (see _set_role_if_bootstrapped) — that revision grants migration_owner
-        # what it needs here and issues its own SET ROLE once it has.
-        _set_role_if_bootstrapped(connection, "migration_owner")
+        # Skipped when the role cannot actually be used in this database yet
+        # (see _set_role_if_usable) — 001_bootstrap grants migration_owner what
+        # it needs here and issues its own SET ROLE once it has.
+        _set_role_if_usable(connection, "migration_owner")
         connection.commit()
 
         context.configure(
