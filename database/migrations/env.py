@@ -13,7 +13,13 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from dotenv import load_dotenv
+from sqlalchemy import MetaData, create_engine, pool, text
+
+# Load .env from the repo root (or nearest parent) so the workflow in
+# docs/DEVELOPMENT.md §3 — "cp .env.example .env, then edit" — actually takes
+# effect here. A no-op if no .env file is found.
+load_dotenv()
 
 # Alembic Config object
 config = context.config
@@ -22,16 +28,18 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Target metadata for autogenerate support
-# When table metadata is added to src/dnd_ai/persistence/, import it here
-# target_metadata = Base.metadata
-target_metadata = None
+# Target metadata for autogenerate support.
+# `alembic check` (run in CI) requires a MetaData object even before any table
+# metadata exists — an empty one correctly reports "no diff" until
+# src/dnd_ai/persistence/ starts registering real tables here.
+target_metadata = MetaData()
+
 
 # Database URL from environment
 def get_url() -> str:
     """
     Get database URL from environment variable.
-    
+
     This function is separate so tests can override it if needed.
     Defaults to the local Docker container described in docs/DEVELOPMENT.md §3.
     """
@@ -74,13 +82,20 @@ def run_migrations_online() -> None:
     context. This is the standard mode for development and deployment.
     """
     url = get_url()
-    
+
     connectable = create_engine(
         url,
         poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
+        # The alembic_version table lives in `core` (version_table_schema below),
+        # but on a brand-new database `core` doesn't exist until revision
+        # 001_bootstrap runs. Alembic creates the version table before running
+        # any revision, so the schema must exist first.
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS core;"))
+        connection.commit()
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

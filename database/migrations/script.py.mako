@@ -22,7 +22,6 @@ Locking considerations:
 See: docs/DATABASE_CONVENTIONS.md §25.2 (Migration files)
 """
 from alembic import op
-import sqlalchemy as sa
 ${imports if imports else ""}
 
 # revision identifiers, used by Alembic.

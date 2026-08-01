@@ -45,7 +45,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 
 ## 2. Repository layout
 
-The tree below is the **target**. Nothing under `database/`, `src/`, or `tests/` exists yet — create directories as the phase you're implementing requires, not in advance.
+The tree below is the **target**. As of Phase 1, `database/`, `src/dnd_ai/`, and `tests/` exist with the scaffolding this phase requires (Alembic setup, the bootstrap and shared-domains revisions, seed infrastructure, the three test layers); the deeper `src/dnd_ai/` subpackages (`api/`, `commands/`, `queries/`, `domain/`, `ai/`, `integrations/`) do not — create each as the phase that needs it requires, not in advance.
 
 ```text
 .
@@ -217,14 +217,15 @@ Run all three before committing. CI runs them without `--fix`.
 
 ## 8. Continuous integration
 
-No workflow exists yet; Phase 1 requires one. `.github/workflows/ci.yml` must cover, per [PLAN.md Phase 1](PLAN.md#23-delivery-phases) and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#23-delivery-phases) and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
 - `ruff format --check`, `ruff check`, `mypy src`
 - migration from an **empty** database through all revisions to head
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
-- seed idempotency — seeding twice yields the same state
 - downgrade of recent development migrations where supported
 - the full pytest suite against a service-container PostgreSQL pinned to the deployed major version
+
+Seed idempotency (seeding twice yields the same state) is not yet a CI step — `apply_seed()` in `src/dnd_ai/persistence/seeds.py` exists, but no revision calls it with real seed content yet. Add that check to the workflow in the same change that introduces the first seed file.
 
 A pull request that changes schema without a green migration job should not merge.
 

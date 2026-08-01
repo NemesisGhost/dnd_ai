@@ -9,6 +9,8 @@ dependencies = [
     "psycopg[binary]>=3.1.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.1",
+    "pyyaml>=6.0.1",
     "sqlalchemy>=2.0.25",
     "uvicorn[standard]>=0.27.0",
 ]
@@ -21,6 +23,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.1.14",
     "testcontainers[postgres]>=3.7.0",
+    "types-PyYAML>=6.0.12",
 ]
 
 [build-system]
@@ -31,6 +34,9 @@ build-backend = "hatchling.build"
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+# ruff also formats fenced python code blocks inside markdown; scope it to
+# actual code so it doesn't rewrite quote style in prose documentation.
+extend-exclude = ["docs", ".github"]
 
 [tool.ruff.lint]
 select = [
