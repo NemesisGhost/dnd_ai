@@ -1,0 +1,42 @@
+# What kind of change an audit row records.
+# Covers the operations docs/DATABASE_CONVENTIONS.md §24.1 requires auditing:
+# canon changes, state changes, permission changes, AI proposal approvals,
+# imports, integration writes, and destructive administrative operations.
+
+- code: created
+  display_name: Created
+  description: A new record was created.
+  sort_order: 10
+  is_active: true
+
+- code: updated
+  display_name: Updated
+  description: An existing record's fields changed.
+  sort_order: 20
+  is_active: true
+
+- code: status_changed
+  display_name: Status Changed
+  description: A canon or lifecycle status transition. previous_status and new_status are set.
+  sort_order: 30
+  is_active: true
+
+- code: archived
+  display_name: Archived
+  description: Retired from active use but retained. The normal end state for world entities.
+  sort_order: 40
+  is_active: true
+
+- code: restored
+  display_name: Restored
+  description: Brought back from archived.
+  sort_order: 50
+  is_active: true
+
+- code: deleted
+  display_name: Deleted
+  description: >-
+    Physically removed. Reserved for unreferenced drafts, test fixtures, and legal
+    removal — see docs/ENTITY_LIFECYCLE.md §14. The audit row outlives the record.
+  sort_order: 60
+  is_active: true

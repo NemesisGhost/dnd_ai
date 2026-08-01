@@ -40,7 +40,13 @@ MANAGED_TABLES = [
     ("core", "calendars"),
     ("core", "calendar_months"),
     ("core", "world_times"),
+    ("audit", "change_actions"),
 ]
+
+# audit.change_log is deliberately excluded from MANAGED_TABLES: it is
+# append-only to application roles (conventions §24.2), so the blanket
+# "app_read_write holds full DML" expectation below does not apply to it.
+# Its grants are asserted in test_audit_change_log.py instead.
 
 # Privileges each application role must hold on every managed table.
 EXPECTED_GRANTS = {

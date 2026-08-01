@@ -21,6 +21,7 @@ SEEDED_LOOKUPS = [
     ("core", "source_types", "source_type_id"),
     ("core", "name_types", "name_type_id"),
     ("core", "world_time_precisions", "world_time_precision_id"),
+    ("audit", "change_actions", "change_action_id"),
 ]
 
 
