@@ -10,8 +10,8 @@ Run through this before `terraform apply`. Explanations live elsewhere — this 
 
 ## Before you start
 
-- [ ] You actually need AWS. Phases 1–7 run on local Docker PostgreSQL at no cost ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup))
-- [ ] You accept ~$25–35/month until teardown ([INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost))
+- [ ] This is a one-time deploy of shared, always-on infrastructure per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) — confirm `dev` isn't already deployed by someone else first (`terraform -chdir=terraform/environments/dev output`)
+- [ ] You accept ~$25–35/month as an ongoing cost, not a per-session toggle ([CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management))
 
 ## Tooling
 
@@ -24,8 +24,8 @@ Run through this before `terraform apply`. Explanations live elsewhere — this 
 
 - [ ] `terraform/environments/dev/terraform.tfvars` exists (copied from `.example`)
 - [ ] `owner_name` set — it tags every resource
-- [ ] `my_ip_cidr` is **your** address in `X.X.X.X/32` form, not the `0.0.0.0/0` default
-- [ ] `enable_public_access` is `true` only if you need to reach the database from your machine
+- [ ] `my_ip_cidr` is a narrow static baseline (e.g. your address in `X.X.X.X/32` form), not the `0.0.0.0/0` default — day-to-day access is per-session via `scripts/aws-db-allow-my-ip.sh`, not this variable ([PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism))
+- [ ] `enable_public_access` is `true` — required, not optional, for the AWS-verification workflow
 - [ ] `aws_region` matches your configured CLI region
 - [ ] VPC approach decided: default VPC (simplest), module-created, or existing via `vpc_id` + `private_subnet_ids`
 

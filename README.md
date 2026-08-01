@@ -776,7 +776,7 @@ New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing
 
-Local development requires **no AWS resources** — a Docker PostgreSQL container is enough for everything through Phase 7.
+Every phase's migrations and `tests/database`/`tests/scenario` suites verify against the deployed AWS `dev` environment, not a local stand-in — see [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy). A local Docker PostgreSQL container is a documented fallback only, for when AWS is genuinely unreachable.
 
 1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
 2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
@@ -801,9 +801,9 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — reference: variables, outputs, verification, teardown, known gaps
 - [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) — the authoritative plan for what the infrastructure should become
 
-Note that the deployed database is currently an **empty PostgreSQL instance** — the schema, role, and extension bootstrap runs through Alembic and does not exist yet.
+Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup).
 
-**Cost:** roughly $25–35/month for the development environment. Destroy it when you aren't using it.
+**Cost:** roughly $25–35/month. Per [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy), `dev` is now shared, always-on infrastructure that every contributor's tests depend on — don't destroy or stop it as routine cost-saving; see [docs/CONTRIBUTING.md §6](docs/CONTRIBUTING.md#6-cost-management).
 
 ---
 

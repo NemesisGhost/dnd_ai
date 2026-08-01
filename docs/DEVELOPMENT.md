@@ -34,11 +34,12 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Migrations | **Alembic** | Required by [DATABASE_CONVENTIONS.md §25.1](DATABASE_CONVENTIONS.md#251-migration-tool). Hand-written SQL inside revisions where a PostgreSQL feature is clearer than the DSL |
 | Validation / DTOs | **Pydantic v2** | Command and query payloads at the API boundary |
 | HTTP API | **FastAPI** | The API layer only ([SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer)). The concrete REST shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) — this pins the framework, not the endpoint design |
-| Tests | **pytest** + **testcontainers-python** | Real PostgreSQL in a container. Constraint and trigger behavior cannot be tested against SQLite |
+| Tests | **pytest** against the deployed AWS `dev` RDS instance | Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) — not testcontainers. Constraint and trigger behavior cannot be tested against SQLite, and a local container is a different PostgreSQL than what's actually deployed |
 | Property tests | **Hypothesis** | For the cases in [PLAN.md §25.4](PLAN.md#254-property-based-tests) |
 | Lint + format | **ruff** | Both linting and formatting; no separate black/isort |
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
-| Local database | **Docker**, PostgreSQL pinned to the deployed major version | Currently 15.x, matching `postgres_version` in [terraform/modules/database](../terraform/modules/database/variables.tf) |
+| AWS access | **AWS CLI v2** | Required for all contributors, not just infrastructure work — see [§3](#3-local-setup). `curl` for IP lookup |
+| Local database fallback | **Docker**, PostgreSQL pinned to the deployed major version | Only when AWS is genuinely unreachable, per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) — see the `testcontainers` fallback fixture in [§6](#6-testing) |
 | UI | **React** | Not yet started; no build tooling chosen |
 
 ---
@@ -89,32 +90,48 @@ The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECT
 
 ## 3. Local setup
 
-Local development needs **no AWS resources**. Do not develop against the shared RDS instance.
+Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), development verifies against the deployed AWS `dev` RDS instance, not a local stand-in. Setting up means getting AWS access, not installing a local database.
 
 ```bash
 # 1. Toolchain
 #    Install uv: https://docs.astral.sh/uv/getting-started/installation/
 uv sync
 
-# 2. Local PostgreSQL, pinned to the deployed major version
-docker run -d --name dnd-ai-pg \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=dnd_ai \
-  -p 5432:5432 \
-  postgres:15
+# 2. AWS access — see CONTRIBUTING.md §2 for account setup and credential
+#    configuration if you don't have these yet
+aws sts get-caller-identity     # must succeed before anything else
 
 # 3. Environment
-cp .env.example .env    # then edit; defaults already point at the container
+cp .env.example .env    # then edit DATABASE_URL to point at the dev endpoint
+```
+
+Open a path to the shared `dev` RDS instance for the length of your session, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) — `dev` is publicly reachable but gated by a security-group rule scoped to your current IP, opened and closed around your work rather than left standing:
+
+```bash
+scripts/aws-db-allow-my-ip.sh open    # authorizes your current IP on the dev security group
+# ... do your work — alembic, pytest, psql ...
+scripts/aws-db-allow-my-ip.sh close   # revokes it
 ```
 
 Verify:
 
 ```bash
 uv run alembic -c database/alembic.ini current
-uv run pytest tests/unit
+uv run pytest tests/unit          # no database, always runs
+uv run pytest tests/database       # against dev RDS, needs the tunnel above open
 ```
 
-The container is disposable. Destructive reset tooling is allowed here and only here, per [DATABASE_CONVENTIONS.md §25.3](DATABASE_CONVENTIONS.md#253-no-destructive-initialization-scripts) — never write a `DROP ... CASCADE` reset script that could target a persistent environment.
+**Fallback only** — if AWS is genuinely unreachable (no network, an account-wide outage), a local container is acceptable per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy):
+
+```bash
+docker run -d --name dnd-ai-pg \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=dnd_ai \
+  -p 5432:5432 \
+  postgres:15
+```
+
+Point `DATABASE_URL` at it and set `DND_AI_USE_LOCAL_POSTGRES=1` so `tests/database`/`tests/scenario` use the local-container fixture instead of the AWS one (see [§6](#6-testing)). The container is disposable. Destructive reset tooling is allowed here and only here, per [DATABASE_CONVENTIONS.md §25.3](DATABASE_CONVENTIONS.md#253-no-destructive-initialization-scripts) — never write a `DROP ... CASCADE` reset script that could target a persistent environment.
 
 ---
 
@@ -176,7 +193,7 @@ Concretely, in order:
 6. **CI workflow** — see §8 below.
 7. **Migration runner** — `terraform/modules/db_migration_runner/`, per [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism). This is what closes the final exit criterion.
 
-Steps 1–6 need no AWS access. Only step 7 does.
+Steps 1–6 need no AWS access to *write*. Verifying them — actually running the migrations and the test suite — does, per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy): both go against the deployed `dev` RDS instance, reached per [§3](#3-local-setup). Step 7 (the migration runner) is additionally what closes Phase 1's own AWS exit criterion for *deployed* migrations specifically — it's a distinct mechanism from the day-to-day test/dev reachability in §29.9, reserved for `staging`/`prod` where public access is never opened.
 
 ---
 
@@ -187,14 +204,18 @@ Three layers, matching [PLAN.md §25](PLAN.md#25-testing-strategy) and [DATABASE
 | Layer | Location | Database | Purpose |
 |---|---|---|---|
 | Unit | `tests/unit/` | none | Pure logic — rules calculations, policy decisions, validation |
-| Database | `tests/database/` | testcontainers | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
-| Scenario | `tests/scenario/` | testcontainers | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §24](PLAN.md#24-vertical-slice-acceptance-scenario) |
+| Database | `tests/database/` | AWS `dev` RDS (ephemeral database per run) | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
+| Scenario | `tests/scenario/` | AWS `dev` RDS (ephemeral database per run) | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §24](PLAN.md#24-vertical-slice-acceptance-scenario) |
+
+Database and scenario tests connect to the `dev` endpoint (open the ingress rule per §3 first) and create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrated to head and dropped afterward, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism). This gives per-run isolation on the one shared instance without needing a database-per-developer.
 
 ```bash
 uv run pytest                    # everything
-uv run pytest tests/unit         # fast loop, no Docker
-uv run pytest tests/database -x
+uv run pytest tests/unit         # fast loop, no AWS needed
+uv run pytest tests/database -x  # needs the dev ingress rule open, see §3
 ```
+
+**Fallback only**: set `DND_AI_USE_LOCAL_POSTGRES=1` with `DATABASE_URL` pointed at a local container to run `tests/database`/`tests/scenario` against testcontainers instead, when AWS is genuinely unreachable (§3). This is not the default path and should not be what CI or day-to-day development relies on.
 
 Two rules that matter more here than in a typical project:
 
@@ -217,13 +238,15 @@ Run all three before committing. CI runs them without `--fix`.
 
 ## 8. Continuous integration
 
-`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#23-delivery-phases) and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#23-delivery-phases), [§23.0](PLAN.md#230-aws-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
 - `ruff format --check`, `ruff check`, `mypy src`
-- migration from an **empty** database through all revisions to head
+- authenticate to AWS (a scoped IAM identity, credentials from repository secrets) and open a short-lived ingress rule on the `dev` security group for the runner's own egress IP, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)
+- migration from an **empty** database (a fresh `dnd_ai_ci_<run-id>` database on the `dev` instance) through all revisions to head
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
 - downgrade of recent development migrations where supported
-- the full pytest suite against a service-container PostgreSQL pinned to the deployed major version
+- the full pytest suite against that same ephemeral database
+- drop the ephemeral database and revoke the ingress rule — in a step that always runs, including on job failure, so a broken run doesn't leave a stale allowlist entry or an orphaned database behind
 
 Seed idempotency (seeding twice yields the same state) is not yet a CI step — `apply_seed()` in `src/dnd_ai/persistence/seeds.py` exists, but no revision calls it with real seed content yet. Add that check to the workflow in the same change that introduces the first seed file.
 
@@ -257,7 +280,7 @@ Before opening a pull request:
 - [ ] The work matches the current phase in [PLAN.md](PLAN.md), or the deviation is stated explicitly
 - [ ] Schema changes follow [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), checked against the anti-patterns in §34
 - [ ] New tables and important columns carry comments (§31)
-- [ ] Migration runs up **and** down cleanly against a fresh local database
+- [ ] Migration runs up **and** down cleanly against a fresh ephemeral database on the AWS `dev` instance (§3, §6) — a local database only if AWS was genuinely unreachable, noted as such
 - [ ] Constraints have positive and negative tests
 - [ ] Code sits in the layer [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) prescribes
 - [ ] `ruff format --check`, `ruff check`, `mypy src`, and `pytest` all pass

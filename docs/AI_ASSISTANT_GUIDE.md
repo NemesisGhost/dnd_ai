@@ -212,7 +212,7 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 | **UI** | React | Web/admin client talking to REST API; not yet started |
 | **Integrations** | FoundryVTT Module, Discord Bot, MCP Interface | All are clients, all go through application API |
 | **Migrations** | Alembic | See [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions) |
-| **Tooling** | uv, pytest + testcontainers, ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
+| **Tooling** | uv, pytest against deployed AWS `dev` (testcontainers is a fallback only), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); AWS-verification policy in [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) |
 
 **Do not introduce new technologies** without explicit design review and documentation update.
 

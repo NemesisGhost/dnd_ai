@@ -2,14 +2,14 @@
 
 Onboarding for new contributors: getting a working environment, then the workflow for changing things.
 
-**Start with §1.** Most work on this project needs no AWS account at all.
+**Start with §1.** Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), every phase — migrations and their `tests/database`/`tests/scenario` suites — is verified against the deployed AWS `dev` environment, not a local stand-in. **You need AWS access to contribute**, not just to touch infrastructure.
 
 ---
 
 ## Table of Contents
 
-- [1. Local development (start here)](#1-local-development-start-here)
-- [2. AWS account setup](#2-aws-account-setup)
+- [1. AWS account setup (start here)](#1-aws-account-setup-start-here)
+- [2. Toolchain and environment](#2-toolchain-and-environment)
 - [3. External API keys](#3-external-api-keys)
 - [4. Changing application code](#4-changing-application-code)
 - [5. Changing infrastructure](#5-changing-infrastructure)
@@ -19,40 +19,11 @@ Onboarding for new contributors: getting a working environment, then the workflo
 
 ---
 
-## 1. Local development (start here)
+## 1. AWS account setup (start here)
 
-The project is in [Phase 1](PLAN.md#23-delivery-phases) — database bootstrap. Everything through Phase 7 runs against a local PostgreSQL container. **You do not need AWS to contribute.**
+The project is in [Phase 1](PLAN.md#23-delivery-phases) — database bootstrap. Every phase from here on verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
 
-Required:
-
-| Tool | Version | Notes |
-|---|---|---|
-| Git | any | |
-| Docker | any | Runs the local PostgreSQL |
-| Python | 3.12+ | Pinned in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
-| uv | latest | Dependency management — [install](https://docs.astral.sh/uv/getting-started/installation/) |
-
-Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the React UI, which has not begun.
-
-Setup, in full, is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup). The short version:
-
-```bash
-uv sync
-docker run -d --name dnd-ai-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=dnd_ai -p 5432:5432 postgres:15
-cp .env.example .env
-```
-
-Then read, in order: [PLAN.md](PLAN.md) for the current phase, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for vocabulary, [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) before writing schema, and [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) for where code belongs.
-
-Skip to §4 unless you specifically need deployed infrastructure.
-
----
-
-## 2. AWS account setup
-
-Only needed to deploy real infrastructure — closing the last [Phase 1 exit criterion](PLAN.md#23-delivery-phases), or working on the migration runner.
-
-### 2.1 Install and configure
+### 1.1 Install and configure
 
 | Tool | Install |
 |---|---|
@@ -69,7 +40,7 @@ aws sts get-caller-identity     # must succeed before anything else
 
 `build.ps1` accepts the profile directly: `./build.ps1 -Environment dev -Action plan -AwsProfile dnd-ai-dev`.
 
-### 2.2 Creating a deployment identity
+### 1.2 Creating a deployment identity
 
 If your organization uses IAM Identity Center, use `aws configure sso` and skip this.
 
@@ -106,9 +77,42 @@ The IAM portion needs only enough to manage the RDS enhanced-monitoring service 
 
 `PowerUserAccess` plus that policy is a reasonable shortcut. On a personal account where you are already the only user, `AdministratorAccess` is defensible — just don't do it on a shared account and call it least privilege.
 
-### 2.3 Deploying
+### 1.3 Deploying `dev`, once
 
-Follow [QUICKSTART.md](QUICKSTART.md), with [CHECKLIST.md](CHECKLIST.md) as the pre-flight. Reference material is [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+`dev` is now shared, always-on infrastructure that every contributor's tests run against — someone needs to have deployed it before anyone can do §2 onward. If it's already up (ask in the project's usual channel, or just try `terraform -chdir=terraform/environments/dev output` first), skip to §2.
+
+Otherwise follow [QUICKSTART.md](QUICKSTART.md), with [CHECKLIST.md](CHECKLIST.md) as the pre-flight. Reference material is [INFRASTRUCTURE.md](INFRASTRUCTURE.md). Set `enable_public_access = true` — required for the reachability mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) — and do **not** narrow `my_ip_cidr` to a single IP the way an old single-developer setup would; per-session access is granted per §2 below, not baked into the Terraform variable.
+
+---
+
+## 2. Toolchain and environment
+
+Required, beyond the AWS access from §1:
+
+| Tool | Version | Notes |
+|---|---|---|
+| Git | any | |
+| Python | 3.12+ | Pinned in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
+| uv | latest | Dependency management — [install](https://docs.astral.sh/uv/getting-started/installation/) |
+| `curl` | any | Used to look up your current IP when opening dev access |
+| Docker | any | **Fallback only** — for the local-container path in [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) when AWS is unreachable |
+
+Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the React UI, which has not begun.
+
+Setup, in full, is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup). The short version:
+
+```bash
+uv sync
+cp .env.example .env              # then edit DATABASE_URL to point at the dev endpoint
+scripts/aws-db-allow-my-ip.sh open # opens dev access for your current IP
+uv run alembic -c database/alembic.ini current
+```
+
+Run `scripts/aws-db-allow-my-ip.sh close` when you're done for the session — it isn't automatic outside CI.
+
+Then read, in order: [PLAN.md](PLAN.md) for the current phase, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for vocabulary, [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) before writing schema, and [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) for where code belongs.
+
+Skip to §4 unless you specifically need to change infrastructure itself, rather than just using the deployed `dev` environment.
 
 ---
 
@@ -158,23 +162,16 @@ Known defects in the current Terraform are catalogued in [INFRASTRUCTURE.md §11
 
 ## 6. Cost management
 
-A dev environment runs ~$25–35/month ([INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost)).
+`dev` runs ~$25–35/month ([INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost)). Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) it's now shared, always-on infrastructure that every contributor's tests depend on — **do not destroy or stop it** as a cost-saving measure; that breaks everyone else's ability to run `tests/database`/`tests/scenario` until it's back. This is an accepted ongoing project cost, not per-developer spend to individually manage.
 
-**Destroy it when you aren't using it.** That is the only reliable way to stop the spend:
+Set a billing alarm in AWS Budgets so a runaway cost (an oversized instance class, an accidentally-left-open ingress rule from a failed CI run, storage growth from real usage) gets noticed quickly rather than discovered a month later. If cost genuinely needs to come down, that's an infrastructure change (right-sizing `instance_class`, revisiting VPC endpoints) proposed and applied deliberately per §5 — not an ad hoc destroy/recreate cycle.
+
+Tearing `dev` down is still appropriate when the project itself is paused for an extended period, not as routine idle-time hygiene:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db --no-deletion-protection --apply-immediately
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
-
-Stopping rather than destroying is a partial measure — storage, KMS, VPC endpoints, and secrets keep billing, and **AWS automatically restarts a stopped RDS instance after 7 days**:
-
-```powershell
-aws rds stop-db-instance --db-instance-identifier dnd-ai-dev-db
-aws rds start-db-instance --db-instance-identifier dnd-ai-dev-db
-```
-
-Set a billing alarm in AWS Budgets so an unnoticed instance doesn't run for a month. Remember that local development costs nothing — reach for §1 before §2.
 
 ---
 

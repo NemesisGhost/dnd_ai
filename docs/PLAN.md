@@ -1136,6 +1136,14 @@ Imported text must not directly create canon without review.
 
 ## 23. Delivery phases
 
+### 23.0 AWS verification policy
+
+Every phase from Phase 1 onward is verified against the deployed AWS `dev` environment, not against a local or containerized stand-in. This applies to that phase's migrations and to its `tests/database`/`tests/scenario` suites. Local Docker PostgreSQL and testcontainers are permitted only when AWS is genuinely unreachable (no network, an account-wide outage) — not as the default inner loop. See [§29.9](#299-aws-first-verification-mechanism) for how this is achieved without weakening `staging`/`prod` isolation, and [DEVELOPMENT.md §6](DEVELOPMENT.md#6-testing) for the resulting test workflow.
+
+`tests/unit` is unaffected — it uses no database at all, so there is nothing to verify against AWS.
+
+A phase's exit criteria below are necessary but not sufficient: they also require the phase's own migrations and tests passing against the deployed `dev` RDS instance before the phase counts as done.
+
 ### Phase 0: Documentation and decision records
 
 Deliver:
@@ -1440,11 +1448,11 @@ See [§29.5–§29.7](#29-aws-terraform-deployment-plan-for-postgresql) for how 
 
 Maintain separate:
 
-- local development
-- automated test
-- integration
+- `dev` (shared, always-on — automated test and day-to-day development both verify against this environment per [§23.0](#230-aws-verification-policy), not a local stand-in)
 - staging
 - production
+
+Local PostgreSQL (Docker) is a fallback for when AWS is genuinely unreachable, not a maintained environment in its own right.
 
 ### 26.3 Backups
 
@@ -1630,3 +1638,28 @@ Additional defects found in the current Terraform — notably that `dev` cannot 
 - **Read replicas**: deferred until query load actually justifies one, per [DATABASE_CONVENTIONS.md §33](DATABASE_CONVENTIONS.md).
 - **CloudWatch alarms**: CPU, storage, connection count, and (once applicable) replica lag are not yet defined anywhere in the module.
 - **Cost**: with current `dev` defaults (`db.t3.micro`, 20GB gp3, VPC endpoints instead of NAT, an on-demand migration runner) expect roughly the same range the project saw before the restart (~$20/month for `dev`). `staging`/`prod` will cost more once Multi-AZ and larger instance classes are applied — measure rather than guess once those environments exist.
+
+### 29.9 AWS-first verification mechanism
+
+Per [§23.0](#230-aws-verification-policy), every phase's migrations and `tests/database`/`tests/scenario` suites run against the deployed `dev` RDS instance, not a local or containerized stand-in. This needs two things: a way in for CI and developers, and isolation so concurrent test runs on the one shared instance don't collide.
+
+**Reachability — dev only, via temporary security-group ingress, not a new bridge module.** `dev` already supports `enable_public_access` (§29.3) with its security group ID exposed as the `database_security_group_id` output. Rather than standing up an SSM bastion/tunnel for routine test access, CI and developers manage a narrow, short-lived ingress rule directly against that security group with the AWS CLI, scoped to the caller's own current public IP, for the duration of the run only:
+
+```bash
+SG_ID=$(terraform -chdir=terraform/environments/dev output -raw database_security_group_id)
+MY_IP=$(curl -s https://checkip.amazonaws.com)/32
+
+aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \
+  --protocol tcp --port 5432 --cidr "$MY_IP"
+
+# ... run migrations / pytest against the dev endpoint ...
+
+aws ec2 revoke-security-group-ingress --group-id "$SG_ID" \
+  --protocol tcp --port 5432 --cidr "$MY_IP"
+```
+
+This reuses infrastructure that already exists rather than adding a new module. It bypasses Terraform for the add/revoke (a `terraform plan` run mid-session will show the rule as drift and is expected to remove it on apply — harmless as long as CI always revokes at job end, including on failure). `enable_public_access` must be `true` for `dev`; `staging` and `prod` stay `publicly_accessible = false` per §29.3 and are never opened this way — their migrations continue to go through the SSM-based migration runner in §29.6, and there is currently no plan to run `tests/database`/`tests/scenario` against them at all (they exist to host real environments, not to be a shared test fixture).
+
+**Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. So each CI run or developer test session creates its own throwaway database on the shared instance (e.g. `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests against it, and drops it — real isolation on shared infrastructure without needing a database-per-environment. This requires a role with `CREATEDB` (the master user, or a narrowly-scoped `test_runner` role using IAM auth) — add this to the bootstrap revision's role list when this mechanism is implemented; it does not exist yet.
+
+**What still needs building**: this section describes the target mechanism; as of this writing neither the CI IP-allowlist step nor the ephemeral-database fixture has been exercised against a live `dev` instance (no `dev` environment has been applied yet — see [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)). Treat both as an open task alongside the migration runner in §29.6, not as already-verified infrastructure.

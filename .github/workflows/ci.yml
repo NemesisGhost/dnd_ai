@@ -6,120 +6,122 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  id-token: write # required for aws-actions/configure-aws-credentials via OIDC
+  contents: read
+
 jobs:
   lint-and-type-check:
     name: Lint and Type Check
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      
+
       - name: Install dependencies
         run: uv sync --all-extras
-      
+
       - name: Check formatting (ruff)
         run: uv run ruff format --check .
-      
+
       - name: Lint (ruff)
         run: uv run ruff check .
-      
+
       - name: Type check (mypy)
         run: uv run mypy src
 
-  migration-validation:
-    name: Migration Validation
+  aws-verification:
+    name: Migrations and Tests (AWS dev)
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: dnd_ai_ci
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    
+    # Per docs/PLAN.md §23.0 and §29.9, migrations and tests/database /
+    # tests/scenario verify against the deployed AWS dev RDS instance rather
+    # than a service-container stand-in. This job needs repository
+    # configuration that does not exist yet (docs/INFRASTRUCTURE.md §11,
+    # items 8-9) and will not run successfully until dev is deployed and that
+    # configuration is set:
+    #   - vars.AWS_REGION, vars.DEV_DB_SECURITY_GROUP_ID
+    #   - secrets.AWS_CI_ROLE_ARN — an IAM role trusting GitHub's OIDC
+    #     provider, scoped to ec2:AuthorizeSecurityGroupIngress /
+    #     RevokeSecurityGroupIngress on that one security group
+    #   - secrets.DEV_DB_ADMIN_URL — a full connection string (scheme
+    #     postgresql+psycopg://...) for a role with CREATEDB on the dev
+    #     instance; there is no such role in the bootstrap revision yet
+    #
+    # One ephemeral database is created for the whole job (migration checks
+    # and pytest both use it), then dropped in the always-run cleanup step
+    # alongside the security-group rule — see tests/conftest.py for the same
+    # ephemeral-database pattern used outside CI.
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      
+
       - name: Install dependencies
         run: uv sync --all-extras
-      
-      - name: Run migrations (empty database to head)
-        env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Open dev access for this runner
         run: |
-          uv run alembic -c database/alembic.ini upgrade head
-      
+          RUNNER_CIDR="$(curl -s https://checkip.amazonaws.com)/32"
+          echo "RUNNER_CIDR=${RUNNER_CIDR}" >> "$GITHUB_ENV"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${{ vars.DEV_DB_SECURITY_GROUP_ID }}" \
+            --protocol tcp --port 5432 --cidr "${RUNNER_CIDR}"
+
+      - name: Create ephemeral test database
+        env:
+          DEV_DB_ADMIN_URL: ${{ secrets.DEV_DB_ADMIN_URL }}
+        run: uv run python scripts/ci_ephemeral_database.py create
+
+      - name: Run migrations (empty ephemeral database to head)
+        run: uv run alembic -c database/alembic.ini upgrade head
+
       - name: Verify migration state
-        env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
-        run: |
-          uv run alembic -c database/alembic.ini current --verbose
-      
+        run: uv run alembic -c database/alembic.ini current --verbose
+
       - name: Test downgrade (last revision only)
-        env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
         run: |
           uv run alembic -c database/alembic.ini downgrade -1
           uv run alembic -c database/alembic.ini upgrade head
-      
-      - name: Schema comparison (autogenerate must produce empty diff)
-        env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
-        run: |
-          uv run alembic -c database/alembic.ini check
 
-  test:
-    name: Test Suite
-    runs-on: ubuntu-latest
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      
-      - name: Install dependencies
-        run: uv sync --all-extras
-      
-      - name: Run unit tests (no database)
-        run: uv run pytest tests/unit -v --tb=short
-      
-      - name: Run database tests (testcontainers)
-        run: uv run pytest tests/database tests/scenario -v --tb=short
+      - name: Schema comparison (autogenerate must produce empty diff)
+        run: uv run alembic -c database/alembic.ini check
+
+      - name: Run full test suite (unit, database, scenario)
+        run: uv run pytest -v --tb=short
+
+      - name: Clean up ephemeral database and revoke access
+        if: always()
         env:
-          # Testcontainers needs Docker socket
-          DOCKER_HOST: unix:///var/run/docker.sock
+          DEV_DB_ADMIN_URL: ${{ secrets.DEV_DB_ADMIN_URL }}
+        run: |
+          uv run python scripts/ci_ephemeral_database.py drop || true
+
+          if [[ -n "${RUNNER_CIDR:-}" ]]; then
+            aws ec2 revoke-security-group-ingress \
+              --group-id "${{ vars.DEV_DB_SECURITY_GROUP_ID }}" \
+              --protocol tcp --port 5432 --cidr "${RUNNER_CIDR}" || true
+          fi

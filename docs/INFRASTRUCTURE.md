@@ -10,7 +10,7 @@ Reference for the AWS infrastructure that hosts the platform's PostgreSQL databa
 | Deploy quickly, having done it before | [QUICKSTART.md](QUICKSTART.md) |
 | Confirm you're ready to apply | [CHECKLIST.md](CHECKLIST.md) |
 | Look up a variable, output, or error | **This document** |
-| Develop locally, without AWS | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
+| Get everyday dev/test access to `dev` | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
 | Know what the infrastructure *should* become | [PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) |
 
 [PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) is the authoritative **plan**; this document describes **what exists today**. Where the two disagree about intent, §29 wins.
@@ -64,7 +64,8 @@ Per [PLAN.md §29.1](PLAN.md#291-scope-and-current-state), still to be built:
 - Remote Terraform state (currently **local state only** — see §29.2 of the plan).
 - `staging/` and `prod/` environment directories.
 - Database role, schema, and extension bootstrap. Terraform provisions the instance but cannot run SQL inside it; the RDS instance boots with only the master role and an empty database.
-- A migration runner (`terraform/modules/db_migration_runner/`) able to reach a private RDS instance to run `alembic upgrade head`.
+- A migration runner (`terraform/modules/db_migration_runner/`) able to reach a private RDS instance to run `alembic upgrade head` — used for `staging`/`prod`, which stay non-public.
+- The `dev` reachability and test-isolation mechanism from [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism): the CI IP-allowlist authorize/revoke steps and the ephemeral-per-run test database. Neither has been exercised against a live instance yet.
 - A `multi_az` variable on the `database` module.
 - CloudWatch alarms.
 
@@ -117,11 +118,11 @@ The step-by-step path is [QUICKSTART.md](QUICKSTART.md); the pre-flight is [CHEC
 
 ```powershell
 Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environments/dev/terraform.tfvars
-# set owner_name and my_ip_cidr
+# set owner_name, enable_public_access = true, and my_ip_cidr to something narrow
 ./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-> **Set `my_ip_cidr` explicitly.** Its declared default is `0.0.0.0/0`. If you enable public access without narrowing it, the database is reachable from the entire internet. It only takes effect when `enable_public_access = true`, but do not rely on that.
+> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
 
 Terraform directly, if you prefer:
 
@@ -145,8 +146,8 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `aws_region` | `us-east-1` | Deployment region |
 | `owner_name` | `developer` | Applied as an `Owner` tag to all resources |
-| `my_ip_cidr` | `0.0.0.0/0` | Ingress CIDR; **always override** |
-| `enable_public_access` | `false` | Makes the RDS instance publicly accessible; dev only |
+| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), not driven through this variable |
+| `enable_public_access` | `false` | Makes the RDS instance publicly accessible; dev only. Set `true` — required for the day-to-day AWS-verification workflow, not just occasional manual access |
 | `vpc_id` | `""` | Override to deploy into a specific VPC instead of the default one |
 | `private_subnet_ids` | `[]` | Override subnet selection |
 | `additional_tags` | `{}` | Extra tags merged into `default_tags` |
@@ -225,7 +226,7 @@ psql -h (terraform -chdir=terraform/environments/dev output -raw database_endpoi
 $env:PGPASSWORD = $null
 ```
 
-This only works from a network that can reach the instance — meaning `enable_public_access = true` with your IP in `my_ip_cidr`, or from inside the VPC.
+This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), or from inside the VPC.
 
 ---
 
@@ -343,7 +344,8 @@ VPC endpoints are the largest variable. They exist to avoid a NAT Gateway, which
 | `InvalidParameterValue: ... cannot be deleted ... deletion protection` | See [§8](#8-teardown). |
 | Secrets Manager "already exists / scheduled for deletion" | A prior destroy left it in the 7-day recovery window: `aws secretsmanager delete-secret --secret-id <name> --force-delete-without-recovery`. |
 | State locked after an interrupted run | `terraform force-unlock <lock-id>` using the ID from the error. |
-| Cannot reach the database | Confirm `enable_public_access = true`, that `my_ip_cidr` matches your current IP, and that the instance is `available`. Your ISP-assigned IP changes. |
+| Cannot reach the database | Confirm `enable_public_access = true`, that the instance is `available`, and that you've actually opened a session rule for your *current* IP (`scripts/aws-db-allow-my-ip.sh open` — your ISP-assigned IP changes, and the rule from a previous session may have been revoked or belong to a stale IP). `my_ip_cidr` alone is not enough per [§3](#3-deploying). |
+| A `terraform plan` on `dev` shows an unexpected security-group ingress rule to remove | Someone's session-scoped rule (§3, §29.9) wasn't revoked cleanly — a crashed CI job or a forgotten `aws-db-allow-my-ip.sh close`. Applying removes it, which is correct; if a session is genuinely still active, revoke and re-open it instead of blocking the apply. |
 
 Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset afterward.
 
@@ -354,9 +356,11 @@ Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset aft
 Documented so they get fixed rather than rediscovered. These are **code** issues, not doc issues:
 
 1. **`dev` cannot be destroyed.** `deletion_protection` is not overridden to `false`, contradicting [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Same for `skip_final_snapshot`, which leaves an unwanted final snapshot on every dev teardown.
-2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open.
+2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open. Now that per-session access is meant to go through `scripts/aws-db-allow-my-ip.sh` and CI's own authorize/revoke step rather than this variable (§3, [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), consider dropping it to a single harmless placeholder CIDR rather than keeping it as a real access path at all.
 3. **`database_secret_name` returns an ARN**, not a name. Either rename the output or change the value.
 4. **`app_config_secret_name` is hardcoded to `""`**, and `deployment_summary.secrets.app_config` to `null`. Dead outputs — remove or implement.
 5. **The `secrets` module exposes `api_gateway_api_key_secret_*` and `basic_auth_secret_*`** outputs that belong to the removed pre-restart Lambda API. Confirm whether the current architecture needs them; if not, remove.
 6. **No remote state.** Local state blocks any second operator and risks loss. Bootstrap per [PLAN.md §29.2](PLAN.md#292-remote-terraform-state) before `staging` exists.
 7. **No `multi_az` variable**, required before `prod` per [PLAN.md §29.8](PLAN.md#298-open-items).
+8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) needs a role that can create and drop databases on `dev`; the current bootstrap revision's five roles are scoped to schema-level DDL/DML only, none with `CREATEDB`. Add one (or grant it narrowly to `migration_owner`) before wiring up CI's use of this mechanism.
+9. **`scripts/aws-db-allow-my-ip.sh` and the CI IP-allowlist step don't exist yet**, nor does the IAM policy scoping who may call `ec2:AuthorizeSecurityGroupIngress`/`RevokeSecurityGroupIngress` on the `dev` security group specifically. Needed before [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) is more than a design.
