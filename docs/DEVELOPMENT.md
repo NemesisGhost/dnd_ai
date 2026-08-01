@@ -190,7 +190,7 @@ Concretely, in order:
 1. **Project skeleton** — `pyproject.toml` with the tools from §1, `uv.lock`, ruff/mypy/pytest configuration, `src/dnd_ai/` package root.
 2. **Alembic scaffold** — `database/alembic.ini` and `database/migrations/`, configured per §4 above. Connection URL read from the environment, never hardcoded.
 3. **The bootstrap revision** — the first revision, containing everything in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap):
-   - `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `pg_trgm` (`vector` is deferred)
+   - `pgcrypto`, `pg_trgm`, and `btree_gist` (`vector` is deferred). `btree_gist` is required for GiST exclusion constraints over UUID equality — see [PLAN.md §4.1](PLAN.md#41-postgresql-extensions)
    - all thirteen schemas from [PLAN.md §3](PLAN.md#3-postgresql-schema-organization)
    - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`
    - the six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles): `migration_owner` created `NOLOGIN` and never granted `rds_iam`, the five login roles created `WITH LOGIN` and granted `rds_iam`

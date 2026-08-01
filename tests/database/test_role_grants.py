@@ -41,6 +41,8 @@ MANAGED_TABLES = [
     ("core", "calendar_months"),
     ("core", "world_times"),
     ("audit", "change_actions"),
+    ("campaign", "parties"),
+    ("campaign", "party_memberships"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

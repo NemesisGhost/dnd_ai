@@ -38,7 +38,13 @@ Initial required extensions:
 ```sql
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 ```
+
+`btree_gist` is not optional: the overlap-prevention pattern in [§12.5](#125-overlap-prevention)
+needs it. GiST has no built-in equality operator class for scalar types, so an
+exclusion constraint mixing `uuid WITH =` and `range WITH &&` cannot be created
+without it.
 
 Later optional extension:
 

@@ -195,7 +195,15 @@ Initially enable:
 ```sql
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 ```
+
+`btree_gist` supplies GiST operator classes for scalar types. It is required by
+any exclusion constraint that combines equality on a scalar column with overlap
+on a range — the temporal-membership pattern in
+[§12.5](DATABASE_CONVENTIONS.md#125-overlap-prevention). Without it,
+`EXCLUDE USING gist (party_id WITH =, ...)` fails outright with "data type uuid
+has no default operator class for access method gist".
 
 Enable `vector` when the embedding subsystem is implemented:
 
@@ -1663,7 +1671,7 @@ The RDS instance boots with only the master role and an empty database. Terrafor
 
 The bootstrap must be idempotent and cover:
 
-- Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` (`vector` deferred until the embedding subsystem exists).
+- Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `pgcrypto`, `pg_trgm`, and `btree_gist` (`vector` deferred until the embedding subsystem exists). `btree_gist` is what makes GiST exclusion constraints over UUID equality possible — see [§4.1](#41-postgresql-extensions).
 - All thirteen schemas from [§3](#3-postgresql-schema-organization): `core`, `security`, `rules`, `character`, `world`, `campaign`, `narrative`, `knowledge`, `interaction`, `ai`, `audit`, `import`, `integration`.
 - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` per [DATABASE_CONVENTIONS.md §3.1](DATABASE_CONVENTIONS.md).
 - The six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md), split into one owning role and five login roles:

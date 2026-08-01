@@ -786,3 +786,85 @@ Index(
     change_log.c.world_id,
     change_log.c.recorded_at.desc(),
 )
+
+
+# ---------------------------------------------------------------------------
+# campaign — parties and memberships (revision 008)
+# ---------------------------------------------------------------------------
+
+parties = Table(
+    "parties",
+    metadata,
+    _uuid_pk("party_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("name", Text(), nullable=False),
+    Column("description", Text()),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "A group of characters who adventure together. Belongs to a world and may "
+        "persist across campaigns (docs/PLAN.md §5.4)."
+    ),
+)
+
+# The EXCLUDE constraint is intentionally absent from this metadata. Alembic's
+# autogenerate does not compare exclusion constraints, so declaring it here
+# would add a second place to maintain with no enforcement behind it — the same
+# reasoning applied to CHECK constraints and triggers. It is covered by
+# tests/database/test_party_memberships.py, which asserts both that it exists
+# and that it behaves correctly.
+party_memberships = Table(
+    "party_memberships",
+    metadata,
+    _uuid_pk("party_membership_id"),
+    Column(
+        "party_id",
+        UUID(),
+        ForeignKey("campaign.parties.party_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "member_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "References core.entities, not character.characters, which arrives in Phase 4. "
+            "Characters are entities, so this is correct but weaker than it will be — the "
+            "database cannot yet reject a non-character being added to a party."
+        ),
+    ),
+    Column("valid_from", TIMESTAMP(timezone=True), nullable=False),
+    Column(
+        "valid_to",
+        TIMESTAMP(timezone=True),
+        comment=(
+            'NULL means the membership is open-ended — the single representation of "still a '
+            'member". Bounded memberships are half-open: valid_to is the first instant NOT '
+            "in the membership, so one membership may start exactly when another ends."
+        ),
+    ),
+    Column("joined_reason", Text()),
+    Column("left_reason", Text()),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "Temporal record of a character belonging to a party. A character may leave and "
+        "rejoin, and may belong to several parties at once, but cannot have two "
+        "overlapping memberships of the SAME party — enforced by the exclusion "
+        "constraint, which is concurrency-safe in a way an application check is not."
+    ),
+)
+
+Index("ix_parties_world_id", parties.c.world_id)
+Index("ix_party_memberships_member_id", party_memberships.c.member_id)
+Index(
+    "ix_party_memberships_party_id_valid_from",
+    party_memberships.c.party_id,
+    party_memberships.c.valid_from.desc(),
+)
