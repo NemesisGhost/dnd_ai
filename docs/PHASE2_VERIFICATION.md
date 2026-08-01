@@ -67,7 +67,7 @@ Recorded here because each is a place a later phase could reasonably expect some
 - **`core.entity_types` is unseeded.** [§4.4](PLAN.md#44-canon-lifecycle) specifies seeding canon statuses and says nothing about entity types, and §2.2's inheritance tree names subtype tables that do not exist until Phases 4, 5, and 9. Each phase registers the types it actually builds.
 - **`security.roles` is unseeded.** The role vocabulary is not specified anywhere in the domain docs; inventing it here would preempt that decision.
 - **`core.worlds.default_ruleset_id` is absent.** `rules.rulesets` arrives in Phase 4; the column and its foreign key arrive with it, as `default_calendar_id` did this phase.
-- **Timeline scoping of `core.entity_names` is absent.** [DATABASE_MODEL.md §5.4](architecture/DATABASE_MODEL.md#54-names-aliases-and-tags) notes names may be timeline-scoped; that needs `campaign.timelines` from Phase 3.
+- **Timeline scoping of `core.entity_names` is absent.** [DATABASE_MODEL.md §5.4](architecture/DATABASE_MODEL.md#54-names-aliases-and-tags) notes names may be timeline-scoped; that needs `campaign.timelines` from Phase 3 and is an explicit Phase 3 carry-forward, not part of the already-closed Phase 2 claim.
 - **`audit.change_log.event_id` is unconstrained.** `narrative.events` arrives in Phase 6. The column exists so rows written now can be linked later.
 - **Test data is built by raw inserts**, not through commands as [§32.3](DATABASE_CONVENTIONS.md#323-data-builders) will eventually require — the command layer does not exist yet, and these tests target database enforcement, which is the exception §32.3 allows. `tests/factories.py` records this so the builders get replaced rather than grown into a parallel write path.
 

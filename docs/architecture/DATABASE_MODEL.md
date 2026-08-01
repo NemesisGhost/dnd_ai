@@ -73,7 +73,9 @@ erDiagram
 
     CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_CAMPAIGNS : hosts
     CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_SESSIONS : contains
-    CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_PARTIES : uses
+    CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_CAMPAIGN_PARTIES : uses
+    CAMPAIGN_PARTIES ||--o{ CAMPAIGN_CAMPAIGN_PARTIES : participates_in
+    CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : scopes
     CAMPAIGN_PARTIES ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : includes
     CHARACTER_CHARACTERS ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : joins
 
@@ -127,7 +129,7 @@ Key columns:
 - `name TEXT`
 - `slug TEXT`
 - `default_calendar_id UUID NULL`
-- `default_ruleset_id UUID NULL`
+- `default_ruleset_id UUID FK NULL` — added in Phase 4
 - `status_id UUID`
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
@@ -205,7 +207,9 @@ erDiagram
     CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_TIMELINES : branches_to
     CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_CAMPAIGNS : hosts
     CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_SESSIONS : contains
-    CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_PARTIES : organizes
+    CAMPAIGN_CAMPAIGNS ||--o{ CAMPAIGN_CAMPAIGN_PARTIES : uses
+    CAMPAIGN_PARTIES ||--o{ CAMPAIGN_CAMPAIGN_PARTIES : participates_in
+    CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : scopes
     CAMPAIGN_PARTIES ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : includes
     CHARACTER_CHARACTERS ||--o{ CAMPAIGN_PARTY_MEMBERSHIPS : participates
 ```
@@ -218,12 +222,16 @@ Key columns:
 - `world_id UUID FK`
 - `name TEXT`
 - `parent_timeline_id UUID NULL`
-- `branch_event_id UUID NULL`
-- `branch_world_time_id UUID NULL`
+- `branch_event_id UUID FK NULL` — added in Phase 6
+- `branch_world_time_id UUID FK NULL`
 - `is_primary BOOLEAN`
 - `status_id UUID`
 
 A branch inherits parent history only through its branch point. Effective-state queries must never include parent events after that point.
+
+`branch_event_id` is part of the target model but is deliberately deferred until `narrative.events` exists in Phase 6. Phase 3 stores the branch's world-time point and parent structure without an unconstrained event UUID.
+
+A root has neither `parent_timeline_id` nor branch-point fields. During Phase 3, a child requires both `parent_timeline_id` and `branch_world_time_id`; the latter must belong to the shared world. Phase 6 adds the event reference, verifies it belongs to the parent timeline at or before that world time, and implements the branch-aware effective-history query.
 
 ### 6.2 `campaign.campaigns`
 
@@ -232,10 +240,12 @@ Key columns:
 - `campaign_id UUID PK`
 - `timeline_id UUID FK`
 - `name TEXT`
-- `ruleset_id UUID FK`
+- `ruleset_id UUID FK` — added in Phase 4
 - `status_id UUID`
 - `started_at TIMESTAMPTZ NULL`
 - `ended_at TIMESTAMPTZ NULL`
+
+`ruleset_id` is part of the target model but is deliberately deferred until `rules.rulesets` exists in Phase 4.
 
 ### 6.3 Parties and membership
 
@@ -243,7 +253,19 @@ Key columns:
 - `campaign.party_memberships`
 - `campaign.campaign_parties`
 
-Membership is temporal and should include effective start/end events or world times.
+`campaign.parties` holds a stable party identity within a world, including `party_id UUID PK` and `world_id UUID FK`. `campaign.campaign_parties` associates that identity with one or more campaigns. Membership is mutable timeline state rather than a property of the party definition, so `campaign.party_memberships` includes:
+
+- `party_membership_id UUID PK`
+- `timeline_id UUID FK`
+- `party_id UUID FK`
+- `member_entity_id UUID FK`
+- `effective_from_world_time_id UUID FK`
+- `effective_to_world_time_id UUID FK NULL`
+- `effective_period INT8RANGE`
+
+The endpoints are half-open `[from, to)` positions in fictional chronology. The range is derived from the endpoint rows' `sort_key` values and is used by a GiST exclusion constraint over `(timeline_id, party_id, member_entity_id, effective_period)` to reject overlaps. The upper bound is unbounded while membership is current. A trigger enforces world agreement, endpoint ordering, and agreement between the endpoint IDs and stored range.
+
+Until `character.characters` exists in Phase 4, `member_entity_id` references `core.entities`; Phase 4 adds enforcement that the entity is a character. Until `narrative.events` exists in Phase 6, join/leave event references are omitted rather than stored as unconstrained UUIDs.
 
 ### 6.4 Sessions
 

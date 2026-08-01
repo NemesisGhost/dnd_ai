@@ -197,6 +197,14 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
+Enable `btree_gist` in the Phase 3 migration that first creates a scalar-key/range exclusion constraint:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+```
+
+It is not a Phase 1 bootstrap dependency, but it is required before the party-membership exclusion constraint described in [§5.4](#54-parties) and [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md).
+
 Enable `vector` when the embedding subsystem is implemented:
 
 ```sql
@@ -292,6 +300,8 @@ Required fields include:
 - lifecycle status
 - created and updated timestamps
 
+`default_ruleset_id` remains part of the target world model but is not added until Phase 4 creates `rules.rulesets`; Phase 3 must not introduce it as an unconstrained UUID.
+
 ### 5.2 Timelines
 
 Implement `campaign.timelines` with:
@@ -310,7 +320,8 @@ Rules:
 
 - A timeline belongs to exactly one world.
 - A branch must belong to the same world as its parent.
-- A branch point cannot occur after the latest known point inherited from the parent.
+- A root timeline has neither a parent nor a branch point. In Phase 3, a branch has both a parent and a branch world time, and that world time belongs to the same world.
+- Once events exist in Phase 6, the branch event must belong to the parent timeline and cannot occur after the branch world time. The effective-history query must ignore every parent event after the branch point.
 - A timeline must not have multiple active primary flags for the same world.
 
 ### 5.3 Campaigns
@@ -327,6 +338,8 @@ Implement `campaign.campaigns` with:
 
 Campaigns do not own world entities. They reference entities through participation, discovery, state, and event records.
 
+The selected ruleset reference is added in Phase 4 together with `rules.rulesets`; Phase 3 omits it rather than storing an unconstrained UUID.
+
 ### 5.4 Parties
 
 Implement:
@@ -335,7 +348,11 @@ Implement:
 - `campaign.party_memberships`
 - `campaign.campaign_parties`
 
-A party may persist across campaigns. Memberships must be temporal so characters can join, leave, disappear, or return.
+A party may persist across campaigns. `campaign.parties` therefore carries its own `party_id` and `world_id`; `campaign.campaign_parties` associates it with campaigns in that world. Memberships must be temporal so characters can join, leave, disappear, or return.
+
+The party is a stable world-level identity; membership is timeline-scoped mutable state. `campaign.party_memberships` therefore includes `timeline_id`, `party_id`, `member_entity_id`, required `effective_from_world_time_id`, optional `effective_to_world_time_id`, and a database-maintained `INT8RANGE effective_period` derived from the endpoints' `core.world_times.sort_key` values.
+
+Intervals are half-open `[from, to)`. The start must be finite; a missing end is an unbounded upper range representing current membership. A trigger enforces endpoint ordering and world agreement. A GiST exclusion constraint over `(timeline_id WITH =, party_id WITH =, member_entity_id WITH =, effective_period WITH &&)` prevents overlap while allowing adjacent periods. [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md) records the full decision and correction policy.
 
 ### 5.5 Sessions
 
@@ -1267,27 +1284,34 @@ Deliver:
 - parties
 - memberships
 - sessions
+- timeline scoping for entity names, carried forward from Phase 2
 
 Exit criteria:
 
 - Two campaigns can share one timeline.
-- A timeline can branch from another timeline.
+- A timeline can branch from another timeline. A root has neither a parent nor a branch point; in Phase 3, a branch requires both a parent and a branch world time.
 - A world cannot have two primary timelines at once, and a branch cannot belong to a different world than its parent — each rejected by the database, each with a negative test.
-- A party membership cannot overlap itself: the same character cannot be recorded as joining a party it has not left.
+- An entity name may remain world-global or be scoped to a same-world timeline; a cross-world timeline reference is rejected by the database.
+- Party membership is timeline-scoped: a membership written to one sibling branch does not create a raw membership row in the other.
+- A party membership cannot overlap itself within the same timeline and party. Negative tests cover bounded and open-ended overlaps; positive tests prove that adjacent `[from, to)` periods and a later return after a gap are accepted.
+- Membership endpoints from the wrong world and intervals whose end is not later than their start are rejected by the database.
+- Branch structure is verified in this phase; inherited-history isolation is explicitly recorded as unverified until Phase 6 supplies events and the effective-history query.
 
 First-time obligations (per [§23.1](#231-phase-exit-review)):
 
-- **First use of an exclusion constraint.** [§5.4](#54-parties) requires temporal memberships so characters can join, leave, and return, and [DATABASE_CONVENTIONS.md §12.5](DATABASE_CONVENTIONS.md#125-overlap-prevention) names membership periods as an exclusion-constraint case. PostgreSQL cannot build one over `(uuid WITH =, range WITH &&)` without the **`btree_gist`** extension, which [§4.1](#41-postgresql-extensions) does not enable — the revision that adds the constraint must enable it first.
+- **First use of an exclusion constraint.** [§5.4](#54-parties), [DATABASE_CONVENTIONS.md §12.5](DATABASE_CONVENTIONS.md#125-overlap-prevention), and [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md) define the exact key and range semantics. PostgreSQL cannot build it without **`btree_gist`**; the revision that adds the constraint must enable the extension first and its downgrade must remove only objects the revision owns safely.
 - **First forward references that must be deferred.** `campaign.timelines` wants an optional branch *event* ([§5.2](#52-timelines)) and `campaign.campaigns` a selected ruleset ([§5.3](#53-campaigns)), but `narrative.events` arrives in Phase 6 and `rules.rulesets` in Phase 4. Follow the precedent Phase 2 set with `worlds.default_calendar_id`: omit the column rather than adding an unconstrained UUID, and let the phase that creates the target table add the column together with its foreign key.
+- **Close Phase 2's entity-name deferral.** Add optional timeline scoping to `core.entity_names` now that `campaign.timelines` exists, with a same-world guard and negative test. Global names keep a `NULL timeline_id`; do not force every existing name into the primary timeline.
 - **Party membership has no character table to point at.** `character.characters` does not exist until Phase 4. Characters are entities, so membership can reference `core.entities` directly — but that means the database cannot yet tell a character from a location, and the check that a member is actually a character belongs with Phase 4.
 - **Branch isolation cannot be fully proven here.** Rule 7 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules) — a timeline inherits parent history only up to its branch point — is the reason branching exists, but there is no history to inherit until events land in Phase 6. Phase 3 can prove the *structure* (a branch records its parent and branch point, and the world-agreement rule holds); it cannot prove the *isolation*. Say so rather than marking the criterion met, and see Phase 6.
-- **The branch-point rule is not declaratively expressible.** "A branch point cannot occur after the latest known point inherited from the parent" ([§5.2](#52-timelines)) compares against `core.world_times.sort_key` across rows and tables, so it needs a trigger, as the cross-world guards in Phase 2 did.
+- **Branch-point checks split across phases.** Phase 3 uses a trigger to enforce the parent/branch-time pairing and same-world rules because those compare across rows and tables. Validation against parent events and the actual no-leakage history query remain Phase 6 obligations; there are no events with which to prove either one here.
 
 ### Phase 4: Rules and shared characters
 
 Deliver:
 
 - initial D&D ruleset definitions
+- deferred world-default and campaign-selected ruleset foreign keys
 - characters
 - NPCs
 - PCs
@@ -1308,6 +1332,8 @@ Exit criteria:
 First-time obligations (per [§23.1](#231-phase-exit-review)):
 
 - **First real class-table inheritance subtypes** (`character.characters` → `character.npcs` / `character.player_characters`), so this is where the mechanism Phase 2 could only build in the abstract is actually exercised. Phase 2's "entity subtype consistency is enforceable" claim is only fully settled here. Get it right before Phases 5, 8, and 9 inherit the pattern.
+- **Close the ruleset forward references.** Add `core.worlds.default_ruleset_id` (deferred in Phase 2) and `campaign.campaigns.ruleset_id` (deferred in Phase 3) together with real foreign keys and same-scope validation. Do not leave either as an unconstrained UUID.
+- **Close Phase 3's temporary party-member reference.** Add database enforcement that every existing and new `campaign.party_memberships.member_entity_id` has a matching `character.characters` row. Include a negative test proving a location or other non-character entity cannot be a party member.
 - **First substantial seed content** (the initial D&D ruleset), which is a much larger idempotency surface than Phase 2's lookup tables and the first seed data with real structure rather than flat codes.
 
 ### Phase 5: Locations and dungeon play
@@ -1340,16 +1366,20 @@ Deliver:
 - effects
 - current-state updates
 - event causality
+- timeline branch-event references and branch-aware inherited history
 
 Exit criteria:
 
 - A player action can resolve into an event and atomic state changes.
 - Current state and event history remain consistent.
+- A branch inherits parent events only through its branch point; a parent event after that point is absent from the branch's effective history, with a scenario test proving the exclusion.
+- A branch-event reference must identify an event from its parent timeline at or before the declared branch world time; cross-timeline and post-branch references are rejected by the database.
 - A failure partway through a multi-domain command leaves no partial write — proven by a test that forces the failure, not by inspecting the transaction boundary.
 
 First-time obligations (per [§23.1](#231-phase-exit-review)):
 
 - **First full exercise of rule 6** (state changes need a causal event, committing atomically — [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules)) and of the transaction boundary in [SYSTEM_ARCHITECTURE.md §7](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary). Phase 2 records creation events; this is where the atomicity guarantee itself is on the line.
+- **Close Phase 3's branch-history deferral.** Add `campaign.timelines.branch_event_id` with its foreign key and cross-row validation, then prove rule 7 with the effective-history scenario described in the exit criteria. Phase 3 verified branch structure only; do not treat that as evidence of isolation.
 - **Likely the first deployable**, if outbox processing lands here — which brings [§30.8](#308-per-phase-deployment-expectations) into force for the first time (a service actually running on Fargate in `dev`, not just migrations).
 
 ### Phase 7: Quests and knowledge

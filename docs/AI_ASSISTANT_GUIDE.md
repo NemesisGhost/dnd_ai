@@ -10,7 +10,7 @@
 
 1. [Quick Start: What You Need to Know First](#quick-start-what-you-need-to-know-first)
 2. [Project Status and Context](#project-status-and-context)
-3. [The 10 Non-Negotiable Architectural Rules](#the-10-non-negotiable-architectural-rules)
+3. [The 11 Non-Negotiable Architectural Rules](#the-11-non-negotiable-architectural-rules)
 4. [Technology Stack Reference](#technology-stack-reference)
 5. [Documentation Hierarchy](#documentation-hierarchy)
 6. [Pre-Implementation Checklist](#pre-implementation-checklist)
@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-**Architecture and domain-modeling stage**. See [docs/PLAN.md Phase 0-1](PLAN.md) for current deliverables.
+Phases 1 (database bootstrap) and 2 (core world platform) are complete and verified against AWS `dev`. The current target is [Phase 3: timelines and campaigns](PLAN.md#phase-3-timelines-and-campaigns). The repository is still database-first: no API, UI, character/rules implementation, or external integration exists yet.
 
 ### What's Being Built
 
@@ -81,7 +81,7 @@ See [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md) for the co
 
 ---
 
-## The 10 Non-Negotiable Architectural Rules
+## The 11 Non-Negotiable Architectural Rules
 
 These hold for **every feature, every file, every migration**. If a task seems to require breaking one, **stop and flag it** — don't deviate quietly.
 
@@ -198,6 +198,19 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 - `DB_PASSWORD = "mypassword123"` in Python code
 - API keys in seed SQL files or committed configs
 
+### 11. Deploy and verify in AWS
+
+✅ **Correct**:
+- Run migrations and database/scenario tests against the deployed AWS `dev` RDS instance
+- Exercise each deployable on ECS Fargate in `dev` once its phase introduces it
+- Use a local PostgreSQL container only as a documented fallback when AWS is genuinely unreachable
+
+❌ **Wrong**:
+- Treating a passing testcontainers run as phase-exit evidence
+- Deferring deployment verification until the end of the project
+
+See [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+
 ---
 
 ## Technology Stack Reference
@@ -295,7 +308,7 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 - [ ] Verify it doesn't break the acceptance scenario
 
 ### Final Checks
-- [ ] Review [10 Non-Negotiable Rules](#the-10-non-negotiable-architectural-rules)
+- [ ] Review [11 Non-Negotiable Rules](#the-11-non-negotiable-architectural-rules)
 - [ ] Review [Anti-Patterns](#common-anti-patterns-to-avoid)
 - [ ] Confirm no legacy code being extended
 - [ ] Verify no secrets in code
@@ -1104,7 +1117,7 @@ NO. AI always goes through:
 
 → Explain this is architecture restart, legacy code being replaced, create new per current docs
 
-### Problem: "I'm about to break one of the 10 rules"
+### Problem: "I'm about to break one of the 11 rules"
 
 → **STOP**. Flag it to user. Don't proceed without explicit design decision.
 
@@ -1119,7 +1132,7 @@ As an AI assistant working on this project:
    - The docs are detailed and authoritative
    - This guide points you to them
 
-2. ✅ **Follow the 10 Non-Negotiable Rules**
+2. ✅ **Follow the 11 Non-Negotiable Rules**
    - No exceptions without explicit user approval
    - PostgreSQL is truth
    - AI proposes, doesn't own canon
@@ -1131,10 +1144,11 @@ As an AI assistant working on this project:
    - Knowledge is per-knower
    - Archive, don't delete
    - No secrets in code
+   - Deploy and verify in AWS
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Don't implement Phase 3 features when we're in Phase 1
+   - Implement only the current phase's features; Phase 3 is current now
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

@@ -8,7 +8,7 @@ A persistent-world simulation platform for tabletop RPGs (initially D&D 5e 2024)
 
 ## 2. Current status
 
-This is an architecture restart. See [README.md § Current Status](README.md#current-status).
+This is an architecture restart whose first two implementation phases are complete. Phase 1 established the database/AWS bootstrap; Phase 2 delivered and verified the core world platform. The current target is [Phase 3: timelines and campaigns](docs/PLAN.md#phase-3-timelines-and-campaigns). See [README.md § Current Status](README.md#current-status).
 
 - The pre-restart legacy code (`Database/` flat `public`-schema tables, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, and the Lambda build scripts) has been **removed**, along with the Terraform modules and environment wiring built specifically for it (`db_runner`, `lambda-api`, `lambda-with-build`, and the `db-schema-introspect`/`query-runner` environment configs).
 - What remains under `terraform/`: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) — infrastructure organization that isn't tied to the old schema and is reasonable to build on.
