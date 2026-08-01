@@ -7,168 +7,116 @@ This document verifies Phase 1 (Database bootstrap) exit criteria per [PLAN.md �
 - [x] Empty database can be created reproducibly
 - [x] Migrations can run up and down in development
 - [x] Schema validation runs in CI
-- [ ] A migration can be applied end-to-end against deployed AWS RDS
+- [x] A migration can be applied end-to-end against a deployed AWS RDS instance using only Terraform-managed infrastructure
 
-The first three were verified with `alembic ... --sql` (offline mode, no database
-required) plus `ruff`/`mypy`, not yet against a live PostgreSQL container — do
-step 3 below before treating them as fully closed in a given environment.
+All four verified against a live `dev` deployment, not just offline SQL generation — see "What Was Actually Verified" below. GitHub Actions run [30704528098](https://github.com/NemesisGhost/dnd_ai/actions/runs/30704528098) is the CI evidence for the third and fourth criteria together: both jobs green on a real push to `main`.
 
-## Verification Steps (Local)
+## What Was Actually Verified
 
-### 1. Install toolchain
+Terraform (`terraform/environments/dev`) applied cleanly against a real AWS account: VPC discovery, KMS key, RDS PostgreSQL 15.18 (`db.t3.micro`), security group, VPC endpoints, the GitHub Actions OIDC role (`terraform/modules/github_actions_ci`), and the `secrets` module. 17 resources, 0 destroyed, reusing a KMS key orphaned by an earlier teardown.
+
+Against that live instance, with `DATABASE_URL` built from the AWS-managed master secret plus `sslmode=require` (the parameter group sets `rds.force_ssl=1` — this doesn't come up against a local container, which has no SSL configured at all):
+
+- `alembic upgrade head` — both revisions, clean.
+- `alembic downgrade base` then `alembic upgrade head` again — the full round trip, including `001_bootstrap`'s `REASSIGN OWNED`/`DROP OWNED`/`DROP ROLE` cleanup path, which had never been exercised against real RDS before this.
+- Schema/role/ownership state confirmed directly: all 13 schemas present, `core` owned by `migration_owner`, `migration_owner` shows `rolcanlogin = false` while the five login roles show `true`, `rds_iam` granted to exactly those five (not `migration_owner`), `core.alembic_version` still owned by the connecting user (untouched by the ownership split).
+- `pytest tests/database` — the ephemeral-per-run database mechanism from [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism): creates `dnd_ai_test_<random>` on the shared instance, migrates it, runs the constraint tests, drops it. Confirmed no orphaned databases afterward.
+- Full suite (`uv run pytest`, real `uv` environment, not an ad-hoc venv) — 15 passed.
+- CI: pushed to `main`, both `lint-and-type-check` and `aws-verification` jobs passed on GitHub's own runners — OIDC auth, session-scoped security-group rule opened and revoked, ephemeral database created and dropped, migrations, downgrade, `alembic check`, full test suite.
+
+## Bugs Found and Fixed By This Verification
+
+Every one of these was invisible to offline SQL generation and would have been invisible to a local-container test run. This is the reason [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) exists.
+
+1. **Route table silently disabled public access.** `terraform/modules/database` unconditionally created a route-less "private" route table and associated it onto reused default-VPC subnets, stripping their existing internet-gateway route. `enable_public_access = true` had no effect. Fixed: only create/associate that table when the module creates its own VPC.
+2. **`migration_owner` holding `rds_iam` locked out the RDS master user.** Granting the ownership-transfer membership made the master user a transitive member of `rds_iam`, which forces IAM auth and disables password auth for every inheriting role — including the master user itself. Fixed by [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md): split into a `NOLOGIN` owning role (`migration_owner`, never granted `rds_iam`) and a login role (`migration_runner`) that runs migrations as a member of it.
+3. **`SET ROLE migration_owner` broke Alembic's own bookkeeping write.** Persisting the role switch for the rest of the run meant Alembic's post-migration write to `core.alembic_version` — a table it created and owns as the original connecting user, before any of our migration code runs — failed with "permission denied for table alembic_version". Fixed by granting `migration_owner` explicit access to that one table.
+4. **The same `SET ROLE` check broke the ephemeral-database mechanism outright.** Testing only "does `migration_owner` exist and am I a member" is true on *any* database once bootstrap has run anywhere on the instance, because roles are cluster-wide in PostgreSQL while schema grants are per-database. A fresh ephemeral test database would switch to `migration_owner` before that database had ever been bootstrapped, and `CREATE TABLE core.alembic_version` failed with "permission denied for schema core". Fixed by checking whether `core.alembic_version` already exists in the *current* database — a proxy for "bootstrap has actually run here" — before switching role.
+5. **A failed migration orphaned its ephemeral database.** `tests/conftest.py`'s `try`/`finally` didn't wrap the database creation itself, so a migration failure (found while chasing bug 4) left the database behind permanently. Found four such orphans from this session's own debugging before the fix. Now everything after `CREATE DATABASE` is inside the guarded block.
+6. **CI failed before AWS was even reached.** `uv.lock` was never committed — no environment doing Phase 1's work had `uv` installed to generate it. `astral-sh/setup-uv@v4`'s dependency-cache step globs for `**/uv.lock` and hard-fails when nothing matches. Fixed by installing `uv`, running `uv sync --all-extras` for real, and committing the result.
+
+## Local Fallback (AWS Unreachable Only)
+
+Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), this is not the default path. Set `DND_AI_USE_LOCAL_POSTGRES=1` and point `DATABASE_URL` at a local container:
 
 ```bash
-# Install uv (if not already installed)
-# Windows: https://docs.astral.sh/uv/getting-started/installation/
-# Or: pip install uv
-
-# Install dependencies
-uv sync --all-extras
+docker run -d --name dnd-ai-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=dnd_ai -p 5432:5432 postgres:15
 ```
 
-### 2. Start local PostgreSQL
-
-```bash
-# Start Docker container
-docker run -d --name dnd-ai-pg `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=dnd_ai `
-  -p 5432:5432 `
-  postgres:15
-
-# Verify it's running
-docker ps
-```
+Steps 3–6 below are unchanged against it. `rds_iam` doesn't exist locally, so the bootstrap migration's conditional grants are silently skipped — expected, not a failure.
 
 ### 3. Run migrations
 
-Run these from the repository root — `database/alembic.ini` resolves
-`script_location` relative to the ini file itself, not the working directory.
-
 ```bash
-# Verify Alembic can connect
 uv run alembic -c database/alembic.ini current
-
-# Run migrations to head
 uv run alembic -c database/alembic.ini upgrade head
-
-# Verify state
 uv run alembic -c database/alembic.ini current --verbose
-uv run alembic -c database/alembic.ini history --verbose
 ```
 
 ### 4. Verify database structure
 
-Connect to the database and verify:
-
 ```bash
-# Connect
 docker exec -it dnd-ai-pg psql -U postgres -d dnd_ai
-
-# In psql:
-\dn+  -- Should show all 13 schemas, all owned by migration_owner
-\dD core.*  -- Should show three domain types
-\du  -- Should show six roles plus postgres
-SELECT schema_name FROM information_schema.schemata ORDER BY schema_name;
 ```
-
-Expected schemas:
-- ai, audit, campaign, character, core, import, integration, interaction, knowledge, narrative, public, rules, security, world
-
-Expected roles ([DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles)):
-- admin_maintenance, app_read_only, app_read_write, integration_worker, migration_runner, migration_owner, postgres
-
-`\du` should show `migration_owner` with **"Cannot login"** — that is the point of the split, not a defect. Everything else logs in. Confirm the ownership split took effect:
 
 ```sql
--- migration_owner owns the schemas but cannot authenticate
+\dn+  -- all 13 schemas, all owned by migration_owner
+\dD core.*  -- three domain types
+\du  -- six roles plus postgres; migration_owner shows "Cannot login"
+
 SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname LIKE 'migration%';
 SELECT nspname, pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'core';
-
--- and carries no rds_iam membership (RDS only; returns nothing locally)
-SELECT r.rolname FROM pg_auth_members m
-  JOIN pg_roles r ON m.member = r.oid
-  JOIN pg_roles g ON m.roleid = g.oid
- WHERE g.rolname = 'rds_iam' ORDER BY 1;
 ```
 
-Expected domains in core:
-- rating_1_10, percentage_0_100, nonnegative_integer
+Expected schemas: ai, audit, campaign, character, core, import, integration, interaction, knowledge, narrative, public, rules, security, world.
 
-`rds_iam` does not exist on local/CI PostgreSQL, so the bootstrap migration
-skips those grants there — this is expected, not a failure. It only grants
-`rds_iam` when that role is present, i.e. on RDS, and only ever to the five
-login roles ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
+Expected roles ([DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles)): admin_maintenance, app_read_only, app_read_write, integration_worker, migration_runner, migration_owner, postgres.
+
+Expected domains in core: rating_1_10, percentage_0_100, nonnegative_integer.
 
 ### 5. Test downgrade
 
 ```bash
-# Downgrade one revision
 uv run alembic -c database/alembic.ini downgrade -1
-
-# Verify (should be at 001_bootstrap)
 uv run alembic -c database/alembic.ini current
-
-# Downgrade to base
 uv run alembic -c database/alembic.ini downgrade base
-
-# Upgrade back to head
 uv run alembic -c database/alembic.ini upgrade head
 ```
 
-Note: downgrading 001_bootstrap to base intentionally leaves the empty `core`
-schema behind — it holds Alembic's own version table
-(`version_table_schema = core`), so the revision that creates the schema
-cannot also drop it in its own downgrade. See the comment in
-`001_bootstrap.py::downgrade`.
+`core` survives `downgrade base` deliberately — it holds Alembic's own version table (`version_table_schema = core`), so the revision that creates the schema can't also drop it. See the comment in `001_bootstrap.py::downgrade`.
 
 ### 6. Run quality checks
 
 ```bash
-# Format check
 uv run ruff format --check .
-
-# Lint
 uv run ruff check .
-
-# Type check
 uv run mypy src
-
-# Full test suite
-uv run pytest tests/unit                       # no database needed
-uv run pytest tests/database tests/scenario     # needs the container from step 2
+uv run pytest
 ```
 
 ### 7. Clean up
 
 ```bash
-# Stop and remove container
 docker stop dnd-ai-pg
 docker rm dnd-ai-pg
 ```
 
-## What's Not Yet Complete
+## Known Follow-Ups
 
-**AWS RDS deployment verification** (Phase 1 final exit criterion):
-- The migration runner module (`terraform/modules/db_migration_runner`) specified in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) has not been implemented yet
-- Cannot verify end-to-end migration against RDS without it
-- This is deferred to allow Phase 2+ work to proceed
-- The migration runner should be implemented before standing up staging/prod environments
-
-**`uv.lock`** is not committed — no environment with `uv` installed has run
-`uv sync` against this `pyproject.toml` yet. Run it once and commit the lock
-file before relying on `uv sync --all-extras` reproducing this dependency set
-elsewhere.
+- **Orphaned KMS key** from an earlier teardown (`5a359a0a-4d30-4c00-925f-2dfad6e5820d`) — the deploying IAM user lacks `kms:ScheduleKeyDeletion`. Still enabled, no alias, unused. Needs either that permission or manual console deletion.
+- **`iam_auth_db_users`** (the Terraform variable listing login roles for `rds_iam_connect_arns`) duplicates the role list in `001_bootstrap.py`. They must be kept in sync by hand; the variable's validation rule only catches `migration_owner` being added to it, not general drift.
+- **Seed idempotency** is not yet a CI step — no revision calls `apply_seed()` with real content yet. Add the check when the first seed file lands.
+- **`staging`/`prod`** remain unbuilt. The SSM-based migration runner in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) is what those will use; `dev`'s direct-reachability mechanism (§29.9) is dev-only by design.
 
 ## Implementation Status
 
 Phase 1 deliverables completed:
-- Project skeleton (pyproject.toml, toolchain configuration)
+- Project skeleton (pyproject.toml, toolchain configuration, committed uv.lock)
 - Alembic scaffold (database/alembic.ini, env.py, script template)
-- Bootstrap revision (extensions, schemas, roles)
-- Shared domains (rating_1_10, percentage_0_100, nonnegative_integer), with
-  positive and negative constraint tests per [DATABASE_CONVENTIONS.md §32.1](DATABASE_CONVENTIONS.md#321-constraint-tests)
+- Bootstrap revision — six roles (one `NOLOGIN` owning role, five login roles), thirteen schemas, extensions, ownership transfer
+- Shared domains (rating_1_10, percentage_0_100, nonnegative_integer), with positive and negative constraint tests per [DATABASE_CONVENTIONS.md §32.1](DATABASE_CONVENTIONS.md#321-constraint-tests)
 - Seed infrastructure (seeds.py, database/seeds/)
-- CI workflow (migration validation, linting, type checking, tests)
+- CI workflow, verified green against live AWS on GitHub's own runners
+- AWS infrastructure: `dev` deployed, GitHub OIDC role for CI, all four exit criteria closed with real evidence
 
 Next phase: Phase 2 (Core world platform) per [PLAN.md §23](PLAN.md#23-delivery-phases).
