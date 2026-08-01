@@ -20,6 +20,11 @@ Locking considerations:
     [Does this add constraints or indexes to large existing tables?]
 
 See: docs/DATABASE_CONVENTIONS.md §25.2 (Migration files)
+
+NOTE: the revision id below must be 32 characters or fewer. Alembic's
+core.alembic_version.version_num column is VARCHAR(32), and a longer id fails
+only at the very end of the migration — after all the DDL has run — with
+"value too long for type character varying(32)".
 """
 from alembic import op
 ${imports if imports else ""}

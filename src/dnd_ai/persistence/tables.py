@@ -205,3 +205,187 @@ user_roles = Table(
 # column of the composite primary key.
 Index("ix_user_roles_role_id", user_roles.c.role_id)
 Index("ix_user_roles_granted_by_user_id", user_roles.c.granted_by_user_id)
+
+
+# ---------------------------------------------------------------------------
+# core — worlds, entity types, entities, sources (revision 004)
+# ---------------------------------------------------------------------------
+
+worlds = Table(
+    "worlds",
+    metadata,
+    _uuid_pk("world_id"),
+    Column("name", Text(), nullable=False),
+    Column(
+        "slug",
+        Text(),
+        nullable=False,
+        comment="Stable URL-safe identifier. Distinct from name, which may be renamed freely.",
+    ),
+    Column("description", Text()),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    *_timestamps(),
+    UniqueConstraint("slug", name="ux_worlds_slug"),
+    schema="core",
+    comment=(
+        "A persistent fictional setting. Owns entity definitions, calendars, and "
+        "timelines; outlives any individual campaign."
+    ),
+)
+
+entity_types = Table(
+    "entity_types",
+    metadata,
+    _uuid_pk("entity_type_id"),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "parent_entity_type_id",
+        UUID(),
+        ForeignKey("core.entity_types.entity_type_id", ondelete="RESTRICT"),
+    ),
+    Column(
+        "required_subtype_table",
+        Text(),
+        comment=(
+            "Schema-qualified subtype table an entity of this type must have a row in, "
+            'e.g. "character.npcs". NULL for types with no subtype table. Enforced by '
+            "core.enforce_entity_subtype()."
+        ),
+    ),
+    Column(
+        "is_abstract",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "True when no entity may be created with this type directly — it exists only "
+            "as a parent of concrete types."
+        ),
+    ),
+    *_timestamps(),
+    UniqueConstraint("code", name="ux_entity_types_code"),
+    schema="core",
+    comment=(
+        "The allowed entity type hierarchy. Each phase registers the types it "
+        "builds; rows are not seeded ahead of the subtype tables they name."
+    ),
+)
+
+sources = Table(
+    "sources",
+    metadata,
+    _uuid_pk("source_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        comment=(
+            "NULL for sources that are not world-specific, such as a published rulebook "
+            "shared across every world."
+        ),
+    ),
+    Column(
+        "source_type_id",
+        UUID(),
+        ForeignKey("core.source_types.source_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("title", Text(), nullable=False),
+    Column(
+        "reference",
+        Text(),
+        comment="Locator within the source — page number, URL, message id, timestamp.",
+    ),
+    Column("description", Text()),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="core",
+    comment=(
+        "Where an authored or imported fact came from. Every meaningful authored "
+        "record should reference one where practical (docs/PLAN.md §4.5)."
+    ),
+)
+
+entities = Table(
+    "entities",
+    metadata,
+    _uuid_pk("entity_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "entity_type_id",
+        UUID(),
+        ForeignKey("core.entity_types.entity_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("canonical_name", Text(), nullable=False),
+    Column(
+        "summary",
+        Text(),
+        comment=(
+            "Short human-readable description. A derived, revisable convenience field — not "
+            "authoritative world data."
+        ),
+    ),
+    Column(
+        "canon_status_id",
+        UUID(),
+        ForeignKey("core.canon_statuses.canon_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("source_id", UUID(), ForeignKey("core.sources.source_id", ondelete="SET NULL")),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment=(
+            "Set when the entity is archived. Persistent world entities are archived rather "
+            "than deleted (docs/ENTITY_LIFECYCLE.md §12)."
+        ),
+    ),
+    schema="core",
+    comment=(
+        "Stable identity for important world objects, and the root of the class-table "
+        "inheritance chain. Definition only — what an entity IS. What is currently true "
+        "about it in a timeline lives in campaign state, not here."
+    ),
+)
+
+Index("ix_worlds_lifecycle_status_id", worlds.c.lifecycle_status_id)
+Index("ix_entity_types_parent_entity_type_id", entity_types.c.parent_entity_type_id)
+Index("ix_sources_world_id", sources.c.world_id)
+Index("ix_sources_source_type_id", sources.c.source_type_id)
+Index("ix_sources_created_by_user_id", sources.c.created_by_user_id)
+Index("ix_entities_world_id", entities.c.world_id)
+Index("ix_entities_entity_type_id", entities.c.entity_type_id)
+Index("ix_entities_canon_status_id", entities.c.canon_status_id)
+Index("ix_entities_lifecycle_status_id", entities.c.lifecycle_status_id)
+Index("ix_entities_source_id", entities.c.source_id)
+Index("ix_entities_created_by_user_id", entities.c.created_by_user_id)
+Index("ix_entities_world_id_canonical_name", entities.c.world_id, entities.c.canonical_name)

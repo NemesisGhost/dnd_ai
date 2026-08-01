@@ -28,6 +28,10 @@ MANAGED_TABLES = [
     ("security", "users"),
     ("security", "roles"),
     ("security", "user_roles"),
+    ("core", "worlds"),
+    ("core", "entity_types"),
+    ("core", "sources"),
+    ("core", "entities"),
 ]
 
 # Privileges each application role must hold on every managed table.
