@@ -49,13 +49,31 @@ def get_url() -> str:
     )
 
 
-def _set_role_if_member(connection: Connection, role: str) -> None:
+def _set_role_if_bootstrapped(connection: Connection, role: str) -> None:
     """
-    SET ROLE to `role`, if it exists and the connected user is a member of it.
+    SET ROLE to `role`, but only if 001_bootstrap has already completed in the
+    CURRENT database.
 
-    Both guards matter: the role does not exist before 001_bootstrap has run,
-    and `pg_has_role` raises rather than returning false for an unknown role.
+    `role` (migration_owner) is cluster-wide in PostgreSQL, so checking that it
+    exists and that the current user is a member of it is not enough — both
+    can be true on a database where 001_bootstrap has never run, because every
+    database on the same instance shares the same roles. The ephemeral
+    per-test-run databases in docs/PLAN.md §29.9 are exactly this case: fresh
+    per database, but talking to an instance where migration_owner has already
+    been created for some other database. Switching role there, before
+    granting it anything in *this* database, made Alembic's own
+    CREATE TABLE core.alembic_version fail with "permission denied for schema
+    core" — verified against a real RDS instance.
+
+    core.alembic_version existing is a reasonable proxy for "bootstrap has run
+    here": Alembic creates it (as whichever role is active at the time, i.e.
+    the connecting user) before any revision executes, so its presence means
+    a prior invocation reached at least that point in this specific database.
     """
+    bootstrapped = connection.execute(text("SELECT to_regclass('core.alembic_version')")).scalar()
+    if not bootstrapped:
+        return
+
     exists = connection.execute(
         text("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :role"), {"role": role}
     ).scalar()
@@ -124,9 +142,10 @@ def run_migrations_online() -> None:
         # ALTER DEFAULT PRIVILEGES entries keyed to migration_owner actually
         # apply. See docs/adr/0009-separate-owning-role-from-login-roles.md.
         #
-        # Skipped on the very first run, when 001_bootstrap has yet to create
-        # the role; that revision issues its own SET ROLE once it has.
-        _set_role_if_member(connection, "migration_owner")
+        # Skipped when 001_bootstrap has not yet completed in this database
+        # (see _set_role_if_bootstrapped) — that revision grants migration_owner
+        # what it needs here and issues its own SET ROLE once it has.
+        _set_role_if_bootstrapped(connection, "migration_owner")
         connection.commit()
 
         context.configure(

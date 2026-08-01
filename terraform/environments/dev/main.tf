@@ -70,7 +70,7 @@ module "database" {
 
   # Networking & access
   # Use provided VPC and subnets when set; otherwise fall back to default VPC discovery
-  vpc_id = var.vpc_id != "" ? var.vpc_id : data.aws_vpc.default.id
+  vpc_id             = var.vpc_id != "" ? var.vpc_id : data.aws_vpc.default.id
   private_subnet_ids = length(var.private_subnet_ids) > 0 ? var.private_subnet_ids : (var.vpc_id != "" ? data.aws_subnets.selected_subnets[0].ids : data.aws_subnets.default_subnets.ids)
 
   publicly_accessible        = var.enable_public_access
@@ -97,6 +97,25 @@ module "secrets" {
   # Note: kms_key_arn is not set - secrets will use AWS-managed key
   # To use customer-managed KMS key, uncomment and ensure IAM permissions
   # kms_key_arn = module.database.kms_key_arn
+
+  additional_tags = var.additional_tags
+}
+
+# -----------------------------------------------------
+# Module: GitHub Actions CI (OIDC role for the aws-verification job)
+# -----------------------------------------------------
+module "github_actions_ci" {
+  source = "../../modules/github_actions_ci"
+
+  project_name = local.project_name
+  environment  = local.environment
+
+  github_org  = var.github_org
+  github_repo = var.github_repo
+
+  create_oidc_provider = var.create_github_oidc_provider
+
+  security_group_ids = [module.database.database_security_group_id]
 
   additional_tags = var.additional_tags
 }

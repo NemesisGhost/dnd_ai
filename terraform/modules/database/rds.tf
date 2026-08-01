@@ -34,23 +34,23 @@ resource "aws_db_instance" "main" {
   identifier = "${var.project_name}-${var.environment}-db"
 
   # Engine configuration
-  engine               = "postgres"
-  engine_version       = var.postgres_version
-  instance_class       = var.instance_class
-  allocated_storage    = var.allocated_storage
+  engine                = "postgres"
+  engine_version        = var.postgres_version
+  instance_class        = var.instance_class
+  allocated_storage     = var.allocated_storage
   max_allocated_storage = var.max_allocated_storage
-  storage_type         = var.storage_type
-  storage_encrypted    = true
+  storage_type          = var.storage_type
+  storage_encrypted     = true
   # Note: kms_key_id omitted - uses AWS-managed encryption key
   # To use customer-managed KMS key, set kms_key_id = aws_kms_key.db_encryption.arn
 
   # Database configuration
-  db_name  = var.database_name
-  username = var.master_username
+  db_name                     = var.database_name
+  username                    = var.master_username
   manage_master_user_password = true
   # Note: master_user_secret_kms_key_id omitted - uses AWS-managed key
   # To use customer-managed KMS key, set master_user_secret_kms_key_id = aws_kms_key.db_encryption.arn
-  port     = 5432
+  port = 5432
 
   # Network configuration
   db_subnet_group_name   = aws_db_subnet_group.main.name
@@ -58,24 +58,24 @@ resource "aws_db_instance" "main" {
   publicly_accessible    = var.publicly_accessible
 
   # Parameter and option groups
-  parameter_group_name = aws_db_parameter_group.main.name
+  parameter_group_name                = aws_db_parameter_group.main.name
   iam_database_authentication_enabled = var.iam_database_authentication_enabled
 
   # Backup configuration
-  backup_retention_period = var.backup_retention_period
-  backup_window          = var.backup_window
-  maintenance_window     = var.maintenance_window
+  backup_retention_period  = var.backup_retention_period
+  backup_window            = var.backup_window
+  maintenance_window       = var.maintenance_window
   delete_automated_backups = false
 
   # Monitoring and logging
   monitoring_interval = var.enhanced_monitoring ? 60 : 0
   monitoring_role_arn = var.enhanced_monitoring ? aws_iam_role.rds_enhanced_monitoring[0].arn : null
-  
+
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
   # Deletion protection
-  deletion_protection = var.deletion_protection
-  skip_final_snapshot = var.skip_final_snapshot
+  deletion_protection       = var.deletion_protection
+  skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.project_name}-${var.environment}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
 
   # Performance insights

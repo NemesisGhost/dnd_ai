@@ -238,7 +238,22 @@ def upgrade() -> None:
         """)
 
     # ==========================================================================
-    # 6. Become migration_owner for the rest of this run
+    # 6. Let migration_owner write Alembic's own bookkeeping table
+    # ==========================================================================
+    # Alembic creates core.alembic_version itself, before any revision's
+    # upgrade() runs, using whatever role was active at connection time — so on
+    # a database this bootstrap revision is creating from scratch, that table
+    # is owned by the connecting user (dnd_admin on RDS), not migration_owner.
+    # Once section 7 below switches the session to migration_owner for the
+    # rest of the run, Alembic's own post-migration write to that table would
+    # otherwise fail with "permission denied for table alembic_version" —
+    # verified against a real RDS instance. Table-level grants survive
+    # ownership transfers elsewhere in this file, so this only needs stating
+    # once, here, regardless of how many revisions run after it.
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON core.alembic_version TO migration_owner;")
+
+    # ==========================================================================
+    # 7. Become migration_owner for the rest of this run
     # ==========================================================================
     # PostgreSQL assigns ownership from the CURRENT role, not from inherited
     # membership — so without this, every object created by later revisions in

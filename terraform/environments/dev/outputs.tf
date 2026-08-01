@@ -33,6 +33,12 @@ output "database_security_group_id" {
   value       = module.database.database_security_group_id
 }
 
+# GitHub Actions CI outputs
+output "github_actions_ci_role_arn" {
+  description = "IAM role ARN GitHub Actions assumes via OIDC — set as the AWS_CI_ROLE_ARN repository secret"
+  value       = module.github_actions_ci.role_arn
+}
+
 # Secrets Outputs
 output "openai_secret_name" {
   description = "Name of the OpenAI API key secret"

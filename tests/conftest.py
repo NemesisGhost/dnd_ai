@@ -84,13 +84,19 @@ def postgres_engine() -> Iterator[Engine]:
         conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     admin_engine.dispose()
 
-    _run_alembic_upgrade(test_url.render_as_string(hide_password=False))
-
-    engine = create_engine(test_url)
+    # Everything from here must be inside try/finally: a failed migration
+    # (which happened during development of this fixture) must not leave the
+    # database it just created behind — orphans accumulate on the shared dev
+    # instance otherwise, silently, since nothing else ever lists them.
     try:
-        yield engine
+        _run_alembic_upgrade(test_url.render_as_string(hide_password=False))
+
+        engine = create_engine(test_url)
+        try:
+            yield engine
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
         admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
         with admin_engine.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
