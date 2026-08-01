@@ -1272,6 +1272,16 @@ Exit criteria:
 
 - Two campaigns can share one timeline.
 - A timeline can branch from another timeline.
+- A world cannot have two primary timelines at once, and a branch cannot belong to a different world than its parent — each rejected by the database, each with a negative test.
+- A party membership cannot overlap itself: the same character cannot be recorded as joining a party it has not left.
+
+First-time obligations (per [§23.1](#231-phase-exit-review)):
+
+- **First use of an exclusion constraint.** [§5.4](#54-parties) requires temporal memberships so characters can join, leave, and return, and [DATABASE_CONVENTIONS.md §12.5](DATABASE_CONVENTIONS.md#125-overlap-prevention) names membership periods as an exclusion-constraint case. PostgreSQL cannot build one over `(uuid WITH =, range WITH &&)` without the **`btree_gist`** extension, which [§4.1](#41-postgresql-extensions) does not enable — the revision that adds the constraint must enable it first.
+- **First forward references that must be deferred.** `campaign.timelines` wants an optional branch *event* ([§5.2](#52-timelines)) and `campaign.campaigns` a selected ruleset ([§5.3](#53-campaigns)), but `narrative.events` arrives in Phase 6 and `rules.rulesets` in Phase 4. Follow the precedent Phase 2 set with `worlds.default_calendar_id`: omit the column rather than adding an unconstrained UUID, and let the phase that creates the target table add the column together with its foreign key.
+- **Party membership has no character table to point at.** `character.characters` does not exist until Phase 4. Characters are entities, so membership can reference `core.entities` directly — but that means the database cannot yet tell a character from a location, and the check that a member is actually a character belongs with Phase 4.
+- **Branch isolation cannot be fully proven here.** Rule 7 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules) — a timeline inherits parent history only up to its branch point — is the reason branching exists, but there is no history to inherit until events land in Phase 6. Phase 3 can prove the *structure* (a branch records its parent and branch point, and the world-agreement rule holds); it cannot prove the *isolation*. Say so rather than marking the criterion met, and see Phase 6.
+- **The branch-point rule is not declaratively expressible.** "A branch point cannot occur after the latest known point inherited from the parent" ([§5.2](#52-timelines)) compares against `core.world_times.sort_key` across rows and tables, so it needs a trigger, as the cross-world guards in Phase 2 did.
 
 ### Phase 4: Rules and shared characters
 

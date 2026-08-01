@@ -47,7 +47,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 
 ## 2. Repository layout
 
-The tree below is the **target**. As of Phase 1, `database/`, `src/dnd_ai/`, and `tests/` exist with the scaffolding this phase requires (Alembic setup, the bootstrap and shared-domains revisions, seed infrastructure, the three test layers); the deeper `src/dnd_ai/` subpackages (`api/`, `commands/`, `queries/`, `domain/`, `ai/`, `integrations/`) do not — create each as the phase that needs it requires, not in advance.
+The tree below is the **target**. As of Phase 2, `database/` holds the migrations and seed files, `src/dnd_ai/persistence/` holds the table metadata and seed machinery, and `tests/` holds all three layers plus shared factories. The deeper `src/dnd_ai/` subpackages (`api/`, `commands/`, `queries/`, `domain/`, `ai/`, `integrations/`) do not exist yet — create each as the phase that needs it requires, not in advance.
 
 ```text
 .
@@ -179,7 +179,7 @@ Against a deployed environment, migrations do **not** run from a laptop — the 
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phase 1 is done.** All four exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), which also records the six defects that verification uncovered. The current target is [PLAN.md §23 Phase 2](PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
+**Phases 1 and 2 are done.** Their exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md) and [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), which also record the defects each verification uncovered. The current target is [PLAN.md §23 Phase 3](PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

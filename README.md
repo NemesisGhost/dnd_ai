@@ -792,7 +792,7 @@ Everything is deployed to and verified in AWS — migrations and the `tests/data
 4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
 5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
-Phase 1 (database bootstrap) is **complete** — see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md) for what was verified and the defects that verification found. The current target is [Phase 2: Core world platform](docs/PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](docs/PLAN.md#231-phase-exit-review) for what closing a phase requires.
+Phases 1 (database bootstrap) and 2 (core world platform) are **complete** — see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md) and [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md) for what was verified and the defects each verification found. The current target is [Phase 3: Timelines and campaigns](docs/PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](docs/PLAN.md#231-phase-exit-review) for what closing a phase requires.
 
 ### If you are deploying infrastructure
 
