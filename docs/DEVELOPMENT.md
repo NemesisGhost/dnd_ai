@@ -39,6 +39,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Lint + format | **ruff** | Both linting and formatting; no separate black/isort |
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
 | AWS access | **AWS CLI v2** | Required for all contributors, not just infrastructure work — see [§3](#3-local-setup). `curl` for IP lookup |
+| Compute | **ECS Fargate**, one image in **ECR** | API, worker, adapter, and one-off jobs share the image; see [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) and [ADR 0008](adr/0008-aws-first-deployment-and-verification.md). Unbuilt |
 | Local database fallback | **Docker**, PostgreSQL pinned to the deployed major version | Only when AWS is genuinely unreachable, per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) — see the `testcontainers` fallback fixture in [§6](#6-testing) |
 | UI | **React** | Not yet started; no build tooling chosen |
 
@@ -56,6 +57,7 @@ The tree below is the **target**. As of Phase 1, `database/`, `src/dnd_ai/`, and
 ├── pyproject.toml             # Python project + tool config (ruff, mypy, pytest)
 ├── uv.lock
 ├── .env.example
+├── Dockerfile                 # The one image all services run from (PLAN.md §30.2)
 ├── docs/                      # ALL documentation (see CLAUDE.md §6)
 ├── terraform/                 # Infrastructure (see docs/INFRASTRUCTURE.md)
 ├── scripts/
@@ -85,6 +87,8 @@ The tree below is the **target**. As of Phase 1, `database/`, `src/dnd_ai/`, and
 ```
 
 The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering). Keep that mapping — it is how a reviewer checks that a handler didn't grow domain rules.
+
+There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints ([PLAN.md §30.2](PLAN.md#302-compute-ecs-fargate)). It does not exist yet — create it with the first deployable.
 
 ---
 
@@ -284,5 +288,6 @@ Before opening a pull request:
 - [ ] Constraints have positive and negative tests
 - [ ] Code sits in the layer [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) prescribes
 - [ ] `ruff format --check`, `ruff check`, `mypy src`, and `pytest` all pass
+- [ ] If the change adds or alters a deployable, it runs in `dev` on ECS Fargate and was exercised there ([PLAN.md §30.8](PLAN.md#308-per-phase-deployment-expectations))
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later

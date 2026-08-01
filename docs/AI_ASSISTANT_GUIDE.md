@@ -204,7 +204,8 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. The pre-restart Lambda/API Gateway wiring was removed; the initial deployment target is a modular monolith, not Lambda-per-function |
+| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. Everything is deployed to and verified in AWS ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md)); the pre-restart Lambda/API Gateway wiring was removed and is not coming back |
+| **Compute** | ECS Fargate | API, background worker, Discord adapter, and one-off jobs (including migrations) run one shared image from ECR. Modular monolith, not Lambda-per-function. See [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) — planned, unbuilt |
 | **IaC** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
 | **Database** | PostgreSQL 15.x | RDS, version pinned in Terraform; migrations via Alembic |
 | **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
@@ -247,7 +248,7 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 | Document | Purpose |
 |----------|---------|
 | [docs/INFRASTRUCTURE.md](INFRASTRUCTURE.md) | Deploying and operating the AWS infrastructure |
-| [docs/adr/](adr/) | Architecture Decision Records — currently stubs; decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions) |
+| [docs/adr/](adr/) | Architecture Decision Records — 0001–0007 are stubs whose decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions); [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) is written in full |
 | [.github/copilot-instructions.md](../.github/copilot-instructions.md) | GitHub Copilot repository instructions |
 
 ---

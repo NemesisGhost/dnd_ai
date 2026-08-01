@@ -1,6 +1,6 @@
 # Quick Start
 
-The fast path to a deployed development database. Assumes AWS CLI and Terraform are already installed and configured — if not, start with [CONTRIBUTING.md](CONTRIBUTING.md#2-aws-account-setup).
+The fast path to a deployed development database. Assumes AWS CLI and Terraform are already installed and configured — if not, start with [CONTRIBUTING.md](CONTRIBUTING.md#1-aws-account-setup-start-here).
 
 > **This is now a prerequisite for everyday development, not an occasional side quest.** Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), migrations and the `tests/database`/`tests/scenario` suites verify against this deployed `dev` instance, not a local container. If `dev` is already deployed by someone else, skip this document and go straight to [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
 

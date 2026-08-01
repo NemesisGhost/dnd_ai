@@ -31,6 +31,7 @@
 - [27. Deferred decisions](#27-deferred-decisions)
 - [28. Definition of implementation success](#28-definition-of-implementation-success)
 - [29. AWS Terraform deployment plan for PostgreSQL](#29-aws-terraform-deployment-plan-for-postgresql)
+- [30. AWS deployment plan for application services](#30-aws-deployment-plan-for-application-services)
 
 ---
 
@@ -1142,7 +1143,15 @@ Every phase from Phase 1 onward is verified against the deployed AWS `dev` envir
 
 `tests/unit` is unaffected — it uses no database at all, so there is nothing to verify against AWS.
 
-A phase's exit criteria below are necessary but not sufficient: they also require the phase's own migrations and tests passing against the deployed `dev` RDS instance before the phase counts as done.
+The same rule applies to *running* code, not just schema: once a phase delivers a deployable — an API, the background worker, an adapter — that deployable runs on AWS in `dev` and is exercised there. The compute platform, deployment flow, and the per-phase table of which deployable is expected from when are in [§30](#30-aws-deployment-plan-for-application-services); the decision behind all of it is [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+
+A phase's exit criteria below are therefore necessary but not sufficient. A phase is done when, additionally:
+
+1. Its migrations have run against the deployed `dev` database.
+2. Its `tests/database`/`tests/scenario` suites pass against that database.
+3. Its deployables (if any — see [§30.8](#308-per-phase-deployment-expectations)) are running in `dev` and exercised there.
+
+"It passes locally" is not a verification claim this project accepts for anything touching the database or a deployable.
 
 ### Phase 0: Documentation and decision records
 
@@ -1619,7 +1628,9 @@ The bootstrap must be idempotent and cover:
 
 Runtime behavior: `pip install -r requirements.txt && alembic upgrade head`, authenticating via an IAM auth token instead of a password.
 
-This is deliberately the lowest-setup-cost option for the project's current pre-implementation stage — it reuses AWS primitives (EC2, SSM, S3, IAM) already understood from the deleted `db_runner`, and needs no container registry or CI/CD platform decision yet. Revisit once the Python application services are containerized: at that point the same image can run migrations as a one-off ECS Fargate task instead of a standing EC2 runner, and CI/CD can trigger it automatically on merge.
+This was originally chosen as the lowest-setup-cost option for the project's pre-implementation stage, reusing AWS primitives (EC2, SSM, S3, IAM) already understood from the deleted `db_runner` and requiring no container registry or CI/CD platform decision.
+
+**That deferral is now resolved**: [§30](#30-aws-deployment-plan-for-application-services) commits the project to ECS Fargate, and migrations become a one-off task running the same image as every other service ([§30.2](#302-compute-ecs-fargate), [§30.6](#306-deployment-flow)). The standing EC2 runner described above is therefore a **transitional** mechanism — worth building only if `staging`/`prod` need migrating before the Fargate pipeline exists. If application deployment lands first, skip it entirely and go straight to the one-off task. Either way, `dev` does not need it: `dev` migrations run directly per [§29.9](#299-aws-first-verification-mechanism).
 
 ### 29.7 Deployment runbook
 
@@ -1663,3 +1674,90 @@ This reuses infrastructure that already exists rather than adding a new module. 
 **Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. So each CI run or developer test session creates its own throwaway database on the shared instance (e.g. `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests against it, and drops it — real isolation on shared infrastructure without needing a database-per-environment. This requires a role with `CREATEDB` (the master user, or a narrowly-scoped `test_runner` role using IAM auth) — add this to the bootstrap revision's role list when this mechanism is implemented; it does not exist yet.
 
 **What still needs building**: this section describes the target mechanism; as of this writing neither the CI IP-allowlist step nor the ephemeral-database fixture has been exercised against a live `dev` instance (no `dev` environment has been applied yet — see [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)). Treat both as an open task alongside the migration runner in §29.6, not as already-verified infrastructure.
+
+---
+
+## 30. AWS deployment plan for application services
+
+### 30.1 Scope
+
+[§29](#29-aws-terraform-deployment-plan-for-postgresql) covers the database. This section covers everything else that runs: the FastAPI application, the background worker that drains the outbox ([SYSTEM_ARCHITECTURE.md §10](architecture/SYSTEM_ARCHITECTURE.md#10-internal-event-dispatcher-and-outbox)), the Discord adapter, and one-off jobs including migrations.
+
+It exists because [§23.0](#230-aws-verification-policy) requires every phase to be deployed and verified in AWS, and because the concrete deployment target was previously unrecorded — [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) named vendor-neutral deployables and [§29.6](#296-migration-execution-mechanism) explicitly deferred the container-registry and CI/CD decision. That decision is now made and recorded in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+
+Nothing in this section is built yet. It is the plan; [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state) is what exists.
+
+### 30.2 Compute: ECS Fargate
+
+Application services run as ECS Fargate services in the same VPC and private subnets as the RDS instance. Rationale and the alternatives rejected (EC2 + systemd, App Runner) are in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+
+| Deployable | ECS shape | Notes |
+|---|---|---|
+| Application API | Long-running service behind an ALB | The modular monolith from [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology); the only deployable with ingress from outside the VPC |
+| Background worker | Long-running service, no load balancer | Outbox drain, integration delivery, AI proposal processing |
+| Discord adapter | Long-running service, no load balancer | Outbound gateway connection; no inbound ingress needed |
+| Migrations | One-off task, run to completion | Replaces the standing EC2 runner in [§29.6](#296-migration-execution-mechanism) — same image, different command |
+| Import / batch jobs | One-off task, run to completion | Phase 11 |
+
+All of these share one container image. The entrypoint selects the role, so there is one artifact to build, scan, and promote.
+
+### 30.3 Image build and registry
+
+- One **ECR** repository per environment account (or one shared repository with immutable tags — decide when `staging` exists, per [§29.3](#293-environments-dev-staging-prod)).
+- Images are tagged with the Git commit SHA. Mutable tags like `latest` are not deployed; a task definition always references an immutable tag, so a rollback is a task-definition revision rather than a rebuild.
+- CI builds and pushes on merge; on pull requests it builds only to prove the image still builds.
+- Image scanning on push is enabled. A failing scan blocks promotion to `staging`/`prod`, not `dev`.
+
+### 30.4 Networking
+
+- Services run in the **private** subnets that already exist in `terraform/modules/database`. They reach AWS APIs through the existing Secrets Manager and KMS interface endpoints; ECR (plus S3, for image layers) endpoints have to be added, or a NAT Gateway accepted — this is the one place the current no-NAT design needs revisiting, and it is a cost tradeoff to measure rather than assume ([§30.9](#309-open-items)).
+- The API service sits behind an **Application Load Balancer** in the public subnets. It is the only public entry point; the database itself is never reachable from the internet in `staging`/`prod`.
+- Each service gets its own security group. Database ingress is granted by attaching those security groups to the RDS security group via `allowed_security_group_ids`, which `terraform/modules/database` already supports — not by widening any CIDR block.
+
+### 30.5 Identity and secrets
+
+- Each service gets its own **task role** (what the application may call) distinct from its **execution role** (what ECS may do to start the task).
+- Database access uses **IAM database authentication** with the roles from [§29.5](#295-database-role-schema-and-extension-bootstrap): the API and worker task roles get `rds-db:connect` for `app_read_write`, read-model-only services get `app_read_only`, and the migration task gets `migration_owner`. No database password is stored for these roles.
+- External credentials (OpenAI, Discord) come from the Secrets Manager entries the `secrets` module already creates, injected as ECS secrets rather than plaintext environment variables. Per rule 10 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules), no secret enters an image, a task definition, or source control.
+
+### 30.6 Deployment flow
+
+1. CI builds the image and pushes it to ECR tagged with the commit SHA.
+2. CI registers a new task-definition revision pointing at that tag.
+3. CI runs the migration task to completion and fails the deployment if it fails — schema changes land before the code that depends on them, which is what the expand-and-contract requirement in [DATABASE_CONVENTIONS.md §25.5](DATABASE_CONVENTIONS.md#255-backward-compatibility) exists for.
+4. CI updates the API, worker, and adapter services to the new revision; ECS rolls them with health checks.
+5. Rollback is redeploying the previous task-definition revision. Because migrations are expand-and-contract, the previous image is expected to run against the newer schema.
+
+For `dev`, steps 3–4 run automatically on merge to `main`. For `staging`/`prod`, promotion is deliberate — the same image, a manual trigger. The SSM-based migration runner in [§29.6](#296-migration-execution-mechanism) is retired once step 3 works, since a one-off Fargate task in the private subnets reaches the database the same way without a standing instance.
+
+### 30.7 Observability
+
+The telemetry requirements are in [SYSTEM_ARCHITECTURE.md §19](architecture/SYSTEM_ARCHITECTURE.md#19-observability); this is where they land:
+
+- Container logs to **CloudWatch Logs**, one log group per service, with retention set explicitly rather than left to never expire.
+- The correlation, causation, and identity fields from §19 are emitted as structured JSON so they are queryable, not free text.
+- Alarms on API 5xx rate and latency, task restart loops, outbox backlog depth, plus the database alarms still missing per [§29.8](#298-open-items).
+
+### 30.8 Per-phase deployment expectations
+
+Application services do not exist until there is application code to run. Phases 2–7 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-aws-verification-policy): migrations and tests verified against the deployed `dev` database.
+
+The additional obligations in this section begin when the corresponding deployable first exists:
+
+| From | Additionally deployed and verified in `dev` |
+|---|---|
+| The first phase that delivers a FastAPI endpoint | API service on Fargate behind the ALB, reachable and health-checked |
+| The first phase that delivers outbox processing | Background worker service |
+| Phase 9 (Foundry synchronization) | Whatever Foundry-facing surface that phase adds, through the API |
+| Phase 10 (AI and Discord) | Discord adapter service; AI provider credentials resolved from Secrets Manager at runtime |
+| Phase 11 (Import tools) | Import job as a one-off task |
+
+A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them.
+
+### 30.9 Open items
+
+- **ECR/S3 VPC endpoints vs. NAT Gateway** ([§30.4](#304-networking)) — the current design deliberately avoids a NAT Gateway; pulling images into private subnets forces one or the other. Measure both before choosing.
+- **Terraform modules**: `ecr`, `ecs_cluster`, `ecs_service`, and `alb` do not exist. Follow the one-module-per-bounded-concern split already used by `database` and `secrets`.
+- **CI/CD platform**: GitHub Actions is already used for CI ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)); deployment is assumed to extend it rather than introduce a second system, but the OIDC role and environment protection rules are unbuilt.
+- **`staging`/`prod` environments** remain unbuilt per [§29.3](#293-environments-dev-staging-prod); everything above is specified for `dev` first.
+- **Cost**: each always-on Fargate service adds to the ~$25–35/month database figure in [INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost). Measure once the API service exists rather than guessing now.

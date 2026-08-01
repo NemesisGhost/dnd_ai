@@ -1,6 +1,8 @@
 # Infrastructure Guide
 
-Reference for the AWS infrastructure that hosts the platform's PostgreSQL database — what exists, how it is configured, and how to operate it.
+Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
+
+Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services is planned but unbuilt: [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) specifies ECS Fargate, and this document gains those sections when the modules exist.
 
 **Which document do you want?**
 
@@ -68,6 +70,7 @@ Per [PLAN.md §29.1](PLAN.md#291-scope-and-current-state), still to be built:
 - The `dev` reachability and test-isolation mechanism from [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism): the CI IP-allowlist authorize/revoke steps and the ephemeral-per-run test database. Neither has been exercised against a live instance yet.
 - A `multi_az` variable on the `database` module.
 - CloudWatch alarms.
+- **All application compute.** Per [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services), the API, background worker, and Discord adapter run on ECS Fargate from a shared image in ECR, behind an ALB. None of `ecr`, `ecs_cluster`, `ecs_service`, or `alb` modules exist. Note that pulling images into the private subnets requires either ECR/S3 VPC endpoints or a NAT Gateway — the current design has neither ([PLAN.md §30.9](PLAN.md#309-open-items)).
 
 ### What was removed
 
@@ -91,7 +94,7 @@ The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambd
 
 The AWS provider is pinned to `~> 5.0` in `terraform/environments/dev/main.tf`.
 
-Credential configuration, named profiles, and creating a scoped deployment identity are covered in [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-account-setup). Verify with `aws sts get-caller-identity` before anything else — a missing or expired credential is the most common cause of a failed first apply.
+Credential configuration, named profiles, and creating a scoped deployment identity are covered in [CONTRIBUTING.md §1](CONTRIBUTING.md#1-aws-account-setup-start-here). Verify with `aws sts get-caller-identity` before anything else — a missing or expired credential is the most common cause of a failed first apply.
 
 ### 2.2 Required IAM permissions
 
@@ -106,7 +109,7 @@ The apply creates resources across six services. The identity running Terraform 
 | IAM | The RDS enhanced-monitoring service role | `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:PassRole`, `iam:GetRole`, `iam:DeleteRole` |
 | CloudWatch Logs | PostgreSQL log export | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:DescribeLogGroups` |
 
-`PowerUserAccess` covers everything except the IAM role creation; pair it with the narrow role policy in [CONTRIBUTING.md §2.2](CONTRIBUTING.md#22-creating-a-deployment-identity). Least-privilege policies for the *runtime* roles — as opposed to the deploying identity — are in [§6](#6-secrets).
+`PowerUserAccess` covers everything except the IAM role creation; pair it with the narrow role policy in [CONTRIBUTING.md §1.2](CONTRIBUTING.md#12-creating-a-deployment-identity). Least-privilege policies for the *runtime* roles — as opposed to the deploying identity — are in [§6](#6-secrets).
 
 The pre-flight checklist is [CHECKLIST.md](CHECKLIST.md).
 

@@ -743,7 +743,7 @@ The database will use bounded PostgreSQL schemas:
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
 │   │   └── DUNGEON_FLOW.md
-│   └── adr/                        # Decision records (currently stubs)
+│   └── adr/                        # Decision records (0001-0007 stubs; 0008 full)
 ├── terraform/
 │   ├── modules/{database,secrets}/
 │   ├── environments/dev/
@@ -751,17 +751,25 @@ The database will use bounded PostgreSQL schemas:
 └── scripts/
 ```
 
-### Planned, not yet created
+Phase 1 added the Python project and migration scaffolding:
 
 ```text
 ├── pyproject.toml                  # Python project and tool configuration
 ├── database/
 │   ├── alembic.ini
-│   ├── migrations/versions/
-│   ├── seeds/
-│   └── functions/
-├── src/dnd_ai/                     # api / commands / queries / domain / persistence / ai / integrations
+│   ├── migrations/versions/        # 001_bootstrap, 002_shared_domains
+│   └── seeds/
+├── src/dnd_ai/                     # persistence/ and config.py so far
 └── tests/{unit,database,scenario}/
+```
+
+### Planned, not yet created
+
+```text
+├── Dockerfile                      # One image for API, worker, adapter, and jobs (PLAN.md §30.2)
+├── database/functions/             # SQL for stored functions, applied via revisions
+├── src/dnd_ai/                     # api / commands / queries / domain / ai / integrations
+└── terraform/modules/              # ecr, ecs_cluster, ecs_service, alb (PLAN.md §30)
 ```
 
 These are created as implementation proceeds, not in advance. The full target layout, with the rationale for each directory, is in [docs/DEVELOPMENT.md §2](docs/DEVELOPMENT.md#2-repository-layout).
@@ -776,7 +784,7 @@ New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing
 
-Every phase's migrations and `tests/database`/`tests/scenario` suites verify against the deployed AWS `dev` environment, not a local stand-in — see [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy). A local Docker PostgreSQL container is a documented fallback only, for when AWS is genuinely unreachable.
+Everything is deployed to and verified in AWS — migrations and the `tests/database`/`tests/scenario` suites run against the deployed `dev` database, and deployables run on ECS Fargate in `dev`. See [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy), [§30](docs/PLAN.md#30-aws-deployment-plan-for-application-services), and [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md). A local Docker PostgreSQL container is a documented fallback only, for when AWS is genuinely unreachable.
 
 1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
 2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
@@ -843,7 +851,7 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. Currently stubs; the reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) is written in full.
 
 ---
 

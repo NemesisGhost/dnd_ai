@@ -17,9 +17,10 @@ This is an architecture restart. See [README.md § Current Status](README.md#cur
 
 ## 3. Technology stack
 
-- **Infrastructure / IaC:** AWS, provisioned and managed with **Terraform**. New environments follow the existing `terraform/modules/` + `terraform/environments/<env>/` pattern.
+- **Infrastructure / IaC:** AWS, provisioned and managed with **Terraform**. New environments follow the existing `terraform/modules/` + `terraform/environments/<env>/` pattern. Everything runs in AWS — see rule 11 in §5.
 - **Database:** PostgreSQL 15.x on AWS RDS. Schema, conventions, and migration approach are defined in [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) (migrations via **Alembic**, per §25.1).
-- **API / backend services:** **Python 3.12+** with **SQLAlchemy 2.x Core** (not the ORM), **psycopg 3**, **Pydantic v2**, and **FastAPI** at the API layer. Dependencies via **uv**; tests with **pytest** + **testcontainers**; **ruff** and **mypy** for quality.
+- **API / backend services:** **Python 3.12+** with **SQLAlchemy 2.x Core** (not the ORM), **psycopg 3**, **Pydantic v2**, and **FastAPI** at the API layer. Dependencies via **uv**; **ruff** and **mypy** for quality. Tests are **pytest** run against the deployed AWS `dev` database (testcontainers is a fallback only, per [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy)).
+- **Compute:** application services (API, background worker, Discord adapter) and one-off jobs including migrations run on **ECS Fargate** from a single shared container image in **ECR**, per [docs/PLAN.md §30](docs/PLAN.md#30-aws-deployment-plan-for-application-services).
 - **UI:** **React**. Any web/admin client is a React application talking to the REST/application API — never directly to PostgreSQL.
 - **Other integrations:** FoundryVTT module, Discord bot, MCP interface — all clients, all going through the application API (§5).
 
@@ -36,11 +37,12 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 | [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | Logical schema: tables per domain, ER diagrams, ownership rules. The concrete translation of DOMAIN_MODEL.md into schema. |
 | [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard rules for naming, types, keys, inheritance, JSONB use, migrations, indexing, anti-patterns (§34). Follow exactly — this is a convention document, not a style suggestion. |
 | [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | How entities are created, approved, mutated, branched, archived, deleted — including the exact command list and required transaction steps. |
-| [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, AI orchestration flow, deployment topology (modular monolith initially). |
+| [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, AI orchestration flow, deployment topology (modular monolith on ECS Fargate). |
 | [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | The reference end-to-end vertical slice (dungeon/quest scenario) — the acceptance test any cross-domain design should be checked against. |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, definition of done. Read before writing code. |
 | [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) | Infrastructure reference — variables, outputs, secrets, verification, teardown, and known gaps in the current Terraform. Deployment path is [docs/QUICKSTART.md](docs/QUICKSTART.md), pre-flight is [docs/CHECKLIST.md](docs/CHECKLIST.md), onboarding is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). The plan for what it should become is [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql). |
 | [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | Long-form version of this file: worked examples, anti-patterns, decision trees. This file is the summary; that one has the detail. |
+| [docs/adr/](docs/adr/) | One record per architectural decision. Most are stubs pointing back at PLAN.md §2; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) is written in full and governs where code runs and is verified. |
 
 ## 5. Non-negotiable architectural rules
 
@@ -56,6 +58,7 @@ These hold regardless of which feature is being implemented. Full rationale is i
 8. **Knowledge is per-knower, never a global boolean.** No `is_player_known` / `is_discovered` flags on the object itself — discovery and belief live in the knowledge domain, scoped to who knows it.
 9. **Persistent world entities are archived, not physically deleted.** Physical deletion is reserved for unreferenced drafts/test fixtures/legal removal, per [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md).
 10. **No secrets in code or seed files.** AWS Secrets Manager for credentials and API keys, consistent with the existing Terraform pattern.
+11. **Everything is deployed to and verified in AWS.** Migrations, `tests/database`, and `tests/scenario` run against the deployed `dev` RDS instance; deployables run on ECS Fargate in `dev`. A local container is a fallback for genuinely unreachable AWS, never the default loop, and "it passes locally" is not a verification claim. See [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy) and [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md).
 
 When any task seems to require breaking one of these, stop and flag it rather than quietly deviating — it usually means the domain model needs an explicit extension (see §37 of DATABASE_CONVENTIONS.md on the convention-change process), not a one-off exception.
 
@@ -68,7 +71,7 @@ Full rules are in the linked docs — don't treat this as complete.
 - **Terraform:** one module per bounded infrastructure concern (mirroring the existing `database` / `secrets` split), one directory per environment under `terraform/environments/`, no hardcoded credentials, state and variable naming should mirror what's already in `terraform/modules/`.
 - **React:** standard component-based structure; the UI is a client like any other — it talks to the application API, not the database.
 - **New documentation** always goes under `docs/` — the only markdown files that belong at the repository root are `README.md` and this file, and the only one under `terraform/` is a short pointer to `docs/INFRASTRUCTURE.md`. Keep `README.md`'s Development Roadmap and Documentation sections pointing at `docs/PLAN.md` rather than duplicating its content.
-- **Tests and tooling:** `pytest` layers (`tests/unit` with no database, `tests/database` and `tests/scenario` against a real PostgreSQL container), `ruff format`/`ruff check`/`mypy src` before committing. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+- **Tests and tooling:** `pytest` layers (`tests/unit` with no database; `tests/database` and `tests/scenario` against an ephemeral database on the deployed AWS `dev` instance, per rule 11), `ruff format`/`ruff check`/`mypy src` before committing. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 7. Before implementing a feature
 

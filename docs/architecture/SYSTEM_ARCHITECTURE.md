@@ -471,19 +471,24 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 ## 17. Deployment topology
 
-Initial deployment may be a modular monolith with separate workers.
+Initial deployment is a modular monolith with separate workers, deployed to AWS. A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving. Service boundaries can become process boundaries later when operational evidence justifies it.
 
-Recommended initial deployables:
+Everything runs in AWS — there is no supported local-deployment topology. Local execution exists only as a fallback for when AWS is unreachable ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
 
-- application API
-- background worker
-- PostgreSQL
-- object storage
-- reverse proxy
-- FoundryVTT module
-- Discord bot or adapter
+| Deployable | AWS target | Notes |
+|---|---|---|
+| Application API | ECS Fargate service behind an Application Load Balancer | The only deployable with ingress from outside the VPC |
+| Background worker | ECS Fargate service, no load balancer | Drains the outbox (§10), delivers integrations, processes AI proposals |
+| Discord adapter | ECS Fargate service, no load balancer | Outbound gateway connection; needs no inbound ingress |
+| Migrations and batch jobs | ECS Fargate one-off tasks | Same image as the services, different entrypoint |
+| PostgreSQL | RDS PostgreSQL, private subnets | Source of truth (§2); never publicly reachable in `staging`/`prod` |
+| Object storage | S3 | Import source documents, exports, image layers |
+| Secrets | Secrets Manager + IAM database authentication | No credential in an image, task definition, or source control |
+| FoundryVTT module | Runs in the user's Foundry instance | A client, not something this project deploys |
 
-A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving. Service boundaries can become process boundaries later when operational evidence justifies it.
+The API, worker, and adapter share a single container image; the entrypoint selects the role, so there is one artifact to build, scan, and promote.
+
+Concrete networking, identity, deployment flow, and per-phase deployment expectations are in [PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services). The database's own provisioning and migration path is [PLAN.md §29](../PLAN.md#29-aws-terraform-deployment-plan-for-postgresql).
 
 ## 18. Security model
 
@@ -558,6 +563,8 @@ Do not prematurely split domains into distributed microservices while core invar
 
 ### Integration tests
 
+Run against the deployed AWS `dev` database, not a local container ([PLAN.md §23.0](../PLAN.md#230-aws-verification-policy)):
+
 - PostgreSQL constraints and functions
 - transactional state/event updates
 - idempotent commands
@@ -586,4 +593,5 @@ The primary end-to-end scenario is the dungeon/quest flow defined in `docs/archi
 7. Timeline resolution is centralized.
 8. Rules data is versioned and ruleset-scoped.
 9. Integrations retain internal UUID mappings.
+10. Everything is deployed to and verified in AWS; local execution is a fallback for unreachable AWS, not a supported topology ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
 10. The initial implementation should remain a modular monolith unless evidence supports decomposition.
