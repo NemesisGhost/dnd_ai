@@ -9,8 +9,8 @@ data "aws_availability_zones" "available" {
 
 # If an existing VPC is provided, fetch its details (CIDR, etc.)
 data "aws_vpc" "existing" {
-  count  = var.vpc_id != null ? 1 : 0
-  id     = var.vpc_id
+  count = var.vpc_id != null ? 1 : 0
+  id    = var.vpc_id
 }
 
 # VPC for database (if not provided)
@@ -42,8 +42,8 @@ resource "aws_internet_gateway" "main" {
 }
 
 locals {
-  effective_vpc_id   = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
-  effective_vpc_cidr = var.vpc_id != null ? data.aws_vpc.existing[0].cidr_block : var.vpc_cidr
+  effective_vpc_id             = var.vpc_id != null ? var.vpc_id : aws_vpc.main[0].id
+  effective_vpc_cidr           = var.vpc_id != null ? data.aws_vpc.existing[0].cidr_block : var.vpc_cidr
   use_existing_private_subnets = length(var.private_subnet_ids) > 0
 }
 
@@ -84,7 +84,7 @@ resource "aws_subnet" "public" {
 resource "aws_eip" "nat" {
   count = var.vpc_id == null && var.use_nat_gateway ? 1 : 0
 
-  domain = "vpc"
+  domain     = "vpc"
   depends_on = [aws_internet_gateway.main]
 
   tags = {
@@ -109,13 +109,20 @@ resource "aws_nat_gateway" "main" {
   depends_on = [aws_internet_gateway.main]
 }
 
-# Route table for private subnets
+# Route table for private subnets — only when this module created the VPC.
+# When reusing an existing/default VPC (var.vpc_id != null), its subnets keep
+# whatever route table they already have. Creating and associating a fresh,
+# route-less table here would silently strip their existing IGW route,
+# breaking publicly_accessible instances even though nothing else changed
+# (this is exactly what happened reusing a default VPC's subnets for dev).
 resource "aws_route_table" "private" {
+  count = var.vpc_id == null ? 1 : 0
+
   vpc_id = local.effective_vpc_id
 
-  # Add route to NAT Gateway for internet access (if creating VPC and NAT Gateway enabled)
+  # Add route to NAT Gateway for internet access (if NAT Gateway enabled)
   dynamic "route" {
-    for_each = var.vpc_id == null && var.use_nat_gateway ? [1] : []
+    for_each = var.use_nat_gateway ? [1] : []
     content {
       cidr_block     = "0.0.0.0/0"
       nat_gateway_id = aws_nat_gateway.main[0].id
@@ -129,12 +136,12 @@ resource "aws_route_table" "private" {
   }
 }
 
-# Route table associations for private subnets
+# Route table associations for private subnets — same condition as above.
 resource "aws_route_table_association" "private" {
-  count = local.use_existing_private_subnets ? length(var.private_subnet_ids) : 2
+  count = var.vpc_id == null ? (local.use_existing_private_subnets ? length(var.private_subnet_ids) : 2) : 0
 
   subnet_id      = local.use_existing_private_subnets ? var.private_subnet_ids[count.index] : aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[0].id
 }
 
 # Route table for public subnets (if creating VPC)
@@ -223,11 +230,11 @@ resource "aws_security_group" "db" {
 resource "aws_vpc_endpoint" "secretsmanager" {
   count = var.create_vpc_endpoints ? 1 : 0
 
-  vpc_id              = local.effective_vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  vpc_id             = local.effective_vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
+  security_group_ids = [aws_security_group.vpc_endpoints[0].id]
 
   private_dns_enabled = true
 
@@ -241,11 +248,11 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 resource "aws_vpc_endpoint" "kms" {
   count = var.create_vpc_endpoints ? 1 : 0
 
-  vpc_id              = local.effective_vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.kms"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  vpc_id             = local.effective_vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.name}.kms"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = local.use_existing_private_subnets ? var.private_subnet_ids : aws_subnet.private[*].id
+  security_group_ids = [aws_security_group.vpc_endpoints[0].id]
 
   private_dns_enabled = true
 

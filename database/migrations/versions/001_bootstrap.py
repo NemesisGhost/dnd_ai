@@ -143,6 +143,15 @@ def upgrade() -> None:
             $$;
         """)
 
+    # The connecting role (the RDS master user, or `postgres` locally) must be
+    # a member of migration_owner before it can transfer schema ownership to
+    # it or set default privileges "FOR ROLE migration_owner" below — neither
+    # statement is permitted otherwise, even for the RDS master user (which is
+    # rds_superuser, not a true superuser, and gets no implicit membership in
+    # roles it creates). Verified against a real RDS instance: this failed
+    # with "must be member of role migration_owner" without this grant.
+    op.execute("GRANT migration_owner TO CURRENT_USER;")
+
     # ==========================================================================
     # 5. Schema ownership and default privileges
     # ==========================================================================
