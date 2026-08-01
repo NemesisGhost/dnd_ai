@@ -94,7 +94,9 @@ module "secrets" {
   project_name = local.project_name
   environment  = local.environment
 
-  kms_key_arn = module.database.kms_key_arn
+  # Note: kms_key_arn is not set - secrets will use AWS-managed key
+  # To use customer-managed KMS key, uncomment and ensure IAM permissions
+  # kms_key_arn = module.database.kms_key_arn
 
   additional_tags = var.additional_tags
 }

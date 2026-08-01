@@ -32,6 +32,8 @@ Before implementation proceeds:
 - No legacy schema or API compatibility is required.
 - Infrastructure, application services, and integrations will be built fresh against this design rather than adapted from prior code.
 
+The operational documentation was consolidated to match: the guides describing the removed Lambda-based schema initializer and SSM SQL runner have been deleted, and the remaining Terraform guidance now lives in a single document, [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
+
 Existing campaign material (notes, PDFs, prior session content) will still be imported later through a staged, reviewed import process. Imported content will not become canonical world data until it has been validated and approved.
 
 ---
@@ -53,6 +55,7 @@ Existing campaign material (notes, PDFs, prior session content) will still be im
 - [AI Design](#ai-design)
 - [PostgreSQL Domain Layout](#postgresql-domain-layout)
 - [Repository Structure](#repository-structure)
+- [Getting Started](#getting-started)
 - [Development Roadmap](#development-roadmap)
 - [Documentation](#documentation)
 - [License](#license)
@@ -715,47 +718,92 @@ The database will use bounded PostgreSQL schemas:
 
 ## Repository Structure
 
+### What exists today
+
 ```text
 .
-├── README.md
-├── CLAUDE.md
+├── README.md                       # This file — project entry point
+├── CLAUDE.md                       # AI assistant operating instructions
+├── build.ps1                       # Terraform orchestration wrapper
+├── .env.example
 ├── .github/
 │   └── copilot-instructions.md
-├── docs/
-│   ├── PLAN.md
+├── docs/                           # ALL documentation lives here
+│   ├── PLAN.md                     # Source of truth for phases and deliverables
 │   ├── DOMAIN_MODEL.md
 │   ├── DATABASE_CONVENTIONS.md
 │   ├── ENTITY_LIFECYCLE.md
-│   ├── DEVELOPMENT.md
+│   ├── CONTRIBUTING.md             # Onboarding for new contributors
+│   ├── DEVELOPMENT.md              # Toolchain, layout, migration and test workflow
+│   ├── QUICKSTART.md               # Fast path to deployed infrastructure
+│   ├── CHECKLIST.md                # Pre-deployment checks
+│   ├── INFRASTRUCTURE.md           # Infrastructure reference
+│   ├── AI_ASSISTANT_GUIDE.md
 │   ├── architecture/
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
-│   │   ├── DUNGEON_FLOW.md
-│   │   └── diagrams/
-│   └── adr/
-│       ├── 0001-use-postgresql.md
-│       ├── 0002-use-class-table-inheritance.md
-│       ├── 0003-separate-world-timeline-and-campaign.md
-│       ├── 0004-use-event-assisted-state.md
-│       ├── 0005-separate-rules-definitions-from-world-instances.md
-│       ├── 0006-ai-proposes-but-does-not-own-canon.md
-│       └── 0007-separate-knowledge-from-truth.md
-├── database/
-│   ├── migrations/
-│   ├── seeds/
-│   ├── functions/
-│   └── tests/
-├── src/
-└── tests/
+│   │   └── DUNGEON_FLOW.md
+│   └── adr/                        # Decision records (currently stubs)
+├── terraform/
+│   ├── modules/{database,secrets}/
+│   ├── environments/dev/
+│   └── scripts/
+└── scripts/
 ```
 
-`CLAUDE.md` should contain Claude Code operating instructions.
+### Planned, not yet created
 
-`.github/copilot-instructions.md` should contain concise repository-wide coding and architecture rules for GitHub Copilot.
+```text
+├── pyproject.toml                  # Python project and tool configuration
+├── database/
+│   ├── alembic.ini
+│   ├── migrations/versions/
+│   ├── seeds/
+│   └── functions/
+├── src/dnd_ai/                     # api / commands / queries / domain / persistence / ai / integrations
+└── tests/{unit,database,scenario}/
+```
 
-`docs/PLAN.md` and the rest of the design and process documentation live under `docs/`; this README remains the high-level project entry point.
+These are created as implementation proceeds, not in advance. The full target layout, with the rationale for each directory, is in [docs/DEVELOPMENT.md §2](docs/DEVELOPMENT.md#2-repository-layout).
 
-This tree is the target layout, not the current one — `database/`, `src/`, and `tests/` don't exist yet and will be created as implementation proceeds. Pre-restart application code and orphaned Terraform wiring have been removed; see [Current Status](#current-status) for what was cleaned up and what was intentionally kept (the generic `terraform/modules/database` and `terraform/modules/secrets` modules).
+All design and process documentation lives under `docs/`; only `README.md` and `CLAUDE.md` belong at the repository root. Pre-restart application code and orphaned Terraform wiring have been removed — see [Current Status](#current-status) for what was cleaned up and what was intentionally kept.
+
+---
+
+## Getting Started
+
+New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
+
+### If you are implementing
+
+Local development requires **no AWS resources** — a Docker PostgreSQL container is enough for everything through Phase 7.
+
+1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
+2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
+3. **Set up your environment** — [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup). Toolchain and repository layout are pinned in §1–2 of that document.
+4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
+5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
+
+The current target is [Phase 1: Database bootstrap](docs/PLAN.md#23-delivery-phases). A step-by-step walkthrough of it is in [docs/DEVELOPMENT.md §5](docs/DEVELOPMENT.md#5-phase-1-walkthrough).
+
+### If you are deploying infrastructure
+
+Terraform provisions PostgreSQL RDS, VPC, KMS, and Secrets Manager on AWS.
+
+```powershell
+Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environments/dev/terraform.tfvars
+# Edit terraform.tfvars — set owner_name and my_ip_cidr (its default is 0.0.0.0/0)
+./build.ps1 -Environment dev -Action apply -AutoApprove
+```
+
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — the deployment path, step by step
+- [docs/CHECKLIST.md](docs/CHECKLIST.md) — pre-flight checks before you apply
+- [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — reference: variables, outputs, verification, teardown, known gaps
+- [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) — the authoritative plan for what the infrastructure should become
+
+Note that the deployed database is currently an **empty PostgreSQL instance** — the schema, role, and extension bootstrap runs through Alembic and does not exist yet.
+
+**Cost:** roughly $25–35/month for the development environment. Destroy it when you aren't using it.
 
 ---
 
@@ -769,7 +817,7 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ## Documentation
 
-Current project and architecture documents:
+### Design and domain
 
 - [docs/PLAN.md](docs/PLAN.md) — source of truth for implementation phases, dependencies, deliverables, and acceptance criteria
 - [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) — authoritative vocabulary and domain ownership rules
@@ -778,13 +826,24 @@ Current project and architecture documents:
 - [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — application, service, AI, integration and deployment architecture
 - [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — full logical database model and domain diagrams
 - [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) — end-to-end dungeon and quest progression diagrams and acceptance scenario
-- [CLAUDE.md](CLAUDE.md) — Claude Code operating instructions: tech stack, architectural rules, and documentation map
 
-Planned supporting documents:
+### Building and operating
 
-- `docs/DEVELOPMENT.md` — local development and contribution workflow
-- `docs/adr/` — individual architecture decision records
-- `.github/copilot-instructions.md` — GitHub Copilot repository instructions
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — onboarding: local setup first, AWS account setup, workflow for code and infrastructure changes
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — toolchain, repository layout, local setup, migration and testing workflow
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — fast path to a deployed development database
+- [docs/CHECKLIST.md](docs/CHECKLIST.md) — pre-deployment and post-deployment checks
+- [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — infrastructure reference: variables, outputs, secrets, verification, teardown, known gaps
+
+### Working with AI assistants
+
+- [CLAUDE.md](CLAUDE.md) — Claude Code operating instructions: tech stack, architectural rules, documentation map
+- [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) — the long form: worked examples, anti-patterns, decision trees
+- [.github/copilot-instructions.md](.github/copilot-instructions.md) — condensed rules for GitHub Copilot
+
+### Decision records
+
+- [docs/adr/](docs/adr/) — one file per architectural decision. Currently stubs; the reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally.
 
 ---
 

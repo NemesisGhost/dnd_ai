@@ -2,7 +2,7 @@
 
 **Purpose**: This is the primary operating manual for AI assistants (Claude, Copilot, etc.) working in this repository. It synthesizes the complete documentation set into actionable guidance.
 
-**Last Updated**: July 31, 2026
+**Scope**: Detailed examples, anti-patterns, and decision trees. For the short version, see [CLAUDE.md](../CLAUDE.md). Where the two disagree, the linked source document wins and both should be corrected.
 
 ---
 
@@ -33,20 +33,20 @@ A **persistent-world simulation platform** for tabletop RPGs (initially D&D 5e 2
 
 ⚠️ **DO NOT resurrect legacy patterns.** The repository previously contained code from a prior iteration (`Database/`, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, and related build scripts) that predated the persistent-world model in this document set. It has been **removed**, along with the Terraform modules and environment wiring built specifically for it (`db_runner`, `lambda-api`, `lambda-with-build`).
 
-- Legacy schema: flat `public`-schema tables, no timelines/worlds/knowledge model → removed, replaced by the design in `docs/architecture/DATABASE_MODEL.md`
+- Legacy schema: flat `public`-schema tables, no timelines/worlds/knowledge model → removed, replaced by the design in `architecture/DATABASE_MODEL.md`
 - Legacy Lambda functions → removed, will be rebuilt from scratch per current architecture
 - Existing database content → will be dropped, no migration required
 - What remains: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) — not tied to the old schema, reasonable to build on
 
 ### Where to look when stuck
 
-1. **Check current phase**: [docs/PLAN.md](docs/PLAN.md) — are you working on something that's supposed to be implemented yet?
-2. **Clarify concepts**: [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) — what does this term actually mean?
-3. **Schema design**: [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — how should this be modeled?
-4. **Database rules**: [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) — what naming/pattern should I use?
-5. **Lifecycle operations**: [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) — how do I create/modify/delete this?
-6. **Architecture**: [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — where does this code belong?
-7. **End-to-end flow**: [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) — how does this fit into the vertical slice?
+1. **Check current phase**: [docs/PLAN.md](PLAN.md) — are you working on something that's supposed to be implemented yet?
+2. **Clarify concepts**: [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — what does this term actually mean?
+3. **Schema design**: [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) — how should this be modeled?
+4. **Database rules**: [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) — what naming/pattern should I use?
+5. **Lifecycle operations**: [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) — how do I create/modify/delete this?
+6. **Architecture**: [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) — where does this code belong?
+7. **End-to-end flow**: [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md) — how does this fit into the vertical slice?
 
 ---
 
@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-**Architecture and domain-modeling stage**. See [docs/PLAN.md Phase 0-1](docs/PLAN.md) for current deliverables.
+**Architecture and domain-modeling stage**. See [docs/PLAN.md Phase 0-1](PLAN.md) for current deliverables.
 
 ### What's Being Built
 
@@ -77,7 +77,7 @@ The first major vertical slice: **dungeon exploration flow**
 - Influences NPC knowledge
 - Leaves consequences for other campaigns on the same timeline
 
-See [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) for the complete acceptance scenario.
+See [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md) for the complete acceptance scenario.
 
 ---
 
@@ -185,7 +185,7 @@ Discovery and belief live in the **knowledge domain**, scoped to who knows it.
 - `DELETE FROM character.npcs WHERE npc_id = 'some-important-character'`
 - "They left the campaign, let's delete them"
 
-See [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md) for complete rules.
+See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 
 ### 10. No secrets in code or seed files
 
@@ -204,14 +204,15 @@ See [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md) for complete rules
 
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| **Infrastructure** | AWS | RDS PostgreSQL, Lambda, S3, API Gateway, Secrets Manager |
-| **IaC** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/` |
-| **Database** | PostgreSQL | RDS, version pinned in Terraform; migrations via Alembic |
-| **Backend** | Python | Application/domain/command-handler code |
-| **API** | REST | Python application layer exposes REST endpoints |
-| **UI** | React | Web/admin client talking to REST API |
+| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. The pre-restart Lambda/API Gateway wiring was removed; the initial deployment target is a modular monolith, not Lambda-per-function |
+| **IaC** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
+| **Database** | PostgreSQL 15.x | RDS, version pinned in Terraform; migrations via Alembic |
+| **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
+| **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) |
+| **UI** | React | Web/admin client talking to REST API; not yet started |
 | **Integrations** | FoundryVTT Module, Discord Bot, MCP Interface | All are clients, all go through application API |
-| **Migrations** | Alembic | Python-based, see [docs/DATABASE_CONVENTIONS.md §25](docs/DATABASE_CONVENTIONS.md) |
+| **Migrations** | Alembic | See [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions) |
+| **Tooling** | uv, pytest + testcontainers, ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
 
 **Do not introduce new technologies** without explicit design review and documentation update.
 
@@ -225,28 +226,29 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 
 | Document | Purpose | When to Read |
 |----------|---------|--------------|
-| [README.md](README.md) | High-level project vision and architecture overview | First time in repo |
-| [CLAUDE.md](CLAUDE.md) | Concise operating instructions for Claude | Quick reference |
-| [docs/PLAN.md](docs/PLAN.md) | **Source of truth** for implementation phases and deliverables | Before starting any feature |
-| [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Conceptual vocabulary and domain boundaries | Before naming anything |
-| [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard rules for schema design | Before writing any schema |
-| [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | Create/mutate/archive/delete workflows | Before implementing entity operations |
+| [README.md](../README.md) | High-level project vision and architecture overview | First time in repo |
+| [CLAUDE.md](../CLAUDE.md) | Concise operating instructions for Claude | Quick reference |
+| [docs/PLAN.md](PLAN.md) | **Source of truth** for implementation phases and deliverables | Before starting any feature |
+| [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) | Conceptual vocabulary and domain boundaries | Before naming anything |
+| [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) | Hard rules for schema design | Before writing any schema |
+| [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) | Create/mutate/archive/delete workflows | Before implementing entity operations |
+| [docs/DEVELOPMENT.md](DEVELOPMENT.md) | Toolchain, repo layout, migration and test workflow | Before writing any code |
 
 ### Architecture Documents
 
 | Document | Purpose |
 |----------|---------|
-| [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries |
-| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | Logical schema: tables, ER diagrams, ownership rules |
-| [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | End-to-end vertical slice (the acceptance test) |
+| [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries |
+| [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) | Logical schema: tables, ER diagrams, ownership rules |
+| [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md) | End-to-end vertical slice (the acceptance test) |
 
-### Supporting Documents (planned)
+### Supporting Documents
 
 | Document | Purpose |
 |----------|---------|
-| `docs/DEVELOPMENT.md` | Local setup, contribution workflow |
-| `docs/adr/*.md` | Architecture Decision Records (ADRs) |
-| `.github/copilot-instructions.md` | GitHub Copilot repository instructions |
+| [docs/INFRASTRUCTURE.md](INFRASTRUCTURE.md) | Deploying and operating the AWS infrastructure |
+| [docs/adr/](adr/) | Architecture Decision Records — currently stubs; decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions) |
+| [.github/copilot-instructions.md](../.github/copilot-instructions.md) | GitHub Copilot repository instructions |
 
 ---
 
@@ -255,19 +257,19 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 **Before implementing ANY feature**, complete this checklist:
 
 ### Phase Check
-- [ ] Check [docs/PLAN.md](docs/PLAN.md) for current phase
+- [ ] Check [docs/PLAN.md](PLAN.md) for current phase
 - [ ] Verify this feature is in the current phase's deliverables
 - [ ] Confirm exit criteria are clear
 
 ### Domain Understanding
-- [ ] Look up concepts in [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md)
+- [ ] Look up concepts in [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md)
 - [ ] Verify I'm not inventing new vocabulary that already exists
 - [ ] Check if this crosses domain boundaries (requires coordination)
 
 ### Schema Design
-- [ ] Review relevant sections in [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md)
+- [ ] Review relevant sections in [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md)
 - [ ] Confirm table placement in correct PostgreSQL schema
-- [ ] Check [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) for:
+- [ ] Check [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) for:
   - [ ] Naming conventions (snake_case, plural tables, entity-specific PK names)
   - [ ] Data types (TEXT vs VARCHAR, TIMESTAMPTZ, UUID, avoid JSONB for stable concepts)
   - [ ] Inheritance pattern (class-table, same UUID through chain)
@@ -275,19 +277,19 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
   - [ ] Index strategy
 
 ### Entity Lifecycle
-- [ ] If creating/mutating/deleting entities: read [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md)
+- [ ] If creating/mutating/deleting entities: read [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md)
 - [ ] Identify correct command/workflow
 - [ ] Ensure atomic transaction for inheritance chain
 - [ ] Plan event creation if state changes
 
 ### Architecture Placement
-- [ ] Check [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md)
+- [ ] Check [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md)
 - [ ] Identify correct layer (API / Application / Domain / Data)
 - [ ] Confirm not bypassing command/transaction pattern
 - [ ] Ensure clients go through API, not direct to DB
 
 ### Vertical Slice Validation
-- [ ] Review [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md)
+- [ ] Review [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md)
 - [ ] Confirm this feature supports the dungeon exploration flow
 - [ ] Verify it doesn't break the acceptance scenario
 
@@ -599,7 +601,7 @@ Reserved for:
   - Rejected proposals that were never canonical
 ```
 
-See [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md) for complete rules.
+See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 
 ---
 
@@ -925,7 +927,7 @@ git commit -m "Add RDS configuration for character schema"
 
 The pre-restart Lambda functions, build scripts (`scripts/build_lambda.ps1`, `scripts/build_layer.ps1`), and Terraform Lambda modules (`lambda-api`, `lambda-with-build`) have been removed along with the legacy code they packaged. There is currently no Lambda build tooling in the repo.
 
-If/when Python services need to run as Lambda functions (per [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) §17, the initial deployment target is a modular monolith, not Lambda-per-function), design fresh build/deploy tooling and a Terraform module against the current architecture rather than restoring the deleted ones from git history.
+If/when Python services need to run as Lambda functions (per [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) §17, the initial deployment target is a modular monolith, not Lambda-per-function), design fresh build/deploy tooling and a Terraform module against the current architecture rather than restoring the deleted ones from git history.
 
 ---
 
@@ -1060,24 +1062,24 @@ NO. AI always goes through:
 
 ### Problem: "I don't know what this term means"
 
-→ [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) — search for the term
+→ [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — search for the term
 
 ### Problem: "I don't know what phase we're in"
 
-→ [docs/PLAN.md](docs/PLAN.md) — check current deliverables
+→ [docs/PLAN.md](PLAN.md) — check current deliverables
 
 ### Problem: "I don't know where this table should go"
 
-→ [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — find similar table, check schema
+→ [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) — find similar table, check schema
 
 ### Problem: "I don't know what to name this column"
 
-→ [docs/DATABASE_CONVENTIONS.md §4](docs/DATABASE_CONVENTIONS.md) — naming conventions section
+→ [docs/DATABASE_CONVENTIONS.md §4](DATABASE_CONVENTIONS.md) — naming conventions section
 
 ### Problem: "I don't know if I should use class-table inheritance"
 
 → Is it an entity subtype? YES → class-table inheritance
-→ See [docs/DATABASE_CONVENTIONS.md §7](docs/DATABASE_CONVENTIONS.md)
+→ See [docs/DATABASE_CONVENTIONS.md §7](DATABASE_CONVENTIONS.md)
 
 ### Problem: "I don't know if this should be definition or state"
 
@@ -1087,15 +1089,15 @@ NO. AI always goes through:
 
 ### Problem: "I don't know how to create/modify/delete this entity"
 
-→ [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) — find matching command
+→ [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) — find matching command
 
 ### Problem: "I don't know where this code belongs (API vs domain vs query)"
 
-→ [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md) — layering section
+→ [docs/architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md) — layering section
 
 ### Problem: "I don't know if this breaks the vertical slice"
 
-→ [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) — validate against acceptance scenario
+→ [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md) — validate against acceptance scenario
 
 ### Problem: "User asked me to extend legacy code"
 

@@ -8,6 +8,10 @@
 tfplan
 destroy-plan
 
+# Backend configuration (optional - can be committed if shared across team)
+# Uncomment the line below to keep backend.tf local:
+# backend.tf
+
 # Lambda packages
 *.zip
 

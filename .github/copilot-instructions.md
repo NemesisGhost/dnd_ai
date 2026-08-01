@@ -2,7 +2,7 @@
 
 **Purpose**: Concise coding and architecture rules for GitHub Copilot working in this repository.
 
-**Full Documentation**: See `docs/` folder and `AI_ASSISTANT_GUIDE.md` for comprehensive details.
+**Full Documentation**: See the `docs/` folder, and [docs/AI_ASSISTANT_GUIDE.md](../docs/AI_ASSISTANT_GUIDE.md) for comprehensive details.
 
 ---
 
@@ -49,19 +49,22 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 ## Technology Stack
 
-- **Infrastructure**: AWS (RDS PostgreSQL, Lambda, S3, API Gateway, Secrets Manager)
+- **Infrastructure**: AWS (RDS PostgreSQL, S3, Secrets Manager, KMS). Initial deployment target is a modular monolith — not Lambda-per-function
 - **IaC**: Terraform (modules under `terraform/modules/`, environments under `terraform/environments/`)
-- **Database**: PostgreSQL on RDS; migrations via Alembic
-- **Backend**: Python (application/domain/command-handler code)
-- **API**: REST (Python application layer)
+- **Database**: PostgreSQL 15.x on RDS; migrations via Alembic
+- **Backend**: Python 3.12+, SQLAlchemy 2.x **Core** (not the ORM), psycopg 3, Pydantic v2
+- **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §27
 - **UI**: React (web/admin client)
+- **Tooling**: uv, pytest + testcontainers, ruff, mypy
 - **Integrations**: FoundryVTT module, Discord bot, MCP interface (all clients, all through API)
+
+Full rationale: [docs/DEVELOPMENT.md §1](../docs/DEVELOPMENT.md#1-toolchain). Do not introduce alternatives.
 
 ---
 
 ## Documentation Hierarchy (Read Before Implementing)
 
-All docs under `docs/` except `README.md`, `CLAUDE.md`, `AI_ASSISTANT_GUIDE.md` in root.
+All docs live under `docs/`. Only `README.md` and `CLAUDE.md` belong in the repository root.
 
 **Before starting any feature, consult**:
 1. **`docs/PLAN.md`** — Current phase and deliverables (source of truth)
@@ -71,8 +74,11 @@ All docs under `docs/` except `README.md`, `CLAUDE.md`, `AI_ASSISTANT_GUIDE.md` 
 5. **`docs/architecture/SYSTEM_ARCHITECTURE.md`** — Service layers and transactions
 6. **`docs/architecture/DATABASE_MODEL.md`** — Logical schema and ER diagrams
 7. **`docs/architecture/DUNGEON_FLOW.md`** — End-to-end acceptance scenario
+8. **`docs/DEVELOPMENT.md`** — Toolchain, layout, Alembic workflow, tests, definition of done
 
-**For comprehensive guidance**: See `AI_ASSISTANT_GUIDE.md` (detailed examples, anti-patterns, decision trees)
+**Onboarding**: `docs/CONTRIBUTING.md` — **Deploying**: `docs/QUICKSTART.md` + `docs/CHECKLIST.md` — **Reference**: `docs/INFRASTRUCTURE.md`
+
+**For comprehensive guidance**: See `docs/AI_ASSISTANT_GUIDE.md` (detailed examples, anti-patterns, decision trees)
 
 ---
 
@@ -301,11 +307,16 @@ Context → AI Output → Proposed Change → Validation → Approval (if high-r
 
 ### Database migrations
 ```bash
-# Using Alembic
-alembic revision -m "create_character_npcs_table"
-# Edit migration: schema-qualified names, follow conventions
-alembic upgrade head
-alembic downgrade -1  # Test rollback
+uv run alembic -c database/alembic.ini revision -m "create character npcs table"
+# Edit the revision: schema-qualified names, table/column comments, FK indexes.
+# Autogenerate misses partial indexes, check constraints, triggers, and comments — always review.
+uv run alembic -c database/alembic.ini upgrade head
+uv run alembic -c database/alembic.ini downgrade -1   # verify rollback before committing
+```
+
+### Quality gate
+```bash
+uv run ruff format . && uv run ruff check . --fix && uv run mypy src && uv run pytest
 ```
 
 ### Terraform
@@ -347,6 +358,9 @@ terraform apply tfplan
 - **Don't know naming convention?** → `docs/DATABASE_CONVENTIONS.md` §4
 - **Don't know entity workflow?** → `docs/ENTITY_LIFECYCLE.md`
 - **Don't know code layer?** → `docs/architecture/SYSTEM_ARCHITECTURE.md` §5
+- **Don't know which library/tool?** → `docs/DEVELOPMENT.md` §1
+- **Don't know where a file goes?** → `docs/DEVELOPMENT.md` §2
+- **Deploying or debugging AWS?** → `docs/INFRASTRUCTURE.md`
 - **User asks to extend legacy code?** → Explain restart, create new per current architecture
 - **About to break one of 10 rules?** → STOP, flag to user
 
@@ -362,10 +376,9 @@ terraform apply tfplan
 6. ✅ **Separate definition/state/knowledge/history**
 7. ✅ **When uncertain: stop and consult docs or user**
 
-**For comprehensive guidance**: See `AI_ASSISTANT_GUIDE.md`
+**For comprehensive guidance**: See `docs/AI_ASSISTANT_GUIDE.md`
 
 ---
 
-**Last Updated**: July 31, 2026  
-**Current Phase**: Architecture and domain-modeling stage (see `docs/PLAN.md`)  
+**Current phase**: always check `docs/PLAN.md` §23 rather than trusting a note here.
 **Repository**: github.com/NemesisGhost/dnd_ai

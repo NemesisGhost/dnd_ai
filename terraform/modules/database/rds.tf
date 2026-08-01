@@ -41,13 +41,15 @@ resource "aws_db_instance" "main" {
   max_allocated_storage = var.max_allocated_storage
   storage_type         = var.storage_type
   storage_encrypted    = true
-  kms_key_id          = aws_kms_key.db_encryption.arn
+  # Note: kms_key_id omitted - uses AWS-managed encryption key
+  # To use customer-managed KMS key, set kms_key_id = aws_kms_key.db_encryption.arn
 
   # Database configuration
   db_name  = var.database_name
   username = var.master_username
   manage_master_user_password = true
-  master_user_secret_kms_key_id = aws_kms_key.db_encryption.arn
+  # Note: master_user_secret_kms_key_id omitted - uses AWS-managed key
+  # To use customer-managed KMS key, set master_user_secret_kms_key_id = aws_kms_key.db_encryption.arn
   port     = 5432
 
   # Network configuration
@@ -78,7 +80,8 @@ resource "aws_db_instance" "main" {
 
   # Performance insights
   performance_insights_enabled = var.performance_insights_enabled
-  performance_insights_kms_key_id = var.performance_insights_enabled ? aws_kms_key.db_encryption.arn : null
+  # Note: performance_insights_kms_key_id omitted - uses AWS-managed key
+  # To use customer-managed KMS key, set performance_insights_kms_key_id = aws_kms_key.db_encryption.arn
 
   tags = {
     Name        = "${var.project_name}-${var.environment}-db"

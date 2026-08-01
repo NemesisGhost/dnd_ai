@@ -30,6 +30,7 @@
 - [26. Operational strategy](#26-operational-strategy)
 - [27. Deferred decisions](#27-deferred-decisions)
 - [28. Definition of implementation success](#28-definition-of-implementation-success)
+- [29. AWS Terraform deployment plan for PostgreSQL](#29-aws-terraform-deployment-plan-for-postgresql)
 
 ---
 
@@ -1142,16 +1143,22 @@ Deliver:
 - `docs/PLAN.md`
 - `docs/DOMAIN_MODEL.md`
 - `docs/DATABASE_CONVENTIONS.md`
+- `docs/ENTITY_LIFECYCLE.md`
+- `docs/architecture/SYSTEM_ARCHITECTURE.md`, `DATABASE_MODEL.md`, `DUNGEON_FLOW.md`
+- `docs/DEVELOPMENT.md` — toolchain, repository layout, migration and test workflow
+- `docs/INFRASTRUCTURE.md` — operating the deployed infrastructure
 - later entity relationship diagrams
 - command/API specifications
 - state-resolution specification
 - AI mutation-policy specification
+- `docs/adr/` records extracted from [§2](#2-architectural-decisions) (currently stubs)
 
 Exit criteria:
 
 - Major domain boundaries agreed.
 - Naming and inheritance strategy agreed.
 - Timeline semantics agreed.
+- Toolchain and repository layout decided, so implementation does not have to invent them.
 
 ### Phase 1: Database bootstrap
 
@@ -1164,12 +1171,16 @@ Deliver:
 - shared domains
 - seed infrastructure
 - CI migration validation
+- AWS infrastructure to host and reach the database (see [§29](#29-aws-terraform-deployment-plan-for-postgresql))
 
 Exit criteria:
 
 - Empty database can be created reproducibly.
 - Migrations can run up and down in development.
 - Schema validation runs in CI.
+- A migration can be applied end-to-end against a deployed AWS RDS instance using only Terraform-managed infrastructure (no manual console steps).
+
+A step-by-step walkthrough of this phase — project skeleton, Alembic scaffold, bootstrap revision, shared domains, seed infrastructure, CI, migration runner — is in [DEVELOPMENT.md §5](DEVELOPMENT.md#5-phase-1-walkthrough).
 
 ### Phase 2: Core world platform
 
@@ -1419,9 +1430,11 @@ Measure:
 
 ### 26.1 Migrations
 
-Use versioned migrations from the first commit. Alembic is recommended for the Python service, with explicit SQL migrations for PostgreSQL-specific features.
+Use versioned migrations from the first commit. Alembic is the decided tool (see [DATABASE_CONVENTIONS.md §25.1](DATABASE_CONVENTIONS.md#251-migration-tool) and [DEVELOPMENT.md §4](DEVELOPMENT.md#4-database-and-migrations)), with explicit SQL migrations for PostgreSQL-specific features.
 
 Never use destructive `DROP TABLE ... CASCADE` initialization scripts outside disposable development databases.
+
+See [§29.5–§29.7](#29-aws-terraform-deployment-plan-for-postgresql) for how migrations are actually executed against a private AWS RDS instance.
 
 ### 26.2 Environments
 
@@ -1493,3 +1506,127 @@ The initial platform is successful when it can:
 - Provide safe, structured context to AI agents.
 - Prevent AI-generated content from silently becoming canon.
 - Accept future imported campaign material through a controlled staging and review process.
+
+---
+
+## 29. AWS Terraform deployment plan for PostgreSQL
+
+### 29.1 Scope and current state
+
+This section defines how the PostgreSQL database is provisioned, reached, and migrated in AWS, entirely through Terraform. It closes the gap left after the pre-restart Lambda-based deployment tooling was removed (see [README.md § Current Status](../README.md#current-status)).
+
+This section is the **plan** — what the infrastructure should become. [INFRASTRUCTURE.md](INFRASTRUCTURE.md) documents what exists today and how to operate it.
+
+`terraform/modules/database` and `terraform/modules/secrets` already exist and provide:
+
+- An RDS PostgreSQL instance (version pinned via `postgres_version`, currently 15.4), encrypted at rest with a dedicated KMS key.
+- A VPC with two private subnets across two availability zones (or reuse of an existing VPC/subnets), a security group scoped to `allowed_cidr_blocks` / `allowed_security_group_ids`, and VPC interface endpoints for Secrets Manager and KMS so private subnets don't need a NAT Gateway by default.
+- An AWS-managed master user secret (`manage_master_user_password = true`) — no master password is ever stored in Terraform state or code.
+- IAM database authentication enabled on the instance (`iam_database_authentication_enabled = true`), ready for use once application-level roles are created.
+- Automated backups, deletion protection, enhanced monitoring, and Performance Insights, all on by default.
+- A `secrets` module providing named (value-less) Secrets Manager entries for OpenAI/Discord credentials, sharing the same KMS key.
+
+What this plan still needs to add, and what the rest of this section covers:
+
+- A remote Terraform state backend (currently local state only).
+- `staging` and `prod` environment directories (only `dev` exists today).
+- A way to create the database roles, schemas, and extensions defined in [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) §2–§3, §27 — Terraform provisions the RDS instance but cannot run SQL inside it.
+- A way to run Alembic migrations against an RDS instance that has no public access, without a bastion host or committed SSH keys.
+- Multi-AZ support in the database module for production.
+
+### 29.2 Remote Terraform state
+
+Local state is acceptable for the current single-developer `dev` exploration but not once `staging`/`prod` exist or more than one person applies changes.
+
+Bootstrap once per AWS account, outside the normal module tree (a backend can't store the state that creates itself):
+
+- A versioned, encrypted S3 bucket for state files.
+- A DynamoDB table for state locking (or rely on native S3 conditional-write locking if the pinned Terraform version supports it).
+
+Implementation: a small `terraform/bootstrap/` root module, applied manually once with local state, whose only job is to create the bucket and lock table. Every environment under `terraform/environments/<env>/` then configures:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "dnd-ai-tfstate"
+    key            = "<env>/database.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "dnd-ai-tfstate-lock"
+    encrypt        = true
+  }
+}
+```
+
+### 29.3 Environments: dev, staging, prod
+
+`terraform/environments/dev/` already exists. `staging/` and `prod/` should be created by copying its structure, not by parameterizing a single environment with conditionals — per-environment tfvars keep blast radius explicit.
+
+| Setting | dev | staging | prod |
+|---|---|---|---|
+| `publicly_accessible` | optional (`enable_public_access`) | `false` | `false` |
+| `instance_class` | `db.t3.micro` | `db.t3.small` or larger | sized after load testing |
+| `deletion_protection` | `false` (fast teardown) | `true` | `true` (already the module default) |
+| `skip_final_snapshot` | `true` | `false` | `false` (already the module default) |
+| `backup_retention_period` | short (3–7 days) | 7 days | 14–30 days |
+| Multi-AZ | no | optional | yes (module gap, see §29.8) |
+
+### 29.4 Provisioning order
+
+A `terraform apply` in a given environment builds, in dependency order:
+
+1. VPC, subnets, route tables, security groups (`module.database`, `networking.tf`).
+2. KMS key (`module.database`, `secrets.tf`).
+3. RDS instance with its AWS-managed master secret (`module.database`, `rds.tf`).
+4. Named Secrets Manager entries for external credentials (`module.secrets`).
+5. Migration runner infrastructure (`module.db_migration_runner`, new — see §29.6).
+
+### 29.5 Database role, schema, and extension bootstrap
+
+The RDS instance boots with only the master role and an empty database. Terraform cannot reach inside PostgreSQL to run SQL, so a one-time (and re-runnable) bootstrap step must execute before `alembic upgrade head` takes over ongoing schema changes. Treat this bootstrap as the first Alembic revision, not a separate untracked script, so it's versioned the same way as everything else.
+
+The bootstrap must be idempotent and cover:
+
+- Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` (`vector` deferred until the embedding subsystem exists).
+- All thirteen schemas from [§3](#3-postgresql-schema-organization): `core`, `security`, `rules`, `character`, `world`, `campaign`, `narrative`, `knowledge`, `interaction`, `ai`, `audit`, `import`, `integration`.
+- `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` per [DATABASE_CONVENTIONS.md §3.1](DATABASE_CONVENTIONS.md).
+- The five database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md):
+  - `migration_owner` — owns schema objects; only the migration runner uses it.
+  - `app_read_write` — the application's runtime role; DML only, no DDL.
+  - `app_read_only` — reporting and read-model queries.
+  - `integration_worker` — scoped grants for Foundry/Discord/import-facing services.
+  - `admin_maintenance` — break-glass, human use only.
+- Each non-migration role created `WITH LOGIN` and `GRANT rds_iam TO <role>;` so applications authenticate with short-lived IAM tokens rather than static passwords — the instance already has `iam_database_authentication_enabled = true`, so no new Secrets Manager entries are needed for these roles (per rule 10 in [CLAUDE.md](../CLAUDE.md)).
+
+### 29.6 Migration execution mechanism
+
+**Problem**: the RDS instance is not publicly reachable (by design, in every environment except an explicit `dev` opt-in), so neither a developer's laptop nor Terraform itself can run `alembic upgrade head` against it directly, and there's no bastion host or committed SSH key in this project.
+
+**Decision**: build a **migration runner** — the Alembic-oriented successor to the retired `db_runner` module — as a new `terraform/modules/db_migration_runner/`:
+
+- A small EC2 instance (or an on-demand SSM-managed instance) inside the same private subnets as the database.
+- Invoked via **AWS Systems Manager Run Command** — no bastion, no SSH keys, no public IP, consistent with how `db_runner` worked and with the least-privilege stance in [DATABASE_CONVENTIONS.md §27](DATABASE_CONVENTIONS.md).
+- An IAM instance role scoped to `rds-db:connect` for the `migration_owner` database user only (IAM auth, not a stored password).
+- Its own security group, attached to the RDS security group via an `aws_security_group_rule` granting itself ingress on 5432 (the same pattern `db_runner` used).
+- An S3 bucket holding the versioned Alembic migrations package (`database/` — Alembic env plus revisions), synced by `build.ps1` or CI before each run.
+
+Runtime behavior: `pip install -r requirements.txt && alembic upgrade head`, authenticating via an IAM auth token instead of a password.
+
+This is deliberately the lowest-setup-cost option for the project's current pre-implementation stage — it reuses AWS primitives (EC2, SSM, S3, IAM) already understood from the deleted `db_runner`, and needs no container registry or CI/CD platform decision yet. Revisit once the Python application services are containerized: at that point the same image can run migrations as a one-off ECS Fargate task instead of a standing EC2 runner, and CI/CD can trigger it automatically on merge.
+
+### 29.7 Deployment runbook
+
+1. One-time per AWS account: apply `terraform/bootstrap/` to create the remote state bucket and lock table (§29.2).
+2. `terraform init` (pointed at the remote backend) and `terraform apply` in `terraform/environments/<env>/` — provisions the VPC, RDS instance, KMS key, secrets, and migration runner.
+3. Package and sync the Alembic migrations project to the migration runner's S3 bucket.
+4. Trigger the migration runner via SSM Run Command (wrapped by `build.ps1` or CI) — runs the bootstrap revision (roles, schemas, extensions) followed by any pending `alembic upgrade head`.
+5. Verify: connect using an IAM auth token as `app_read_only`, confirm all thirteen schemas exist and the Alembic version table reflects the expected head revision.
+6. For every subsequent schema change: new Alembic revision → re-sync the package → re-trigger the runner. This manual loop is the seed of what should become an automated CI/CD pipeline once one is chosen.
+
+### 29.8 Open items
+
+Additional defects found in the current Terraform — notably that `dev` cannot be destroyed because `deletion_protection` is never overridden to `false`, and that `my_ip_cidr` defaults to `0.0.0.0/0` — are catalogued in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
+
+- **Multi-AZ**: `terraform/modules/database` has no `multi_az` variable yet; add one before standing up `prod`.
+- **Read replicas**: deferred until query load actually justifies one, per [DATABASE_CONVENTIONS.md §33](DATABASE_CONVENTIONS.md).
+- **CloudWatch alarms**: CPU, storage, connection count, and (once applicable) replica lag are not yet defined anywhere in the module.
+- **Cost**: with current `dev` defaults (`db.t3.micro`, 20GB gp3, VPC endpoints instead of NAT, an on-demand migration runner) expect roughly the same range the project saw before the restart (~$20/month for `dev`). `staging`/`prod` will cost more once Multi-AZ and larger instance classes are applied — measure rather than guess once those environments exist.

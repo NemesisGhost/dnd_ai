@@ -18,12 +18,12 @@ This is an architecture restart. See [README.md § Current Status](README.md#cur
 ## 3. Technology stack
 
 - **Infrastructure / IaC:** AWS, provisioned and managed with **Terraform**. New environments follow the existing `terraform/modules/` + `terraform/environments/<env>/` pattern.
-- **Database:** PostgreSQL on AWS RDS. Schema, conventions, and migration approach are defined in [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) (migrations via **Alembic**, per §25.1).
-- **API / backend services:** **Python**. Application/domain/command-handler code (see architecture layers in §5 below) is Python.
+- **Database:** PostgreSQL 15.x on AWS RDS. Schema, conventions, and migration approach are defined in [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) (migrations via **Alembic**, per §25.1).
+- **API / backend services:** **Python 3.12+** with **SQLAlchemy 2.x Core** (not the ORM), **psycopg 3**, **Pydantic v2**, and **FastAPI** at the API layer. Dependencies via **uv**; tests with **pytest** + **testcontainers**; **ruff** and **mypy** for quality.
 - **UI:** **React**. Any web/admin client is a React application talking to the REST/application API — never directly to PostgreSQL.
 - **Other integrations:** FoundryVTT module, Discord bot, MCP interface — all clients, all going through the application API (§5).
 
-When a doc below doesn't yet specify a technology choice, default to this stack rather than introducing a new one.
+The full toolchain, with rationale and the process for changing any of it, is in [docs/DEVELOPMENT.md §1](docs/DEVELOPMENT.md#1-toolchain). When a doc doesn't specify a technology choice, default to this stack rather than introducing a new one.
 
 ## 4. Documentation map
 
@@ -38,6 +38,9 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 | [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | How entities are created, approved, mutated, branched, archived, deleted — including the exact command list and required transaction steps. |
 | [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, AI orchestration flow, deployment topology (modular monolith initially). |
 | [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | The reference end-to-end vertical slice (dungeon/quest scenario) — the acceptance test any cross-domain design should be checked against. |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, definition of done. Read before writing code. |
+| [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) | Infrastructure reference — variables, outputs, secrets, verification, teardown, and known gaps in the current Terraform. Deployment path is [docs/QUICKSTART.md](docs/QUICKSTART.md), pre-flight is [docs/CHECKLIST.md](docs/CHECKLIST.md), onboarding is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). The plan for what it should become is [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql). |
+| [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | Long-form version of this file: worked examples, anti-patterns, decision trees. This file is the summary; that one has the detail. |
 
 ## 5. Non-negotiable architectural rules
 
@@ -64,7 +67,8 @@ Full rules are in the linked docs — don't treat this as complete.
 - **Python services:** organize around the command/query and domain-service layering in [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md); commands are the only way to mutate state and must be transactional per §6–7 of that doc.
 - **Terraform:** one module per bounded infrastructure concern (mirroring the existing `database` / `secrets` split), one directory per environment under `terraform/environments/`, no hardcoded credentials, state and variable naming should mirror what's already in `terraform/modules/`.
 - **React:** standard component-based structure; the UI is a client like any other — it talks to the application API, not the database.
-- **New documentation** always goes under `docs/` (see [docs/PLAN.md Phase 0](docs/PLAN.md#23-delivery-phases) for the planned ADR/domain-doc set). Keep `README.md`'s Development Roadmap and Documentation sections pointing at `docs/PLAN.md` rather than duplicating its content.
+- **New documentation** always goes under `docs/` — the only markdown files that belong at the repository root are `README.md` and this file, and the only one under `terraform/` is a short pointer to `docs/INFRASTRUCTURE.md`. Keep `README.md`'s Development Roadmap and Documentation sections pointing at `docs/PLAN.md` rather than duplicating its content.
+- **Tests and tooling:** `pytest` layers (`tests/unit` with no database, `tests/database` and `tests/scenario` against a real PostgreSQL container), `ruff format`/`ruff check`/`mypy src` before committing. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## 7. Before implementing a feature
 
@@ -73,4 +77,5 @@ Full rules are in the linked docs — don't treat this as complete.
 3. If it creates, mutates, or removes an entity, follow the matching command/workflow in [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md).
 4. Write schema per [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md); check §34 (anti-patterns) before finishing.
 5. Place the code in the correct architectural layer per [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — don't let API handlers embed domain rules or let domain services bypass the command/transaction pattern.
-6. If the change introduces a new cross-cutting concept, update the relevant doc under `docs/` in the same change — these documents are meant to stay current, not drift from the implementation.
+6. Follow the mechanics in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — Alembic revision requirements, test layers, and the definition-of-done checklist in §10.
+7. If the change introduces a new cross-cutting concept, update the relevant doc under `docs/` in the same change — these documents are meant to stay current, not drift from the implementation.

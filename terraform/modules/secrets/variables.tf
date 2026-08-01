@@ -18,8 +18,9 @@ variable "environment" {
 }
 
 variable "kms_key_arn" {
-  description = "ARN of the KMS key for encryption"
+  description = "ARN of the KMS key for encryption (leave empty to use AWS-managed key)"
   type        = string
+  default     = ""
 }
 
 # Tags

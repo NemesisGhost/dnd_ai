@@ -10,7 +10,8 @@ resource "aws_secretsmanager_secret" "openai_api_key" {
   name                    = "${var.project_name}/${var.environment}/openai/api-key"
   description             = "OpenAI API key and related config"
   recovery_window_in_days = 7
-  kms_key_id              = var.kms_key_arn
+  # Use provided KMS key, or omit to use AWS-managed default key
+  kms_key_id              = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = merge(var.additional_tags, {
     Name        = "${var.project_name}-${var.environment}-openai-api-key"
@@ -25,7 +26,8 @@ resource "aws_secretsmanager_secret" "discord_bot_token" {
   name                    = "${var.project_name}/${var.environment}/discord/bot-token"
   description             = "Discord bot token and application metadata"
   recovery_window_in_days = 7
-  kms_key_id              = var.kms_key_arn
+  # Use provided KMS key, or omit to use AWS-managed default key
+  kms_key_id              = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = merge(var.additional_tags, {
     Name        = "${var.project_name}-${var.environment}-discord-bot-token"
@@ -40,7 +42,8 @@ resource "aws_secretsmanager_secret" "api_gateway_api_key" {
   name                    = "${var.project_name}/${var.environment}/api/api-key"
   description             = "API Gateway usage plan API key (JSON: {\"api_key\": \"...\"})"
   recovery_window_in_days = 7
-  kms_key_id              = var.kms_key_arn
+  # Use provided KMS key, or omit to use AWS-managed default key
+  kms_key_id              = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = merge(var.additional_tags, {
     Name        = "${var.project_name}-${var.environment}-api-key"
@@ -55,7 +58,8 @@ resource "aws_secretsmanager_secret" "basic_auth" {
   name                    = "${var.project_name}/${var.environment}/basic-auth"
   description             = "Basic Auth credentials (JSON: {\"username\":\"...\",\"password\":\"...\"})"
   recovery_window_in_days = 7
-  kms_key_id              = var.kms_key_arn
+  # Use provided KMS key, or omit to use AWS-managed default key
+  kms_key_id              = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   tags = merge(var.additional_tags, {
     Name        = "${var.project_name}-${var.environment}-basic-auth"
