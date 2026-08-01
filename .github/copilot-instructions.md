@@ -6,7 +6,7 @@
 
 ---
 
-## ⚠️ Critical: Architecture Restart in Progress
+## ⚠️ Critical: Architecture Restart
 
 This repository underwent a **complete architecture restart**.
 
@@ -15,6 +15,8 @@ The pre-restart legacy code has already been **removed**: the old flat `Database
 Any existing database content will be dropped; no legacy schema or API compatibility is required.
 
 **What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
+
+**Current implementation status**: Phases 1 (database bootstrap) and 2 (core world platform) are complete and verified against AWS `dev`. The current target is [Phase 3: timelines and campaigns](../docs/PLAN.md#phase-3-timelines-and-campaigns). No API or UI exists yet.
 
 ---
 
@@ -30,7 +32,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 ---
 
-## 10 Non-Negotiable Architectural Rules
+## 11 Non-Negotiable Architectural Rules
 
 1. **PostgreSQL is the only source of truth** (not embeddings/caches)
 2. **AI never writes canon directly** (proposes → validates → approves → commits)
@@ -42,6 +44,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 8. **Knowledge is per-knower, never global** (no `is_discovered` flags on entities)
 9. **Persistent entities are archived, not deleted** (set `archived_at`, keep row)
 10. **No secrets in code or seed files** (AWS Secrets Manager only)
+11. **Deploy and verify in AWS** (RDS for database tests; ECS Fargate for deployables; local containers are fallback only)
 
 **If a task requires breaking a rule: STOP and flag it.**
 
@@ -55,7 +58,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 - **Backend**: Python 3.12+, SQLAlchemy 2.x **Core** (not the ORM), psycopg 3, Pydantic v2
 - **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §27
 - **UI**: React (web/admin client)
-- **Tooling**: uv, pytest + testcontainers, ruff, mypy
+- **Tooling**: uv, pytest against deployed AWS `dev`, ruff, mypy. Testcontainers is a fallback only when AWS is genuinely unreachable
 - **Integrations**: FoundryVTT module, Discord bot, MCP interface (all clients, all through API)
 
 Full rationale: [docs/DEVELOPMENT.md §1](../docs/DEVELOPMENT.md#1-toolchain). Do not introduce alternatives.
@@ -362,14 +365,14 @@ terraform apply tfplan
 - **Don't know where a file goes?** → `docs/DEVELOPMENT.md` §2
 - **Deploying or debugging AWS?** → `docs/INFRASTRUCTURE.md`
 - **User asks to extend legacy code?** → Explain restart, create new per current architecture
-- **About to break one of 10 rules?** → STOP, flag to user
+- **About to break one of 11 rules?** → STOP, flag to user
 
 ---
 
 ## Summary
 
 1. ✅ **Read relevant docs before implementing** (`docs/PLAN.md` first)
-2. ✅ **Follow 10 Non-Negotiable Rules** (no exceptions without approval)
+2. ✅ **Follow 11 Non-Negotiable Rules** (no exceptions without approval)
 3. ✅ **Don't extend legacy code** (create new per current architecture)
 4. ✅ **PostgreSQL is truth, AI proposes, clients use API**
 5. ✅ **Class-table inheritance, same UUID through chain**

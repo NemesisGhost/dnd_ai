@@ -173,13 +173,13 @@ uv run alembic -c database/alembic.ini downgrade -1     # verify rollback before
 uv run alembic -c database/alembic.ini history --verbose
 ```
 
-Against a deployed environment, migrations do **not** run from a laptop — the instance is private. They run through the migration runner described in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism), which does not exist yet.
+For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) and run Alembic from the configured development machine. `staging` and `prod` remain private and will use the ECS one-off migration task described in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism); that runner is intentionally deferred until the first non-`dev` environment.
 
 ---
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 and 2 are done.** Their exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md) and [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), which also record the defects each verification uncovered. The current target is [PLAN.md §23 Phase 3](PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
+**Phases 1 and 2 are done.** Their exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md) and [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), which also record the defects each verification uncovered. The current target is [Phase 3: timelines and campaigns](PLAN.md#phase-3-timelines-and-campaigns); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 
@@ -190,7 +190,7 @@ Concretely, in order:
 1. **Project skeleton** — `pyproject.toml` with the tools from §1, `uv.lock`, ruff/mypy/pytest configuration, `src/dnd_ai/` package root.
 2. **Alembic scaffold** — `database/alembic.ini` and `database/migrations/`, configured per §4 above. Connection URL read from the environment, never hardcoded.
 3. **The bootstrap revision** — the first revision, containing everything in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap):
-   - `pgcrypto`, `pg_trgm`, and `btree_gist` (`vector` is deferred). `btree_gist` is required for GiST exclusion constraints over UUID equality — see [PLAN.md §4.1](PLAN.md#41-postgresql-extensions)
+   - `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `pg_trgm` (`btree_gist` is added by the Phase 3 revision that first needs it; `vector` is deferred)
    - all thirteen schemas from [PLAN.md §3](PLAN.md#3-postgresql-schema-organization)
    - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`
    - the six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles): `migration_owner` created `NOLOGIN` and never granted `rds_iam`, the five login roles created `WITH LOGIN` and granted `rds_iam`
@@ -248,17 +248,18 @@ Run all three before committing. CI runs them without `--fix`.
 
 ## 8. Continuous integration
 
-`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#23-delivery-phases), [§23.0](PLAN.md#230-aws-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§23.0](PLAN.md#230-aws-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
 - `ruff format --check`, `ruff check`, `mypy src`
 - authenticate to AWS (a scoped IAM identity, credentials from repository secrets) and open a short-lived ingress rule on the `dev` security group for the runner's own egress IP, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)
 - migration from an **empty** database (a fresh `dnd_ai_ci_<run-id>` database on the `dev` instance) through all revisions to head
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
 - downgrade of recent development migrations where supported
+- seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
 - the full pytest suite against that same ephemeral database
 - drop the ephemeral database and revoke the ingress rule — in a step that always runs, including on job failure, so a broken run doesn't leave a stale allowlist entry or an orphaned database behind
 
-Seed idempotency (seeding twice yields the same state) is not yet a CI step — `apply_seed()` in `src/dnd_ai/persistence/seeds.py` exists, but no revision calls it with real seed content yet. **This comes due in Phase 2**, which seeds the canon and lifecycle statuses from [PLAN.md §4.4](PLAN.md#44-canon-lifecycle); add the check in the same change that introduces the first seed file. Note that `apply_seed()` has never executed even once — it was rewritten during Phase 1 but only ever verified by inspection.
+Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
 A pull request that changes schema without a green migration job should not merge.
 

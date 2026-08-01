@@ -22,15 +22,19 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 ## Current Status
 
-The project is in the architecture and domain-modeling stage. This is a restart, not an incremental evolution of the prior implementation.
+The architecture is established and the database foundation is now being implemented. Phases 1 (database bootstrap) and 2 (core world platform) are complete and were verified against the deployed AWS `dev` environment. The current target is [Phase 3: timelines and campaigns](docs/PLAN.md#phase-3-timelines-and-campaigns).
+
+The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, seed machinery, and database verification suite. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, character/rules data, or playable campaign workflows; those remain scheduled in later phases.
+
+This is still a restart, not an incremental evolution of the prior implementation.
 
 The repository previously contained database schema, Lambda functions, and prototype scripts from an earlier iteration of the platform (`Database/`, `DirectAPICalls/`, `PDFChatBot/`, `src/lambda-functions/`, and related build scripts). That code predated the persistent-world model described in this document and has been removed rather than extended or migrated. The Terraform configuration was trimmed to match: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) remain, while the modules and environment wiring built specifically for the old schema and Lambda functions (`db_runner`, `lambda-api`, `lambda-with-build`, and their environment configs) were removed.
 
-Before implementation proceeds:
+The restart boundaries remain:
 
 - Any existing database content will be dropped, not migrated.
 - No legacy schema or API compatibility is required.
-- Infrastructure, application services, and integrations will be built fresh against this design rather than adapted from prior code.
+- Infrastructure, application services, and integrations are being built fresh against this design rather than adapted from prior code.
 
 The operational documentation was consolidated to match: the guides describing the removed Lambda-based schema initializer and SSM SQL runner have been deleted, and the remaining Terraform guidance now lives in a single document, [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
 
@@ -792,7 +796,7 @@ Everything is deployed to and verified in AWS — migrations and the `tests/data
 4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
 5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
-Phases 1 (database bootstrap) and 2 (core world platform) are **complete** — see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md) and [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md) for what was verified and the defects each verification found. The current target is [Phase 3: Timelines and campaigns](docs/PLAN.md#23-delivery-phases); read its first-time obligations before starting, and [§23.1](docs/PLAN.md#231-phase-exit-review) for what closing a phase requires.
+Phases 1 (database bootstrap) and 2 (core world platform) are **complete** — see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md) and [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md) for what was verified and the defects each verification found. The current target is [Phase 3: timelines and campaigns](docs/PLAN.md#phase-3-timelines-and-campaigns); read its first-time obligations before starting, and [§23.1](docs/PLAN.md#231-phase-exit-review) for what closing a phase requires.
 
 ### If you are deploying infrastructure
 
@@ -851,7 +855,7 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) and [ADR 0009](docs/adr/0009-separate-owning-role-from-login-roles.md) (separating the object-owning database role from the login roles) are written in full.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; ADRs 0008–0010 record the AWS-first policy, database ownership model, and fictional-time interval representation.
 
 ---
 

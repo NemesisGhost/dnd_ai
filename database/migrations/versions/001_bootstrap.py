@@ -10,9 +10,7 @@ Purpose:
     schema protection, and the six database roles.
 
 Forward migration:
-    - Enable pgcrypto, pg_trgm, and btree_gist extensions (vector deferred until
-      embeddings). btree_gist is what lets a GiST exclusion constraint mix UUID
-      equality with range overlap — see the note in section 1.
+    - Enable pgcrypto and pg_trgm extensions (vector deferred until embeddings)
     - Create thirteen bounded schemas per docs/PLAN.md §3
     - Revoke public schema CREATE privilege per docs/DATABASE_CONVENTIONS.md §3.1
     - Create six database roles per docs/DATABASE_CONVENTIONS.md §27.1, split
@@ -63,18 +61,12 @@ def upgrade() -> None:
     # ==========================================================================
     # 1. Extensions
     # ==========================================================================
-    # pgcrypto:    UUID generation (gen_random_uuid)
-    # pg_trgm:     Trigram similarity for text search
-    # btree_gist:  GiST operator classes for scalar types, so an exclusion
-    #              constraint can combine UUID equality with range overlap.
-    #              Without it, `EXCLUDE USING gist (party_id WITH =, ...)` fails
-    #              with "data type uuid has no default operator class for access
-    #              method gist" — GiST has no built-in UUID equality.
-    # vector:      Deferred until embedding subsystem per docs/PLAN.md §4.1
+    # pgcrypto: UUID generation (gen_random_uuid)
+    # pg_trgm: Trigram similarity for text search
+    # vector: Deferred until embedding subsystem per docs/PLAN.md §4.1
 
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-    op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist;")
 
     # ==========================================================================
     # 2. Schemas
@@ -392,6 +384,5 @@ def downgrade() -> None:
         """)
 
     # Drop extensions
-    op.execute("DROP EXTENSION IF EXISTS btree_gist;")
     op.execute("DROP EXTENSION IF EXISTS pg_trgm;")
     op.execute("DROP EXTENSION IF EXISTS pgcrypto;")

@@ -21,7 +21,7 @@ Onboarding for new contributors: getting a working environment, then the workflo
 
 ## 1. AWS account setup (start here)
 
-The project is in [Phase 1](PLAN.md#23-delivery-phases) — database bootstrap. Every phase from here on verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
+Phases 1 and 2 are complete; the current target is [Phase 3: timelines and campaigns](PLAN.md#phase-3-timelines-and-campaigns). Every phase verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
 
 ### 1.1 Install and configure
 
@@ -140,7 +140,7 @@ uv run pytest
 
 All four must pass before opening a pull request. The full workflow — Alembic revision requirements, the three test layers, CI expectations — is [DEVELOPMENT.md §4–§8](DEVELOPMENT.md#4-database-and-migrations), and the definition of done is [§10](DEVELOPMENT.md#10-definition-of-done).
 
-Before writing anything, confirm it belongs to the current phase in [PLAN.md](PLAN.md), and check the ten non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
+Before writing anything, confirm it belongs to the current phase in [PLAN.md](PLAN.md), and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
 
 ---
 

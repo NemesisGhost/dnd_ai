@@ -272,6 +272,8 @@ A campaign does not duplicate world entities.
 
 A **Party** is an organized group of characters.
 
+The party itself is a stable identity within a world. Its membership is mutable timeline state: branches may inherit the same party identity while diverging on who belongs to it.
+
 A party can:
 
 - exist across sessions
@@ -284,6 +286,8 @@ A party can:
 ### 5.4 Party membership
 
 A **Party Membership** relates a character to a party during a period of time.
+
+Membership is scoped to a timeline. A character's membership change in one branch must not silently change the party in another branch.
 
 It supports:
 
