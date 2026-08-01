@@ -19,6 +19,7 @@ SEEDED_LOOKUPS = [
     ("core", "canon_statuses", "canon_status_id"),
     ("core", "lifecycle_statuses", "lifecycle_status_id"),
     ("core", "source_types", "source_type_id"),
+    ("core", "name_types", "name_type_id"),
 ]
 
 

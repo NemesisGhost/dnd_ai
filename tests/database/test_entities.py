@@ -10,74 +10,13 @@ arrives in a later phase). These tests are also specifically about database
 enforcement — the constraints themselves — which is the exception §32.3 allows.
 """
 
-import uuid
-
 import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
+from tests.factories import make_entity, make_entity_type, make_world, status_id
+
 pytestmark = pytest.mark.database
-
-
-def _status_id(connection: Connection, table: str, code: str) -> uuid.UUID:
-    pk = "canon_status_id" if table == "canon_statuses" else "lifecycle_status_id"
-    value = connection.execute(
-        text(f"SELECT {pk} FROM core.{table} WHERE code = :c"), {"c": code}
-    ).scalar()
-    assert isinstance(value, uuid.UUID), f"seeded {table} row {code!r} missing"
-    return value
-
-
-def _make_world(connection: Connection, slug: str = "test-world") -> uuid.UUID:
-    return connection.execute(  # type: ignore[return-value]
-        text("""
-            INSERT INTO core.worlds (name, slug, lifecycle_status_id)
-            VALUES ('Test World', :slug, :status)
-            RETURNING world_id
-        """),
-        {"slug": slug, "status": _status_id(connection, "lifecycle_statuses", "active")},
-    ).scalar()
-
-
-def _make_entity_type(
-    connection: Connection,
-    code: str,
-    *,
-    parent_id: uuid.UUID | None = None,
-    subtype_table: str | None = None,
-) -> uuid.UUID:
-    return connection.execute(  # type: ignore[return-value]
-        text("""
-            INSERT INTO core.entity_types
-                (code, display_name, parent_entity_type_id, required_subtype_table)
-            VALUES (:code, :code, :parent, :subtype)
-            RETURNING entity_type_id
-        """),
-        {"code": code, "parent": parent_id, "subtype": subtype_table},
-    ).scalar()
-
-
-def _make_entity(
-    connection: Connection,
-    world_id: uuid.UUID,
-    entity_type_id: uuid.UUID,
-    name: str = "Test Entity",
-) -> uuid.UUID:
-    return connection.execute(  # type: ignore[return-value]
-        text("""
-            INSERT INTO core.entities
-                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id)
-            VALUES (:world, :etype, :name, :canon, :lifecycle)
-            RETURNING entity_id
-        """),
-        {
-            "world": world_id,
-            "etype": entity_type_id,
-            "name": name,
-            "canon": _status_id(connection, "canon_statuses", "draft"),
-            "lifecycle": _status_id(connection, "lifecycle_statuses", "active"),
-        },
-    ).scalar()
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +25,19 @@ def _make_entity(
 
 
 def test_world_can_be_created(db_connection: Connection) -> None:
-    assert _make_world(db_connection) is not None
+    assert make_world(db_connection) is not None
 
 
 def test_world_rejects_duplicate_slug(db_connection: Connection) -> None:
-    _make_world(db_connection, slug="dupe-world")
+    make_world(db_connection, slug="dupe-world")
     with pytest.raises(IntegrityError):
-        _make_world(db_connection, slug="dupe-world")
+        make_world(db_connection, slug="dupe-world")
 
 
 @pytest.mark.parametrize("bad_slug", ["Uppercase", "has_underscore", "9-leading-digit", ""])
 def test_world_rejects_malformed_slug(db_connection: Connection, bad_slug: str) -> None:
     with pytest.raises(IntegrityError):
-        _make_world(db_connection, slug=bad_slug)
+        make_world(db_connection, slug=bad_slug)
 
 
 def test_world_requires_a_real_lifecycle_status(db_connection: Connection) -> None:
@@ -113,8 +52,8 @@ def test_world_requires_a_real_lifecycle_status(db_connection: Connection) -> No
 
 def test_lifecycle_status_in_use_cannot_be_deleted(db_connection: Connection) -> None:
     """ON DELETE RESTRICT — a status cannot vanish from under the worlds using it."""
-    _make_world(db_connection, slug="restrict-world")
-    status = _status_id(db_connection, "lifecycle_statuses", "active")
+    make_world(db_connection, slug="restrict-world")
+    status = status_id(db_connection, "lifecycle_statuses", "active")
     with pytest.raises(IntegrityError):
         db_connection.execute(
             text("DELETE FROM core.lifecycle_statuses WHERE lifecycle_status_id = :s"),
@@ -128,13 +67,13 @@ def test_lifecycle_status_in_use_cannot_be_deleted(db_connection: Connection) ->
 
 
 def test_entity_type_can_have_a_parent(db_connection: Connection) -> None:
-    parent = _make_entity_type(db_connection, "parent_type")
-    child = _make_entity_type(db_connection, "child_type", parent_id=parent)
+    parent = make_entity_type(db_connection, "parent_type")
+    child = make_entity_type(db_connection, "child_type", parent_id=parent)
     assert child is not None
 
 
 def test_entity_type_cannot_be_its_own_parent(db_connection: Connection) -> None:
-    type_id = _make_entity_type(db_connection, "self_parent")
+    type_id = make_entity_type(db_connection, "self_parent")
     with pytest.raises(IntegrityError):
         db_connection.execute(
             text(
@@ -150,17 +89,17 @@ def test_entity_type_rejects_unqualified_subtype_table(
     db_connection: Connection, bad_table: str
 ) -> None:
     with pytest.raises(IntegrityError):
-        _make_entity_type(db_connection, "bad_subtype", subtype_table=bad_table)
+        make_entity_type(db_connection, "bad_subtype", subtype_table=bad_table)
 
 
 def test_entity_type_accepts_qualified_subtype_table(db_connection: Connection) -> None:
-    assert _make_entity_type(db_connection, "ok_subtype", subtype_table="character.npcs")
+    assert make_entity_type(db_connection, "ok_subtype", subtype_table="character.npcs")
 
 
 def test_entity_type_in_use_cannot_be_deleted(db_connection: Connection) -> None:
-    world = _make_world(db_connection, slug="etype-restrict")
-    etype = _make_entity_type(db_connection, "in_use_type")
-    _make_entity(db_connection, world, etype)
+    world = make_world(db_connection, slug="etype-restrict")
+    etype = make_entity_type(db_connection, "in_use_type")
+    make_entity(db_connection, world, etype)
     with pytest.raises(IntegrityError):
         db_connection.execute(
             text("DELETE FROM core.entity_types WHERE entity_type_id = :t"), {"t": etype}
@@ -174,8 +113,8 @@ def test_entity_type_in_use_cannot_be_deleted(db_connection: Connection) -> None
 
 def test_entity_can_be_created_with_full_provenance(db_connection: Connection) -> None:
     """The Phase 2 exit criterion: a world and an entity, with provenance."""
-    world = _make_world(db_connection, slug="provenance-world")
-    etype = _make_entity_type(db_connection, "provenanced_type")
+    world = make_world(db_connection, slug="provenance-world")
+    etype = make_entity_type(db_connection, "provenanced_type")
     user = db_connection.execute(
         text(
             "INSERT INTO security.users (username, display_name) "
@@ -207,8 +146,8 @@ def test_entity_can_be_created_with_full_provenance(db_connection: Connection) -
         {
             "world": world,
             "etype": etype,
-            "canon": _status_id(db_connection, "canon_statuses", "canon"),
-            "lifecycle": _status_id(db_connection, "lifecycle_statuses", "active"),
+            "canon": status_id(db_connection, "canon_statuses", "canon"),
+            "lifecycle": status_id(db_connection, "lifecycle_statuses", "active"),
             "source": source,
             "user": user,
         },
@@ -220,7 +159,7 @@ def test_entity_can_be_created_with_full_provenance(db_connection: Connection) -
 
 
 def test_entity_requires_a_world(db_connection: Connection) -> None:
-    etype = _make_entity_type(db_connection, "worldless_type")
+    etype = make_entity_type(db_connection, "worldless_type")
     with pytest.raises(IntegrityError):
         db_connection.execute(
             text("""
@@ -231,15 +170,15 @@ def test_entity_requires_a_world(db_connection: Connection) -> None:
             """),
             {
                 "etype": etype,
-                "canon": _status_id(db_connection, "canon_statuses", "draft"),
-                "lifecycle": _status_id(db_connection, "lifecycle_statuses", "active"),
+                "canon": status_id(db_connection, "canon_statuses", "draft"),
+                "lifecycle": status_id(db_connection, "lifecycle_statuses", "active"),
             },
         )
 
 
 def test_entity_rejects_unseeded_canon_status(db_connection: Connection) -> None:
-    world = _make_world(db_connection, slug="bad-canon")
-    etype = _make_entity_type(db_connection, "bad_canon_type")
+    world = make_world(db_connection, slug="bad-canon")
+    etype = make_entity_type(db_connection, "bad_canon_type")
     with pytest.raises(IntegrityError):
         db_connection.execute(
             text("""
@@ -251,23 +190,23 @@ def test_entity_rejects_unseeded_canon_status(db_connection: Connection) -> None
             {
                 "world": world,
                 "etype": etype,
-                "lifecycle": _status_id(db_connection, "lifecycle_statuses", "active"),
+                "lifecycle": status_id(db_connection, "lifecycle_statuses", "active"),
             },
         )
 
 
 def test_entity_rejects_empty_canonical_name(db_connection: Connection) -> None:
-    world = _make_world(db_connection, slug="empty-name")
-    etype = _make_entity_type(db_connection, "empty_name_type")
+    world = make_world(db_connection, slug="empty-name")
+    etype = make_entity_type(db_connection, "empty_name_type")
     with pytest.raises(IntegrityError):
-        _make_entity(db_connection, world, etype, name="")
+        make_entity(db_connection, world, etype, name="")
 
 
 def test_world_with_entities_cannot_be_deleted(db_connection: Connection) -> None:
     """ON DELETE RESTRICT — entities are archived, not silently mass-deleted."""
-    world = _make_world(db_connection, slug="restrict-delete")
-    etype = _make_entity_type(db_connection, "restrict_type")
-    _make_entity(db_connection, world, etype)
+    world = make_world(db_connection, slug="restrict-delete")
+    etype = make_entity_type(db_connection, "restrict_type")
+    make_entity(db_connection, world, etype)
     with pytest.raises(IntegrityError):
         db_connection.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world})
 
@@ -275,8 +214,8 @@ def test_world_with_entities_cannot_be_deleted(db_connection: Connection) -> Non
 def test_deleting_source_nulls_the_reference_rather_than_the_entity(
     db_connection: Connection,
 ) -> None:
-    world = _make_world(db_connection, slug="source-setnull")
-    etype = _make_entity_type(db_connection, "setnull_type")
+    world = make_world(db_connection, slug="source-setnull")
+    etype = make_entity_type(db_connection, "setnull_type")
     source = db_connection.execute(
         text("""
             INSERT INTO core.sources (world_id, source_type_id, title)
@@ -300,8 +239,8 @@ def test_deleting_source_nulls_the_reference_rather_than_the_entity(
         {
             "world": world,
             "etype": etype,
-            "canon": _status_id(db_connection, "canon_statuses", "draft"),
-            "lifecycle": _status_id(db_connection, "lifecycle_statuses", "active"),
+            "canon": status_id(db_connection, "canon_statuses", "draft"),
+            "lifecycle": status_id(db_connection, "lifecycle_statuses", "active"),
             "source": source,
         },
     ).scalar()
@@ -336,7 +275,7 @@ def test_source_may_be_global(db_connection: Connection) -> None:
 
 
 def test_deleting_world_cascades_to_its_sources(db_connection: Connection) -> None:
-    world = _make_world(db_connection, slug="cascade-sources")
+    world = make_world(db_connection, slug="cascade-sources")
     db_connection.execute(
         text("""
             INSERT INTO core.sources (world_id, source_type_id, title)
@@ -388,9 +327,9 @@ def test_subtype_row_accepted_when_entity_type_requires_that_table(
     db_connection: Connection,
 ) -> None:
     table = _make_subtype_table(db_connection, "tst_widgets", "widget_id")
-    world = _make_world(db_connection, slug="subtype-ok")
-    etype = _make_entity_type(db_connection, "widget", subtype_table=table)
-    entity = _make_entity(db_connection, world, etype)
+    world = make_world(db_connection, slug="subtype-ok")
+    etype = make_entity_type(db_connection, "widget", subtype_table=table)
+    entity = make_entity(db_connection, world, etype)
 
     db_connection.execute(
         text("INSERT INTO core.tst_widgets (widget_id) VALUES (:e)"), {"e": entity}
@@ -402,9 +341,9 @@ def test_subtype_row_rejected_when_entity_type_does_not_require_it(
 ) -> None:
     """The negative half — the invariant this function exists for."""
     _make_subtype_table(db_connection, "tst_widgets", "widget_id")
-    world = _make_world(db_connection, slug="subtype-bad")
-    wrong_type = _make_entity_type(db_connection, "not_a_widget")
-    entity = _make_entity(db_connection, world, wrong_type)
+    world = make_world(db_connection, slug="subtype-bad")
+    wrong_type = make_entity_type(db_connection, "not_a_widget")
+    entity = make_entity(db_connection, world, wrong_type)
 
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)) as exc:
         db_connection.execute(
@@ -420,10 +359,10 @@ def test_subtype_row_accepted_via_inherited_type(db_connection: Connection) -> N
     the characters table is named by the parent type, not the entity's own.
     """
     table = _make_subtype_table(db_connection, "tst_characters", "character_id")
-    world = _make_world(db_connection, slug="subtype-inherited")
-    parent = _make_entity_type(db_connection, "tst_character", subtype_table=table)
-    child = _make_entity_type(db_connection, "tst_npc", parent_id=parent)
-    entity = _make_entity(db_connection, world, child)
+    world = make_world(db_connection, slug="subtype-inherited")
+    parent = make_entity_type(db_connection, "tst_character", subtype_table=table)
+    child = make_entity_type(db_connection, "tst_npc", parent_id=parent)
+    entity = make_entity(db_connection, world, child)
 
     db_connection.execute(
         text("INSERT INTO core.tst_characters (character_id) VALUES (:e)"), {"e": entity}

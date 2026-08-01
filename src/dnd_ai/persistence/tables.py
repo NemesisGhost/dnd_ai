@@ -389,3 +389,138 @@ Index("ix_entities_lifecycle_status_id", entities.c.lifecycle_status_id)
 Index("ix_entities_source_id", entities.c.source_id)
 Index("ix_entities_created_by_user_id", entities.c.created_by_user_id)
 Index("ix_entities_world_id_canonical_name", entities.c.world_id, entities.c.canonical_name)
+
+
+# ---------------------------------------------------------------------------
+# core — names and tags (revision 005)
+# ---------------------------------------------------------------------------
+
+name_types = _lookup_table(
+    "core",
+    "name_types",
+    "name_type_id",
+    "Kinds of alternate or historical name an entity can carry — see docs/DOMAIN_MODEL.md §4.4.",
+)
+
+entity_names = Table(
+    "entity_names",
+    metadata,
+    _uuid_pk("entity_name_id"),
+    Column(
+        "entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "name_type_id",
+        UUID(),
+        ForeignKey("core.name_types.name_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("name", Text(), nullable=False),
+    Column(
+        "language",
+        Text(),
+        comment=(
+            "In-world or real-world language tag, for translated names. NULL when not applicable."
+        ),
+    ),
+    Column("notes", Text()),
+    Column(
+        "is_primary",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "At most one per entity, enforced by a partial unique index. Marks the name to "
+            "prefer when several of the same type exist."
+        ),
+    ),
+    *_timestamps(),
+    schema="core",
+    comment=(
+        "Alternate and historical names for an entity. core.entities.canonical_name "
+        "stays the single denormalized display name; this table holds everything else."
+    ),
+)
+
+tags = Table(
+    "tags",
+    metadata,
+    _uuid_pk("tag_id"),
+    Column("world_id", UUID(), ForeignKey("core.worlds.world_id", ondelete="CASCADE")),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    *_timestamps(),
+    schema="core",
+    comment=(
+        "Free-form classification. world_id NULL means a platform tag usable by every "
+        "world; a set world_id means the world owns it (conventions §11.3)."
+    ),
+)
+
+entity_tags = Table(
+    "entity_tags",
+    metadata,
+    Column(
+        "entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "tag_id",
+        UUID(),
+        ForeignKey("core.tags.tag_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("tagged_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column(
+        "tagged_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    PrimaryKeyConstraint("entity_id", "tag_id"),
+    schema="core",
+    comment=(
+        "Applies a tag to an entity. A world-owned tag may only be applied to entities "
+        "in that world — enforced by core.enforce_entity_tag_world()."
+    ),
+)
+
+Index("ix_entity_names_entity_id", entity_names.c.entity_id)
+Index("ix_entity_names_name_type_id", entity_names.c.name_type_id)
+Index("ix_tags_world_id", tags.c.world_id)
+Index("ix_entity_tags_tag_id", entity_tags.c.tag_id)
+Index("ix_entity_tags_tagged_by_user_id", entity_tags.c.tagged_by_user_id)
+
+# Partial and expression indexes. Autogenerate does not reliably produce these
+# (docs/DEVELOPMENT.md §4), so they are declared explicitly to keep
+# `alembic check` from reporting them as drift against the migration.
+Index(
+    "ux_entity_names_one_primary_per_entity",
+    entity_names.c.entity_id,
+    unique=True,
+    postgresql_where=entity_names.c.is_primary,
+)
+Index(
+    "ix_entity_names_name_trgm",
+    entity_names.c.name,
+    postgresql_using="gin",
+    postgresql_ops={"name": "gin_trgm_ops"},
+)
+Index(
+    "ux_tags_platform_code",
+    tags.c.code,
+    unique=True,
+    postgresql_where=tags.c.world_id.is_(None),
+)
+Index(
+    "ux_tags_world_code",
+    tags.c.world_id,
+    tags.c.code,
+    unique=True,
+    postgresql_where=tags.c.world_id.isnot(None),
+)

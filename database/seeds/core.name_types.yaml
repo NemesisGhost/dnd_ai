@@ -1,0 +1,67 @@
+# Kinds of alternate or historical name an entity can carry.
+# Vocabulary from docs/DOMAIN_MODEL.md §4.4, plus `mistaken` from
+# docs/architecture/DATABASE_MODEL.md §5.4.
+#
+# Whether a given name is *known* to a particular character is a knowledge-domain
+# question, not a property of the name — a secret identity is secret from someone,
+# never globally (rule 8 in CLAUDE.md).
+
+- code: canonical
+  display_name: Canonical
+  description: The name the platform treats as primary for this entity.
+  sort_order: 10
+  is_active: true
+
+- code: common
+  display_name: Common
+  description: What people usually call it in everyday speech.
+  sort_order: 20
+  is_active: true
+
+- code: title
+  display_name: Title
+  description: A formal or honorific style, such as a rank or office.
+  sort_order: 30
+  is_active: true
+
+- code: nickname
+  display_name: Nickname
+  description: An informal or affectionate name.
+  sort_order: 40
+  is_active: true
+
+- code: alias
+  display_name: Alias
+  description: A name deliberately used in place of the real one.
+  sort_order: 50
+  is_active: true
+
+- code: secret_identity
+  display_name: Secret Identity
+  description: A name tied to a concealed identity.
+  sort_order: 60
+  is_active: true
+
+- code: former_name
+  display_name: Former Name
+  description: A name no longer in use, retained for history.
+  sort_order: 70
+  is_active: true
+
+- code: translated_name
+  display_name: Translated Name
+  description: The name rendered in another in-world language.
+  sort_order: 80
+  is_active: true
+
+- code: disguise
+  display_name: Disguise
+  description: A name used while impersonating or concealing identity, usually temporary.
+  sort_order: 90
+  is_active: true
+
+- code: mistaken
+  display_name: Mistaken
+  description: A name others wrongly believe belongs to this entity. Wrong on purpose.
+  sort_order: 100
+  is_active: true

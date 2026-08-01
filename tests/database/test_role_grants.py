@@ -32,6 +32,10 @@ MANAGED_TABLES = [
     ("core", "entity_types"),
     ("core", "sources"),
     ("core", "entities"),
+    ("core", "name_types"),
+    ("core", "entity_names"),
+    ("core", "tags"),
+    ("core", "entity_tags"),
 ]
 
 # Privileges each application role must hold on every managed table.
