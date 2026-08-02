@@ -22,7 +22,7 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 ## Current Status
 
-The architecture is established and the database foundation is being implemented. Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters, including its corrections and closeout passes — see [docs/PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md)) are complete, verified against the deployed AWS `dev` environment including a successful GitHub Actions run. The current target is [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play).
+The architecture is established and the database foundation is being implemented. Phases 1 (database bootstrap), 2 (core world platform), and 3 (timelines and campaigns) are complete. Phase 4's rules/shared-character schema and corrections through revision 034 are implemented and verified against the deployed AWS `dev` environment, including successful GitHub Actions run [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355), but a post-closeout review reopened a narrow set of final integrity and verification issues. Clear [docs/PHASE4_REMAINING_ISSUES.md](docs/PHASE4_REMAINING_ISSUES.md) before beginning [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play).
 
 The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, seed machinery, and database verification suite. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, locations, or playable campaign workflows; those remain scheduled in later phases.
 
@@ -798,7 +798,7 @@ Database work is deployed to and verified in AWS: migrations and the `tests/data
 4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
 5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
-Phases 1 through 4 are **complete**; see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md), [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md), [docs/PHASE3_VERIFICATION.md](docs/PHASE3_VERIFICATION.md), and [docs/PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md) for the evidence. [Phase 5](docs/PLAN.md#phase-5-locations-and-dungeon-play) is next; [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process.
+Phases 1 through 3 are **complete**; see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md), [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md), and [docs/PHASE3_VERIFICATION.md](docs/PHASE3_VERIFICATION.md) for the evidence. Phase 4 is at final closeout after revisions 031–034; its remaining gate is [docs/PHASE4_REMAINING_ISSUES.md](docs/PHASE4_REMAINING_ISSUES.md). [Phase 5](docs/PLAN.md#phase-5-locations-and-dungeon-play) begins only after that gate is cleared; [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process.
 
 ### If you are deploying infrastructure
 
