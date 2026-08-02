@@ -1,0 +1,6 @@
+- code: champion
+  display_name: Champion
+  class_code: fighter
+- code: evocation
+  display_name: School of Evocation
+  class_code: wizard

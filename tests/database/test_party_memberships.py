@@ -27,6 +27,7 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
+    make_character,
     make_entity,
     make_entity_type,
     make_party,
@@ -52,10 +53,8 @@ class World:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.party_id = make_party(connection, self.world_id)
-        entity_type = make_entity_type(connection, f"{slug.replace('-', '_')}_member")
         self.members = [
-            make_entity(connection, self.world_id, entity_type, name=f"Member {i}")
-            for i in range(2)
+            make_character(connection, self.world_id, name=f"Member {i}") for i in range(2)
         ]
         self.times = {k: make_world_time(connection, self.world_id, k) for k in (K0, K1, K2, K3)}
 
@@ -344,8 +343,7 @@ def test_endpoint_from_another_world_is_rejected(db_connection: Connection, w: W
 
 def test_member_must_belong_to_the_partys_world(db_connection: Connection, w: World) -> None:
     other_world = make_world(db_connection, slug="party-member-other-world")
-    entity_type = make_entity_type(db_connection, "foreign_member_type")
-    foreign_member = make_entity(db_connection, other_world, entity_type)
+    foreign_member = make_character(db_connection, other_world)
 
     with pytest.raises(CONSTRAINT_ERRORS) as exc:
         db_connection.execute(
@@ -362,6 +360,33 @@ def test_member_must_belong_to_the_partys_world(db_connection: Connection, w: Wo
             },
         )
     assert "belongs to world" in str(exc.value)
+
+
+def test_a_non_character_entity_cannot_be_a_party_member(
+    db_connection: Connection, w: World
+) -> None:
+    """Closes Phase 3's temporary deferral (revision 018): member_entity_id
+    must have a matching character.characters row. A bare entity — a
+    location, in spirit, though the location subtype itself doesn't exist
+    until Phase 5 — is rejected."""
+    entity_type = make_entity_type(db_connection, "non_character_type")
+    non_character = make_entity(db_connection, w.world_id, entity_type, name="A Location")
+
+    with pytest.raises(IntegrityError) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO campaign.party_memberships
+                    (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
+                VALUES (:tl, :p, :m, :f)
+            """),
+            {
+                "tl": w.timeline_id,
+                "p": w.party_id,
+                "m": non_character,
+                "f": w.times[K0],
+            },
+        )
+    assert "is not a character" in str(exc.value)
 
 
 def test_two_open_ended_memberships_of_the_same_party_conflict(

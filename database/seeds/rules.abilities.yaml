@@ -1,0 +1,21 @@
+# The six D&D 5e (2024) ability scores. ruleset_version_id is resolved at
+# migration time, not stored here — see revision 022.
+
+- code: strength
+  display_name: Strength
+  description: Physical power.
+- code: dexterity
+  display_name: Dexterity
+  description: Agility and reflexes.
+- code: constitution
+  display_name: Constitution
+  description: Health and stamina.
+- code: intelligence
+  display_name: Intelligence
+  description: Reasoning and memory.
+- code: wisdom
+  display_name: Wisdom
+  description: Perception and insight.
+- code: charisma
+  display_name: Charisma
+  description: Force of personality.

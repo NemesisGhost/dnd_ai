@@ -1,0 +1,11 @@
+# A minimal pair of classes — enough to prove multiclassing and build
+# structure work, not a complete Player's Handbook class list.
+
+- code: fighter
+  display_name: Fighter
+  hit_die: 10
+  primary_ability_code: strength
+- code: wizard
+  display_name: Wizard
+  hit_die: 6
+  primary_ability_code: intelligence

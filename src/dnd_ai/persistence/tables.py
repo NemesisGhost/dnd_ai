@@ -242,6 +242,16 @@ worlds = Table(
             "defined one yet."
         ),
     ),
+    # Added by revision 016, once rules.rulesets existed to point at.
+    Column(
+        "default_ruleset_id",
+        UUID(),
+        ForeignKey("rules.rulesets.ruleset_id", ondelete="SET NULL"),
+        comment=(
+            "The ruleset to use when none is specified. Must be one of the rulesets the "
+            "world allows (rules.world_rulesets) — enforced by trigger."
+        ),
+    ),
     UniqueConstraint("slug", name="ux_worlds_slug"),
     schema="core",
     comment=(
@@ -683,6 +693,11 @@ world_times = Table(
 )
 
 Index("ix_worlds_default_calendar_id", worlds.c.default_calendar_id)
+Index(
+    "ix_worlds_default_ruleset_id",
+    worlds.c.default_ruleset_id,
+    postgresql_where=worlds.c.default_ruleset_id.isnot(None),
+)
 Index("ix_calendars_world_id", calendars.c.world_id)
 Index("ix_calendar_months_calendar_id", calendar_months.c.calendar_id)
 Index("ix_world_times_world_id", world_times.c.world_id)
@@ -1021,6 +1036,17 @@ campaigns = Table(
     Column("started_at", TIMESTAMP(timezone=True)),
     Column("ended_at", TIMESTAMP(timezone=True)),
     *_timestamps(),
+    # Added by revision 016, once rules.rulesets existed to point at.
+    Column(
+        "ruleset_id",
+        UUID(),
+        ForeignKey("rules.rulesets.ruleset_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "The ruleset this campaign is played with. Must be allowed for the "
+            "campaign's world (rules.world_rulesets) — enforced by trigger."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A single game's run on a timeline. Several campaigns may share one timeline "
@@ -1061,6 +1087,7 @@ campaign_parties = Table(
 
 Index("ix_campaigns_timeline_id", campaigns.c.timeline_id)
 Index("ix_campaigns_lifecycle_status_id", campaigns.c.lifecycle_status_id)
+Index("ix_campaigns_ruleset_id", campaigns.c.ruleset_id)
 Index("ix_campaign_parties_party_id", campaign_parties.c.party_id)
 
 
@@ -1146,4 +1173,990 @@ Index(
     "ix_sessions_source_id",
     sessions.c.source_id,
     postgresql_where=sessions.c.source_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# rules — rulesets and ruleset versions (revision 013)
+# ---------------------------------------------------------------------------
+
+rulesets = Table(
+    "rulesets",
+    metadata,
+    _uuid_pk("ruleset_id"),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "source_id",
+        UUID(),
+        ForeignKey("core.sources.source_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    UniqueConstraint("code", name="ux_rulesets_code"),
+    schema="rules",
+    comment=(
+        'A named rule system (e.g. "D&D 5e (2024)"). Homebrew rulesets are ordinary rows '
+        "here with their own source and canon status (docs/PLAN.md §6.2) — not a separate "
+        "structure."
+    ),
+)
+
+ruleset_versions = Table(
+    "ruleset_versions",
+    metadata,
+    _uuid_pk("ruleset_version_id"),
+    Column(
+        "ruleset_id",
+        UUID(),
+        ForeignKey("rules.rulesets.ruleset_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("version_label", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "is_current",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "The version to use when none is pinned explicitly. At most one per ruleset, "
+            "enforced by a partial unique index rather than a CHECK, since the rule spans "
+            "rows."
+        ),
+    ),
+    *_timestamps(),
+    UniqueConstraint("ruleset_id", "version_label", name="ux_ruleset_versions_ruleset_label"),
+    schema="rules",
+    comment=(
+        "A version within a ruleset. Rule-content tables reference a version rather than "
+        "a bare ruleset, since two versions of the same ruleset may define the same-named "
+        "thing differently."
+    ),
+)
+
+Index(
+    "ix_rulesets_source_id",
+    rulesets.c.source_id,
+    postgresql_where=rulesets.c.source_id.isnot(None),
+)
+Index("ix_ruleset_versions_ruleset_id", ruleset_versions.c.ruleset_id)
+Index(
+    "ux_ruleset_versions_one_current_per_ruleset",
+    ruleset_versions.c.ruleset_id,
+    unique=True,
+    postgresql_where=ruleset_versions.c.is_current,
+)
+
+
+# ---------------------------------------------------------------------------
+# rules — ruleset-scoped lookup content (revision 014)
+# ---------------------------------------------------------------------------
+
+
+def _ruleset_lookup_table(name: str, pk: str, comment: str) -> Table:
+    """A ruleset-version-scoped lookup, per revision 014's shared shape."""
+    return Table(
+        name,
+        metadata,
+        _uuid_pk(pk),
+        Column(
+            "ruleset_version_id",
+            UUID(),
+            ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        Column("code", Text(), nullable=False),
+        Column("display_name", Text(), nullable=False),
+        Column("description", Text()),
+        *_timestamps(),
+        UniqueConstraint("ruleset_version_id", "code", name=f"ux_{name}_ruleset_version_code"),
+        schema="rules",
+        comment=comment,
+    )
+
+
+abilities = _ruleset_lookup_table(
+    "abilities",
+    "ability_id",
+    "A scored capability a character has (Strength, Dexterity, ...). Governs skills "
+    "and saving throws.",
+)
+species = _ruleset_lookup_table(
+    "species",
+    "species_id",
+    "A playable ancestry (Human, Elf, ...). One of the identity-level references on "
+    "character.characters (docs/architecture/DATABASE_MODEL.md §7.1).",
+)
+damage_types = _ruleset_lookup_table(
+    "damage_types",
+    "damage_type_id",
+    "A category of damage (fire, slashing, ...) that resistances, vulnerabilities, "
+    "and immunities key off.",
+)
+conditions = _ruleset_lookup_table(
+    "conditions",
+    "condition_id",
+    "A status a character can be under (poisoned, prone, ...). Definitions only — "
+    "campaign.character_conditions (Phase 4 timeline state) tracks who currently has "
+    "one.",
+)
+creature_types = _ruleset_lookup_table(
+    "creature_types",
+    "creature_type_id",
+    "A monster-manual classification (beast, fiend, undead, ...), distinct from "
+    "species: a character has a species, any character or monster has a creature "
+    "type.",
+)
+languages = _ruleset_lookup_table(
+    "languages",
+    "language_id",
+    "A language a character can know or speak, referenced by character.character_languages.",
+)
+proficiency_types = _ruleset_lookup_table(
+    "proficiency_types",
+    "proficiency_type_id",
+    "A category of proficiency (weapon, armor, tool, skill, saving throw) that "
+    "character.character_proficiencies rows are typed by.",
+)
+resource_definitions = _ruleset_lookup_table(
+    "resource_definitions",
+    "resource_definition_id",
+    "A depletable/rechargeable resource kind (spell slot, ki point, rage use, ...). "
+    "Definitions only — campaign.character_resources (Phase 4 timeline state) tracks "
+    "current and maximum amounts.",
+)
+
+for _t in (
+    abilities,
+    species,
+    damage_types,
+    conditions,
+    creature_types,
+    languages,
+    proficiency_types,
+    resource_definitions,
+):
+    Index(f"ix_{_t.name}_ruleset_version_id", _t.c.ruleset_version_id)
+
+skills = Table(
+    "skills",
+    metadata,
+    _uuid_pk("skill_id"),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    *_timestamps(),
+    UniqueConstraint("ruleset_version_id", "code", name="ux_skills_ruleset_version_code"),
+    schema="rules",
+    comment="A trained capability governed by one ability (Stealth -> Dexterity, ...).",
+)
+
+Index("ix_skills_ruleset_version_id", skills.c.ruleset_version_id)
+Index("ix_skills_ability_id", skills.c.ability_id)
+
+
+# ---------------------------------------------------------------------------
+# rules — classes, subclasses, features, feats, spells (revision 015)
+# ---------------------------------------------------------------------------
+
+classes = Table(
+    "classes",
+    metadata,
+    _uuid_pk("class_id"),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column("hit_die", NONNEGATIVE_INTEGER, nullable=False),
+    Column(
+        "primary_ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
+    ),
+    *_timestamps(),
+    UniqueConstraint("ruleset_version_id", "code", name="ux_classes_ruleset_version_code"),
+    schema="rules",
+    comment=(
+        "A playable class definition (Fighter, Wizard, ...). character_class_levels "
+        "references this to record a character's levels in it."
+    ),
+)
+
+Index("ix_classes_ruleset_version_id", classes.c.ruleset_version_id)
+Index(
+    "ix_classes_primary_ability_id",
+    classes.c.primary_ability_id,
+    postgresql_where=classes.c.primary_ability_id.isnot(None),
+)
+
+subclasses = Table(
+    "subclasses",
+    metadata,
+    _uuid_pk("subclass_id"),
+    Column(
+        "class_id",
+        UUID(),
+        ForeignKey("rules.classes.class_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    *_timestamps(),
+    UniqueConstraint("class_id", "code", name="ux_subclasses_class_code"),
+    schema="rules",
+    comment=(
+        "A specialization within a class (Champion within Fighter, ...). Unique per "
+        "class, not per ruleset version — two different classes may each define their "
+        "own subclass with the same code."
+    ),
+)
+
+Index("ix_subclasses_class_id", subclasses.c.class_id)
+Index("ix_subclasses_ruleset_version_id", subclasses.c.ruleset_version_id)
+
+features = Table(
+    "features",
+    metadata,
+    _uuid_pk("feature_id"),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("class_id", UUID(), ForeignKey("rules.classes.class_id", ondelete="CASCADE")),
+    Column("subclass_id", UUID(), ForeignKey("rules.subclasses.subclass_id", ondelete="CASCADE")),
+    Column("species_id", UUID(), ForeignKey("rules.species.species_id", ondelete="CASCADE")),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "granted_at_level",
+        NONNEGATIVE_INTEGER,
+        comment=(
+            "The class or subclass level at which this feature is gained. NULL for "
+            "species traits, which are not level-gated."
+        ),
+    ),
+    *_timestamps(),
+    UniqueConstraint("ruleset_version_id", "code", name="ux_features_ruleset_version_code"),
+    schema="rules",
+    comment=(
+        "A granted trait or ability — a class feature, subclass feature, or species "
+        "trait. The three associations are independently nullable, not mutually "
+        "exclusive: which combinations are meaningful is rules content, not structure."
+    ),
+)
+
+Index("ix_features_ruleset_version_id", features.c.ruleset_version_id)
+Index("ix_features_class_id", features.c.class_id, postgresql_where=features.c.class_id.isnot(None))
+Index(
+    "ix_features_subclass_id",
+    features.c.subclass_id,
+    postgresql_where=features.c.subclass_id.isnot(None),
+)
+Index(
+    "ix_features_species_id",
+    features.c.species_id,
+    postgresql_where=features.c.species_id.isnot(None),
+)
+
+feats = Table(
+    "feats",
+    metadata,
+    _uuid_pk("feat_id"),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column("prerequisite_description", Text()),
+    *_timestamps(),
+    UniqueConstraint("ruleset_version_id", "code", name="ux_feats_ruleset_version_code"),
+    schema="rules",
+    comment=(
+        "An optional feat a character may take. prerequisite_description is free text "
+        "for now — structured, machine-checkable prerequisites are a later refinement."
+    ),
+)
+
+Index("ix_feats_ruleset_version_id", feats.c.ruleset_version_id)
+
+spells = Table(
+    "spells",
+    metadata,
+    _uuid_pk("spell_id"),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("code", Text(), nullable=False),
+    Column("display_name", Text(), nullable=False),
+    Column("description", Text()),
+    Column("level", NONNEGATIVE_INTEGER, nullable=False),
+    Column("school", Text()),
+    Column("casting_time", Text()),
+    Column("range", Text()),
+    Column("duration", Text()),
+    Column(
+        "damage_type_id",
+        UUID(),
+        ForeignKey("rules.damage_types.damage_type_id", ondelete="RESTRICT"),
+    ),
+    *_timestamps(),
+    UniqueConstraint("ruleset_version_id", "code", name="ux_spells_ruleset_version_code"),
+    schema="rules",
+    comment=(
+        "A spell definition. level 0 is a cantrip. damage_type_id is set only for "
+        "spells that deal typed damage."
+    ),
+)
+
+Index("ix_spells_ruleset_version_id", spells.c.ruleset_version_id)
+Index(
+    "ix_spells_damage_type_id",
+    spells.c.damage_type_id,
+    postgresql_where=spells.c.damage_type_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# rules — world_rulesets (revision 016)
+# ---------------------------------------------------------------------------
+
+world_rulesets = Table(
+    "world_rulesets",
+    metadata,
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "ruleset_id",
+        UUID(),
+        ForeignKey("rules.rulesets.ruleset_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("is_default", Boolean(), nullable=False, server_default=text("false")),
+    Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("world_id", "ruleset_id"),
+    schema="rules",
+    comment=(
+        "Associates a world with the rulesets it allows and identifies its default. "
+        "A world may allow more than one ruleset; at most one is default."
+    ),
+)
+
+Index("ix_world_rulesets_ruleset_id", world_rulesets.c.ruleset_id)
+Index(
+    "ux_world_rulesets_one_default_per_world",
+    world_rulesets.c.world_id,
+    unique=True,
+    postgresql_where=world_rulesets.c.is_default,
+)
+
+
+# ---------------------------------------------------------------------------
+# character — characters, npcs, player_characters (revision 017)
+# ---------------------------------------------------------------------------
+
+characters = Table(
+    "characters",
+    metadata,
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "species_id",
+        UUID(),
+        ForeignKey("rules.species.species_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("size_category", Text(), nullable=False),
+    *_timestamps(),
+    schema="character",
+    comment=(
+        "Identity-level mechanical data shared by every character: species and size. "
+        "NPCs and player characters both extend this row rather than duplicating it "
+        "(docs/PLAN.md §7.1). origin_location_id arrives in Phase 5 once "
+        "world.locations exists."
+    ),
+)
+
+Index("ix_characters_species_id", characters.c.species_id)
+
+npcs = Table(
+    "npcs",
+    metadata,
+    Column(
+        "npc_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    *_timestamps(),
+    schema="character",
+    comment=(
+        "Marks a character as an NPC. Portrayal, goals, routines, and other simulation "
+        "apparatus (docs/PLAN.md §8) are deferred to Phase 10, which builds the AI "
+        "agents that consume them."
+    ),
+)
+
+player_characters = Table(
+    "player_characters",
+    metadata,
+    Column(
+        "player_character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "player_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="character",
+    comment=(
+        "Marks a character as player-controlled. player_user_id is basic ownership "
+        "identity; timeline- or session-scoped control handoffs "
+        "(character.character_controllers) are deferred to Phase 10."
+    ),
+)
+
+Index(
+    "ix_player_characters_player_user_id",
+    player_characters.c.player_user_id,
+    postgresql_where=player_characters.c.player_user_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# character — shared data: descriptions, languages, senses, movements
+# (revision 019)
+# ---------------------------------------------------------------------------
+
+character_descriptions = Table(
+    "character_descriptions",
+    metadata,
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("background", Text()),
+    Column("appearance", Text()),
+    Column("notes", Text()),
+    *_timestamps(),
+    schema="character",
+    comment=(
+        "Free-text background, appearance, and notes that do not drive mechanics "
+        "(docs/PLAN.md §7.2). Optional: a character need not have one yet."
+    ),
+)
+
+character_languages = Table(
+    "character_languages",
+    metadata,
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "language_id",
+        UUID(),
+        ForeignKey("rules.languages.language_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_id", "language_id"),
+    schema="character",
+    comment=(
+        "Languages a character knows. Pure association — a character may know "
+        "languages from more than one ruleset's content."
+    ),
+)
+
+Index("ix_character_languages_language_id", character_languages.c.language_id)
+
+character_senses = Table(
+    "character_senses",
+    metadata,
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("sense_type", Text(), nullable=False),
+    Column("range_feet", NONNEGATIVE_INTEGER, nullable=False),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_id", "sense_type"),
+    schema="character",
+    comment="A special sense a character has (darkvision, blindsight, ...) and its range.",
+)
+
+character_movements = Table(
+    "character_movements",
+    metadata,
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("movement_type", Text(), nullable=False),
+    Column("speed_feet", NONNEGATIVE_INTEGER, nullable=False),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_id", "movement_type"),
+    schema="character",
+    comment="A movement mode a character has (walk, fly, swim, ...) and its speed.",
+)
+
+
+# ---------------------------------------------------------------------------
+# character — builds (revision 020)
+# ---------------------------------------------------------------------------
+
+character_builds = Table(
+    "character_builds",
+    metadata,
+    _uuid_pk("character_build_id"),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("label", Text()),
+    Column(
+        "is_current",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "The build a character sheet is assembled from by default. At most one per "
+            "character, enforced by a partial unique index rather than a CHECK, since "
+            "the rule spans rows."
+        ),
+    ),
+    *_timestamps(),
+    schema="character",
+    comment=(
+        "A versioned mechanical snapshot of a character, pinned to one ruleset version. "
+        "Ability scores, class levels, proficiencies, features, and spellcasting all "
+        "belong to a build, not directly to the character, so re-leveling or rebuilding "
+        "does not erase the prior build's history."
+    ),
+)
+
+Index("ix_character_builds_character_id", character_builds.c.character_id)
+Index("ix_character_builds_ruleset_version_id", character_builds.c.ruleset_version_id)
+Index(
+    "ux_character_builds_one_current_per_character",
+    character_builds.c.character_id,
+    unique=True,
+    postgresql_where=character_builds.c.is_current,
+)
+
+character_ability_scores = Table(
+    "character_ability_scores",
+    metadata,
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("score", NONNEGATIVE_INTEGER, nullable=False),
+    *_timestamps(),
+    PrimaryKeyConstraint("character_build_id", "ability_id"),
+    schema="character",
+    comment=(
+        "The raw score (e.g. 16) a build has in one ability. Modifiers are derived, not stored."
+    ),
+)
+
+Index("ix_character_ability_scores_ability_id", character_ability_scores.c.ability_id)
+
+character_class_levels = Table(
+    "character_class_levels",
+    metadata,
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "class_id",
+        UUID(),
+        ForeignKey("rules.classes.class_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "subclass_id",
+        UUID(),
+        ForeignKey("rules.subclasses.subclass_id", ondelete="RESTRICT"),
+    ),
+    Column("level", NONNEGATIVE_INTEGER, nullable=False),
+    *_timestamps(),
+    PrimaryKeyConstraint("character_build_id", "class_id"),
+    schema="character",
+    comment="A build's level in one class. Multiple rows per build support multiclassing.",
+)
+
+Index("ix_character_class_levels_class_id", character_class_levels.c.class_id)
+Index(
+    "ix_character_class_levels_subclass_id",
+    character_class_levels.c.subclass_id,
+    postgresql_where=character_class_levels.c.subclass_id.isnot(None),
+)
+
+character_proficiencies = Table(
+    "character_proficiencies",
+    metadata,
+    _uuid_pk("character_proficiency_id"),
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "proficiency_type_id",
+        UUID(),
+        ForeignKey("rules.proficiency_types.proficiency_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("skill_id", UUID(), ForeignKey("rules.skills.skill_id", ondelete="CASCADE")),
+    Column(
+        "saving_throw_ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="CASCADE"),
+    ),
+    Column("target_label", Text()),
+    Column("is_expertise", Boolean(), nullable=False, server_default=text("false")),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="character",
+    comment=(
+        "A build's proficiency in a skill, a saving-throw ability, or a free-text "
+        "target (a weapon, armor category, or tool). Exactly one of skill_id, "
+        "saving_throw_ability_id, and target_label is set."
+    ),
+)
+
+Index("ix_character_proficiencies_build_id", character_proficiencies.c.character_build_id)
+Index("ix_character_proficiencies_type_id", character_proficiencies.c.proficiency_type_id)
+Index(
+    "ix_character_proficiencies_skill_id",
+    character_proficiencies.c.skill_id,
+    postgresql_where=character_proficiencies.c.skill_id.isnot(None),
+)
+Index(
+    "ix_character_proficiencies_saving_throw_ability_id",
+    character_proficiencies.c.saving_throw_ability_id,
+    postgresql_where=character_proficiencies.c.saving_throw_ability_id.isnot(None),
+)
+
+character_features = Table(
+    "character_features",
+    metadata,
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "feature_id",
+        UUID(),
+        ForeignKey("rules.features.feature_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_build_id", "feature_id"),
+    schema="character",
+    comment="A feature a build has been granted, from its class, subclass, or species.",
+)
+
+Index("ix_character_features_feature_id", character_features.c.feature_id)
+
+character_spellcasting_profiles = Table(
+    "character_spellcasting_profiles",
+    metadata,
+    _uuid_pk("character_spellcasting_profile_id"),
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("class_id", UUID(), ForeignKey("rules.classes.class_id", ondelete="CASCADE")),
+    Column(
+        "spellcasting_ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("character_build_id", "class_id", name="ux_spellcasting_profiles_build_class"),
+    schema="character",
+    comment=(
+        "A source of spellcasting for a build (Wizard casting, Warlock Pact Magic, "
+        "...) and the ability it keys off. class_id is NULL for species- or "
+        "feat-granted casting with no owning class."
+    ),
+)
+
+Index("ix_spellcasting_profiles_build_id", character_spellcasting_profiles.c.character_build_id)
+Index(
+    "ix_spellcasting_profiles_class_id",
+    character_spellcasting_profiles.c.class_id,
+    postgresql_where=character_spellcasting_profiles.c.class_id.isnot(None),
+)
+Index(
+    "ix_spellcasting_profiles_ability_id",
+    character_spellcasting_profiles.c.spellcasting_ability_id,
+)
+
+character_known_spells = Table(
+    "character_known_spells",
+    metadata,
+    Column(
+        "character_spellcasting_profile_id",
+        UUID(),
+        ForeignKey(
+            "character.character_spellcasting_profiles.character_spellcasting_profile_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "spell_id",
+        UUID(),
+        ForeignKey("rules.spells.spell_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_spellcasting_profile_id", "spell_id"),
+    schema="character",
+    comment="Spells a spellcasting profile knows, independent of whether they are prepared.",
+)
+
+Index("ix_character_known_spells_spell_id", character_known_spells.c.spell_id)
+
+character_prepared_spells = Table(
+    "character_prepared_spells",
+    metadata,
+    Column(
+        "character_spellcasting_profile_id",
+        UUID(),
+        ForeignKey(
+            "character.character_spellcasting_profiles.character_spellcasting_profile_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "spell_id",
+        UUID(),
+        ForeignKey("rules.spells.spell_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("character_spellcasting_profile_id", "spell_id"),
+    schema="character",
+    comment=(
+        "Spells currently prepared for a spellcasting profile. Not constrained to be "
+        "a subset of known spells: whether that subset relationship applies at all "
+        "varies by class."
+    ),
+)
+
+Index("ix_character_prepared_spells_spell_id", character_prepared_spells.c.spell_id)
+
+
+# ---------------------------------------------------------------------------
+# campaign — character timeline state (revision 021)
+# ---------------------------------------------------------------------------
+
+character_state = Table(
+    "character_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("current_hit_points", Integer(), nullable=False),
+    Column("maximum_hit_points", NONNEGATIVE_INTEGER, nullable=False),
+    Column("temporary_hit_points", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column("exhaustion_level", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column("death_save_successes", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column("death_save_failures", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column(
+        "initiative",
+        Integer(),
+        comment="Set only while the character is in an encounter. NULL otherwise.",
+    ),
+    Column(
+        "transformed_into_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="SET NULL"),
+        comment=(
+            "The character sheet currently being used instead of this one's own (a "
+            "polymorph or similar transformation). NULL means no transformation is "
+            "active."
+        ),
+    ),
+    *_timestamps(),
+    PrimaryKeyConstraint("timeline_id", "character_id"),
+    schema="campaign",
+    comment=(
+        "Current combat/vitals state for a character on a timeline: HP, exhaustion, "
+        "death saves, initiative when in an encounter, and current transformed form. "
+        "One row per (timeline, character) — see the module docstring on why there is "
+        "no event-linked history yet."
+    ),
+)
+
+Index("ix_character_state_character_id", character_state.c.character_id)
+Index(
+    "ix_character_state_transformed_into_id",
+    character_state.c.transformed_into_id,
+    postgresql_where=character_state.c.transformed_into_id.isnot(None),
+)
+
+character_conditions = Table(
+    "character_conditions",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "condition_id",
+        UUID(),
+        ForeignKey("rules.conditions.condition_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("source_description", Text()),
+    Column("applied_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "character_id", "condition_id"),
+    schema="campaign",
+    comment=(
+        "A condition currently active on a character in a timeline. "
+        "source_description is free text for now — a causal event reference arrives "
+        "in Phase 6."
+    ),
+)
+
+Index("ix_character_conditions_character_id", character_conditions.c.character_id)
+Index("ix_character_conditions_condition_id", character_conditions.c.condition_id)
+
+character_resources = Table(
+    "character_resources",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "resource_definition_id",
+        UUID(),
+        ForeignKey("rules.resource_definitions.resource_definition_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("current_amount", NONNEGATIVE_INTEGER, nullable=False),
+    Column("maximum_amount", NONNEGATIVE_INTEGER, nullable=False),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "character_id", "resource_definition_id"),
+    schema="campaign",
+    comment=(
+        "Current and maximum amount of a depletable/rechargeable resource (spell "
+        "slots, ki points, rage uses, ...) a character has in a timeline."
+    ),
+)
+
+Index("ix_character_resources_character_id", character_resources.c.character_id)
+Index(
+    "ix_character_resources_resource_definition_id",
+    character_resources.c.resource_definition_id,
 )

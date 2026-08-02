@@ -1,0 +1,27 @@
+# A handful of spells — enough to prove known/prepared spell tracking works,
+# not a complete spell list. damage_type_code is omitted for spells that deal
+# no damage.
+
+- code: fire_bolt
+  display_name: Fire Bolt
+  level: 0
+  school: evocation
+  damage_type_code: fire
+- code: mage_hand
+  display_name: Mage Hand
+  level: 0
+  school: conjuration
+- code: magic_missile
+  display_name: Magic Missile
+  level: 1
+  school: evocation
+  damage_type_code: force
+- code: cure_wounds
+  display_name: Cure Wounds
+  level: 1
+  school: evocation
+- code: fireball
+  display_name: Fireball
+  level: 3
+  school: evocation
+  damage_type_code: fire

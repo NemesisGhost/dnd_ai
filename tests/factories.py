@@ -169,19 +169,171 @@ def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Com
     return value
 
 
-def make_campaign(
-    connection: Connection, timeline_id: uuid.UUID, name: str = "The Campaign"
+def make_ruleset_version(connection: Connection, code: str | None = None) -> uuid.UUID:
+    """A bare ruleset + ruleset_version, with no world association.
+
+    For content tests (species, classes, ...) that need a version to hang
+    off but don't need a campaign or world_rulesets entry. Use
+    make_ruleset_for_world instead when a campaign needs to reference the
+    ruleset.
+    """
+    if code is None:
+        code = f"ruleset_{uuid.uuid4().hex[:8]}"
+    ruleset_id = connection.execute(
+        text(
+            "INSERT INTO rules.rulesets (code, display_name) VALUES (:c, :c) RETURNING ruleset_id"
+        ),
+        {"c": code},
+    ).scalar()
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.ruleset_versions (ruleset_id, version_label)
+            VALUES (:r, 'v1')
+            RETURNING ruleset_version_id
+        """),
+        {"r": ruleset_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_species(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "human"
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
-            INSERT INTO campaign.campaigns (timeline_id, name, lifecycle_status_id)
-            VALUES (:tl, :n, :status)
+            INSERT INTO rules.species (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING species_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    species_id: uuid.UUID | None = None,
+    name: str = "Test Character",
+    size_category: str = "medium",
+    entity_type_code: str = "character",
+) -> uuid.UUID:
+    """A core.entities row plus its character.characters row. Returns the
+    shared UUID (the character_id, same as the entity_id).
+
+    species_id is auto-provisioned (a throwaway ruleset version + species)
+    when omitted. entity_type_code defaults to the bare 'character' type;
+    pass 'npc' or 'player_character' when the caller also needs to insert
+    the corresponding character.npcs / character.player_characters row —
+    core.enforce_entity_subtype() rejects that subtype row otherwise, since
+    a bare 'character'-typed entity does not require one.
+    """
+    if species_id is None:
+        species_id = make_species(connection, make_ruleset_version(connection))
+
+    character_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", entity_type_code
+    )
+    character_id = make_entity(connection, world_id, character_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO character.characters (character_id, species_id, size_category)
+            VALUES (:c, :s, :size)
+        """),
+        {"c": character_id, "s": species_id, "size": size_category},
+    )
+    return character_id
+
+
+def make_ruleset_for_world(
+    connection: Connection,
+    world_id: uuid.UUID,
+    code: str | None = None,
+    *,
+    is_default: bool | None = None,
+) -> uuid.UUID:
+    """A ruleset + current ruleset_version + world_rulesets association, ready
+    for a campaign in this world to reference.
+
+    code defaults to a random slug since rules.rulesets.code is unique across
+    the whole database, not per world. is_default defaults to True only if
+    this world has no world_rulesets row yet — a second call for the same
+    world would otherwise collide with ux_world_rulesets_one_default_per_world.
+    """
+    if code is None:
+        code = f"ruleset_{uuid.uuid4().hex[:8]}"
+    if is_default is None:
+        has_existing = connection.execute(
+            text("SELECT 1 FROM rules.world_rulesets WHERE world_id = :w LIMIT 1"),
+            {"w": world_id},
+        ).scalar()
+        is_default = has_existing is None
+
+    ruleset_id = connection.execute(
+        text(
+            "INSERT INTO rules.rulesets (code, display_name) VALUES (:c, :c) RETURNING ruleset_id"
+        ),
+        {"c": code},
+    ).scalar()
+    assert isinstance(ruleset_id, uuid.UUID)
+    connection.execute(
+        text("""
+            INSERT INTO rules.ruleset_versions (ruleset_id, version_label, is_current)
+            VALUES (:r, 'v1', true)
+        """),
+        {"r": ruleset_id},
+    )
+    connection.execute(
+        text("""
+            INSERT INTO rules.world_rulesets (world_id, ruleset_id, is_default)
+            VALUES (:w, :r, :is_default)
+        """),
+        {"w": world_id, "r": ruleset_id, "is_default": is_default},
+    )
+    return ruleset_id
+
+
+def make_campaign(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    name: str = "The Campaign",
+    *,
+    ruleset_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A campaign on the given timeline.
+
+    ruleset_id is auto-provisioned when omitted: looks up the timeline's
+    world, reuses a ruleset already allowed there if one exists, otherwise
+    creates one via make_ruleset_for_world. Callers testing ruleset-specific
+    behavior should pass one explicitly.
+    """
+    if ruleset_id is None:
+        world_id = connection.execute(
+            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+            {"t": timeline_id},
+        ).scalar()
+        existing = connection.execute(
+            text("SELECT ruleset_id FROM rules.world_rulesets WHERE world_id = :w LIMIT 1"),
+            {"w": world_id},
+        ).scalar()
+        ruleset_id = (
+            existing if existing is not None else make_ruleset_for_world(connection, world_id)
+        )
+
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.campaigns (timeline_id, name, lifecycle_status_id, ruleset_id)
+            VALUES (:tl, :n, :status, :ruleset)
             RETURNING campaign_id
         """),
         {
             "tl": timeline_id,
             "n": name,
             "status": status_id(connection, "lifecycle_statuses", "active"),
+            "ruleset": ruleset_id,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

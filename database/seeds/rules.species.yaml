@@ -1,0 +1,9 @@
+# A minimal pair of species — enough to prove the ruleset content model works,
+# not a complete Player's Handbook species list.
+
+- code: human
+  display_name: Human
+  description: Versatile and adaptable.
+- code: elf
+  display_name: Elf
+  description: Long-lived, keen senses, resistant to sleep magic.

@@ -1,0 +1,10 @@
+- code: spell_slot
+  display_name: Spell Slot
+- code: ki_point
+  display_name: Ki Point
+- code: rage
+  display_name: Rage
+- code: second_wind
+  display_name: Second Wind
+- code: bardic_inspiration
+  display_name: Bardic Inspiration

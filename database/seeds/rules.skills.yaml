@@ -1,0 +1,58 @@
+# The eighteen D&D 5e (2024) skills, each governed by one ability. The
+# governing ability is resolved by code at migration time (see revision 022),
+# not stored as a UUID here.
+
+- code: acrobatics
+  display_name: Acrobatics
+  ability_code: dexterity
+- code: animal_handling
+  display_name: Animal Handling
+  ability_code: wisdom
+- code: arcana
+  display_name: Arcana
+  ability_code: intelligence
+- code: athletics
+  display_name: Athletics
+  ability_code: strength
+- code: deception
+  display_name: Deception
+  ability_code: charisma
+- code: history
+  display_name: History
+  ability_code: intelligence
+- code: insight
+  display_name: Insight
+  ability_code: wisdom
+- code: intimidation
+  display_name: Intimidation
+  ability_code: charisma
+- code: investigation
+  display_name: Investigation
+  ability_code: intelligence
+- code: medicine
+  display_name: Medicine
+  ability_code: wisdom
+- code: nature
+  display_name: Nature
+  ability_code: intelligence
+- code: perception
+  display_name: Perception
+  ability_code: wisdom
+- code: performance
+  display_name: Performance
+  ability_code: charisma
+- code: persuasion
+  display_name: Persuasion
+  ability_code: charisma
+- code: religion
+  display_name: Religion
+  ability_code: intelligence
+- code: sleight_of_hand
+  display_name: Sleight of Hand
+  ability_code: dexterity
+- code: stealth
+  display_name: Stealth
+  ability_code: dexterity
+- code: survival
+  display_name: Survival
+  ability_code: wisdom

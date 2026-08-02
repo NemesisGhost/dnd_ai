@@ -1,0 +1,15 @@
+# A small sample of features: one per class (granted at level 1) and one
+# species trait, to prove all three association shapes work
+# (rules.features.class_id / .subclass_id / .species_id).
+
+- code: second_wind
+  display_name: Second Wind
+  class_code: fighter
+  granted_at_level: 1
+- code: wizard_spellcasting
+  display_name: Spellcasting
+  class_code: wizard
+  granted_at_level: 1
+- code: elf_darkvision
+  display_name: Darkvision
+  species_code: elf

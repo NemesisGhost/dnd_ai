@@ -1365,6 +1365,10 @@ Exit criteria:
 - Hidden connections remain distinct from party knowledge.
 - Actions can alter dungeon state.
 
+First-time obligations (per [§23.1](#231-phase-exit-review)):
+
+- **Close Phase 4's character-location forward references.** Add `character.characters.origin_location_id` (deferred in Phase 4 — [DATABASE_MODEL.md §7.1](architecture/DATABASE_MODEL.md#71-shared-character-definition) already names "origin" as part of the target model) and `campaign.character_location_history` (deferred in Phase 4's [§7.3](#73-timeline-state)), both with real foreign keys to `world.locations` now that it exists. Neither had anything to reference before this phase.
+
 ### Phase 6: Events and interactions
 
 Deliver:

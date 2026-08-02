@@ -13,7 +13,13 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
-from tests.factories import make_campaign, make_party, make_timeline, make_world
+from tests.factories import (
+    make_campaign,
+    make_party,
+    make_ruleset_for_world,
+    make_timeline,
+    make_world,
+)
 
 pytestmark = pytest.mark.database
 
@@ -28,6 +34,11 @@ def world_id(db_connection: Connection) -> uuid.UUID:
 @pytest.fixture
 def timeline_id(db_connection: Connection, world_id: uuid.UUID) -> uuid.UUID:
     return make_timeline(db_connection, world_id, is_primary=True)
+
+
+@pytest.fixture
+def ruleset_id(db_connection: Connection, world_id: uuid.UUID) -> uuid.UUID:
+    return make_ruleset_for_world(db_connection, world_id)
 
 
 # ---------------------------------------------------------------------------
@@ -50,33 +61,34 @@ def test_two_campaigns_can_share_one_timeline(
 
 
 def test_an_end_without_a_start_is_rejected(
-    db_connection: Connection, timeline_id: uuid.UUID
+    db_connection: Connection, timeline_id: uuid.UUID, ruleset_id: uuid.UUID
 ) -> None:
     with pytest.raises(IntegrityError) as exc:
         db_connection.execute(
             text("""
                 INSERT INTO campaign.campaigns
-                    (timeline_id, name, lifecycle_status_id, ended_at)
+                    (timeline_id, name, lifecycle_status_id, ruleset_id, ended_at)
                 VALUES (:tl, 'Broken', (SELECT lifecycle_status_id FROM core.lifecycle_statuses
-                                        WHERE code = 'active'), now())
+                                        WHERE code = 'active'), :ruleset, now())
             """),
-            {"tl": timeline_id},
+            {"tl": timeline_id, "ruleset": ruleset_id},
         )
     assert "ck_campaigns_ended_requires_started" in str(exc.value)
 
 
 def test_ended_before_started_is_rejected(
-    db_connection: Connection, timeline_id: uuid.UUID
+    db_connection: Connection, timeline_id: uuid.UUID, ruleset_id: uuid.UUID
 ) -> None:
     with pytest.raises(IntegrityError) as exc:
         db_connection.execute(
             text("""
                 INSERT INTO campaign.campaigns
-                    (timeline_id, name, lifecycle_status_id, started_at, ended_at)
+                    (timeline_id, name, lifecycle_status_id, ruleset_id, started_at, ended_at)
                 VALUES (:tl, 'Broken', (SELECT lifecycle_status_id FROM core.lifecycle_statuses
-                                        WHERE code = 'active'), now(), now() - interval '1 day')
+                                        WHERE code = 'active'), :ruleset,
+                                        now(), now() - interval '1 day')
             """),
-            {"tl": timeline_id},
+            {"tl": timeline_id, "ruleset": ruleset_id},
         )
     assert "ck_campaigns_ended_after_started" in str(exc.value)
 

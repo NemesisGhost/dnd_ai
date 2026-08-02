@@ -1,0 +1,10 @@
+- code: weapon
+  display_name: Weapon
+- code: armor
+  display_name: Armor
+- code: tool
+  display_name: Tool
+- code: skill
+  display_name: Skill
+- code: saving_throw
+  display_name: Saving Throw
