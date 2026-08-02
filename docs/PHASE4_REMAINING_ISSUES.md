@@ -1,10 +1,11 @@
 # Phase 4 Remaining Issues
 
-> **OPEN (2026-08-02).** Revision 034 and GitHub Actions run
-> [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355)
-> are green, but a post-closeout review found two final-schema integrity gaps and
-> three missing verification cases. Phase 5 remains blocked until this register is
-> cleared and the resulting GitHub Actions run succeeds.
+> **CLOSED (2026-08-02).** Both schema blockers and all three verification
+> obligations below are implemented, tested, and verified — see
+> [PHASE4_VERIFICATION.md § Second closeout](PHASE4_VERIFICATION.md#second-closeout-2026-08-02)
+> for the resolving revisions (`035`, `036`) and evidence. This file is retained as
+> a historical record of what this review round found and fixed; it is no longer
+> an active gate, and Phase 5 is unblocked.
 
 ## Review baseline and scope
 

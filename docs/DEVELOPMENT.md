@@ -179,7 +179,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 3 are done.** Phase 4's implementation and corrections through revision 034 are verified against live AWS and GitHub Actions; see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md), and [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md). A post-closeout review reopened [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md); clear that gate before starting [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play), then follow [§23.1](PLAN.md#231-phase-exit-review) when Phase 5 closes.
+**Phases 1 through 4 are done.** Phase 4's implementation, first correction set, and both closeout passes are all verified against live AWS and GitHub Actions; see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md), and [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. The current target is [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play); follow [§23.1](PLAN.md#231-phase-exit-review) when it closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

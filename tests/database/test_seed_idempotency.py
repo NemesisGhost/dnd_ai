@@ -230,6 +230,43 @@ def test_rerunning_the_seed_migration_does_not_duplicate_rows(db_connection: Con
     )
 
 
+def test_seeded_ruleset_family_and_version_are_edition_neutral(db_connection: Connection) -> None:
+    """Revision 034 (PHASE4_REMAINING_ISSUES.md §5, post-closeout §4): the
+    family row is edition-neutral display data, and the edition-specific
+    text moved to the version row it actually describes. No YAML file
+    backs this — it's set inline by revisions 022/034 — so this is the
+    directly-asserted structured-seed check for it."""
+    ruleset = db_connection.execute(
+        text(
+            "SELECT ruleset_id, code, display_name, description "
+            "FROM rules.rulesets WHERE code = 'dnd5e'"
+        )
+    ).one()
+    assert ruleset.code == "dnd5e"
+    assert ruleset.display_name == "D&D 5e"
+    assert "2024" not in ruleset.display_name
+    # The family description may legitimately *mention* 2024 in passing (it
+    # spans multiple editions, of which 2024 is one) without *being* an
+    # edition-specific description — the thing that must not recur is the
+    # old family-level text that claimed to describe one specific revision.
+    assert ruleset.description != "The 2024 revision of the fifth-edition rules.", (
+        f"family description still reads as edition-specific: {ruleset.description!r}"
+    )
+
+    version = db_connection.execute(
+        text(
+            "SELECT version_label, description FROM rules.ruleset_versions "
+            "WHERE ruleset_id = :r AND version_label = '2024'"
+        ),
+        {"r": ruleset.ruleset_id},
+    ).one()
+    assert version.version_label == "2024"
+    assert version.description == "The 2024 revision of the fifth-edition rules.", (
+        f"version description should carry the edition-specific meaning, got: "
+        f"{version.description!r}"
+    )
+
+
 def test_seeded_skills_resolve_the_correct_ability_by_code(db_connection: Connection) -> None:
     for row in load_seed_data("rules", "skills"):
         ability_code = db_connection.execute(

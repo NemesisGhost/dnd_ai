@@ -1,4 +1,4 @@
-"""Phase 4 closeout register (PHASE4_REMAINING_ISSUES.md, revisions 031-034).
+"""Phase 4 closeout register (PHASE4_REMAINING_ISSUES.md, revisions 031-035).
 
 Covers the seven items the corrections review left open after revision 030:
 complete world-ruleset allow-list protection (§1, revision 031), proficiency-
@@ -7,17 +7,27 @@ scope immutability (§2, revision 033), and the SQLAlchemy canon-status
 default drift class (§4). §5 (ruleset-family/version separation) and §6/§7
 (source-enforcement policy, CI cleanup) are data/docs/workflow changes with
 no new trigger behavior to exercise here — see PHASE4_VERIFICATION.md.
+
+A post-closeout review reopened the register with two further schema
+blockers and three verification obligations, closed below: concurrency-safe
+allow-list enforcement (§1, revision 035), immutability for the three
+rule-definition tables revision 033 omitted (§2, revision 036), a
+proficiency-type UPDATE rejection test (§3), and — in `test_seed_idempotency.py`
+and `scripts/ci_cleanup.py`/its own test module respectively — the seeded
+family/version assertion (§4) and the CI cleanup script test (§5).
 """
 
 import uuid
 
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from dnd_ai.persistence.tables import metadata
 from tests.factories import (
+    make_campaign,
     make_character,
+    make_ruleset_for_world,
     make_ruleset_version_for_world,
     make_timeline,
     make_world,
@@ -107,8 +117,6 @@ class AllowListFixture:
     species/build/condition/resource dependency to before removing it."""
 
     def __init__(self, connection: Connection, slug: str) -> None:
-        from tests.factories import make_ruleset_for_world
-
         self.world_id = make_world(connection, slug=slug)
         self.ruleset_id = make_ruleset_for_world(
             connection, self.world_id, code=f"allowlist_{slug.replace('-', '_')}", is_default=False
@@ -330,6 +338,62 @@ def test_a_proficiencys_type_in_the_same_version_succeeds(
         ),
         {"b": pbf.build_id, "t": prof_type},
     )
+
+
+def test_updating_a_proficiencys_type_to_a_different_version_is_rejected(
+    db_connection: Connection, pbf: ProficiencyBuildFixture
+) -> None:
+    """revision 032 enforces the version check on UPDATE as well as INSERT —
+    the closeout suite only proved the insert and same-version paths."""
+    prof_type = db_connection.execute(
+        text(
+            "INSERT INTO rules.proficiency_types "
+            "(ruleset_version_id, code, display_name, target_kind) "
+            "VALUES (:v, 'weapon', 'Weapon', 'free_text') RETURNING proficiency_type_id"
+        ),
+        {"v": pbf.version},
+    ).scalar()
+    proficiency_id = db_connection.execute(
+        text(
+            "INSERT INTO character.character_proficiencies "
+            "(character_build_id, proficiency_type_id, target_label) "
+            "VALUES (:b, :t, 'dagger') RETURNING character_proficiency_id"
+        ),
+        {"b": pbf.build_id, "t": prof_type},
+    ).scalar()
+
+    foreign_type = db_connection.execute(
+        text(
+            "INSERT INTO rules.proficiency_types "
+            "(ruleset_version_id, code, display_name, target_kind) "
+            "VALUES (:v, 'armor', 'Armor', 'free_text') RETURNING proficiency_type_id"
+        ),
+        {"v": pbf.other_version},
+    ).scalar()
+
+    # A SAVEPOINT (begin_nested): the failed UPDATE aborts the current
+    # transaction in PostgreSQL, which would poison every later statement on
+    # this connection — including the very query below that proves the row
+    # is unchanged — unless the failure is scoped to a sub-transaction that
+    # rolls back on its own.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text(
+                "UPDATE character.character_proficiencies SET proficiency_type_id = :t "
+                "WHERE character_proficiency_id = :p"
+            ),
+            {"t": foreign_type, "p": proficiency_id},
+        )
+    assert "proficiency type" in str(exc.value)
+
+    unchanged = db_connection.execute(
+        text(
+            "SELECT proficiency_type_id FROM character.character_proficiencies "
+            "WHERE character_proficiency_id = :p"
+        ),
+        {"p": proficiency_id},
+    ).scalar()
+    assert unchanged == prof_type, "the failed UPDATE must not have partially applied"
 
 
 # ---------------------------------------------------------------------------
@@ -850,3 +914,474 @@ def test_unrelated_rule_content_columns_remain_freely_updatable(db_connection: C
     ).one()
     assert row[0] == "Renamed"
     assert row[1] == ability
+
+
+# ---------------------------------------------------------------------------
+# §1 (post-closeout): concurrency-safe allow-list enforcement (revision 035)
+# ---------------------------------------------------------------------------
+# Two real connections, following the pattern established in
+# test_party_memberships.py::test_concurrent_overlapping_inserts_cannot_both_commit:
+# committed setup under a unique slug (this fixture's transaction can't be the
+# auto-rollback db_connection, since two independent connections need to see
+# each other's committed state), a short lock_timeout on the side that must
+# block, and explicit teardown in a finally block.
+#
+# All six dependency categories are covered for the DELETE race (the race the
+# review actually found — a dependent being created while the association is
+# concurrently removed). The identical lock also protects an UPDATE-based
+# repoint, since revision 031's trigger already fires on
+# "BEFORE DELETE OR UPDATE OF world_id, ruleset_id" and repointing needs the
+# same exclusive row lock a DELETE does — proven once (build category) rather
+# than for all six, since the locking mechanism is table/row-level, not
+# category-specific, and repeating it six times would exercise the same
+# mechanism six times over rather than six different things.
+
+
+class ConcurrencyWorld:
+    """A world with one ruleset allowed (not default) and a timeline/character
+    ready to attach a build/condition/resource/campaign dependency to.
+    Committed, not rolled back — the tests using this own their teardown."""
+
+    def __init__(self, connection: Connection, slug: str) -> None:
+        self.world_id = make_world(connection, slug=slug)
+        self.ruleset_id = make_ruleset_for_world(
+            connection,
+            self.world_id,
+            code=f"concurrency_{slug.replace('-', '_')}",
+            is_default=False,
+        )
+        self.version_id = _current_version(connection, self.ruleset_id)
+        self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
+        self.character_id = make_character(connection, self.world_id)
+
+
+def _cleanup_concurrency_world(engine: Engine, slug: str) -> None:
+    with engine.begin() as cleanup:
+        params = {"s": slug}
+        for statement in (
+            """DELETE FROM campaign.character_resources WHERE timeline_id IN (
+                SELECT timeline_id FROM campaign.timelines
+                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)
+            )""",
+            """DELETE FROM campaign.character_conditions WHERE timeline_id IN (
+                SELECT timeline_id FROM campaign.timelines
+                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)
+            )""",
+            """DELETE FROM campaign.campaigns WHERE timeline_id IN (
+                SELECT timeline_id FROM campaign.timelines
+                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)
+            )""",
+            """DELETE FROM character.character_builds WHERE character_id IN (
+                SELECT entity_id FROM core.entities
+                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)
+            )""",
+            """DELETE FROM character.characters WHERE character_id IN (
+                SELECT entity_id FROM core.entities
+                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)
+            )""",
+            """DELETE FROM campaign.timelines
+               WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)""",
+            """DELETE FROM core.entities
+               WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)""",
+            """DELETE FROM rules.world_rulesets
+               WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)""",
+            """DELETE FROM rules.ruleset_versions WHERE ruleset_id IN (
+                SELECT ruleset_id FROM rules.rulesets
+                WHERE code LIKE ('concurrency_' || :s || '%')
+            )""",
+            "DELETE FROM rules.rulesets WHERE code LIKE ('concurrency_' || :s || '%')",
+            "DELETE FROM core.worlds WHERE slug = :s",
+        ):
+            cleanup.execute(text(statement), params)
+
+
+def _assert_delete_races_dependent_creation(
+    engine: Engine,
+    world_id: uuid.UUID,
+    ruleset_id: uuid.UUID,
+    create_dependent: object,
+    expected_message: str,
+) -> None:
+    """The shared race proof: a dependent-creating transaction takes the
+    FOR SHARE lock (revision 035) before committing; a concurrent DELETE of
+    the association must block behind it, then — once unblocked by the
+    dependent's commit — must be rejected outright by the pre-existing
+    still-in-use check (revision 031), never silently succeed alongside it."""
+    with engine.connect() as first, engine.connect() as second:
+        first.begin()
+        second.begin()
+
+        create_dependent(first)
+
+        second.execute(text("SET LOCAL lock_timeout = '2s'"))
+        with pytest.raises(Exception) as exc:
+            second.execute(
+                text("DELETE FROM rules.world_rulesets WHERE world_id = :w AND ruleset_id = :r"),
+                {"w": world_id, "r": ruleset_id},
+            )
+            second.commit()
+        message = str(exc.value)
+        assert "lock_timeout" in message or "canceling statement" in message, (
+            f"expected the delete to block on the dependent-creator's FOR SHARE lock, "
+            f"got: {message}"
+        )
+        second.rollback()
+
+        first.commit()
+
+        with engine.begin() as third:
+            with pytest.raises(CONSTRAINT_ERRORS) as exc2:
+                third.execute(
+                    text(
+                        "DELETE FROM rules.world_rulesets WHERE world_id = :w AND ruleset_id = :r"
+                    ),
+                    {"w": world_id, "r": ruleset_id},
+                )
+            assert expected_message in str(exc2.value)
+
+
+def test_concurrent_species_creation_blocks_a_concurrent_removal(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-species-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+
+        def create(conn: Connection) -> None:
+            species = conn.execute(
+                text(
+                    "INSERT INTO rules.species (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'human', 'Human') RETURNING species_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+            make_character(conn, cw.world_id, species_id=species)
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "species from it"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_build_creation_blocks_a_concurrent_removal(postgres_engine: Engine) -> None:
+    engine = postgres_engine
+    slug = f"conc-build-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO character.character_builds (character_id, ruleset_version_id) "
+                    "VALUES (:c, :v)"
+                ),
+                {"c": cw.character_id, "v": cw.version_id},
+            )
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "character build"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_condition_creation_blocks_a_concurrent_removal(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-condition-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            condition_id = setup.execute(
+                text(
+                    "INSERT INTO rules.conditions (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'poisoned', 'Poisoned') RETURNING condition_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO campaign.character_conditions "
+                    "(timeline_id, character_id, condition_id) VALUES (:t, :c, :cond)"
+                ),
+                {"t": cw.timeline_id, "c": cw.character_id, "cond": condition_id},
+            )
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "applied character condition"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_resource_creation_blocks_a_concurrent_removal(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-resource-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            resource_id = setup.execute(
+                text(
+                    "INSERT INTO rules.resource_definitions (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'ki', 'Ki') RETURNING resource_definition_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO campaign.character_resources "
+                    "(timeline_id, character_id, resource_definition_id, current_amount, "
+                    "maximum_amount) VALUES (:t, :c, :r, 3, 3)"
+                ),
+                {"t": cw.timeline_id, "c": cw.character_id, "r": resource_id},
+            )
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "tracked character resource"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_campaign_creation_blocks_a_concurrent_removal(postgres_engine: Engine) -> None:
+    engine = postgres_engine
+    slug = f"conc-campaign-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+
+        def create(conn: Connection) -> None:
+            make_campaign(conn, cw.timeline_id, ruleset_version_id=cw.version_id)
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "still pinned to a version of it"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_world_default_assignment_blocks_a_concurrent_removal(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-default-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text("UPDATE core.worlds SET default_ruleset_id = :r WHERE world_id = :w"),
+                {"r": cw.ruleset_id, "w": cw.world_id},
+            )
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "is that world's default"
+        )
+    finally:
+        with engine.begin() as reset:
+            reset.execute(
+                text("UPDATE core.worlds SET default_ruleset_id = NULL WHERE slug = :s"),
+                {"s": slug},
+            )
+        _cleanup_concurrency_world(engine, slug)
+
+
+def test_concurrent_build_creation_blocks_a_concurrent_repoint(postgres_engine: Engine) -> None:
+    """The same FOR SHARE lock protects an UPDATE-based repoint of the
+    association, not just a DELETE — revision 031's trigger fires on both."""
+    engine = postgres_engine
+    slug = f"conc-repoint-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            other_ruleset_id = _bare_ruleset(setup, f"conc_repoint_target_{uuid.uuid4().hex[:8]}")
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            first.execute(
+                text(
+                    "INSERT INTO character.character_builds (character_id, ruleset_version_id) "
+                    "VALUES (:c, :v)"
+                ),
+                {"c": cw.character_id, "v": cw.version_id},
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text(
+                        "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                        "WHERE world_id = :w AND ruleset_id = :old"
+                    ),
+                    {"new": other_ruleset_id, "w": cw.world_id, "old": cw.ruleset_id},
+                )
+                second.commit()
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the repoint to block on the dependent-creator's FOR SHARE lock, "
+                f"got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+            with engine.begin() as third:
+                with pytest.raises(CONSTRAINT_ERRORS) as exc2:
+                    third.execute(
+                        text(
+                            "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                            "WHERE world_id = :w AND ruleset_id = :old"
+                        ),
+                        {"new": other_ruleset_id, "w": cw.world_id, "old": cw.ruleset_id},
+                    )
+                assert "character build" in str(exc2.value)
+    finally:
+        with engine.begin() as cleanup:
+            cleanup.execute(
+                text("DELETE FROM rules.rulesets WHERE code LIKE 'conc_repoint_target_%'")
+            )
+        _cleanup_concurrency_world(engine, slug)
+
+
+# ---------------------------------------------------------------------------
+# §2 (post-closeout): immutability for the remaining rule-definition tables
+# (revision 036)
+# ---------------------------------------------------------------------------
+
+
+def test_creature_types_ruleset_version_id_is_immutable(db_connection: Connection) -> None:
+    version, other_version = _make_version_pair(db_connection, "immut_creature_types")
+    creature_type_id = db_connection.execute(
+        text(
+            "INSERT INTO rules.creature_types (ruleset_version_id, code, display_name) "
+            "VALUES (:v, 'beast', 'Beast') RETURNING creature_type_id"
+        ),
+        {"v": version},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE rules.creature_types SET ruleset_version_id = :o "
+                "WHERE creature_type_id = :c"
+            ),
+            {"o": other_version, "c": creature_type_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_languages_ruleset_version_id_is_immutable(db_connection: Connection) -> None:
+    version, other_version = _make_version_pair(db_connection, "immut_languages")
+    language_id = db_connection.execute(
+        text(
+            "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+            "VALUES (:v, 'common', 'Common') RETURNING language_id"
+        ),
+        {"v": version},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE rules.languages SET ruleset_version_id = :o WHERE language_id = :l"),
+            {"o": other_version, "l": language_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_feats_ruleset_version_id_is_immutable(db_connection: Connection) -> None:
+    version, other_version = _make_version_pair(db_connection, "immut_feats")
+    feat_id = db_connection.execute(
+        text(
+            "INSERT INTO rules.feats (ruleset_version_id, code, display_name) "
+            "VALUES (:v, 'alert', 'Alert') RETURNING feat_id"
+        ),
+        {"v": version},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE rules.feats SET ruleset_version_id = :o WHERE feat_id = :f"),
+            {"o": other_version, "f": feat_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_every_rule_table_with_a_ruleset_version_id_column_protects_it(
+    db_connection: Connection,
+) -> None:
+    """Table-driven, off the live schema rather than a hand-maintained list:
+    every rules.* table with a ruleset_version_id column must have an
+    immutability trigger covering it, so a future migration that adds a new
+    ruleset-scoped rule-content table (as revision 033 itself did not, for
+    creature_types/languages/feats) cannot silently omit this policy.
+
+    Excludes rules.ruleset_versions itself: its ruleset_version_id is that
+    row's own primary key (its identity), not a reference to a *different*
+    ruleset version — the column this policy protects everywhere else. Its
+    actual parent reference, ruleset_id, is checked separately below."""
+    tables = (
+        db_connection.execute(
+            text(
+                "SELECT table_name FROM information_schema.columns "
+                "WHERE table_schema = 'rules' AND column_name = 'ruleset_version_id' "
+                "AND table_name != 'ruleset_versions' "
+                "ORDER BY table_name"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(tables) >= 12, f"expected at least 12 ruleset-scoped rule tables, found: {tables}"
+
+    for table in tables:
+        trigger_defs = (
+            db_connection.execute(
+                text(
+                    "SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t "
+                    "WHERE t.tgrelid = ('rules.' || :table)::regclass AND NOT t.tgisinternal"
+                ),
+                {"table": table},
+            )
+            .scalars()
+            .all()
+        )
+        assert any(
+            "enforce_immutable_columns" in d and "'ruleset_version_id'" in d for d in trigger_defs
+        ), (
+            f"rules.{table}.ruleset_version_id has no core.enforce_immutable_columns() trigger "
+            f"covering it. Installed triggers: {trigger_defs}"
+        )
+
+    # rules.ruleset_versions was excluded above (its ruleset_version_id is
+    # its own identity, not a parent reference) but its actual parent
+    # reference, ruleset_id, must still be covered.
+    ruleset_versions_triggers = (
+        db_connection.execute(
+            text(
+                "SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t "
+                "WHERE t.tgrelid = 'rules.ruleset_versions'::regclass AND NOT t.tgisinternal"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert any(
+        "enforce_immutable_columns" in d and "'ruleset_id'" in d for d in ruleset_versions_triggers
+    ), (
+        "rules.ruleset_versions.ruleset_id has no core.enforce_immutable_columns() trigger "
+        f"covering it. Installed triggers: {ruleset_versions_triggers}"
+    )

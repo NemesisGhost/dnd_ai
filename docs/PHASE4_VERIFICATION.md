@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, and the revision-031–034 closeout pass. A subsequent review reopened [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) with two final-schema blockers and three verification obligations. Phase 4 is not yet closed; Phase 5 remains blocked.
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, and the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found (see "Second closeout" below). Phase 4 is complete; Phase 5 is next.
 
 ## Exit Criteria
 
@@ -115,7 +115,26 @@ The push-triggered GitHub Actions run [`30765722355`](https://github.com/Nemesis
 
 A review of commit `257325f` found that the revision-031 allow-list checks are not safe against concurrent dependency creation and deletion/repointing under `READ COMMITTED`, and revision 033 omits `rules.creature_types`, `rules.languages`, and `rules.feats` from the model's rule-definition identity-immutability policy. It also found three unfulfilled verification criteria: the proficiency-type mismatch has no negative update test, revision 034's final seeded family/version values are not directly asserted, and CI cleanup's combined failure behavior has no safe simulated failure-path test.
 
-These are the only active Phase 4 closeout items. Their implementation requirements and acceptance criteria are in [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md). Purely intermediate migration-state concerns remain excluded unless an already-deployed database or a later phase can be affected.
+## Second closeout (2026-08-02)
+
+Both schema blockers and all three verification obligations from the post-closeout review are closed, by two more forward-only revisions plus test/script additions (none touching the 34 already-applied migrations):
+
+| Revision | Closes |
+|---|---|
+| `035_world_ruleset_concurrency` | §1. Every "is this ruleset allowed for this world" check (`rules.ruleset_allowed_for_world()` shared by species/build/condition/resource, plus `core.enforce_world_default_ruleset_allowed()` and `campaign.enforce_campaign_ruleset_allowed()`) now takes a `SELECT ... FOR SHARE` lock on the specific `rules.world_rulesets` row before deciding, closing the `READ COMMITTED` race with a concurrent delete/repoint (which needs an exclusive lock on that same row, acquired automatically before revision 031's trigger runs). Documented why a single, always-same-row lock cannot deadlock. |
+| `036_remaining_rules_immutable` | §2. Attaches `core.enforce_immutable_columns()` to `rules.creature_types`, `rules.languages`, and `rules.feats` — the three rule-definition tables revision 033's own enumeration (built by grepping for an existing cross-version invariant) missed, since nothing currently reads their `ruleset_version_id` as a parent. The identity policy applies regardless. |
+
+Verification obligations closed without new migrations:
+
+- **§3.** `test_updating_a_proficiencys_type_to_a_different_version_is_rejected` starts from a valid proficiency, updates `proficiency_type_id` to a type from a different ruleset version inside a `SAVEPOINT` (so the expected failure doesn't poison the rest of the test's transaction), asserts rejection, and re-reads the row to prove it is unchanged.
+- **§4.** `test_seeded_ruleset_family_and_version_are_edition_neutral` (`test_seed_idempotency.py`) directly asserts `rules.rulesets` code `dnd5e`/display name `D&D 5e`/a non-edition-specific description, and `rules.ruleset_versions` version label `2024` with the edition-specific description moved there.
+- **§5.** `scripts/ci_cleanup.py` extracts the cleanup step's combine-and-report logic into `run_cleanup(drop_database, revoke_ingress)`, wired to the real operations by `main()` and to fake success/failure callables by `tests/unit/test_ci_cleanup.py` — all four combinations (both succeed, each fails alone, both fail) are exercised without ever touching AWS. `.github/workflows/ci.yml`'s cleanup step now just calls the script.
+
+Also added: `test_every_rule_table_with_a_ruleset_version_id_column_protects_it`, a table-driven test built off `information_schema` (not a hand-maintained list) asserting every `rules.*` table with a `ruleset_version_id` column has an immutability trigger covering it — the mechanism that would have caught revision 033's omission automatically, and now guards against a future rule-content table repeating it.
+
+Verified the same way as the first closeout pass: full `downgrade base` → `upgrade head` round trip (through all 36 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean, `ruff format --check`/`ruff check`/`mypy src` clean, seed idempotency green, and the full suite — 847 tests (up from 830) — green against AWS `dev`. The two-connection concurrency tests follow `test_party_memberships.py`'s established pattern (committed setup under a unique slug, a short `lock_timeout` on the side that must block, explicit teardown) and cover all six dependency categories for the delete race plus one repoint race, reasoned in the test module as sufficient coverage of the underlying (table/row-level, not category-specific) locking mechanism rather than a gap.
+
+`DATABASE_MODEL.md` §8's two temporary implementation-gap notes (immutability coverage, allow-list concurrency) are removed now that both are true without qualification.
 
 ## Outstanding
 
@@ -126,4 +145,4 @@ Carried forward, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-Phase 4 remains at final closeout. Clear [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and record the succeeding GitHub Actions evidence here before beginning Phase 5 (Locations and dungeon play). Phase 5's first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) remain recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 is complete. Next: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).

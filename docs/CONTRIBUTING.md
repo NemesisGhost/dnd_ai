@@ -21,7 +21,7 @@ Onboarding for new contributors: getting a working environment, then the workflo
 
 ## 1. AWS account setup (start here)
 
-Phases 1 through 3 are complete. Phase 4's implementation and corrections through revision 034 are CI-verified, but its post-closeout [remaining-issues register](PHASE4_REMAINING_ISSUES.md) is active. Clear it before beginning [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play). Every phase verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
+Phases 1 through 4 are complete and CI-verified, including both of Phase 4's closeout passes ([PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record). [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play) is next. Every phase verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
 
 ### 1.1 Install and configure
 
