@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, and the closeout pass that cleared [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) (now a closed historical record — see "Closeout" below). Phase 4 is complete; Phase 5 is next.
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, and the revision-031–034 closeout pass. A subsequent review reopened [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) with two final-schema blockers and three verification obligations. Phase 4 is not yet closed; Phase 5 remains blocked.
 
 ## Exit Criteria
 
@@ -61,7 +61,7 @@ None of these were schema-design defects — all six were test/tooling bugs foun
 - **`campaign.character_location_history` is deferred to Phase 5** (locations) and **`campaign.character_inventory` to Phase 9** (items) — both already recorded as deferred in `PLAN.md` §7.3 before this phase started.
 - **`rules.item_definitions` is deferred to Phase 9**, which explicitly owns "item definitions and instances" together.
 - **No event-linked history on the three timeline-state tables.** `DATABASE_MODEL.md` §17's general shape calls for `effective_from_event_id`/`effective_to_event_id`, but `narrative.events` doesn't exist until Phase 6. Each table is a single mutable current row per `(timeline, character)` instead, enforced by its primary key; Phase 6 is expected to add event linkage without needing to change these tables' shape, since atomicity is a transaction-boundary guarantee the command layer provides, not a column.
-- **Cross-ruleset-version checks originally stopped at ability scores and class levels.** This original scope cut was superseded by revision 026. The remaining proficiency-type and parent-update gaps found afterward are tracked in [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md).
+- **Cross-ruleset-version checks originally stopped at ability scores and class levels.** Revision 026 superseded that original scope cut. Revisions 032 and 033 then closed the proficiency-type and parent-update gaps found in the next review; the active register tracks only the later revision-034 findings.
 - **`size_category` is a CHECK, not a lookup table.** The six D&D size categories are a fixed, universal vocabulary unlike canon/lifecycle status or ability names, which the conventions' "lookup tables over ENUM" guidance targets because they vary by ruleset or need GM extension.
 - **`character.character_senses.sense_type` and `character.character_movements.movement_type` are free text**, not lookups — this project has no documented controlled vocabulary for either, and inventing one unprompted risked recreating the exact drift the pre-phase reconciliation just fixed.
 
@@ -72,7 +72,7 @@ A follow-up review of the Phase 4 schema — after the exit criteria above were 
 | Revision | Closes |
 |---|---|
 | `023_session_world_time_period` | `campaign.sessions` had world-time endpoints but no derived `INT8RANGE`, unlike `party_memberships`. Added `world_time_period`, half-open `[start, end)`, unbounded upper for open-ended, `NULL` for unscheduled — same contract as [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md), deliberately without an exclusion constraint (sessions may overlap). |
-| `024_campaign_ruleset_version` | `campaign.campaigns.ruleset_id` pinned a ruleset *family*, not the specific *version* a build pins to — not reproducible if the family later gained a second current version. Renamed to `ruleset_version_id`, referencing `rules.ruleset_versions` directly. The ruleset row's code changed from `dnd5e_2024` to `dnd5e` (an UPDATE, not a migration edit). The family display name/description remained 2024-specific and is tracked for completion in [PHASE4_REMAINING_ISSUES.md §5](PHASE4_REMAINING_ISSUES.md#5-finish-the-ruleset-familyversion-separation). |
+| `024_campaign_ruleset_version` | `campaign.campaigns.ruleset_id` pinned a ruleset *family*, not the specific *version* a build pins to — not reproducible if the family later gained a second current version. Renamed to `ruleset_version_id`, referencing `rules.ruleset_versions` directly. The ruleset row's code changed from `dnd5e_2024` to `dnd5e` (an UPDATE, not a migration edit). Revision 034 later completed the family/version display-data separation. |
 | `025_rules_provenance_canon` | No rule-content table carried `source_id`/`canon_status_id`, contradicting `rules.rulesets`' own comment and [DATABASE_CONVENTIONS.md §16](DATABASE_CONVENTIONS.md#16-canon-and-provenance-conventions). Added both to all 16 rule tables, `canon_status_id` defaulted to `'canon'` via `rules.default_canon_status_id()` (a plain subquery is not a valid column default in PostgreSQL) — official content needs no per-row boilerplate; homebrew overrides it explicitly. |
 | `026_ruleset_version_checks` | Revision 020's own docstring recorded proficiencies/features/spellcasting-vs-build ruleset-version checks as a deliberate scope cut. Closed it, plus classes/primary-ability, features/class-subclass-species, and spells/damage-type, all by trigger (the established pattern for cross-row checks a CHECK can't express). |
 | `027_world_ruleset_default` | `rules.world_rulesets.is_default` and `core.worlds.default_ruleset_id` were two independent representations of one fact with nothing keeping them in sync. Removed `is_default`; `default_ruleset_id` is now the sole source of truth. Added a trigger rejecting removal of a `world_rulesets` association still relied on by a world's default or a campaign's pinned version. |
@@ -89,7 +89,7 @@ Two deviations from the corrections request, both reasoned rather than oversight
 
 ## Closeout (2026-08-02)
 
-[PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md)'s seven items are closed. Four forward-only revisions (none touching the 30 already-applied migrations):
+The seven issues found in the revision-030 review were closed by four forward-only revisions (none touching the 30 already-applied migrations):
 
 | Revision | Closes |
 |---|---|
@@ -107,9 +107,15 @@ Plus a CI fix outside the migration set:
 
 - **§7 (CI cleanup masking).** `.github/workflows/ci.yml`'s cleanup step appended `|| true` to both the ephemeral-database drop and the security-group ingress revocation, so either could fail while the job stayed green. Both are now always attempted, each result captured, and the step fails after both if either failed — with `::error::` annotations identifying which one.
 
-Verified the same way as the corrections pass: full `downgrade base` → `upgrade head` round trip (through all 34 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean, `ruff format --check`/`ruff check`/`mypy src` clean, every new invariant covered by a positive and negative test (`tests/database/test_phase4_remaining_issues.py`, 218 tests — including the world-ruleset repoint-actually-takes-effect case and the NULL-transition case the immutability fix depends on), seed idempotency green (`test_seed_idempotency.py`, including its in-process replay of revisions 022/024/029), and the full suite — 830 tests (up from 612) — green against AWS `dev`.
+Verified the same way as the corrections pass: full `downgrade base` → `upgrade head` round trip (through all 34 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean, `ruff format --check`/`ruff check`/`mypy src` clean, 218 focused tests in `tests/database/test_phase4_remaining_issues.py` (including the world-ruleset repoint-actually-takes-effect case and the NULL-transition case the immutability fix depends on), seed idempotency green (`test_seed_idempotency.py`, including its in-process replay of revisions 022/024/029), and the full suite — 830 tests (up from 612) — green against AWS `dev`. This proves the tested single-transaction paths; it does not claim coverage for the concurrency and missing negative/value/failure cases in the post-closeout register.
 
-`PHASE4_REMAINING_ISSUES.md` is retained as a closed historical record (converted, not deleted, since several other docs link to its per-item anchors) rather than removed outright.
+The push-triggered GitHub Actions run [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355) independently passed both jobs, including the full migration round trip, all 830 tests, database cleanup, and ingress revocation.
+
+## Post-closeout review (2026-08-02)
+
+A review of commit `257325f` found that the revision-031 allow-list checks are not safe against concurrent dependency creation and deletion/repointing under `READ COMMITTED`, and revision 033 omits `rules.creature_types`, `rules.languages`, and `rules.feats` from the model's rule-definition identity-immutability policy. It also found three unfulfilled verification criteria: the proficiency-type mismatch has no negative update test, revision 034's final seeded family/version values are not directly asserted, and CI cleanup's combined failure behavior has no safe simulated failure-path test.
+
+These are the only active Phase 4 closeout items. Their implementation requirements and acceptance criteria are in [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md). Purely intermediate migration-state concerns remain excluded unless an already-deployed database or a later phase can be affected.
 
 ## Outstanding
 
@@ -120,4 +126,4 @@ Carried forward, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-Phase 4 is complete. Next: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 remains at final closeout. Clear [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and record the succeeding GitHub Actions evidence here before beginning Phase 5 (Locations and dungeon play). Phase 5's first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) remain recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).

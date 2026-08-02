@@ -48,13 +48,11 @@ jobs:
     # than a service-container stand-in. The mechanism itself — ephemeral
     # per-run database creation (scripts/ci_ephemeral_database.py) and
     # scoped security-group ingress (scripts/aws-db-allow-my-ip.sh and the
-    # steps below) — is built and has been exercised manually end-to-end
-    # against the deployed dev instance (create database, migrate to head,
-    # alembic check, seed idempotency, full test suite, drop database,
-    # revoke ingress). What this job still depends on, and what this
-    # repository's own configuration cannot confirm from inside a checkout,
-    # is that the following GitHub Actions secrets/variables are actually
-    # set on this repository:
+    # steps below) — is built and has run successfully in GitHub Actions,
+    # including run 30765722355 (create database, migrate to head, alembic
+    # check, seed idempotency, full test suite, drop database, revoke
+    # ingress). It depends on the following configured GitHub Actions
+    # secrets/variables:
     #   - vars.AWS_REGION, vars.DEV_DB_SECURITY_GROUP_ID
     #   - secrets.AWS_CI_ROLE_ARN — an IAM role trusting GitHub's OIDC
     #     provider, scoped to ec2:AuthorizeSecurityGroupIngress /
@@ -67,9 +65,8 @@ jobs:
     #     have the necessary privilege — a dedicated, narrower CI role is
     #     still worth creating before this runs unattended in prod-adjacent
     #     environments.
-    # Confirm these are set, then watch this job on the next push — its own
-    # run is the actual verification; no test in this repository can prove a
-    # GitHub Actions run outside itself succeeded.
+    # Each push-triggered run remains the authoritative verification of its
+    # own commit; repository tests cannot substitute for that external run.
     #
     # One ephemeral database is created for the whole job (migration checks
     # and pytest both use it), then dropped in the always-run cleanup step
