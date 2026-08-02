@@ -381,6 +381,8 @@ Campaigns should not usually create independent copies of locations, NPCs, organ
 
 ---
 
+> **Illustrative, not authoritative.** From here through "PostgreSQL Domain Layout," diagrams and example SQL sketch the shape of the platform for a reader new to the project. They are simplified and will drift from the real schema as it's built. [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) is the source of truth for actual tables, columns, and schema scope; [docs/PLAN.md](docs/PLAN.md) is the source of truth for what's built and in what phase.
+
 ## Entity Model
 
 ```mermaid

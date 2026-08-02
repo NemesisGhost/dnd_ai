@@ -381,8 +381,10 @@ Implement:
 
 - `rules.rulesets`
 - `rules.ruleset_versions`
+- `rules.world_rulesets` — associates a world with its allowed rulesets and identifies its default
 - `rules.abilities`
 - `rules.skills`
+- `rules.species`
 - `rules.classes`
 - `rules.subclasses`
 - `rules.features`
@@ -390,10 +392,12 @@ Implement:
 - `rules.spells`
 - `rules.conditions`
 - `rules.damage_types`
-- `rules.item_definitions`
 - `rules.creature_types`
 - `rules.languages`
 - `rules.proficiency_types`
+- `rules.resource_definitions`
+
+`rules.item_definitions` is deferred to Phase 9, which owns both item definitions and item instances together (see Phase 9's Deliver list).
 
 All rule definitions must identify their ruleset and version.
 
@@ -441,7 +445,7 @@ Implement:
 - `character.character_descriptions`
 - `character.character_builds`
 - `character.character_ability_scores`
-- `character.character_classes`
+- `character.character_class_levels`
 - `character.character_proficiencies`
 - `character.character_features`
 - `character.character_spellcasting_profiles`
@@ -458,8 +462,8 @@ Implement timeline-scoped mutable state:
 - `campaign.character_state`
 - `campaign.character_resources`
 - `campaign.character_conditions`
-- `campaign.character_location_history`
-- `campaign.character_inventory`
+
+`campaign.character_location_history` is deferred until `world.locations` exists in Phase 5, and `campaign.character_inventory` until item instances exist in Phase 9 — neither has anything to reference yet. Phase 4 delivers the three tables above only.
 
 Character state includes:
 
@@ -501,8 +505,10 @@ Implement:
 - `character.npc_routine_steps`
 - `character.npc_preferences`
 - `character.npc_boundaries`
-- `character.npc_emotional_state`
+- `character.npc_disclosure_rules`
 - `character.npc_agent_assignments`
+
+`campaign.npc_emotional_state` and `campaign.npc_goal_state` are timeline-scoped current mood, trust, and goal progress — `campaign` schema, not `character`, alongside the other timeline state in [§7.3](#73-timeline-state). The tables above are world-level portrayal definitions.
 
 ### 8.1 Simulation levels
 
@@ -730,7 +736,10 @@ A generic longsword is a definition. A named legendary sword is an entity and it
 Implement:
 
 - `campaign.item_state`
-- `campaign.character_inventory`
+- `campaign.item_ownership` — who owns an instance
+- `campaign.inventory_entries` — who currently possesses/carries it; distinct from ownership
+- `campaign.item_attunements`
+- `campaign.character_inventory` — character-centric read index over `item_ownership`/`inventory_entries`
 - `world.item_containers`
 - `knowledge.item_identification`
 
@@ -1133,7 +1142,7 @@ Implement later:
 - `import.staged_knowledge`
 - `import.entity_matches`
 - `import.validation_results`
-- `import.approval_batches`
+- `import.promotion_batches`
 
 Import flow:
 

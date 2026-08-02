@@ -4,6 +4,8 @@
 
 This document defines the logical PostgreSQL database model for the D&D AI World Platform. It translates the conceptual model in `docs/DOMAIN_MODEL.md` into a complete set of database domains, primary relationships, ownership rules, and state boundaries.
 
+**This is the authoritative source of truth for database schema and table scope** — which tables exist, what schema they live in, and their key columns. `docs/PLAN.md` is authoritative for implementation *phasing* (which phase builds which table, exit criteria, first-time obligations) but its per-phase "Implement" prose is a working sketch, not the schema record; where the two disagree on a table's existence, name, or column shape, this document wins and PLAN.md should be corrected to match. `README.md`'s schema summary is illustrative only — it exists to give newcomers a feel for the shape of the platform, not to enumerate tables authoritatively.
+
 This is a logical model rather than final migration SQL. Column details may evolve during implementation, but the ownership, identity, inheritance, timeline, event, knowledge, and state rules in this document are architectural constraints.
 
 ## 2. Modeling principles
@@ -25,7 +27,7 @@ This is a logical model rather than final migration SQL. Column details may evol
 
 | Schema | Primary responsibility |
 |---|---|
-| `core` | Worlds, entities, names, provenance, tags, calendars, common statuses |
+| `core` | Worlds, entities, names, provenance, tags, calendars, fictional time, common statuses |
 | `security` | Users, roles, permissions, campaign access, service identities |
 | `rules` | Rulesets and reusable mechanical definitions |
 | `character` | Shared character definitions, builds, NPC and PC extensions |
@@ -85,6 +87,11 @@ erDiagram
     CORE_ENTITIES ||--o{ NARRATIVE_EVENT_PARTICIPANTS : participates
     NARRATIVE_EVENTS ||--o{ NARRATIVE_EVENT_EFFECTS : causes
 
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_ENCOUNTER_PARTICIPANTS : has
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_ENCOUNTER_ROUNDS : contains
+    NARRATIVE_ENCOUNTER_ROUNDS ||--o{ NARRATIVE_ENCOUNTER_TURNS : contains
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_EVENTS : produces
+
     CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_CHARACTER_STATE : owns
     CHARACTER_CHARACTERS ||--o{ CAMPAIGN_CHARACTER_STATE : has
     CAMPAIGN_TIMELINES ||--o{ CAMPAIGN_LOCATION_STATE : owns
@@ -130,7 +137,7 @@ Key columns:
 - `slug TEXT`
 - `default_calendar_id UUID NULL`
 - `default_ruleset_id UUID FK NULL` — added in Phase 4
-- `status_id UUID`
+- `lifecycle_status_id UUID FK`
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
 
@@ -175,14 +182,16 @@ Entity rows are definition records. Timeline-specific conditions do not belong h
 ### 5.4 Names, aliases and tags
 
 - `core.entity_names`
+- `core.name_types` — lookup for `entity_names.name_type_id` (canonical, common, former, translated, secret, mistaken, …)
 - `core.tags`
 - `core.entity_tags`
 
-`entity_names` supports canonical, common, former, translated, secret and mistaken names. Names may optionally be timeline-scoped when a name only exists after a historical event.
+`entity_names` supports canonical, common, former, translated, secret and mistaken names, typed through `name_types` rather than an enum. Names may optionally be scoped to a same-world `campaign.timeline_id` when a name only exists after a historical event; a `NULL` timeline is a global name.
 
 ### 5.5 Sources and canon
 
 - `core.sources`
+- `core.source_types` — lookup for `sources.source_type_id` (book, session note, homebrew document, import, …)
 - `core.source_documents`
 - `core.canon_statuses`
 - `core.lifecycle_statuses`
@@ -198,6 +207,17 @@ or
 
 - Canon status: `proposed`
 - Lifecycle status: `pending_review`
+
+### 5.6 Calendars and fictional time
+
+- `core.calendars`
+- `core.calendar_months`
+- `core.world_time_precisions`
+- `core.world_times`
+
+A world may define several calendars (a common reckoning and an elvish one, say), each with `calendar_id`, `world_id FK`, `code`, `days_per_week`, and an `epoch_label`. `calendar_months` orders a calendar's months by `month_number` with a `day_count` each.
+
+`world_times` is the concrete representation of a point in fictional chronology: `world_time_id PK`, `world_id FK`, an optional `calendar_id FK` and calendar-aware `year`/`month_number`/`day`/`hour`/`minute` fields (each cascading a NOT NULL requirement onto the field above it — a day needs a month, a month needs a year), a `world_time_precision_id FK` (exact, partial, approximate, narrative — how precisely this moment is known), an optional narrative `label` for moments with no calendar date, and a `sort_key BIGINT NOT NULL` used to order and range-compare moments regardless of calendar. Every fictional-time interval elsewhere in the schema (party membership, sessions, event ordering) is built from `world_times` foreign keys plus a derived range over `sort_key`, never from calendar fields directly — see [ADR 0010](../adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md).
 
 ## 6. World, timeline, campaign and session
 
@@ -225,7 +245,7 @@ Key columns:
 - `branch_event_id UUID FK NULL` — added in Phase 6
 - `branch_world_time_id UUID FK NULL`
 - `is_primary BOOLEAN`
-- `status_id UUID`
+- `lifecycle_status_id UUID FK`
 
 A branch inherits parent history only through its branch point. Effective-state queries must never include parent events after that point.
 
@@ -241,7 +261,7 @@ Key columns:
 - `timeline_id UUID FK`
 - `name TEXT`
 - `ruleset_id UUID FK` — added in Phase 4
-- `status_id UUID`
+- `lifecycle_status_id UUID FK`
 - `started_at TIMESTAMPTZ NULL`
 - `ended_at TIMESTAMPTZ NULL`
 
@@ -277,12 +297,15 @@ Key columns:
 - `campaign_id UUID FK`
 - `session_number INTEGER`
 - `title TEXT`
-- `status_id UUID`
-- `start_world_time_id UUID NULL`
-- `end_world_time_id UUID NULL`
+- `lifecycle_status_id UUID FK`
+- `start_world_time_id UUID FK NULL`
+- `end_world_time_id UUID FK NULL`
 - `started_at TIMESTAMPTZ NULL`
 - `ended_at TIMESTAMPTZ NULL`
 - `summary TEXT NULL`
+- `source_id UUID FK NULL`
+
+A session carries both real-world time (`started_at`/`ended_at`, when the table actually played) and fictional time (`start_world_time_id`/`end_world_time_id`, where the story was) at once — they answer different questions and neither substitutes for the other. Unlike party memberships, sessions carry no derived range or exclusion constraint: overlapping fictional-time spans across sessions (a flashback, two sessions each covering an overlapping stretch of story time) are legitimate.
 
 ## 7. Character model
 
@@ -304,20 +327,31 @@ erDiagram
 
 ### 7.1 Shared character definition
 
-`character.characters` contains identity-level mechanical references such as species, size and origin. NPCs and player characters both extend it.
+`character.characters` contains identity-level mechanical references such as species, size and origin. NPCs and player characters both extend it. Potential later subtypes (companions, familiars, summons, special creature actors) reuse `character.characters` when they need full character mechanics, rather than growing a parallel hierarchy.
+
+- `character.characters`
+- `character.character_descriptions` — free-text background, appearance, and other prose that doesn't drive mechanics
+- `character.character_languages`
+- `character.character_senses`
+- `character.character_movements`
+- `character.character_religious_affiliations` — personal belief, distinct from organizational membership or employment (§10.3)
 
 ### 7.2 NPC extension
 
 - `character.npcs`
-- `character.npc_portrayal_profiles`
+- `character.npc_portrayal_profiles` — versioned: speech style, voice, vocabulary, mannerisms, emotional baseline, conversational habits, topics avoided, disclosure boundaries, roleplay guidance
 - `character.npc_characteristics`
-- `character.npc_goals`
+- `character.npc_goals` — may be world-level or timeline-specific; each goal has an owner, description, type, priority, status, target entities, progress, secrecy/visibility policy, initiating event, completion/failure event, and dependencies
 - `character.npc_routines`
+- `character.npc_routine_steps`
 - `character.npc_preferences`
+- `character.npc_boundaries` — hard limits on portrayal distinct from `npc_disclosure_rules`' softer information-sharing policy
 - `character.npc_disclosure_rules`
 - `character.npc_agent_assignments`
 
-NPC goals and emotional state may be timeline-scoped. Portrayal defaults are world definitions; current mood and trust belong to timeline state.
+Portrayal defaults (`npc_portrayal_profiles`, `npc_characteristics`, `npc_preferences`, `npc_boundaries`, `npc_disclosure_rules`) are world definitions. Current mood, trust, and goal progress are timeline-scoped and live in typed state (`campaign.npc_emotional_state`, `campaign.npc_goal_state` — §16), not here — this table holds what an NPC generally *is*, not what is currently true of them in a given timeline.
+
+The AI context service assembles prompts from the current portrayal profile and current state rather than relying on one unstructured personality prompt.
 
 ### 7.3 Player character extension
 
@@ -325,7 +359,7 @@ NPC goals and emotional state may be timeline-scoped. Portrayal defaults are wor
 - `character.character_controllers`
 - `security.character_permissions`
 
-A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition.
+A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition. `character_controllers` supports player-controlled, GM-controlled, and AI-controlled NPCs, plus temporary control handoffs (a player temporarily running a companion); assignments are campaign- or timeline-aware.
 
 ### 7.4 Character builds
 
@@ -336,17 +370,19 @@ A player character can participate in multiple campaigns and timelines. Ownershi
 - `character.character_features`
 - `character.character_spellcasting_profiles`
 - `character.character_known_spells`
+- `character.character_prepared_spells`
 
-Builds are versioned definitions. Current hit points, conditions, spell-slot use and other temporary resources belong to campaign timeline state.
+Builds are versioned definitions. Current hit points, conditions, spell-slot use and other temporary resources belong to campaign timeline state (§16), not the build.
 
 ## 8. Rules model
 
-Rules data is reusable and ruleset-scoped.
+Rules data is reusable and ruleset-scoped. All rule definitions must identify their ruleset and version; homebrew definitions use the same tables and carry the same provenance and canon-status metadata as official content rather than requiring separate schema.
 
 Primary tables:
 
 - `rules.rulesets`
 - `rules.ruleset_versions`
+- `rules.world_rulesets` — associates a world with one or more allowed rulesets and identifies its default
 - `rules.abilities`
 - `rules.skills`
 - `rules.species`
@@ -356,13 +392,13 @@ Primary tables:
 - `rules.feats`
 - `rules.spells`
 - `rules.conditions`
-- `rules.item_definitions`
+- `rules.creature_types`
 - `rules.damage_types`
 - `rules.languages`
 - `rules.proficiency_types`
 - `rules.resource_definitions`
 
-`rules.world_rulesets` associates a world with one or more allowed rulesets and identifies defaults.
+`rules.item_definitions` is listed here as a rule-definition concept (§11) but is deferred to Phase 9, which owns both item definitions and item instances together.
 
 ## 9. Location and dungeon model
 
@@ -385,20 +421,19 @@ erDiagram
 
 ### 9.1 Location hierarchy
 
-`world.locations` contains a nullable `parent_location_id` for containment. General semantic relationships should still use the relationship model.
+`world.locations` contains a nullable `parent_location_id` for containment. General semantic relationships (adjacency, claims, portals, trade routes, disputed control) use the universal relationship model (§10) instead of dedicated columns.
 
 Specializations may include:
 
 - planes
-- continents
-- regions
-- nations
+- continents / regions / nations
 - settlements
 - districts
 - buildings
 - rooms
 - dungeons
 - dungeon areas
+- geographic features
 
 ### 9.2 Dungeon structure
 
@@ -410,7 +445,13 @@ Specializations may include:
 - `world.area_interactables`
 - `world.area_spawn_definitions`
 
-Definitions describe what can exist. Timeline state describes what is currently open, destroyed, active, discovered, occupied or depleted.
+Area connections support normal doors, secret doors, passages, portals, stairs/ladders, pits, bridges, one-way routes, and conditional routes.
+
+Definitions describe what can exist. Timeline state (§16) describes what is currently open, destroyed, active, discovered, occupied or depleted.
+
+### 9.3 Discovery versus existence
+
+A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§14) and may differ by party or character.
 
 ## 10. Organizations and relationships
 
@@ -423,41 +464,70 @@ erDiagram
     WORLD_RELATIONSHIPS ||--o{ CAMPAIGN_RELATIONSHIP_STATE : state
 ```
 
-Primary tables:
+### 10.1 Universal relationships
 
-- `world.organizations`
-- `world.organization_memberships`
+- `world.relationship_types` — lookup: parent-of, member-of, controls, owned-by, reveres, capital-of, connected-to, …
 - `world.relationships`
 - `world.relationship_participants`
 - `world.relationship_perspectives`
+
+Relationships may connect any entities — an NPC parent of another NPC, an NPC member of an organization, an organization controlling a settlement, an item owned by an NPC, a religion revered by a city, a dungeon area connected to another. The base relationship row stores shared facts and history; perspectives store how each participant perceives the relationship (affinity, trust, respect, fear, obligation, emotional tone, private interpretation) — the objective/subjective split rule 5 of §21 depends on.
+
+### 10.2 Specialized relationship subtypes
+
+Class-table inheritance for relationship details that need typed columns beyond the generic participant/perspective shape:
+
+- `world.organization_memberships`
 - `world.employment_relationships`
 - `world.ownership_relationships`
 - `world.family_relationships`
 - `world.political_relationships`
 
-The base relationship model supports n-ary relationships. Specialized tables add domain constraints and typed attributes.
+### 10.3 Organizations
+
+Hierarchy:
+
+```text
+core.entities
+    -> world.organizations
+        -> world.businesses
+        -> world.governments
+        -> world.religious_organizations
+        -> world.military_units
+        -> world.political_factions
+```
+
+An organization row stores its type, founded/dissolved world times, headquarters, parent organization, public description, internal description, and status. Membership is a specialized relationship (§10.2), supporting multiple roles, rejoining, secret membership, ranks, and historical periods — it is not a separate ad hoc table.
+
+### 10.4 Religion distinction
+
+A religion is a belief system; a church, temple, order, or cult is an organization that may serve it. Conflating the two loses the distinction between believing something and belonging to (or being employed by) an institution built around it.
+
+- `world.religions`
+- `world.religious_organizations`
+- `character.character_religious_affiliations` — personal belief, kept separate from organizational rank (`world.organization_memberships`) and employment (`world.employment_relationships`)
 
 ## 11. Item model
 
-Rules item definitions are distinct from world item instances.
+Rules item definitions are distinct from world item instances, which are distinct again from the state and ownership of a particular instance.
 
 Primary tables:
 
-- `rules.item_definitions`
-- `world.item_instances`
+- `rules.item_definitions` — reusable mechanical definitions (deferred to Phase 9)
+- `world.item_instances` — particular objects in the world
 - `world.item_containers`
-- `campaign.item_state`
-- `campaign.item_ownership`
-- `campaign.inventory_entries`
+- `campaign.item_state` — location, charges, damage/condition, equipped state
+- `campaign.item_ownership` — who owns an instance
+- `campaign.inventory_entries` — who currently possesses/carries it, and where (a container, a location) — distinct from ownership, since a borrowed or stolen item is possessed without being owned
 - `campaign.item_attunements`
-- `knowledge.item_identification`
+- `knowledge.item_identification` — identification level and which hidden properties are known to whom
 
 Examples:
 
 - `Longsword`: rules definition
 - `Blade of Saint Orra`: world entity plus item instance
-- Current possessor, charges and damage: timeline state
-- True magical properties known by a character: knowledge state
+- Current possessor, charges and damage: timeline state (`item_state`, `inventory_entries`)
+- True magical properties known by a character: knowledge state (`item_identification`)
 
 ## 12. Events and effects
 
@@ -483,9 +553,32 @@ Primary tables:
 - `narrative.event_effects`
 - `narrative.event_observations`
 
-Events should record effective world time and database recording time. Typed state updates and their event should commit in one transaction.
+An event belongs to a timeline and may reference a campaign and session when produced during play. It should record both effective world time and database recording time. Effects identify a target entity, affected component, old value, new value, effective world time, and application status; common effects should also update typed state tables in the same transaction (rule 6).
 
-## 13. Quest and story model
+Not every attack roll needs a permanent world event — high-volume tactical actions live in interaction and encounter logs (§13, §15) instead. Promote meaningful outcomes to narrative events: a character is killed, a ward is disabled, a room is flooded, an artifact is destroyed, an NPC is rescued, a faction becomes hostile, a quest stage is completed.
+
+## 13. Encounters and combat
+
+```mermaid
+erDiagram
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_ENCOUNTER_PARTICIPANTS : has
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_ENCOUNTER_ROUNDS : contains
+    NARRATIVE_ENCOUNTER_ROUNDS ||--o{ NARRATIVE_ENCOUNTER_TURNS : contains
+    INTERACTION_COMBAT_ACTIONS ||--o{ NARRATIVE_ENCOUNTER_TURNS : resolves
+    NARRATIVE_ENCOUNTERS ||--o{ NARRATIVE_EVENTS : produces
+```
+
+Primary tables:
+
+- `narrative.encounters`
+- `narrative.encounter_participants`
+- `narrative.encounter_rounds`
+- `narrative.encounter_turns`
+- `interaction.combat_actions`
+
+FoundryVTT may remain the detailed tactical authority during live combat; the database captures synchronized state and meaningful outcomes rather than duplicating every tactical decision. Persist enough to support initiative and turn order, current HP and conditions, resource consumption, participants, defeated/escaped/surrendered/captured outcomes, an encounter summary, and the resulting narrative events.
+
+## 14. Quest and story model
 
 ```mermaid
 erDiagram
@@ -513,9 +606,9 @@ Primary tables:
 - `campaign.quest_state`
 - `campaign.objective_state`
 
-Quest definitions describe possible progression. Timeline or campaign state records actual progression. Objectives may be event-evaluable, GM-confirmed or hybrid.
+Quest definitions describe possible progression; timeline or campaign state records actual progression. Objectives support required/optional/hidden status, dependencies, target entities, quantities, completion-rule metadata, visibility policies, and automatic or GM-confirmed completion. Events may advance objectives through explicit mappings or rule evaluation (entering an area completes a travel objective, activating three pylons completes a restoration objective, an NPC death fails a protection objective); every automated transition must record the triggering event.
 
-## 14. Knowledge model
+## 15. Knowledge model
 
 ```mermaid
 erDiagram
@@ -535,13 +628,16 @@ Primary tables:
 - `knowledge.knowledge_versions`
 - `knowledge.entity_knowledge`
 - `knowledge.information_transfers`
+- `knowledge.expertise_domains` — lookup for `character_expertise.expertise_domain_id`
 - `knowledge.character_expertise`
-- `knowledge.party_discoveries`
-- `knowledge.public_knowledge`
+- `knowledge.party_discoveries` — the discovery *record*: when and how a party learned a knowledge item
+- `knowledge.public_knowledge` — what is known publicly within a location or region, independent of any one knower
 
-A knowledge item represents a claim. Truth status, awareness, belief, confidence, interpretation and willingness to share are distinct fields.
+`campaign.party_knowledge` (§16) is the related but distinct *current effective view* of what a party presently knows — typed state, derived from discoveries and transfers, kept separate from the discovery log the same way `campaign.character_state` is kept separate from the events that produced it.
 
-## 15. Interaction and resolution model
+A knowledge item represents a claim; truth status, awareness, belief, confidence, interpretation, and willingness to share are distinct fields. Entity knowledge stores what a knower believes, its confidence, interpretation, source, and willingness to share — a false belief is valid game data and must not be overwritten merely because the canonical truth is known to the GM. Discovery may be recorded for an individual character, a party, an organization, or the public within a location or region. Information transfers record source knower, recipient, transferred knowledge, modified interpretation, the causing interaction or event, and world time — this is what supports rumor propagation and misinformation.
+
+## 16. Interaction and resolution model
 
 ```mermaid
 erDiagram
@@ -561,22 +657,37 @@ Primary tables:
 - `interaction.check_requests`
 - `interaction.check_results`
 - `interaction.consequences`
+- `interaction.external_messages` — the Discord/Foundry message or command that originated an interaction, so external actions create or reference interaction records rather than writing directly to arbitrary tables
 
-Not all interactions create events. Persistent or narratively meaningful consequences should.
+Interactions include searching, movement, lockpicking, conversation, attacks, spellcasting, resting, travel, using an item, activating mechanisms, and reading inscriptions. Not all interactions create events — persistent or narratively meaningful consequences should.
 
-## 16. Typed timeline state
+Resolution flow:
 
-Typed state tables are optimized for current effective reads.
+```text
+Create interaction
+    -> determine required checks
+    -> resolve rules
+    -> create observations and consequences
+    -> create significant event where appropriate
+    -> update state, knowledge, relationships, and quests
+```
 
-Primary tables include:
+## 17. Typed timeline state
+
+Typed state tables are optimized for current effective reads. Every state row must include `timeline_id`, a target identifier, state status/version, `effective_from_event_id`, `effective_to_event_id NULL` for current rows, and system timestamps. A partial unique index should enforce one current row per timeline and target.
+
+Primary tables:
 
 - `campaign.character_state`
 - `campaign.character_conditions`
 - `campaign.character_resources`
+- `campaign.character_inventory` — a character-centric read index over `item_ownership`/`inventory_entries` (§11); the source of truth stays with the item-level tables, this is the "what is this character carrying right now" view
+- `campaign.character_location_history` — deferred to Phase 5, which owns locations
 - `campaign.location_state`
 - `campaign.area_connection_state`
 - `campaign.area_feature_state`
 - `campaign.hazard_state`
+- `campaign.interactable_state`
 - `campaign.organization_state`
 - `campaign.relationship_state`
 - `campaign.item_state`
@@ -584,24 +695,18 @@ Primary tables include:
 - `campaign.objective_state`
 - `campaign.npc_goal_state`
 - `campaign.npc_emotional_state`
+- `campaign.party_knowledge` — current effective view of what a party knows; see §15 for how this differs from the discovery log
+- `campaign.entity_overrides` — a generic JSON escape hatch for experimental or rarely queried properties; must not replace typed designs (§19.2 in PLAN.md), and a property that turns out to matter should be promoted to its own typed column rather than left here
 
-Every state row must include:
+Examples of tracked state: current and maximum HP, temporary HP, death-save state, exhaustion, initiative when in an encounter, current location, active conditions, expended resources, current form/transformation; door open/closed/locked/broken/destroyed; connection known/undiscovered; trap armed/triggered/reset/bypassed/disarmed; room searched; shrine activated; bridge collapsed; alarm level.
 
-- `timeline_id`
-- target identifier
-- state status/version
-- `effective_from_event_id`
-- `effective_to_event_id NULL` for current rows
-- system timestamps
-
-A partial unique index should enforce one current row per timeline and target.
-
-## 17. AI and approval model
+## 18. AI and approval model
 
 ```mermaid
 erDiagram
     AI_AGENTS ||--o{ AI_AGENT_ASSIGNMENTS : assigned
     AI_AGENTS ||--o{ AI_CONTEXT_REQUESTS : receives
+    AI_CONTEXT_REQUESTS ||--o{ AI_CONTEXT_SNAPSHOTS : captures
     AI_CONTEXT_REQUESTS ||--o{ AI_GENERATED_OUTPUTS : produces
     AI_GENERATED_OUTPUTS ||--o{ AI_PROPOSED_CHANGES : proposes
     AI_PROPOSED_CHANGES ||--o{ AI_CHANGE_REVIEWS : reviewed
@@ -617,14 +722,17 @@ Primary tables:
 - `ai.prompt_templates`
 - `ai.prompt_fragments`
 - `ai.context_requests`
+- `ai.context_snapshots` — the assembled context actually sent for a request, retained for reproducibility and debugging, distinct from the request itself
 - `ai.generated_outputs`
 - `ai.proposed_changes`
 - `ai.change_reviews`
 - `ai.embedding_records`
 
-AI proposals never become canonical merely because they were generated. Accepted mutations must produce normal domain commands, events, state updates and audit records.
+Initial agent roles: NPC portrayal agent, dungeon-state agent, quest manager, rules assistant, world-state manager, lore consistency checker, session summarizer, rumor propagation agent.
 
-## 18. Security, audit and integration
+AI proposals never become canonical merely because they were generated. Agents do not write directly to canonical tables — they submit proposed commands or structured changes, and a policy engine determines whether a proposal may be applied automatically, requires GM approval, or is rejected by validation. Low-risk automatic examples: marking an already-authored hidden feature as discovered, recording conversational memory, advancing a deterministic counter. High-impact approval-required examples: character death, settlement destruction, faction-control changes, permanent quest failure, creation of major new canon. Accepted mutations must produce normal domain commands, events, state updates and audit records.
+
+## 19. Security, audit and integration
 
 ### Security
 
@@ -633,13 +741,15 @@ AI proposals never become canonical merely because they were generated. Accepted
 - `security.user_roles`
 - `security.permissions`
 - `security.campaign_members`
+- `security.character_permissions`
 - `security.service_accounts`
 
 ### Audit
 
 - `audit.change_log`
+- `audit.change_actions` — lookup for `change_log.change_action_id` (create, update, archive, delete, …)
 - `audit.state_transitions`
-- `audit.approvals`
+- `audit.approval_history`
 - `audit.validation_failures`
 - `audit.agent_activity`
 
@@ -653,7 +763,7 @@ AI proposals never become canonical merely because they were generated. Accepted
 
 External IDs must never replace internal UUID identity.
 
-## 19. Import staging
+## 20. Import staging
 
 Primary tables:
 
@@ -667,9 +777,22 @@ Primary tables:
 - `import.validation_results`
 - `import.promotion_batches`
 
-Promotion from staging must use the same entity creation and approval pathways as manually authored data.
+Import flow:
 
-## 20. Delete and archival rules
+```text
+Source documents
+    -> extraction
+    -> staged candidates
+    -> entity matching and deduplication
+    -> validation
+    -> GM review
+    -> approved commands
+    -> canonical world records
+```
+
+Promotion from staging must use the same entity creation and approval pathways as manually authored data. Imported text must not directly create canon without review.
+
+## 21. Delete and archival rules
 
 - Canonical entities are normally archived, not physically deleted.
 - Child subtype rows use `ON DELETE CASCADE` from the base entity only for controlled administrative deletion.
@@ -677,7 +800,7 @@ Promotion from staging must use the same entity creation and approval pathways a
 - Events, audit records and approved provenance are immutable except through explicit correction workflows.
 - Test fixtures may use destructive cleanup; production domain operations may not.
 
-## 21. Required database invariants
+## 22. Required database invariants
 
 1. Every subtype row has a matching base entity.
 2. Every base entity requiring a subtype has exactly one valid subtype chain.
@@ -692,7 +815,7 @@ Promotion from staging must use the same entity creation and approval pathways a
 11. External integration records cannot become authoritative identity.
 12. Imported records cannot bypass review and promotion.
 
-## 22. Implementation order
+## 23. Implementation order
 
 1. `core`, `security` and database conventions.
 2. Worlds, entity types, entities, sources, names and statuses.
@@ -706,7 +829,9 @@ Promotion from staging must use the same entity creation and approval pathways a
 10. AI proposals and approval flows.
 11. Integration, audit hardening and import staging.
 
-## 23. Acceptance scenario
+This is the intended dependency order, not a strict phase-to-section mapping — `docs/PLAN.md` §23 is authoritative for what each numbered phase actually delivers and in what order; consult it before starting a phase.
+
+## 24. Acceptance scenario
 
 The database model is sufficient for the first vertical slice when it can represent and query all of the following atomically and historically:
 
@@ -720,3 +845,24 @@ The database model is sufficient for the first vertical slice when it can repres
 - An NPC learns or reacts to the change.
 - Another campaign on the same timeline sees the changed dungeon.
 - A campaign on a branch created before the event sees the original state.
+
+## 25. Reconciliation notes (2026-08-02)
+
+This document and `docs/PLAN.md` had drifted independently: this document's per-domain "primary tables" lists were a compressed sketch, while PLAN.md's per-domain implementation sections had grown more detailed prose covering additional tables neither document cross-referenced. This section records the merge and the judgment calls it required, so a future pass can revisit them if they turn out wrong rather than rediscovering the drift from scratch.
+
+**Tables added that already existed in migrations but were undocumented here** (Phases 1–3 built them; this document simply hadn't caught up): `audit.change_actions`, `core.calendars`, `core.calendar_months`, `core.world_time_precisions`, `core.world_times`, `core.name_types`, `core.source_types`. These are facts, not judgment calls — §5.6 and the audit/security section above now describe their actual shape.
+
+**Tables added from PLAN.md with no naming conflict** (genuinely new to this document, not a rename of something already here): `rules.creature_types`; `rules.resource_definitions`, `rules.species`, `rules.world_rulesets` (these three were already present in this document but missing from PLAN.md — PLAN.md should be updated to mention them); `character.character_descriptions`, `character.character_languages`, `character.character_movements`, `character.character_senses`, `character.character_prepared_spells`, `character.character_religious_affiliations`; `character.npc_routine_steps`, `character.npc_boundaries`; `world.relationship_types`, `world.religions`, `world.religious_organizations`; `knowledge.expertise_domains`; `interaction.external_messages`; `ai.context_snapshots`; the entire encounters/combat domain (`narrative.encounters`, `narrative.encounter_participants`, `narrative.encounter_rounds`, `narrative.encounter_turns`, `interaction.combat_actions`) — this document previously had no encounter model at all, now §13.
+
+**Naming or schema conflicts resolved** (the same real concept named or scoped differently in each document — one name was chosen as canonical; PLAN.md should be updated to match):
+
+- `audit.approvals` (this document) vs. `audit.approval_history` (PLAN.md) → kept **`audit.approval_history`**, matching the `_log`/`_history` naming pattern already used by its sibling `audit.change_log`.
+- `import.promotion_batches` (this document) vs. `import.approval_batches` (PLAN.md) → kept **`import.promotion_batches`** — this document's own import-flow prose already uses "promotion" as the operative verb for staging → canonical.
+- `character.npc_emotional_state` (PLAN.md, under `character` schema) vs. `campaign.npc_emotional_state` (this document, under `campaign` schema) → kept **`campaign.npc_emotional_state`**. This document's own §7.2 text ("current mood and trust belong to timeline state") already argued for campaign-schema placement; PLAN.md's schema tag looks like the error.
+- `character.character_classes` (PLAN.md) vs. `character.character_class_levels` (this document) → kept **`character.character_class_levels`**, consistent with `character_ability_scores` naming a scored instance rather than the bare concept.
+
+**Judgment calls that are genuinely uncertain** and should be revisited when the owning phase is actually implemented, not assumed correct from this pass alone:
+
+- `campaign.character_inventory` (PLAN.md) is documented in §17 as a character-centric read index over `campaign.item_ownership` / `campaign.inventory_entries` (this document's existing, more granular item-state split). This is a reasonable reconciliation, but it was not validated against any actual query pattern — Phase 9, which owns items, should confirm whether a separate index table is actually warranted or whether a view/query suffices.
+- `campaign.knowledge_discoveries` (PLAN.md, `campaign` schema) was treated as the same concept as `knowledge.party_discoveries` (this document, `knowledge` schema already present) — kept **`knowledge.party_discoveries`** per this document's own schema-responsibility table (§3: discoveries belong to `knowledge`). `campaign.party_knowledge` (PLAN.md) was kept as a **separate**, additional table (§17) for the current-effective-view side, distinct from the discovery log. Phase 7, which owns knowledge, should confirm this split is real and not two names for one table.
+- `campaign.character_location_history` (PLAN.md) is listed in §17 but its ownership is deferred to Phase 5 (locations) rather than built alongside the other Phase 4 character-state tables, since it cannot reference anything before `world.locations` exists. Confirm this at Phase 5 time.

@@ -32,9 +32,9 @@ All project documentation lives under `docs/` (never the repo root, except `READ
 
 | Document | Use it for |
 |---|---|
-| [docs/PLAN.md](docs/PLAN.md) | **Source of truth** for implementation phases, deliverables, and exit criteria. Check current phase before starting work. |
+| [docs/PLAN.md](docs/PLAN.md) | **Source of truth** for implementation *phasing*: which phase delivers what, exit criteria, first-time obligations. Check current phase before starting work. Its per-phase "Implement" prose is a working sketch, not the schema record — where it names a table, defer to DATABASE_MODEL.md for that table's actual existence, schema, and shape. |
 | [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Conceptual vocabulary — what a World/Timeline/Campaign/Entity/Event/Knowledge Item/etc. *is* and its boundaries. Read before naming or designing anything new. |
-| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | Logical schema: tables per domain, ER diagrams, ownership rules. The concrete translation of DOMAIN_MODEL.md into schema. |
+| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | **Source of truth** for database schema and table scope: every table, its schema, key columns, ER diagrams, ownership rules. If PLAN.md and this document disagree on whether a table exists, its name, or its shape, this document wins and PLAN.md should be corrected (§25 there records the last such reconciliation). |
 | [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard rules for naming, types, keys, inheritance, JSONB use, migrations, indexing, anti-patterns (§34). Follow exactly — this is a convention document, not a style suggestion. |
 | [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | How entities are created, approved, mutated, branched, archived, deleted — including the exact command list and required transaction steps. |
 | [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, AI orchestration flow, deployment topology (modular monolith on ECS Fargate). |
