@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, and the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found (see "Second closeout" below). Phase 4 is complete; Phase 5 is next.
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, and the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found (see "Second closeout" below). Revision 036 is CI-green, but a final review found one character-language integrity defect and three focused verification gaps. Phase 4 remains open under [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md); Phase 5 must not begin yet.
 
 ## Exit Criteria
 
@@ -134,7 +134,34 @@ Also added: `test_every_rule_table_with_a_ruleset_version_id_column_protects_it`
 
 Verified the same way as the first closeout pass: full `downgrade base` → `upgrade head` round trip (through all 36 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean, `ruff format --check`/`ruff check`/`mypy src` clean, seed idempotency green, and the full suite — 847 tests (up from 830) — green against AWS `dev`. The two-connection concurrency tests follow `test_party_memberships.py`'s established pattern (committed setup under a unique slug, a short `lock_timeout` on the side that must block, explicit teardown) and cover all six dependency categories for the delete race plus one repoint race, reasoned in the test module as sufficient coverage of the underlying (table/row-level, not category-specific) locking mechanism rather than a gap.
 
+The push-triggered GitHub Actions workflow independently confirmed that result in
+run [`30771818049`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30771818049):
+migration through revision 036, full downgrade/upgrade, seed verification,
+`alembic check`, formatting, Ruff, mypy, all 847 tests, database removal, and
+ingress revocation passed.
+
 `DATABASE_MODEL.md` §8's two temporary implementation-gap notes (immutability coverage, allow-list concurrency) are removed now that both are true without qualification.
+
+## Final review after revision 036 (2026-08-02)
+
+A review of commit `f154f49` accepted the revision-035 and revision-036 corrections
+but found one dependency category that the preceding allow-list reviews had not
+enumerated: `character.character_languages`. The association can reference a
+language from a ruleset family the character's world does not allow, does not block
+removal or repointing of an allow-list row it uses, and does not participate in the
+shared-lock protocol during concurrent creation.
+
+The same review found three narrower verification gaps: the concurrency suite does
+not let an already-waiting mutation resume naturally after the creator commits;
+the cleanup unit suite does not assert `main()` exits with status 1 on failure; and
+the ruleset-family seed test does not assert revision 034's exact edition-neutral
+family description.
+
+These are active closeout work, not failures of run `30771818049`: the workflow
+proved the behavior exercised by the committed suite, while the review identified
+final-schema and coverage paths that suite does not exercise. Acceptance criteria
+and the completion gate are in
+[PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md).
 
 ## Outstanding
 
@@ -145,4 +172,4 @@ Carried forward, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-Phase 4 is complete. Next: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 remains open under [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md). Do not begin Phase 5 (Locations and dungeon play) until that gate is cleared and a new push-triggered AWS workflow is recorded here. Phase 5's first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) remain recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
