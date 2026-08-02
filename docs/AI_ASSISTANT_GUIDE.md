@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap), 2 (core world platform), and 3 (timelines and campaigns) are complete. Phase 4's rules/shared-character implementation and first correction set are verified against AWS `dev` and GitHub Actions, but the phase remains in corrective closeout. The current target is [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md); do not begin [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play) until that register is cleared. The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters, including its corrections and closeout passes) are complete, verified against AWS `dev` and GitHub Actions. [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. The current target is [Phase 5](PLAN.md#phase-5-locations-and-dungeon-play). The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1148,7 +1148,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 4 closeout is current, and Phase 5 is gated on [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md)
+   - Implement only the current target; Phase 4 is complete (closeout included), so Phase 5 is current
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

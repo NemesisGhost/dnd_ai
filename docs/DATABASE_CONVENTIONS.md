@@ -886,6 +886,8 @@ World-authored entities and facts require a canon status.
 
 AI-generated, imported, and integration-created content must always identify a source.
 
+This is an **application-command obligation, not a database constraint** (resolved by PHASE4_REMAINING_ISSUES.md §6): every `source_id UUID FK` column is nullable with `ON DELETE SET NULL`, because official/officially-seeded content legitimately has no single authored source row and there is no schema concept of content *origin* independent of `canon_status_id` to key a structural check off of. The command handler that creates AI-generated, imported, homebrew, or integration-created rule content is responsible for requiring and validating a source before that content is written, with its own tests at that boundary, once such a command exists. Do not describe nullable `source_id` as database-enforced provenance.
+
 ### 16.3 Proposed content
 
 Proposed content must remain distinguishable from canon in queries and AI context assembly.

@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review and its first corrections pass. A post-correction review found additional final-schema issues; they are the active closeout gate in [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md).
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, and the closeout pass that cleared [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) (now a closed historical record — see "Closeout" below). Phase 4 is complete; Phase 5 is next.
 
 ## Exit Criteria
 
@@ -87,6 +87,30 @@ Two deviations from the corrections request, both reasoned rather than oversight
 - **`rules.rulesets` / `rules.ruleset_versions`' `canon_status_id`, and every rule-content table's, got a database-level `DEFAULT` of `'canon'`** rather than being caller-mandatory like `core.entities.canon_status_id`. The overwhelming majority of rule content is officially authored; requiring every future INSERT (including every test fixture) to look up and pass the status explicitly was pure friction for that common case, and a default doesn't weaken the column's meaning — homebrew/proposed content still overrides it. `core.entities` intentionally has no such default since its callers must always decide both canon and lifecycle status as policy; rule content is a narrower case.
 - **Alembic comment comparison documentation** — `tests/database/test_schema_documentation.py` still claimed `compare_comments=False`, even though the Alembic environment enables comment comparison. That stale test-module docstring was corrected during the final documentation reconciliation.
 
+## Closeout (2026-08-02)
+
+[PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md)'s seven items are closed. Four forward-only revisions (none touching the 30 already-applied migrations):
+
+| Revision | Closes |
+|---|---|
+| `031_world_ruleset_full_protect` | §1. `rules.enforce_world_ruleset_still_in_use()` (revision 027) protected only a world's default and a campaign's pin. Added the four remaining dependency categories — character species, character build, applied condition, tracked resource — and fixed the function to `RETURN NEW` on a permitted `UPDATE` (it previously always `RETURN OLD`, silently discarding a permitted repoint). |
+| `032_proficiency_type_version` | §3. `character.enforce_proficiency_ruleset_version()` (revision 026) checked a proficiency's skill/saving-throw target against its build's ruleset version but never `proficiency_type_id` itself. Added that check. |
+| `033_rules_identity_immutable` | §2. Every ruleset-version-consistency trigger (revisions 014, 015, 020, 026, 029) validated only the child row's own insert/update, so a parent's identity could still change out from under already-valid children. Made the parent side of every such invariant immutable, reusing `core.enforce_immutable_columns()` (revision 030) — extended in the same revision to allow a `NULL` -> value transition (a column being set, not changed), which revision 029's own add-column-then-backfill pattern for `proficiency_types.target_kind` depends on. |
+| `034_ruleset_family_neutral` | §5. The seeded ruleset family's code was already edition-neutral (`dnd5e`, revision 024) but its `display_name`/`description` still named "2024" at the family level. Moved the edition-specific text to the version row; the family row is now edition-neutral display data only. |
+
+Two items needed no schema change:
+
+- **§4 (SQLAlchemy canon-status default drift).** `tables.py` declared `rules.rulesets.canon_status_id`'s default as a bare subquery; the live schema had always used `rules.default_canon_status_id()` (revision 025). Fixed the Python declaration to match. Since `alembic check` doesn't compare server defaults, added a generic test (`test_metadata_server_default_matches_live_schema`, parametrized over every `text()`-valued server default in the metadata) that diffs the declared default against `information_schema.columns.column_default` for the live column — this closes the whole class of drift, not just this one instance.
+- **§6 (rule-source enforcement).** Resolved as an application-command obligation, not a database constraint: there's no schema concept of content *origin* independent of canon status, and no `commands/` layer exists yet to validate against. `DATABASE_CONVENTIONS.md` §16.2 and `DATABASE_MODEL.md` §8 now say so explicitly, rather than describing nullable `source_id` as database-enforced provenance.
+
+Plus a CI fix outside the migration set:
+
+- **§7 (CI cleanup masking).** `.github/workflows/ci.yml`'s cleanup step appended `|| true` to both the ephemeral-database drop and the security-group ingress revocation, so either could fail while the job stayed green. Both are now always attempted, each result captured, and the step fails after both if either failed — with `::error::` annotations identifying which one.
+
+Verified the same way as the corrections pass: full `downgrade base` → `upgrade head` round trip (through all 34 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean, `ruff format --check`/`ruff check`/`mypy src` clean, every new invariant covered by a positive and negative test (`tests/database/test_phase4_remaining_issues.py`, 218 tests — including the world-ruleset repoint-actually-takes-effect case and the NULL-transition case the immutability fix depends on), seed idempotency green (`test_seed_idempotency.py`, including its in-process replay of revisions 022/024/029), and the full suite — 830 tests (up from 612) — green against AWS `dev`.
+
+`PHASE4_REMAINING_ISSUES.md` is retained as a closed historical record (converted, not deleted, since several other docs link to its per-item anchors) rather than removed outright.
+
 ## Outstanding
 
 Carried forward, still open:
@@ -95,6 +119,5 @@ Carried forward, still open:
 - **No `CREATEDB`-capable test role.** The ephemeral-database mechanism works today via the RDS master user (proven repeatedly, including throughout this corrections review); a dedicated, narrower login role is still worth adding before running it unattended in prod-adjacent environments — see [INFRASTRUCTURE.md §11 item 8](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
-- **Final Phase 4 closeout issues remain.** The post-correction review found child-only integrity checks, metadata drift, incomplete family/version naming, a provenance-policy decision, and cleanup failure masking. [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is the blocking register.
 
-Next phase after the register is cleared and reverified: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 is complete. Next: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).

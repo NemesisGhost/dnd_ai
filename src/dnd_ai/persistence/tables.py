@@ -1254,9 +1254,10 @@ rulesets = Table(
         UUID(),
         ForeignKey("core.canon_statuses.canon_status_id", ondelete="RESTRICT"),
         nullable=False,
-        server_default=text(
-            "(SELECT canon_status_id FROM core.canon_statuses WHERE code = 'canon')"
-        ),
+        # PostgreSQL rejects a bare subquery in a column DEFAULT — matches the
+        # STABLE SQL function every other rule-content table's canon_status_id
+        # default calls (revision 025's rules.default_canon_status_id()).
+        server_default=text("rules.default_canon_status_id()"),
         comment=(
             "How authoritative this ruleset is. Homebrew rulesets typically start at "
             "draft/proposed rather than canon (docs/architecture/DATABASE_MODEL.md §8)."
@@ -1266,9 +1267,10 @@ rulesets = Table(
     UniqueConstraint("code", name="ux_rulesets_code"),
     schema="rules",
     comment=(
-        'A named rule system (e.g. "D&D 5e (2024)"). Homebrew rulesets are ordinary rows '
-        "here with their own source and canon status (docs/PLAN.md §6.2) — not a separate "
-        "structure."
+        'A named, edition-neutral rule-system family (e.g. "D&D 5e") — a specific edition '
+        "or revision is recorded on rules.ruleset_versions.version_label and description, "
+        "not here. Homebrew rulesets are ordinary rows here with their own source and "
+        "canon status (docs/PLAN.md §6.2) — not a separate structure."
     ),
 )
 

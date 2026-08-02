@@ -22,7 +22,7 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 ## Current Status
 
-The architecture is established and the database foundation is being implemented. Phases 1 (database bootstrap), 2 (core world platform), and 3 (timelines and campaigns) are complete. Phase 4's rules/shared-character schema and its first corrections pass are implemented and verified against the deployed AWS `dev` environment, including a successful GitHub Actions run, but a final review found integrity and CI issues that must close before Phase 5 begins. The current target is the [Phase 4 closeout issue register](docs/PHASE4_REMAINING_ISSUES.md); [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play) follows after that gate is cleared.
+The architecture is established and the database foundation is being implemented. Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters, including its corrections and closeout passes — see [docs/PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md)) are complete, verified against the deployed AWS `dev` environment including a successful GitHub Actions run. The current target is [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play).
 
 The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, seed machinery, and database verification suite. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, locations, or playable campaign workflows; those remain scheduled in later phases.
 
@@ -798,7 +798,7 @@ Database work is deployed to and verified in AWS: migrations and the `tests/data
 4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
 5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
-Phases 1 through 3 are **complete**. Phase 4 is implemented and CI-verified but remains in corrective closeout; see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md), [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md), [docs/PHASE3_VERIFICATION.md](docs/PHASE3_VERIFICATION.md), and [docs/PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md) for the evidence. Close every blocker in [docs/PHASE4_REMAINING_ISSUES.md](docs/PHASE4_REMAINING_ISSUES.md) before beginning [Phase 5](docs/PLAN.md#phase-5-locations-and-dungeon-play); [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process.
+Phases 1 through 4 are **complete**; see [docs/PHASE1_VERIFICATION.md](docs/PHASE1_VERIFICATION.md), [docs/PHASE2_VERIFICATION.md](docs/PHASE2_VERIFICATION.md), [docs/PHASE3_VERIFICATION.md](docs/PHASE3_VERIFICATION.md), and [docs/PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md) for the evidence. [Phase 5](docs/PLAN.md#phase-5-locations-and-dungeon-play) is next; [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process.
 
 ### If you are deploying infrastructure
 

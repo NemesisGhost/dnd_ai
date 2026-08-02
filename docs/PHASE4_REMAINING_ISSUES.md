@@ -1,5 +1,7 @@
 # Phase 4 Remaining Issues
 
+> **CLOSED (2026-08-02).** All seven items below are implemented, tested, and verified — see [PHASE4_VERIFICATION.md § Closeout](PHASE4_VERIFICATION.md#closeout-2026-08-02) for the resolving revisions and evidence. This file is retained as a historical record of what the closeout review found and fixed; it is no longer an active gate, and Phase 5 is unblocked.
+
 This is the blocking issue register for final Phase 4 closeout. Do not begin Phase 5 until every item below is implemented, tested, and verified by the full AWS GitHub Actions workflow.
 
 ## Review baseline and scope

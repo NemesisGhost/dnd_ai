@@ -139,10 +139,33 @@ jobs:
         env:
           DEV_DB_ADMIN_URL: ${{ secrets.DEV_DB_ADMIN_URL }}
         run: |
-          uv run python scripts/ci_ephemeral_database.py drop || true
+          # Both cleanup operations must always be attempted, even if one
+          # fails — a broken run must not leave the ephemeral database behind
+          # just because ingress revocation failed, or leave port 5432 open
+          # to the runner's CIDR just because the drop failed. Each result is
+          # captured (not swallowed with `|| true`) so the step — and the
+          # job — fails loudly if either cleanup action failed, instead of
+          # staying green with an orphaned database or an open ingress rule.
+          set +e
+          db_status=0
+          ingress_status=0
+
+          uv run python scripts/ci_ephemeral_database.py drop
+          db_status=$?
+          if [[ $db_status -ne 0 ]]; then
+            echo "::error::Failed to drop the ephemeral database (exit $db_status)"
+          fi
 
           if [[ -n "${RUNNER_CIDR:-}" ]]; then
             aws ec2 revoke-security-group-ingress \
               --group-id "${{ vars.DEV_DB_SECURITY_GROUP_ID }}" \
-              --protocol tcp --port 5432 --cidr "${RUNNER_CIDR}" || true
+              --protocol tcp --port 5432 --cidr "${RUNNER_CIDR}"
+            ingress_status=$?
+            if [[ $ingress_status -ne 0 ]]; then
+              echo "::error::Failed to revoke security-group ingress for ${RUNNER_CIDR} (exit $ingress_status)"
+            fi
+          fi
+
+          if [[ $db_status -ne 0 || $ingress_status -ne 0 ]]; then
+            exit 1
           fi
