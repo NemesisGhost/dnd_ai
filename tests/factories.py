@@ -104,6 +104,71 @@ def make_user(connection: Connection, username: str = "tester") -> uuid.UUID:
     return value
 
 
+def make_world_time(connection: Connection, world_id: uuid.UUID, sort_key: int) -> uuid.UUID:
+    """A minimal point in a world's fictional chronology.
+
+    sort_key is the only field that matters to interval logic, so callers pass
+    it explicitly and everything else takes a default. year is supplied because
+    ck_world_times_year_or_label requires a year or a label.
+    """
+    value = connection.execute(
+        text("""
+            INSERT INTO core.world_times
+                (world_id, world_time_precision_id, year, sort_key)
+            VALUES (
+                :world,
+                (SELECT world_time_precision_id FROM core.world_time_precisions
+                 WHERE code = 'exact'),
+                :year,
+                :sort_key
+            )
+            RETURNING world_time_id
+        """),
+        {"world": world_id, "year": 1000 + sort_key, "sort_key": sort_key},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_timeline(
+    connection: Connection,
+    world_id: uuid.UUID,
+    name: str = "Primary",
+    *,
+    is_primary: bool = False,
+    parent_timeline_id: uuid.UUID | None = None,
+    branch_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.timelines
+                (world_id, name, is_primary, parent_timeline_id, branch_world_time_id,
+                 lifecycle_status_id)
+            VALUES (:world, :name, :primary, :parent, :branch, :status)
+            RETURNING timeline_id
+        """),
+        {
+            "world": world_id,
+            "name": name,
+            "primary": is_primary,
+            "parent": parent_timeline_id,
+            "branch": branch_world_time_id,
+            "status": status_id(connection, "lifecycle_statuses", "active"),
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Company") -> uuid.UUID:
+    value = connection.execute(
+        text("INSERT INTO campaign.parties (world_id, name) VALUES (:w, :n) RETURNING party_id"),
+        {"w": world_id, "n": name},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:
     """A world plus a throwaway entity type plus one entity, for tests that need
     an entity but do not care about its world or type."""

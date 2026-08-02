@@ -42,7 +42,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import DOMAIN, JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import DOMAIN, INT8RANGE, JSONB, TIMESTAMP, UUID
 from sqlalchemy.types import Integer
 
 metadata = MetaData()
@@ -789,7 +789,82 @@ Index(
 
 
 # ---------------------------------------------------------------------------
-# campaign — parties and memberships (revision 008)
+# campaign — timelines (revision 008)
+# ---------------------------------------------------------------------------
+
+timelines = Table(
+    "timelines",
+    metadata,
+    _uuid_pk("timeline_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "parent_timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="RESTRICT"),
+    ),
+    Column(
+        "branch_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        comment=(
+            "The world time at which this timeline diverged from its parent. NULL only "
+            "for a root timeline. The causal branch_event_id arrives in Phase 6 with "
+            "narrative.events."
+        ),
+    ),
+    Column(
+        "is_primary",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "The world's canonical timeline. At most one per world, enforced by a partial "
+            "unique index rather than a CHECK, since the rule spans rows."
+        ),
+    ),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "A branching chronology within a world. Campaigns are played on a timeline; a "
+        "branch inherits parent history only up to its branch point (docs/PLAN.md §5.2)."
+    ),
+)
+
+Index("ix_timelines_world_id", timelines.c.world_id)
+Index(
+    "ix_timelines_parent_timeline_id",
+    timelines.c.parent_timeline_id,
+    postgresql_where=timelines.c.parent_timeline_id.isnot(None),
+)
+Index("ix_timelines_lifecycle_status_id", timelines.c.lifecycle_status_id)
+Index(
+    "ix_timelines_branch_world_time_id",
+    timelines.c.branch_world_time_id,
+    postgresql_where=timelines.c.branch_world_time_id.isnot(None),
+)
+Index(
+    "ux_timelines_one_primary_per_world",
+    timelines.c.world_id,
+    unique=True,
+    postgresql_where=timelines.c.is_primary,
+)
+
+
+# ---------------------------------------------------------------------------
+# campaign — parties and memberships (revision 009)
 # ---------------------------------------------------------------------------
 
 parties = Table(
@@ -807,8 +882,9 @@ parties = Table(
     *_timestamps(),
     schema="campaign",
     comment=(
-        "A group of characters who adventure together. Belongs to a world and may "
-        "persist across campaigns (docs/PLAN.md §5.4)."
+        "A group of characters who adventure together. A stable world-level identity that "
+        "may persist across campaigns; membership is timeline-scoped state, not a property "
+        "of this row (docs/PLAN.md §5.4)."
     ),
 )
 
@@ -817,11 +893,21 @@ parties = Table(
 # would add a second place to maintain with no enforcement behind it — the same
 # reasoning applied to CHECK constraints and triggers. It is covered by
 # tests/database/test_party_memberships.py, which asserts both that it exists
-# and that it behaves correctly.
+# with the exact shape ADR 0010 specifies and that it behaves correctly.
 party_memberships = Table(
     "party_memberships",
     metadata,
     _uuid_pk("party_membership_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "Membership is timeline state: it can diverge after a branch. A row written "
+            "to one branch is not a row in its sibling."
+        ),
+    ),
     Column(
         "party_id",
         UUID(),
@@ -829,7 +915,7 @@ party_memberships = Table(
         nullable=False,
     ),
     Column(
-        "member_id",
+        "member_entity_id",
         UUID(),
         ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
         nullable=False,
@@ -839,14 +925,31 @@ party_memberships = Table(
             "database cannot yet reject a non-character being added to a party."
         ),
     ),
-    Column("valid_from", TIMESTAMP(timezone=True), nullable=False),
     Column(
-        "valid_to",
-        TIMESTAMP(timezone=True),
+        "effective_from_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "effective_to_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
         comment=(
             'NULL means the membership is open-ended — the single representation of "still a '
-            'member". Bounded memberships are half-open: valid_to is the first instant NOT '
-            "in the membership, so one membership may start exactly when another ends."
+            'member". Bounded memberships are half-open: this world time is the first moment '
+            "NOT in the membership, so one membership may start exactly where another ends."
+        ),
+    ),
+    Column(
+        "effective_period",
+        INT8RANGE(),
+        nullable=False,
+        comment=(
+            "Derived, never client-authoritative: an INT8RANGE over the endpoint rows' "
+            "core.world_times.sort_key values, rebuilt by trigger on every INSERT and "
+            "UPDATE. It exists because PostgreSQL cannot apply the overlap operator to "
+            "foreign keys."
         ),
     ),
     Column("joined_reason", Text()),
@@ -854,17 +957,23 @@ party_memberships = Table(
     *_timestamps(),
     schema="campaign",
     comment=(
-        "Temporal record of a character belonging to a party. A character may leave and "
-        "rejoin, and may belong to several parties at once, but cannot have two "
-        "overlapping memberships of the SAME party — enforced by the exclusion "
-        "constraint, which is concurrency-safe in a way an application check is not."
+        "Timeline-scoped temporal record of a character belonging to a party. A character "
+        "may leave and rejoin, and may belong to several parties at once, but cannot have "
+        "two overlapping memberships of the SAME party in the SAME timeline — enforced by "
+        "an exclusion constraint, which is concurrency-safe in a way an application check "
+        "is not (ADR 0010)."
     ),
 )
 
 Index("ix_parties_world_id", parties.c.world_id)
-Index("ix_party_memberships_member_id", party_memberships.c.member_id)
+Index("ix_party_memberships_member_entity_id", party_memberships.c.member_entity_id)
+Index("ix_party_memberships_party_id", party_memberships.c.party_id)
 Index(
-    "ix_party_memberships_party_id_valid_from",
-    party_memberships.c.party_id,
-    party_memberships.c.valid_from.desc(),
+    "ix_party_memberships_effective_from_world_time_id",
+    party_memberships.c.effective_from_world_time_id,
+)
+Index(
+    "ix_party_memberships_effective_to_world_time_id",
+    party_memberships.c.effective_to_world_time_id,
+    postgresql_where=party_memberships.c.effective_to_world_time_id.isnot(None),
 )

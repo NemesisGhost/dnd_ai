@@ -189,6 +189,30 @@ def upgrade() -> None:
     # This grant is only safe because migration_owner carries no rds_iam.
     op.execute("GRANT migration_owner TO CURRENT_USER;")
 
+    # Later revisions run as migration_owner (see section 7), so it — not the
+    # connecting role — is what needs privileges for anything they create. That
+    # includes extensions: revision 009 installs btree_gist for the party
+    # membership exclusion constraint, and without this it fails with
+    # "permission denied to create extension btree_gist" even when the
+    # connecting user is the RDS master.
+    #
+    # CREATE on the database is sufficient rather than superuser because
+    # btree_gist, pgcrypto, and pg_trgm are all *trusted* extensions on
+    # PostgreSQL 13+ (verified as trusted on the dev instance, 15.18). A
+    # non-superuser may install a trusted extension with only this privilege,
+    # which is why the roles never need rds_superuser.
+    # The database name is not known statically — ephemeral test databases are
+    # named dnd_ai_test_<random> — so it is resolved at run time.
+    op.execute("""
+        DO $$
+        BEGIN
+            EXECUTE format(
+                'GRANT CREATE ON DATABASE %I TO migration_owner', current_database()
+            );
+        END
+        $$;
+    """)
+
     # ==========================================================================
     # 5. Schema ownership and default privileges
     # ==========================================================================

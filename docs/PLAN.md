@@ -1706,6 +1706,7 @@ The bootstrap must be idempotent and cover:
 - Each of the five **login** roles created `WITH LOGIN` and `GRANT rds_iam TO <role>;` so applications authenticate with short-lived IAM tokens rather than static passwords — the instance already has `iam_database_authentication_enabled = true`, so no new Secrets Manager entries are needed for these roles (per rule 10 in [CLAUDE.md](../CLAUDE.md)).
 - `migration_owner` is **excluded** from that grant, and from IAM auth generally. `rds_iam` forces IAM authentication on every role that inherits it, so an owning role carrying it would disable password authentication for the RDS master user the moment the master user is granted the membership that ownership transfer requires. This is not theoretical — it locked a real instance out. See [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md).
 - Migrations issue `SET ROLE migration_owner` after connecting, because PostgreSQL takes object ownership from the current role rather than from inherited membership.
+- `GRANT CREATE ON DATABASE <current> TO migration_owner;`, so that later revisions — which run as `migration_owner` because of the `SET ROLE` above — can install trusted extensions. Without it, Phase 3's `CREATE EXTENSION btree_gist` fails with `permission denied to create extension` even when the connecting user is the RDS master. See [DATABASE_CONVENTIONS.md §2.3](DATABASE_CONVENTIONS.md#23-extension-ownership).
 
 ### 29.6 Migration execution mechanism
 

@@ -41,6 +41,7 @@ MANAGED_TABLES = [
     ("core", "calendar_months"),
     ("core", "world_times"),
     ("audit", "change_actions"),
+    ("campaign", "timelines"),
     ("campaign", "parties"),
     ("campaign", "party_memberships"),
 ]

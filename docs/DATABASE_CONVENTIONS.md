@@ -60,6 +60,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 Extensions are installed through migrations or infrastructure bootstrap under a controlled database owner. Application users must not have extension-management permissions.
 
+`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, 15.18). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
+
+That privilege belongs to **`migration_owner`**, not to the connecting login role. Revision `001_bootstrap` ends with `SET ROLE migration_owner`, and `env.py` issues the same `SET ROLE` on connect, so every later revision runs as `migration_owner`; a `CREATE EXTENSION` in one of them fails with `permission denied to create extension` unless that role holds database-level `CREATE`. The bootstrap grants it for exactly this reason. A migration that adds an extension must not assume the connecting user's privileges apply to it.
+
 ---
 
 ## 3. Schema conventions
@@ -1441,6 +1445,8 @@ Maintain database scenario tests for:
 - quest advancement
 - NPC knowledge filtering
 - AI proposal approval
+
+Each becomes required in the phase that first makes it provable, not before. In particular, **branch isolation** — a timeline inherits parent history only up to its branch point — is a **Phase 6** scenario test, because there is no history to inherit until `narrative.events` exists. Phase 3 delivers branch *structure* (parent, branch world time, world agreement) and timeline-scoped membership rows; neither demonstrates isolation, and neither should be recorded as satisfying this item. See [PLAN.md Phase 3](PLAN.md#phase-3-timelines-and-campaigns) and [Phase 6](PLAN.md#phase-6-narrative-events-and-state).
 
 ### 32.3 Data builders
 
