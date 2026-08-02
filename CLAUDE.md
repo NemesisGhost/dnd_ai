@@ -8,7 +8,7 @@ A persistent-world simulation platform for tabletop RPGs (initially D&D 5e 2024)
 
 ## 2. Current status
 
-This is an architecture restart whose first four implementation phases are complete. Phase 1 established the database/AWS bootstrap; Phase 2 delivered and verified the core world platform; Phase 3 delivered timelines and campaigns; Phase 4 delivered the initial ruleset and shared-character schema, including a corrections pass that closed several integrity gaps found in review. The current target is [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play). See [README.md § Current Status](README.md#current-status).
+This is an architecture restart. Phases 1 through 3 are complete. Phase 4's initial ruleset/shared-character schema and first corrections pass are implemented and CI-verified, but final closeout is still open. The current target is to close [the remaining Phase 4 issues](docs/PHASE4_REMAINING_ISSUES.md); do not begin [Phase 5](docs/PLAN.md#phase-5-locations-and-dungeon-play) until that register is cleared and reverified. See [README.md § Current Status](README.md#current-status).
 
 - The pre-restart legacy code (`Database/` flat `public`-schema tables, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, and the Lambda build scripts) has been **removed**, along with the Terraform modules and environment wiring built specifically for it (`db_runner`, `lambda-api`, `lambda-with-build`, and the `db-schema-introspect`/`query-runner` environment configs).
 - What remains under `terraform/`: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) — infrastructure organization that isn't tied to the old schema and is reasonable to build on.

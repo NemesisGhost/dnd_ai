@@ -360,17 +360,11 @@ These must not be conflated.
 
 ## 7. Rules domain
 
-### 7.1 Ruleset
+### 7.1 Ruleset and ruleset version
 
-A **Ruleset** identifies a game system and version.
+A **Ruleset** identifies a game-system family, such as D&D 5e. A **Ruleset Version** identifies a reproducible edition or release within that family, such as 2014 or 2024. Homebrew is represented either as its own family or as an explicitly sourced version of a family, depending on whether it remains compatible with that system.
 
-Examples:
-
-- D&D 5e 2014
-- D&D 5e 2024
-- homebrew variant
-
-A campaign selects a ruleset configuration. A world may define a default.
+A world allows one or more ruleset families and may select a family default. A campaign pins one specific ruleset version so later versions cannot silently change its mechanics.
 
 ### 7.2 Rule definition
 
