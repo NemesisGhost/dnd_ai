@@ -449,6 +449,17 @@ entity_names = Table(
             "prefer when several of the same type exist."
         ),
     ),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        comment=(
+            "NULL means the name is global — valid regardless of which timeline is being "
+            "viewed, and what every name defaults to. A set value scopes the name to that "
+            "timeline, for names that only exist after some historical event; it must "
+            "belong to the same world as the named entity."
+        ),
+    ),
     *_timestamps(),
     schema="core",
     comment=(
@@ -504,6 +515,11 @@ entity_tags = Table(
 
 Index("ix_entity_names_entity_id", entity_names.c.entity_id)
 Index("ix_entity_names_name_type_id", entity_names.c.name_type_id)
+Index(
+    "ix_entity_names_timeline_id",
+    entity_names.c.timeline_id,
+    postgresql_where=entity_names.c.timeline_id.isnot(None),
+)
 Index("ix_tags_world_id", tags.c.world_id)
 Index("ix_entity_tags_tag_id", entity_tags.c.tag_id)
 Index("ix_entity_tags_tagged_by_user_id", entity_tags.c.tagged_by_user_id)
@@ -976,4 +992,158 @@ Index(
     "ix_party_memberships_effective_to_world_time_id",
     party_memberships.c.effective_to_world_time_id,
     postgresql_where=party_memberships.c.effective_to_world_time_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# campaign — campaigns and campaign_parties (revision 010)
+# ---------------------------------------------------------------------------
+
+campaigns = Table(
+    "campaigns",
+    metadata,
+    _uuid_pk("campaign_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="The timeline this campaign is played on. Not unique: two campaigns may share one timeline.",
+    ),
+    Column("name", Text(), nullable=False),
+    Column("description", Text()),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("started_at", TIMESTAMP(timezone=True)),
+    Column("ended_at", TIMESTAMP(timezone=True)),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "A single game's run on a timeline. Several campaigns may share one timeline "
+        "(docs/PLAN.md §5.3). Does not own world entities — it reaches them through "
+        "participation, discovery, state, and event records."
+    ),
+)
+
+# The world-agreement trigger (campaign.enforce_campaign_party_world) is
+# intentionally absent here — same reasoning as the exclusion constraint in
+# party_memberships: alembic check does not compare triggers, so declaring one
+# here would be a second place to maintain with no enforcement behind it.
+campaign_parties = Table(
+    "campaign_parties",
+    metadata,
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "party_id",
+        UUID(),
+        ForeignKey("campaign.parties.party_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("campaign_id", "party_id"),
+    schema="campaign",
+    comment=(
+        "Associates a world-level party (campaign.parties) with the campaigns that use "
+        "it. Membership itself is timeline-scoped state tracked separately in "
+        "campaign.party_memberships — this table only says which campaigns a party "
+        "participates in."
+    ),
+)
+
+Index("ix_campaigns_timeline_id", campaigns.c.timeline_id)
+Index("ix_campaigns_lifecycle_status_id", campaigns.c.lifecycle_status_id)
+Index("ix_campaign_parties_party_id", campaign_parties.c.party_id)
+
+
+# ---------------------------------------------------------------------------
+# campaign — sessions (revision 011)
+# ---------------------------------------------------------------------------
+
+sessions = Table(
+    "sessions",
+    metadata,
+    _uuid_pk("session_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("session_number", Integer(), nullable=False),
+    Column("title", Text()),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "start_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        comment=(
+            "Where the story was in fictional chronology when the session began. "
+            "Distinct from started_at, which is when the table actually played."
+        ),
+    ),
+    Column(
+        "end_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+    ),
+    Column("started_at", TIMESTAMP(timezone=True)),
+    Column("ended_at", TIMESTAMP(timezone=True)),
+    Column(
+        "summary",
+        Text(),
+        comment=(
+            "A derived artifact. May be revised freely without changing the events it "
+            "summarizes (docs/PLAN.md §5.5)."
+        ),
+    ),
+    Column(
+        "source_id",
+        UUID(),
+        ForeignKey("core.sources.source_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "A single period of play within a campaign. Carries both real-world time "
+        "(started_at/ended_at, when the table actually played) and fictional time "
+        "(start/end_world_time_id, where the story was) — see docs/PLAN.md §5.5."
+    ),
+)
+
+Index(
+    "ux_sessions_campaign_number",
+    sessions.c.campaign_id,
+    sessions.c.session_number,
+    unique=True,
+)
+Index("ix_sessions_campaign_id", sessions.c.campaign_id)
+Index("ix_sessions_lifecycle_status_id", sessions.c.lifecycle_status_id)
+Index(
+    "ix_sessions_start_world_time_id",
+    sessions.c.start_world_time_id,
+    postgresql_where=sessions.c.start_world_time_id.isnot(None),
+)
+Index(
+    "ix_sessions_end_world_time_id",
+    sessions.c.end_world_time_id,
+    postgresql_where=sessions.c.end_world_time_id.isnot(None),
+)
+Index(
+    "ix_sessions_source_id",
+    sessions.c.source_id,
+    postgresql_where=sessions.c.source_id.isnot(None),
 )

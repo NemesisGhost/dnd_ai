@@ -169,6 +169,53 @@ def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Com
     return value
 
 
+def make_campaign(
+    connection: Connection, timeline_id: uuid.UUID, name: str = "The Campaign"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.campaigns (timeline_id, name, lifecycle_status_id)
+            VALUES (:tl, :n, :status)
+            RETURNING campaign_id
+        """),
+        {
+            "tl": timeline_id,
+            "n": name,
+            "status": status_id(connection, "lifecycle_statuses", "active"),
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_session(
+    connection: Connection,
+    campaign_id: uuid.UUID,
+    session_number: int,
+    *,
+    start_world_time_id: uuid.UUID | None = None,
+    end_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.sessions
+                (campaign_id, session_number, lifecycle_status_id,
+                 start_world_time_id, end_world_time_id)
+            VALUES (:c, :n, :status, :start, :end)
+            RETURNING session_id
+        """),
+        {
+            "c": campaign_id,
+            "n": session_number,
+            "status": status_id(connection, "lifecycle_statuses", "active"),
+            "start": start_world_time_id,
+            "end": end_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:
     """A world plus a throwaway entity type plus one entity, for tests that need
     an entity but do not care about its world or type."""

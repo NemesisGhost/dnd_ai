@@ -44,6 +44,9 @@ MANAGED_TABLES = [
     ("campaign", "timelines"),
     ("campaign", "parties"),
     ("campaign", "party_memberships"),
+    ("campaign", "campaigns"),
+    ("campaign", "campaign_parties"),
+    ("campaign", "sessions"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is
