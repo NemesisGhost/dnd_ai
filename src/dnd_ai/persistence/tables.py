@@ -73,6 +73,39 @@ def _timestamps() -> list[Column[datetime]]:
     ]
 
 
+def _provenance_columns() -> list[Column[uuid.UUID]]:
+    """source_id + canon_status_id, added to every rule-content table by
+    revision 025. Must match that revision's COMMENT ON COLUMN text exactly."""
+    return [
+        Column(
+            "source_id",
+            UUID(),
+            ForeignKey("core.sources.source_id", ondelete="SET NULL"),
+            comment=(
+                "Where this definition came from — a rulebook, a homebrew document, an "
+                "import. NULL is common for official content with no single authored "
+                "source record yet."
+            ),
+        ),
+        Column(
+            "canon_status_id",
+            UUID(),
+            ForeignKey("core.canon_statuses.canon_status_id", ondelete="RESTRICT"),
+            nullable=False,
+            # Not compared by alembic check (compare_server_default is off in
+            # env.py), declared here only for readers of this module: defaults
+            # to 'canon' via rules.default_canon_status_id(), since most rule
+            # content is officially authored — see revision 025's reasoning.
+            server_default=text("rules.default_canon_status_id()"),
+            comment=(
+                "How authoritative this definition is. Homebrew content uses the same "
+                "column, typically starting at draft/proposed rather than canon "
+                "(docs/architecture/DATABASE_MODEL.md §8)."
+            ),
+        ),
+    ]
+
+
 # Must match the COMMENT ON COLUMN text in revision 003 exactly.
 LOOKUP_CODE_COMMENT = (
     "Stable machine-readable identifier. Application logic may reference "
@@ -1036,15 +1069,20 @@ campaigns = Table(
     Column("started_at", TIMESTAMP(timezone=True)),
     Column("ended_at", TIMESTAMP(timezone=True)),
     *_timestamps(),
-    # Added by revision 016, once rules.rulesets existed to point at.
+    # Added by revision 016 (as ruleset_id), once rules.rulesets existed to
+    # point at; renamed to ruleset_version_id by revision 024 so a campaign
+    # pins a specific, reproducible ruleset version rather than a family that
+    # might later gain a second, different, current version.
     Column(
-        "ruleset_id",
+        "ruleset_version_id",
         UUID(),
-        ForeignKey("rules.rulesets.ruleset_id", ondelete="RESTRICT"),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="RESTRICT"),
         nullable=False,
         comment=(
-            "The ruleset this campaign is played with. Must be allowed for the "
-            "campaign's world (rules.world_rulesets) — enforced by trigger."
+            "The exact ruleset version this campaign is played with — pinned, not just "
+            "the ruleset family, so the campaign's rules configuration is reproducible. "
+            "Must belong to a ruleset allowed for the campaign's world "
+            "(rules.world_rulesets) — enforced by trigger."
         ),
     ),
     schema="campaign",
@@ -1087,7 +1125,7 @@ campaign_parties = Table(
 
 Index("ix_campaigns_timeline_id", campaigns.c.timeline_id)
 Index("ix_campaigns_lifecycle_status_id", campaigns.c.lifecycle_status_id)
-Index("ix_campaigns_ruleset_id", campaigns.c.ruleset_id)
+Index("ix_campaigns_ruleset_version_id", campaigns.c.ruleset_version_id)
 Index("ix_campaign_parties_party_id", campaign_parties.c.party_id)
 
 
@@ -1142,6 +1180,21 @@ sessions = Table(
         UUID(),
         ForeignKey("core.sources.source_id", ondelete="SET NULL"),
     ),
+    # Added by revision 023: a derived INT8RANGE over the world-time
+    # endpoints' sort_key values, mirroring party_memberships.effective_period
+    # (ADR 0010) — see that revision for the [start, end)/unscheduled/
+    # open-ended contract. No exclusion constraint: sessions may overlap.
+    Column(
+        "world_time_period",
+        INT8RANGE(),
+        comment=(
+            "Derived, never client-authoritative: an INT8RANGE over start_world_time_id/"
+            "end_world_time_id's sort_key values, rebuilt by trigger on every INSERT and "
+            "UPDATE. NULL when the session is unscheduled (both endpoints NULL). Unlike "
+            "party_memberships, there is no exclusion constraint over this column — "
+            "overlapping sessions are legitimate (docs/architecture/DATABASE_MODEL.md §6.4)."
+        ),
+    ),
     *_timestamps(),
     schema="campaign",
     comment=(
@@ -1192,6 +1245,23 @@ rulesets = Table(
         UUID(),
         ForeignKey("core.sources.source_id", ondelete="SET NULL"),
     ),
+    # canon_status_id added by revision 025 — rules.rulesets had source_id
+    # from the start but was missing this, contradicting its own comment
+    # below (which was already true about source_id and became true about
+    # canon status once this column existed).
+    Column(
+        "canon_status_id",
+        UUID(),
+        ForeignKey("core.canon_statuses.canon_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        server_default=text(
+            "(SELECT canon_status_id FROM core.canon_statuses WHERE code = 'canon')"
+        ),
+        comment=(
+            "How authoritative this ruleset is. Homebrew rulesets typically start at "
+            "draft/proposed rather than canon (docs/architecture/DATABASE_MODEL.md §8)."
+        ),
+    ),
     *_timestamps(),
     UniqueConstraint("code", name="ux_rulesets_code"),
     schema="rules",
@@ -1225,6 +1295,7 @@ ruleset_versions = Table(
             "rows."
         ),
     ),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_id", "version_label", name="ux_ruleset_versions_ruleset_label"),
     schema="rules",
@@ -1240,7 +1311,14 @@ Index(
     rulesets.c.source_id,
     postgresql_where=rulesets.c.source_id.isnot(None),
 )
+Index("ix_rulesets_canon_status_id", rulesets.c.canon_status_id)
 Index("ix_ruleset_versions_ruleset_id", ruleset_versions.c.ruleset_id)
+Index(
+    "ix_ruleset_versions_source_id",
+    ruleset_versions.c.source_id,
+    postgresql_where=ruleset_versions.c.source_id.isnot(None),
+)
+Index("ix_ruleset_versions_canon_status_id", ruleset_versions.c.canon_status_id)
 Index(
     "ux_ruleset_versions_one_current_per_ruleset",
     ruleset_versions.c.ruleset_id,
@@ -1269,6 +1347,7 @@ def _ruleset_lookup_table(name: str, pk: str, comment: str) -> Table:
         Column("code", Text(), nullable=False),
         Column("display_name", Text(), nullable=False),
         Column("description", Text()),
+        *_provenance_columns(),
         *_timestamps(),
         UniqueConstraint("ruleset_version_id", "code", name=f"ux_{name}_ruleset_version_code"),
         schema="rules",
@@ -1338,6 +1417,24 @@ for _t in (
     resource_definitions,
 ):
     Index(f"ix_{_t.name}_ruleset_version_id", _t.c.ruleset_version_id)
+    Index(f"ix_{_t.name}_source_id", _t.c.source_id, postgresql_where=_t.c.source_id.isnot(None))
+    Index(f"ix_{_t.name}_canon_status_id", _t.c.canon_status_id)
+
+# target_kind added by revision 029, specific to proficiency_types alone —
+# not part of the shared _ruleset_lookup_table shape.
+proficiency_types.append_column(
+    Column(
+        "target_kind",
+        Text(),
+        nullable=False,
+        comment=(
+            "Which column of character.character_proficiencies a proficiency of this "
+            "type must set: skill_id, saving_throw_ability_id, or the free-text "
+            "target_label (weapon/armor/tool categories with no dedicated lookup yet). "
+            "Enforced by trigger on character.character_proficiencies."
+        ),
+    )
+)
 
 skills = Table(
     "skills",
@@ -1358,6 +1455,7 @@ skills = Table(
     Column("code", Text(), nullable=False),
     Column("display_name", Text(), nullable=False),
     Column("description", Text()),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_version_id", "code", name="ux_skills_ruleset_version_code"),
     schema="rules",
@@ -1366,6 +1464,8 @@ skills = Table(
 
 Index("ix_skills_ruleset_version_id", skills.c.ruleset_version_id)
 Index("ix_skills_ability_id", skills.c.ability_id)
+Index("ix_skills_source_id", skills.c.source_id, postgresql_where=skills.c.source_id.isnot(None))
+Index("ix_skills_canon_status_id", skills.c.canon_status_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1391,6 +1491,7 @@ classes = Table(
         UUID(),
         ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
     ),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_version_id", "code", name="ux_classes_ruleset_version_code"),
     schema="rules",
@@ -1406,6 +1507,8 @@ Index(
     classes.c.primary_ability_id,
     postgresql_where=classes.c.primary_ability_id.isnot(None),
 )
+Index("ix_classes_source_id", classes.c.source_id, postgresql_where=classes.c.source_id.isnot(None))
+Index("ix_classes_canon_status_id", classes.c.canon_status_id)
 
 subclasses = Table(
     "subclasses",
@@ -1426,6 +1529,7 @@ subclasses = Table(
     Column("code", Text(), nullable=False),
     Column("display_name", Text(), nullable=False),
     Column("description", Text()),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("class_id", "code", name="ux_subclasses_class_code"),
     schema="rules",
@@ -1438,6 +1542,12 @@ subclasses = Table(
 
 Index("ix_subclasses_class_id", subclasses.c.class_id)
 Index("ix_subclasses_ruleset_version_id", subclasses.c.ruleset_version_id)
+Index(
+    "ix_subclasses_source_id",
+    subclasses.c.source_id,
+    postgresql_where=subclasses.c.source_id.isnot(None),
+)
+Index("ix_subclasses_canon_status_id", subclasses.c.canon_status_id)
 
 features = Table(
     "features",
@@ -1463,6 +1573,7 @@ features = Table(
             "species traits, which are not level-gated."
         ),
     ),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_version_id", "code", name="ux_features_ruleset_version_code"),
     schema="rules",
@@ -1474,6 +1585,10 @@ features = Table(
 )
 
 Index("ix_features_ruleset_version_id", features.c.ruleset_version_id)
+Index(
+    "ix_features_source_id", features.c.source_id, postgresql_where=features.c.source_id.isnot(None)
+)
+Index("ix_features_canon_status_id", features.c.canon_status_id)
 Index("ix_features_class_id", features.c.class_id, postgresql_where=features.c.class_id.isnot(None))
 Index(
     "ix_features_subclass_id",
@@ -1500,6 +1615,7 @@ feats = Table(
     Column("display_name", Text(), nullable=False),
     Column("description", Text()),
     Column("prerequisite_description", Text()),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_version_id", "code", name="ux_feats_ruleset_version_code"),
     schema="rules",
@@ -1510,6 +1626,8 @@ feats = Table(
 )
 
 Index("ix_feats_ruleset_version_id", feats.c.ruleset_version_id)
+Index("ix_feats_source_id", feats.c.source_id, postgresql_where=feats.c.source_id.isnot(None))
+Index("ix_feats_canon_status_id", feats.c.canon_status_id)
 
 spells = Table(
     "spells",
@@ -1534,6 +1652,7 @@ spells = Table(
         UUID(),
         ForeignKey("rules.damage_types.damage_type_id", ondelete="RESTRICT"),
     ),
+    *_provenance_columns(),
     *_timestamps(),
     UniqueConstraint("ruleset_version_id", "code", name="ux_spells_ruleset_version_code"),
     schema="rules",
@@ -1549,6 +1668,8 @@ Index(
     spells.c.damage_type_id,
     postgresql_where=spells.c.damage_type_id.isnot(None),
 )
+Index("ix_spells_source_id", spells.c.source_id, postgresql_where=spells.c.source_id.isnot(None))
+Index("ix_spells_canon_status_id", spells.c.canon_status_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1570,23 +1691,20 @@ world_rulesets = Table(
         ForeignKey("rules.rulesets.ruleset_id", ondelete="RESTRICT"),
         nullable=False,
     ),
-    Column("is_default", Boolean(), nullable=False, server_default=text("false")),
+    # is_default removed by revision 027: core.worlds.default_ruleset_id is
+    # now the sole source of truth for a world's default ruleset, so this
+    # table is a pure allow-list with no default concept of its own.
     Column("added_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
     PrimaryKeyConstraint("world_id", "ruleset_id"),
     schema="rules",
     comment=(
-        "Associates a world with the rulesets it allows and identifies its default. "
-        "A world may allow more than one ruleset; at most one is default."
+        "Associates a world with the rulesets it allows. A world may allow more than "
+        "one ruleset; its default is core.worlds.default_ruleset_id alone (not "
+        "represented here — see the reconciliation note in revision 027)."
     ),
 )
 
 Index("ix_world_rulesets_ruleset_id", world_rulesets.c.ruleset_id)
-Index(
-    "ux_world_rulesets_one_default_per_world",
-    world_rulesets.c.world_id,
-    unique=True,
-    postgresql_where=world_rulesets.c.is_default,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -1776,35 +1894,25 @@ character_builds = Table(
         nullable=False,
     ),
     Column("label", Text()),
-    Column(
-        "is_current",
-        Boolean(),
-        nullable=False,
-        server_default=text("false"),
-        comment=(
-            "The build a character sheet is assembled from by default. At most one per "
-            "character, enforced by a partial unique index rather than a CHECK, since "
-            "the rule spans rows."
-        ),
-    ),
+    # is_current removed by revision 028: active-build selection moved to
+    # timeline state (campaign.character_state.character_build_id), since a
+    # single global "current" flag cannot represent a character built
+    # differently on two timelines after a branch.
     *_timestamps(),
     schema="character",
     comment=(
         "A versioned mechanical snapshot of a character, pinned to one ruleset version. "
         "Ability scores, class levels, proficiencies, features, and spellcasting all "
         "belong to a build, not directly to the character, so re-leveling or rebuilding "
-        "does not erase the prior build's history."
+        "does not erase the prior build's history. Which build is active on a given "
+        "timeline is timeline state (campaign.character_state.character_build_id), not a "
+        "property of the build itself — a character may use different builds on "
+        "different timelines after a branch."
     ),
 )
 
 Index("ix_character_builds_character_id", character_builds.c.character_id)
 Index("ix_character_builds_ruleset_version_id", character_builds.c.ruleset_version_id)
-Index(
-    "ux_character_builds_one_current_per_character",
-    character_builds.c.character_id,
-    unique=True,
-    postgresql_where=character_builds.c.is_current,
-)
 
 character_ability_scores = Table(
     "character_ability_scores",
@@ -1910,6 +2018,29 @@ Index(
     "ix_character_proficiencies_saving_throw_ability_id",
     character_proficiencies.c.saving_throw_ability_id,
     postgresql_where=character_proficiencies.c.saving_throw_ability_id.isnot(None),
+)
+# Duplicate-prevention indexes added by revision 029 — a build cannot be
+# granted the same semantic proficiency twice.
+Index(
+    "ux_character_proficiencies_build_skill",
+    character_proficiencies.c.character_build_id,
+    character_proficiencies.c.skill_id,
+    unique=True,
+    postgresql_where=character_proficiencies.c.skill_id.isnot(None),
+)
+Index(
+    "ux_character_proficiencies_build_saving_throw",
+    character_proficiencies.c.character_build_id,
+    character_proficiencies.c.saving_throw_ability_id,
+    unique=True,
+    postgresql_where=character_proficiencies.c.saving_throw_ability_id.isnot(None),
+)
+Index(
+    "ux_character_proficiencies_build_target_label",
+    character_proficiencies.c.character_build_id,
+    character_proficiencies.c.target_label,
+    unique=True,
+    postgresql_where=character_proficiencies.c.target_label.isnot(None),
 )
 
 character_features = Table(
@@ -2070,6 +2201,21 @@ character_state = Table(
             "active."
         ),
     ),
+    # Added by revision 028: the build this character sheet is assembled
+    # from on this timeline, replacing character_builds.is_current so a
+    # character can use different builds on different timelines after a
+    # branch.
+    Column(
+        "character_build_id",
+        UUID(),
+        ForeignKey("character.character_builds.character_build_id", ondelete="SET NULL"),
+        comment=(
+            "The build this character sheet is currently assembled from on this "
+            "timeline. NULL if no build has been selected yet. Must belong to this same "
+            "character (enforced by trigger) — different timelines may select different "
+            "builds for the same character after a branch."
+        ),
+    ),
     *_timestamps(),
     PrimaryKeyConstraint("timeline_id", "character_id"),
     schema="campaign",
@@ -2086,6 +2232,11 @@ Index(
     "ix_character_state_transformed_into_id",
     character_state.c.transformed_into_id,
     postgresql_where=character_state.c.transformed_into_id.isnot(None),
+)
+Index(
+    "ix_character_state_character_build_id",
+    character_state.c.character_build_id,
+    postgresql_where=character_state.c.character_build_id.isnot(None),
 )
 
 character_conditions = Table(

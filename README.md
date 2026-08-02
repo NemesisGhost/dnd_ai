@@ -22,9 +22,9 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 ## Current Status
 
-The architecture is established and the database foundation is now being implemented. Phases 1 (database bootstrap) and 2 (core world platform) are complete and were verified against the deployed AWS `dev` environment. The current target is [Phase 3: timelines and campaigns](docs/PLAN.md#phase-3-timelines-and-campaigns).
+The architecture is established and the database foundation is now being implemented. Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters) are complete and verified against the deployed AWS `dev` environment — Phase 4 including a corrections pass that closed several integrity gaps found in review (see [PHASE4_VERIFICATION.md](docs/PHASE4_VERIFICATION.md)). The current target is [Phase 5: locations and dungeon play](docs/PLAN.md#phase-5-locations-and-dungeon-play).
 
-The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, seed machinery, and database verification suite. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, character/rules data, or playable campaign workflows; those remain scheduled in later phases.
+The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, seed machinery, and database verification suite. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, locations, or playable campaign workflows; those remain scheduled in later phases.
 
 This is still a restart, not an incremental evolution of the prior implementation.
 

@@ -12,7 +12,13 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
-from tests.factories import make_character, make_ruleset_version, make_species, make_world
+from tests.factories import (
+    make_character,
+    make_ruleset_version,
+    make_ruleset_version_for_world,
+    make_species,
+    make_world,
+)
 
 pytestmark = pytest.mark.database
 
@@ -54,12 +60,17 @@ def _make_subclass(
 
 
 def _make_proficiency_type(connection: Connection, version: uuid.UUID, code: str) -> uuid.UUID:
+    """target_kind (revision 029) is derived from code the same way the seed
+    migration's backfill did: skill/saving_throw name themselves, anything
+    else (weapon, armor, tool, ...) is free_text."""
+    target_kind = code if code in ("skill", "saving_throw") else "free_text"
     return connection.execute(
         text(
-            "INSERT INTO rules.proficiency_types (ruleset_version_id, code, display_name) "
-            "VALUES (:v, :c, :c) RETURNING proficiency_type_id"
+            "INSERT INTO rules.proficiency_types "
+            "(ruleset_version_id, code, display_name, target_kind) "
+            "VALUES (:v, :c, :c, :k) RETURNING proficiency_type_id"
         ),
-        {"v": version, "c": code},
+        {"v": version, "c": code, "k": target_kind},
     ).scalar()
 
 
@@ -78,7 +89,7 @@ class Fixture:
 
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
-        self.version = make_ruleset_version(connection)
+        self.version = make_ruleset_version_for_world(connection, self.world_id)
         species = make_species(connection, self.version)
         self.character_id = make_character(connection, self.world_id, species_id=species)
         self.build_id = connection.execute(
@@ -116,22 +127,36 @@ def test_a_character_may_have_more_than_one_build(db_connection: Connection, f: 
     assert count == 2
 
 
-def test_a_character_cannot_have_two_current_builds(db_connection: Connection, f: Fixture) -> None:
+def test_a_build_is_no_longer_globally_current(db_connection: Connection, f: Fixture) -> None:
+    """Revision 028: active-build selection moved to timeline state
+    (campaign.character_state.character_build_id) — character_builds no
+    longer has an is_current column or a global uniqueness rule at all. Two
+    builds for the same character coexist freely; see
+    test_character_timeline_state.py for the timeline-scoped selection this
+    replaced it with."""
     db_connection.execute(
         text(
-            "UPDATE character.character_builds SET is_current = true WHERE character_build_id = :b"
+            "INSERT INTO character.character_builds (character_id, ruleset_version_id) "
+            "VALUES (:c, :v)"
         ),
-        {"b": f.build_id},
+        {"c": f.character_id, "v": f.version},
     )
-    with pytest.raises(IntegrityError) as exc:
-        db_connection.execute(
+    count = db_connection.execute(
+        text("SELECT count(*) FROM character.character_builds WHERE character_id = :c"),
+        {"c": f.character_id},
+    ).scalar()
+    assert count == 2
+
+    columns = {
+        r[0]
+        for r in db_connection.execute(
             text(
-                "INSERT INTO character.character_builds "
-                "(character_id, ruleset_version_id, is_current) VALUES (:c, :v, true)"
-            ),
-            {"c": f.character_id, "v": f.version},
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'character' AND table_name = 'character_builds'"
+            )
         )
-    assert "ux_character_builds_one_current_per_character" in str(exc.value)
+    }
+    assert "is_current" not in columns
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +273,12 @@ def test_subclass_matching_its_class_succeeds(db_connection: Connection, f: Fixt
 
 
 def test_a_proficiency_naming_no_target_is_rejected(db_connection: Connection, f: Fixture) -> None:
+    """Since revision 029, character.enforce_proficiency_target_kind() fires
+    before ck_character_proficiencies_one_target ever gets evaluated — a
+    proficiency_type_id always requires its specific target column, so a row
+    naming none is rejected with a more specific message than the bare CHECK.
+    test_a_proficiency_naming_two_targets_is_rejected below still exercises
+    the CHECK directly, for the case the trigger does not cover."""
     prof_type = _make_proficiency_type(db_connection, f.version, "weapon")
 
     with pytest.raises(IntegrityError) as exc:
@@ -258,23 +289,34 @@ def test_a_proficiency_naming_no_target_is_rejected(db_connection: Connection, f
             ),
             {"b": f.build_id, "t": prof_type},
         )
-    assert "ck_character_proficiencies_one_target" in str(exc.value)
+    assert "requires a free-text target" in str(exc.value)
 
 
 def test_a_proficiency_naming_two_targets_is_rejected(
     db_connection: Connection, f: Fixture
 ) -> None:
+    """A skill proficiency that also sets target_label satisfies
+    enforce_proficiency_target_kind() (skill_id is present, as 'skill'
+    requires) but still trips ck_character_proficiencies_one_target, since
+    that CHECK counts every non-null target column, not just the required
+    one."""
     prof_type = _make_proficiency_type(db_connection, f.version, "skill")
-    ability = _make_ability(db_connection, f.version, "dexterity")
+    skill = db_connection.execute(
+        text(
+            "INSERT INTO rules.skills (ruleset_version_id, ability_id, code, display_name) "
+            "VALUES (:v, :a, 'stealth', 'Stealth') RETURNING skill_id"
+        ),
+        {"v": f.version, "a": _make_ability(db_connection, f.version, "dexterity")},
+    ).scalar()
 
     with pytest.raises(IntegrityError) as exc:
         db_connection.execute(
             text(
                 "INSERT INTO character.character_proficiencies "
-                "(character_build_id, proficiency_type_id, saving_throw_ability_id, target_label) "
-                "VALUES (:b, :t, :a, 'longsword')"
+                "(character_build_id, proficiency_type_id, skill_id, target_label) "
+                "VALUES (:b, :t, :s, 'longsword')"
             ),
-            {"b": f.build_id, "t": prof_type, "a": ability},
+            {"b": f.build_id, "t": prof_type, "s": skill},
         )
     assert "ck_character_proficiencies_one_target" in str(exc.value)
 

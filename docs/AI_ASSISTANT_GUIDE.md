@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap) and 2 (core world platform) are complete and verified against AWS `dev`. The current target is [Phase 3: timelines and campaigns](PLAN.md#phase-3-timelines-and-campaigns). The repository is still database-first: no API, UI, character/rules implementation, or external integration exists yet.
+Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters) are complete and verified against AWS `dev`. The current target is [Phase 5: locations and dungeon play](PLAN.md#phase-5-locations-and-dungeon-play). The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1148,7 +1148,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current phase's features; Phase 3 is current now
+   - Implement only the current phase's features; Phase 5 is current now
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

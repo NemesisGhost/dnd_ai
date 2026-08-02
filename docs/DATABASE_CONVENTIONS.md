@@ -1225,6 +1225,8 @@ Destructive reset scripts may exist only under clearly labeled local test toolin
 
 Seed stable lookup data through migrations or versioned seed commands.
 
+Once a migration applying a `database/seeds/*.yaml` file has been applied anywhere (including only to the deployed `dev` instance), that file is frozen: do not edit it. A migration's `upgrade()` reads the seed file at whatever content it has *when the migration runs* — on a fresh database provisioned after the edit, not the content that existed when the migration was written. Editing a consumed file therefore makes two environments that both report being at the same revision seed different data, silently. To change or add content, add a new `*.yaml` file and a new migration. `database/seeds/frozen_manifest.json` records a sha256 hash per already-consumed file and the revision that consumed it; `tests/database/test_seed_idempotency.py` fails loudly if a listed file's hash no longer matches, rather than letting the drift reach a fresh database unnoticed.
+
 ### 25.5 Backward compatibility
 
 Before production, use expand-and-contract migrations for breaking changes:
@@ -1446,7 +1448,7 @@ Maintain database scenario tests for:
 - NPC knowledge filtering
 - AI proposal approval
 
-Each becomes required in the phase that first makes it provable, not before. In particular, **branch isolation** — a timeline inherits parent history only up to its branch point — is a **Phase 6** scenario test, because there is no history to inherit until `narrative.events` exists. Phase 3 delivers branch *structure* (parent, branch world time, world agreement) and timeline-scoped membership rows; neither demonstrates isolation, and neither should be recorded as satisfying this item. See [PLAN.md Phase 3](PLAN.md#phase-3-timelines-and-campaigns) and [Phase 6](PLAN.md#phase-6-narrative-events-and-state).
+Each becomes required in the phase that first makes it provable, not before. In particular, **branch isolation** — a timeline inherits parent history only up to its branch point — is a **Phase 6** scenario test, because there is no history to inherit until `narrative.events` exists. Phase 3 delivers branch *structure* (parent, branch world time, world agreement) and timeline-scoped membership rows; neither demonstrates isolation, and neither should be recorded as satisfying this item. See [PLAN.md Phase 3](PLAN.md#phase-3-timelines-and-campaigns) and [Phase 6](PLAN.md#phase-6-events-and-interactions).
 
 ### 32.3 Data builders
 

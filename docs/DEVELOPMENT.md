@@ -179,7 +179,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 and 2 are done.** Their exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md) and [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), which also record the defects each verification uncovered. The current target is [Phase 3: timelines and campaigns](PLAN.md#phase-3-timelines-and-campaigns); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
+**Phases 1 through 4 are done.** Their exit criteria are closed with live-AWS evidence — see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md), and [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md), which also record the defects each verification (and, for Phase 4, its corrections review) uncovered. The current target is [Phase 5: locations and dungeon play](PLAN.md#phase-5-locations-and-dungeon-play); read its first-time obligations before starting, and [§23.1](PLAN.md#231-phase-exit-review) for what closing a phase requires.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

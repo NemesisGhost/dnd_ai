@@ -1,0 +1,20 @@
+{
+  "policy": "Files listed under 'files' are the immutable input to the named revision. A migration replays this exact content on every future 'upgrade head' (a fresh dev/staging/prod database, a downgrade/upgrade round trip, CI). Editing one of these files would silently change what that already-applied revision seeds on a database that has not seen it yet, while databases that already ran it keep the old content -- two environments both at the same revision id with different data. Do not edit a listed file. To change or add rule content, create a new *.yaml file and a new migration that seeds it, per docs/DATABASE_CONVENTIONS.md section 25.4. tests/database/test_seed_idempotency.py enforces this by recomputing each file's sha256 and comparing it to the value recorded here.",
+  "revision": "022_seed_ruleset",
+  "files": {
+    "rules.abilities.yaml": "15cf7f171ab8faa7133648e9b175cff0a048cbae949a41e30320908c7eb5bfbd",
+    "rules.classes.yaml": "69daab2e428c131e801bfaeac24e895d11cb147dc7b7c94ff2ad6a41b4bd270a",
+    "rules.conditions.yaml": "186a6aaa62bb9100e6b4db020748745000dc119fd59c3025ea35aafde1bed606",
+    "rules.creature_types.yaml": "eadbaf2ee0fe4027c5e0d6217ca040e246ef7d5a3360fab644dc445eebc1179d",
+    "rules.damage_types.yaml": "eb0ac4ed0459797821d4b09c001a294635ff63f201c0bede23567d6b73840890",
+    "rules.feats.yaml": "8784e1bb3e72ff75c8b94e766c84e3addb4e58198bf756dcd8b79843205f278a",
+    "rules.features.yaml": "4cda9a249c16721361beded68d8ca5fb6230022fe68c89cfbab85236be06aac5",
+    "rules.languages.yaml": "70ce164967646717e2402113b9fb25e9f7da362276dd5bd2aa1981ef7ae87b7f",
+    "rules.proficiency_types.yaml": "c1cc99eb65242cca6a56f5743874de79af25700f575d8d78e8de0c3aecb96801",
+    "rules.resource_definitions.yaml": "b2352102d3d3bad76f33da44a4df8393905517633bff1d01a40b9329309e1dbc",
+    "rules.skills.yaml": "8518bbce87d8dbcb8da4c335311052831b142371f009b8ec03624e5e450aca26",
+    "rules.species.yaml": "7d05a0666e6e75ac4baf74d762267eb9f27d762525a499e4bbac7bbb06884db9",
+    "rules.spells.yaml": "8b7b58dd500a8eee4f159da34b8c44ccf9fe8b1296af98d8dc555f97e62155d9",
+    "rules.subclasses.yaml": "f3a99e00b9053a5db278c503d6b8d39ba5a2caf3f6966cdda374029c38559b3f"
+  }
+}

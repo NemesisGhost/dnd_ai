@@ -24,6 +24,7 @@ from tests.factories import (
     make_character,
     make_entity,
     make_ruleset_version,
+    make_ruleset_version_for_world,
     make_species,
     make_user,
     make_world,
@@ -169,7 +170,7 @@ def test_player_character_row_cannot_attach_to_an_npc_entity(
 ) -> None:
     entity_type = _entity_type_id(db_connection, "npc")
     entity_id = make_entity(db_connection, world_id, entity_type, name="An NPC entity")
-    species = make_species(db_connection, make_ruleset_version(db_connection))
+    species = make_species(db_connection, make_ruleset_version_for_world(db_connection, world_id))
     db_connection.execute(
         text(
             "INSERT INTO character.characters (character_id, species_id, size_category) "
@@ -197,7 +198,7 @@ def test_size_category_must_be_a_recognized_value(
 ) -> None:
     entity_type = _entity_type_id(db_connection, "character")
     entity_id = make_entity(db_connection, world_id, entity_type)
-    species = make_species(db_connection, make_ruleset_version(db_connection))
+    species = make_species(db_connection, make_ruleset_version_for_world(db_connection, world_id))
 
     with pytest.raises(IntegrityError) as exc:
         db_connection.execute(

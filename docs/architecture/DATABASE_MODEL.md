@@ -258,14 +258,14 @@ A root has neither `parent_timeline_id` nor branch-point fields. During Phase 3,
 Key columns:
 
 - `campaign_id UUID PK`
-- `timeline_id UUID FK`
+- `timeline_id UUID FK` — immutable once set (Phase 4 corrections)
 - `name TEXT`
-- `ruleset_id UUID FK` — added in Phase 4
+- `ruleset_version_id UUID FK` — added in Phase 4, added as `ruleset_id` (pinning a ruleset family) and renamed to `ruleset_version_id` (pinning a specific version) by a Phase 4 corrections revision, for reproducibility: a campaign's rules configuration should not silently change if its ruleset family later gains a second current version
 - `lifecycle_status_id UUID FK`
 - `started_at TIMESTAMPTZ NULL`
 - `ended_at TIMESTAMPTZ NULL`
 
-`ruleset_id` is part of the target model but is deliberately deferred until `rules.rulesets` exists in Phase 4.
+`ruleset_version_id` must be allowed for the campaign's world (`rules.world_rulesets`, resolved through the pinned version's ruleset family) — enforced by trigger.
 
 ### 6.3 Parties and membership
 
@@ -304,8 +304,9 @@ Key columns:
 - `ended_at TIMESTAMPTZ NULL`
 - `summary TEXT NULL`
 - `source_id UUID FK NULL`
+- `world_time_period INT8RANGE NULL` — added by a Phase 4 corrections revision
 
-A session carries both real-world time (`started_at`/`ended_at`, when the table actually played) and fictional time (`start_world_time_id`/`end_world_time_id`, where the story was) at once — they answer different questions and neither substitutes for the other. Unlike party memberships, sessions carry no derived range or exclusion constraint: overlapping fictional-time spans across sessions (a flashback, two sessions each covering an overlapping stretch of story time) are legitimate.
+A session carries both real-world time (`started_at`/`ended_at`, when the table actually played) and fictional time (`start_world_time_id`/`end_world_time_id`, where the story was) at once — they answer different questions and neither substitutes for the other. `world_time_period` is derived from the two world-time endpoints' `sort_key` values the same way `party_memberships.effective_period` is (half-open `[start, end)`, unbounded upper when open-ended, `NULL` when unscheduled — [ADR 0010](../adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md)), but unlike party memberships, sessions carry **no exclusion constraint**: overlapping fictional-time spans across sessions (a flashback, two sessions each covering an overlapping stretch of story time) are legitimate. The range makes the interval queryable; it does not make overlap invalid.
 
 ## 7. Character model
 
@@ -329,7 +330,7 @@ erDiagram
 
 `character.characters` contains identity-level mechanical references such as species, size and origin. NPCs and player characters both extend it. Potential later subtypes (companions, familiars, summons, special creature actors) reuse `character.characters` when they need full character mechanics, rather than growing a parallel hierarchy.
 
-- `character.characters`
+- `character.characters` — `character_id UUID PK/FK` to `core.entities`; `species_id UUID FK` to `rules.species`, which must be allowed for the character's own world (`rules.world_rulesets`, enforced by trigger since a Phase 4 corrections revision); `size_category TEXT` (a fixed CHECK vocabulary, not a lookup table — the six D&D size categories don't vary by ruleset); `origin_location_id` arrives in Phase 5
 - `character.character_descriptions` — free-text background, appearance, and other prose that doesn't drive mechanics
 - `character.character_languages`
 - `character.character_senses`
@@ -363,39 +364,38 @@ A player character can participate in multiple campaigns and timelines. Ownershi
 
 ### 7.4 Character builds
 
-- `character.character_builds`
-- `character.character_ability_scores`
-- `character.character_class_levels`
-- `character.character_proficiencies`
-- `character.character_features`
-- `character.character_spellcasting_profiles`
-- `character.character_known_spells`
-- `character.character_prepared_spells`
+- `character.character_builds` — `character_id UUID FK`, `ruleset_version_id UUID FK` (must be allowed for the character's own world, enforced by trigger), `label TEXT NULL`. No `is_current` column: which build is active on a given timeline is timeline state (`campaign.character_state.character_build_id`, §17), not a property of the build, since a character may use different builds on different timelines after a branch — a global "current" flag couldn't represent that. A character may have any number of builds.
+- `character.character_ability_scores` — one row per `(build, ability)`; the ability's ruleset version must match the build's
+- `character.character_class_levels` — one row per `(build, class)`, so a build may hold levels in more than one class (multiclassing); an optional `subclass_id` must belong to the same class; the class's ruleset version must match the build's
+- `character.character_proficiencies` — exactly one of `skill_id`, `saving_throw_ability_id`, or a free-text `target_label` (weapon/armor/tool categories with no dedicated lookup) per row, and that one must be the kind `proficiency_type_id` requires (`rules.proficiency_types.target_kind`); a build cannot hold the same semantic proficiency twice; whichever target is a rule reference must match the build's ruleset version
+- `character.character_features` — a granted `rules.features` row per build; ruleset version must match
+- `character.character_spellcasting_profiles` — an optional `class_id` plus a required `spellcasting_ability_id`; both, when set, must match the build's ruleset version
+- `character.character_known_spells` / `character.character_prepared_spells` — independent associations (not one a subset of the other — whether "prepared" is even meaningful varies by class); each spell's ruleset version must match its profile's build
 
-Builds are versioned definitions. Current hit points, conditions, spell-slot use and other temporary resources belong to campaign timeline state (§16), not the build.
+Builds are versioned definitions. Current hit points, conditions, spell-slot use and other temporary resources belong to campaign timeline state (§16), not the build. Every ruleset-version cross-check above is enforced by trigger (a CHECK cannot compare across tables), added incrementally across Phase 4 and a Phase 4 corrections revision that closed the cases Phase 4 itself had deliberately deferred.
 
 ## 8. Rules model
 
-Rules data is reusable and ruleset-scoped. All rule definitions must identify their ruleset and version; homebrew definitions use the same tables and carry the same provenance and canon-status metadata as official content rather than requiring separate schema.
+Rules data is reusable and ruleset-scoped. All rule definitions must identify their ruleset and version; homebrew definitions use the same tables and carry the same provenance and canon-status metadata as official content rather than requiring separate schema — every table below carries a nullable `source_id UUID FK` (`core.sources`) and a required `canon_status_id UUID FK` (`core.canon_statuses`, defaulted to `'canon'` for the common case of officially authored content, overridable for anything homebrew or proposed).
 
 Primary tables:
 
-- `rules.rulesets`
-- `rules.ruleset_versions`
-- `rules.world_rulesets` — associates a world with one or more allowed rulesets and identifies its default
+- `rules.rulesets` — `ruleset_id UUID PK`, `code TEXT UNIQUE`, `display_name TEXT`
+- `rules.ruleset_versions` — `ruleset_version_id UUID PK`, `ruleset_id UUID FK`, `version_label TEXT`, `is_current BOOLEAN` (at most one per ruleset)
+- `rules.world_rulesets` — a pure allow-list associating a world with the ruleset families it allows (`world_id`, `ruleset_id` composite PK). Identifying the *default* is `core.worlds.default_ruleset_id UUID FK` alone (§5.1) — `world_rulesets` carries no `is_default` column of its own; a Phase 4 corrections revision removed one after finding the two could disagree. A `world_rulesets` row cannot be removed while it is a world's default or a campaign is still pinned to a version of it (enforced by trigger).
 - `rules.abilities`
-- `rules.skills`
+- `rules.skills` — governing `ability_id` must share the skill's ruleset version
 - `rules.species`
-- `rules.classes`
-- `rules.subclasses`
-- `rules.features`
+- `rules.classes` — optional `primary_ability_id` must share the class's ruleset version
+- `rules.subclasses` — scoped to a `class_id`, not directly to a ruleset version; must share its class's version
+- `rules.features` — independently nullable `class_id`/`subclass_id`/`species_id`, each of which (when set) must share the feature's ruleset version
 - `rules.feats`
-- `rules.spells`
+- `rules.spells` — optional `damage_type_id` must share the spell's ruleset version; `code` follows the same `^[a-z][a-z0-9_]*$` format as every sibling table
 - `rules.conditions`
 - `rules.creature_types`
 - `rules.damage_types`
 - `rules.languages`
-- `rules.proficiency_types`
+- `rules.proficiency_types` — `target_kind TEXT` (`skill` / `saving_throw` / `free_text`) added by a Phase 4 corrections revision, naming which `character.character_proficiencies` column a proficiency of this type must set
 - `rules.resource_definitions`
 
 `rules.item_definitions` is listed here as a rule-definition concept (§11) but is deferred to Phase 9, which owns both item definitions and item instances together.
@@ -674,11 +674,13 @@ Create interaction
 
 ## 17. Typed timeline state
 
-Typed state tables are optimized for current effective reads. Every state row must include `timeline_id`, a target identifier, state status/version, `effective_from_event_id`, `effective_to_event_id NULL` for current rows, and system timestamps. A partial unique index should enforce one current row per timeline and target.
+Typed state tables are optimized for current effective reads. Once `narrative.events` exists (Phase 6), a state row's target-level history should include `timeline_id`, a target identifier, `effective_from_event_id`, `effective_to_event_id NULL` for current rows, and system timestamps, with a partial unique index enforcing one current row per timeline and target where history is tracked that way.
+
+That is the target model, not a requirement every typed-state table must already meet. Phase 4's `campaign.character_state`, `.character_conditions`, and `.character_resources` are current-state snapshots with no event-linked history columns at all: `narrative.events` does not exist yet, so there is nothing to link to, and each table instead enforces "one row per (timeline, target)" directly through its primary key. This is correct for their phase, not a gap to silently work around — do not add `effective_from_event_id`/`effective_to_event_id` to a table before `narrative.events` exists merely because this section names them as the general shape. When Phase 6 delivers events, extend these tables with a `last_event_id` (or equivalent) provenance reference for the change that produced the current row, rather than retrofitting full interval history onto tables designed as single-current-row snapshots — rule 6 (state changes need a causal event, committing atomically) is a transaction-boundary guarantee the command layer provides, not a column these tables were missing.
 
 Primary tables:
 
-- `campaign.character_state`
+- `campaign.character_state` — includes `character_build_id UUID FK NULL` to `character.character_builds` (§7.4), the active build for this character *on this timeline*; must belong to the same character as the state row (enforced by trigger)
 - `campaign.character_conditions`
 - `campaign.character_resources`
 - `campaign.character_inventory` — a character-centric read index over `item_ownership`/`inventory_entries` (§11); the source of truth stays with the item-level tables, this is the "what is this character carrying right now" view

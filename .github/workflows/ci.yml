@@ -16,15 +16,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -45,32 +45,46 @@ jobs:
     runs-on: ubuntu-latest
     # Per docs/PLAN.md §23.0 and §29.9, migrations and tests/database /
     # tests/scenario verify against the deployed AWS dev RDS instance rather
-    # than a service-container stand-in. This job needs repository
-    # configuration that does not exist yet (docs/INFRASTRUCTURE.md §11,
-    # items 8-9) and will not run successfully until dev is deployed and that
-    # configuration is set:
+    # than a service-container stand-in. The mechanism itself — ephemeral
+    # per-run database creation (scripts/ci_ephemeral_database.py) and
+    # scoped security-group ingress (scripts/aws-db-allow-my-ip.sh and the
+    # steps below) — is built and has been exercised manually end-to-end
+    # against the deployed dev instance (create database, migrate to head,
+    # alembic check, seed idempotency, full test suite, drop database,
+    # revoke ingress). What this job still depends on, and what this
+    # repository's own configuration cannot confirm from inside a checkout,
+    # is that the following GitHub Actions secrets/variables are actually
+    # set on this repository:
     #   - vars.AWS_REGION, vars.DEV_DB_SECURITY_GROUP_ID
     #   - secrets.AWS_CI_ROLE_ARN — an IAM role trusting GitHub's OIDC
     #     provider, scoped to ec2:AuthorizeSecurityGroupIngress /
     #     RevokeSecurityGroupIngress on that one security group
     #   - secrets.DEV_DB_ADMIN_URL — a full connection string (scheme
     #     postgresql+psycopg://...) for a role with CREATEDB on the dev
-    #     instance; there is no such role in the bootstrap revision yet
+    #     instance. The bootstrap revision's six roles are still scoped to
+    #     schema-level DDL/DML with none holding CREATEDB (INFRASTRUCTURE.md
+    #     §11 item 8); today this points at the RDS master user, which does
+    #     have the necessary privilege — a dedicated, narrower CI role is
+    #     still worth creating before this runs unattended in prod-adjacent
+    #     environments.
+    # Confirm these are set, then watch this job on the next push — its own
+    # run is the actual verification; no test in this repository can prove a
+    # GitHub Actions run outside itself succeeded.
     #
     # One ephemeral database is created for the whole job (migration checks
     # and pytest both use it), then dropped in the always-run cleanup step
     # alongside the security-group rule — see tests/conftest.py for the same
     # ephemeral-database pattern used outside CI.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -78,7 +92,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}

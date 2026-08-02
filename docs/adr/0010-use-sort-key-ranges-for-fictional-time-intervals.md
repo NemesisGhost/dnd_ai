@@ -61,7 +61,7 @@ A real join, departure, disappearance, or return creates or closes a membership 
 
 ## Verification status
 
-This decision is a Phase 3 implementation contract. It is documented but not yet implemented or verified. Phase 3 exit tests must prove boundary adjacency, overlap rejection, open-ended behavior, world agreement, and timeline scoping of membership rows against the deployed AWS `dev` database.
+Implemented and verified. Phase 3 exit tests prove boundary adjacency, overlap rejection, open-ended behavior, world agreement, and timeline scoping of `campaign.party_memberships` rows against the deployed AWS `dev` database (`tests/database/test_party_memberships.py`; see [PHASE3_VERIFICATION.md](../PHASE3_VERIFICATION.md)). A Phase 4 corrections revision (023) applied the same derived-range half of this contract to `campaign.sessions` — endpoints, half-open bounds, and an unbounded upper range for open-ended cases — deliberately without the exclusion constraint, since overlapping sessions are legitimate; see `tests/database/test_phase4_corrections.py` and [DATABASE_MODEL.md §6.4](../architecture/DATABASE_MODEL.md#64-sessions).
 
 ## References
 

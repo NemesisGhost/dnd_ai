@@ -1,10 +1,12 @@
-"""campaign.sessions (revision 011).
+"""campaign.sessions (revision 011; world_time_period added by revision 023).
 
 Sessions carry both real-world time (started_at/ended_at) and fictional time
 (start/end_world_time_id) at once — deliberately, per DATABASE_CONVENTIONS.md
-§12. Unlike party_memberships, there is no derived range and no exclusion
-constraint: nothing requires sessions not to overlap in fictional time, so
-only ordering and world agreement are enforced.
+§12. Since revision 023, the fictional-time endpoints also derive a
+world_time_period INT8RANGE (ADR 0010's contract) — but unlike
+party_memberships, there is still no exclusion constraint: nothing requires
+sessions not to overlap in fictional time. This module covers ordering and
+world agreement; test_phase4_corrections.py covers world_time_period itself.
 """
 
 import uuid

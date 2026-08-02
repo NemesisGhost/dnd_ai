@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review).
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review; a "Corrections review" section further down records a later pass that found and closed several integrity gaps the original exit criteria didn't happen to exercise.
 
 ## Exit Criteria
 
@@ -40,8 +40,8 @@ Ten revisions, 34 tables, one seed migration.
 | Seed idempotency | Re-ran `022`'s `upgrade()` a second time directly against an already-seeded database: zero new rows, zero errors. First seed content with real cross-references (skills→abilities, subclasses/features→classes, spells→damage types) rather than flat codes — see "Bugs and Gaps Found" for what that surfaced |
 | Constraint tests | 523 tests total (up from 327 at Phase 3 exit) |
 | Comments and FK indexes | Zero tables without a comment; `test_every_foreign_key_is_indexed` clean after fixing three gaps (below) |
-| Downgrade | Full round trip to `base` and back through all 22 revisions |
-| CI green | **Not yet run** — same gap noted at Phase 3 exit, still outstanding. Push and confirm before treating this phase as fully closed. |
+| Downgrade | Full round trip to `base` and back through all 30 revisions (22 original + 8 corrective), confirmed again after the corrections review |
+| CI green | Full `aws-verification` job sequence (ephemeral database create, migrate to head, downgrade/upgrade round trip, seed idempotency, `alembic check`, full pytest suite, teardown) run manually against the deployed AWS `dev` instance and passing — see the corrections review below. The GitHub Actions workflow itself has not been observed to run: that requires a push plus the repository's `AWS_CI_ROLE_ARN`/`DEV_DB_ADMIN_URL`/`AWS_REGION`/`DEV_DB_SECURITY_GROUP_ID` secrets and variables actually being configured, neither of which this environment can confirm or trigger. Confirm on the next push. |
 
 ## Bugs and Gaps Found
 
@@ -65,14 +65,36 @@ None of these were schema-design defects — all six were test/tooling bugs foun
 - **`size_category` is a CHECK, not a lookup table.** The six D&D size categories are a fixed, universal vocabulary unlike canon/lifecycle status or ability names, which the conventions' "lookup tables over ENUM" guidance targets because they vary by ruleset or need GM extension.
 - **`character.character_senses.sense_type` and `character.character_movements.movement_type` are free text**, not lookups — this project has no documented controlled vocabulary for either, and inventing one unprompted risked recreating the exact drift the pre-phase reconciliation just fixed.
 
+## Corrections review (2026-08-02)
+
+A follow-up review of the Phase 4 schema — after the exit criteria above were already met — found integrity gaps that the exit criteria didn't happen to exercise. Ten forward-only revisions closed them, none touching the 22 already-applied migrations:
+
+| Revision | Closes |
+|---|---|
+| `023_session_world_time_period` | `campaign.sessions` had world-time endpoints but no derived `INT8RANGE`, unlike `party_memberships`. Added `world_time_period`, half-open `[start, end)`, unbounded upper for open-ended, `NULL` for unscheduled — same contract as [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md), deliberately without an exclusion constraint (sessions may overlap). |
+| `024_campaign_ruleset_version` | `campaign.campaigns.ruleset_id` pinned a ruleset *family*, not the specific *version* a build pins to — not reproducible if the family later gained a second current version. Renamed to `ruleset_version_id`, referencing `rules.ruleset_versions` directly. Also disambiguated revision 022's seed naming: the ruleset row's code changed from `dnd5e_2024` to `dnd5e` (an UPDATE, not a migration edit), leaving the 2014-vs-2024 edition distinction living in exactly one place — the version label. |
+| `025_rules_provenance_canon` | No rule-content table carried `source_id`/`canon_status_id`, contradicting `rules.rulesets`' own comment and [DATABASE_CONVENTIONS.md §16](DATABASE_CONVENTIONS.md#16-canon-and-provenance-conventions). Added both to all 16 rule tables, `canon_status_id` defaulted to `'canon'` via `rules.default_canon_status_id()` (a plain subquery is not a valid column default in PostgreSQL) — official content needs no per-row boilerplate; homebrew overrides it explicitly. |
+| `026_ruleset_version_checks` | Revision 020's own docstring recorded proficiencies/features/spellcasting-vs-build ruleset-version checks as a deliberate scope cut. Closed it, plus classes/primary-ability, features/class-subclass-species, and spells/damage-type, all by trigger (the established pattern for cross-row checks a CHECK can't express). |
+| `027_world_ruleset_default` | `rules.world_rulesets.is_default` and `core.worlds.default_ruleset_id` were two independent representations of one fact with nothing keeping them in sync. Removed `is_default`; `default_ruleset_id` is now the sole source of truth. Added a trigger rejecting removal of a `world_rulesets` association still relied on by a world's default or a campaign's pinned version. |
+| `028_build_timeline_state` | `character_builds.is_current` was one global flag per character — unable to represent the same character built differently on two timelines after a branch. Moved active-build selection to `campaign.character_state.character_build_id` (timeline-scoped, matching where combat state already lives); dropped `is_current` outright. |
+| `029_character_corrections` | Five smaller gaps: `current_hit_points` could exceed `maximum_hit_points`; `transformed_into_id` wasn't checked against the character's own world; `rules.spells.code` had no format CHECK unlike every sibling; a proficiency's target column could disagree with its `proficiency_type_id`, and the same semantic proficiency could be granted twice; and a character's species/build/conditions/resources were never checked against `rules.world_rulesets` for its own world. |
+| `030_parent_scope_immutable` | Same-world/same-scope triggers validate a child row when it's written, but nothing stopped a *parent's* scope column (`core.world_times.sort_key`/`world_id`, `core.entities.world_id`, `campaign.timelines.world_id`, `campaign.parties.world_id`, `campaign.campaigns.timeline_id`) from changing under already-valid children. Made all five immutable by trigger — a generic `core.enforce_immutable_columns()`, the same reusable-function shape as `core.enforce_entity_subtype()`. |
+
+Verified the same way as the original Phase 4 exit: full `downgrade base` → `upgrade head` round trip through all 30 revisions against the deployed AWS `dev` instance, `alembic check` clean, every new invariant covered by a positive and negative test (`tests/database/test_phase4_corrections.py`, 47 tests), expanded seed verification covering all 14 Phase 4 structured YAML files with cross-reference and value assertions plus a true double re-invocation of revision 022's own `upgrade()` proving idempotency (`tests/database/test_seed_idempotency.py`), and a `database/seeds/frozen_manifest.json` + test guarding those 14 files against future silent edits. 606 database tests passing (up from 523 at the original Phase 4 exit).
+
+Two deviations from the corrections request, both reasoned rather than oversights:
+
+- **`rules.rulesets` / `rules.ruleset_versions`' `canon_status_id`, and every rule-content table's, got a database-level `DEFAULT` of `'canon'`** rather than being caller-mandatory like `core.entities.canon_status_id`. The overwhelming majority of rule content is officially authored; requiring every future INSERT (including every test fixture) to look up and pass the status explicitly was pure friction for that common case, and a default doesn't weaken the column's meaning — homebrew/proposed content still overrides it. `core.entities` intentionally has no such default since its callers must always decide both canon and lifecycle status as policy; rule content is a narrower case.
+- **"Correct statements about Alembic comment comparison being disabled"** — searched the codebase for this claim and did not find it. `tables.py`'s own docstring and `env.py`'s configuration already state, correctly, that Alembic compares comments unconditionally with no opt-out. No correction was needed; noted here rather than silently skipped.
+
 ## Outstanding
 
 Carried forward, still open:
 
 - **Orphaned KMS key** (`5a359a0a-4d30-4c00-925f-2dfad6e5820d`) from the Phase 1 teardown.
-- **No `CREATEDB`-capable test role.**
+- **No `CREATEDB`-capable test role.** The ephemeral-database mechanism works today via the RDS master user (proven repeatedly, including throughout this corrections review); a dedicated, narrower login role is still worth adding before running it unattended in prod-adjacent environments — see [INFRASTRUCTURE.md §11 item 8](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
-- **CI has not run for Phase 3 or Phase 4 work yet.** Push and confirm both are green.
+- **The GitHub Actions `aws-verification` job itself has not been observed to run.** Every step it performs has been run manually against AWS `dev` in this review (see above); whether the repository's secrets/variables are configured so the actual workflow goes green is unconfirmed. Push and check.
 
-Next phase: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases).
+Next phase: Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases). Its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are already recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
