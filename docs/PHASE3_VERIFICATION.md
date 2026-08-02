@@ -52,7 +52,7 @@ Re-checked against the live `dev` database at phase end, not assumed:
 | Constraint tests | 327 tests total (up from 248 at Phase 2 exit); every new CHECK, exclusion constraint, and trigger has a positive and negative test |
 | Comments and FK indexes | Zero tables without a comment; `test_every_foreign_key_is_indexed` clean after fixing the three gaps below |
 | Downgrade | Full round trip to `base` and back through all twelve revisions |
-| CI green | **Not yet run.** This work is verified directly against AWS `dev` per [§23.0](PLAN.md#230-aws-verification-policy), but the commit has not been pushed, so no CI run exists for it yet. Push and confirm green before treating this phase as fully closed. |
+| CI green | Confirmed by later full-chain GitHub Actions runs, including Phase 4 corrections run [`30755760409`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30755760409), which migrated through all Phase 3 revisions, completed a full downgrade/upgrade round trip, and ran the complete suite successfully. |
 
 ## Bugs and Gaps Found
 
@@ -69,7 +69,7 @@ Re-checked against the live `dev` database at phase end, not assumed:
 - **`party_memberships.member_entity_id` references `core.entities`, not `character.characters`.** That table doesn't exist until Phase 4. The database cannot yet reject a non-character party member — Phase 4 closes it with a negative test.
 - **`timelines.branch_event_id` is absent.** `narrative.events` arrives in Phase 6. `test_branch_event_id_is_not_present_yet` marks the deferral so its closure in Phase 6 is deliberate rather than silently forgotten.
 - **`campaign_parties` is not timeline-scoped.** [DATABASE_MODEL.md §6.3](architecture/DATABASE_MODEL.md#63-parties-and-membership)'s ER diagram scopes `timeline_id` to `party_memberships` only; a party's association with a campaign is stable regardless of which branch is being viewed.
-- **Sessions get no exclusion constraint.** Unlike memberships, nothing requires two sessions not to overlap in fictional time — a flashback session is a legitimate overlap. `campaign.sessions` validates world agreement and endpoint ordering by trigger but stores no derived range and prevents nothing.
+- **Sessions get a derived range but no exclusion constraint.** Revision 023 later added `world_time_period`, derived from the fictional-time endpoints under ADR 0010. Unlike memberships, nothing requires two sessions not to overlap in fictional time — a flashback session is a legitimate overlap.
 - **`campaigns.lifecycle_status_id` and `sessions.lifecycle_status_id` reuse `core.lifecycle_statuses`** rather than introducing campaign- or session-specific status vocabularies. Neither [§5.3](PLAN.md#53-campaigns) nor [§5.5](PLAN.md#55-sessions) names new lookup tables to create, and `campaign.timelines` (this same phase) already set the precedent of reusing the generic lifecycle table for a campaign-domain concept.
 - **Test data is still built by raw inserts**, per the Phase 2 note — the command layer does not exist yet. `tests/factories.py` gained `make_world_time`, `make_timeline`, `make_party`, `make_campaign`, `make_session`.
 
@@ -82,8 +82,4 @@ Carried forward from Phase 2, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-New from this phase:
-
-- **CI has not run for this work yet** — see "Recurring Obligations" above. Push and confirm the workflow is green.
-
-Next phase: Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases).
+Phase 3 is closed. Phase 4 subsequently built rules and shared characters; current project status is recorded in [README.md § Current Status](../README.md#current-status).

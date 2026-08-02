@@ -1,11 +1,9 @@
 """Every table carries a comment (docs/DATABASE_CONVENTIONS.md §31).
 
-`alembic check` runs with compare_comments=False, because keeping every
-comment in both the migration and src/dnd_ai/persistence/tables.py would give
-them two sources of truth that drift apart silently. Enforcement lives here
-instead, asserted against the live database — which is stronger than
-comparing metadata to metadata, since it catches a table created by a
-migration that simply forgot the comment.
+`alembic check` compares comments between the live database and
+src/dnd_ai/persistence/tables.py. These catalog-level assertions complement
+that comparison by requiring every project-owned schema and table to have a
+comment at all, including objects accidentally omitted from metadata.
 
 Deliberately queries the catalog rather than a hardcoded table list, so a new
 table added in a later phase is covered the moment it exists.
