@@ -1,11 +1,21 @@
 # Phase 5 Remaining Issues
 
-> **OPEN (2026-08-03).** Phase 5 was merged to `main` by
-> [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge commit
-> `bcc22ee`, but the post-merge review found three database-integrity blockers
-> and two smaller correctness/documentation gaps that the green verification
-> suite does not exercise. Phase 5 is implemented and merged, but it is not
-> closed. Complete this register before starting Phase 6.
+> **CLOSED (2026-08-03).** All five items below are implemented, tested, and
+> verified — see
+> [PHASE5_VERIFICATION.md § Third exit review corrections](PHASE5_VERIFICATION.md#third-exit-review-corrections-2026-08-03)
+> for the resolving revisions (`052`–`055`) and evidence: the revision-052
+> splice point exercised in both directions, a fresh from-`base` migration
+> run against an empty database, `alembic check`, `ruff format`/`ruff check`/
+> `mypy src`, and the full suite (1,080 tests, up from 1,066), all against the
+> deployed AWS `dev` instance, plus a push-triggered GitHub Actions AWS
+> workflow. Phase 5 is complete; this register is now a closed historical
+> record.
+>
+> Original framing, preserved below as the review record: Phase 5 was merged
+> to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
+> commit `bcc22ee`, but the post-merge review found three database-integrity
+> blockers and two smaller correctness/documentation gaps that the green
+> verification suite did not exercise.
 
 ## Review baseline and scope
 

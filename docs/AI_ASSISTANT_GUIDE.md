@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters, including its corrections pass and all three closeout passes) are complete and verified. Phase 5 (locations and dungeon play) and its two pre-merge corrections passes are implemented, merged, and CI-verified, but the post-merge closeout remains open; see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is a closed historical record. Phase 6 is queued until the Phase 5 register closes. The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), and 4 (rules and shared characters, including its corrections pass and all three closeout passes) are complete and verified. Phase 5 (locations and dungeon play) is complete and verified, including three exit-review corrections passes — two pre-merge, one post-merge; see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. The current target is [Phase 6](PLAN.md#phase-6-events-and-interactions). The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1148,7 +1148,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 5's merged implementation still has the closeout items in [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md), so Phase 6 is not current yet
+   - Implement only the current target; Phase 5 is complete (including its three exit-review corrections passes), so Phase 6 is current
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

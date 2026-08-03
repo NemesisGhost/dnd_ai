@@ -15,6 +15,7 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
+    lookup_id,
     make_area_connection,
     make_area_feature,
     make_area_hazard,
@@ -23,6 +24,7 @@ from tests.factories import (
     make_dungeon_area,
     make_location,
     make_world,
+    status_id,
 )
 
 pytestmark = pytest.mark.database
@@ -400,6 +402,130 @@ def test_a_location_still_cannot_be_its_own_direct_parent(db_connection: Connect
             text("UPDATE world.locations SET parent_location_id = :a WHERE location_id = :a"),
             {"a": region_a},
         )
+
+
+# ---------------------------------------------------------------------------
+# Complete, corruption-safe cycle detection (revision 054)
+# ---------------------------------------------------------------------------
+# Revision 044's original ancestry walk only checked whether NEW.location_id
+# appeared within a depth-bounded search; a pre-existing corrupt cycle not
+# containing NEW.location_id would loop forever under plain UNION ALL and
+# get silently truncated by the depth cutoff, wrongly accepted as "no cycle
+# found." These tests construct exactly that corruption (bypassing the
+# trigger, since there is no other way to create it) and prove revision
+# 054's CYCLE-clause-based detection catches it, plus that hitting the
+# depth safety bound now raises instead of silently succeeding.
+
+
+def test_a_preexisting_cycle_not_containing_the_target_is_detected(
+    db_connection: Connection,
+) -> None:
+    """A corrupt cycle among OTHER locations — the row being updated is not
+    part of it at all. The old depth-bounded walk would loop through such a
+    cycle until its cutoff, never find the target, and wrongly accept the
+    write; the CYCLE clause detects the repeated node directly, regardless
+    of where the target is relative to it."""
+    world_id = make_world(db_connection, slug="mutation-safety-corrupt-cycle-world")
+    region_a = make_location(db_connection, world_id, entity_type_code="region", name="A")
+    region_b = make_location(
+        db_connection, world_id, parent_location_id=region_a, entity_type_code="region", name="B"
+    )
+    region_c = make_location(
+        db_connection, world_id, parent_location_id=region_b, entity_type_code="region", name="C"
+    )
+    bystander = make_location(db_connection, world_id, entity_type_code="region", name="Bystander")
+
+    # Bypass the trigger to force a 3-node cycle A -> C -> B -> A that could
+    # never be created through a normal write, then restore it explicitly.
+    db_connection.execute(
+        text("ALTER TABLE world.locations DISABLE TRIGGER tr_locations_enforce_no_cycle")
+    )
+    db_connection.execute(
+        text("UPDATE world.locations SET parent_location_id = :c WHERE location_id = :a"),
+        {"c": region_c, "a": region_a},
+    )
+    db_connection.execute(
+        text("ALTER TABLE world.locations ENABLE TRIGGER tr_locations_enforce_no_cycle")
+    )
+
+    # `bystander` is not part of the cycle at all. Parenting it under A must
+    # still be rejected — A's own ancestry is corrupt, independent of
+    # bystander's relationship to it.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE world.locations SET parent_location_id = :a WHERE location_id = :b"),
+            {"a": region_a, "b": bystander},
+        )
+    assert "pre-existing containment cycle" in str(exc.value)
+
+    unchanged_parent = db_connection.execute(
+        text("SELECT parent_location_id FROM world.locations WHERE location_id = :b"),
+        {"b": bystander},
+    ).scalar()
+    assert unchanged_parent is None, "the rejected update must not have reparented the bystander"
+
+
+def test_the_depth_safety_bound_raises_rather_than_silently_accepting(
+    db_connection: Connection,
+) -> None:
+    """A genuinely non-cyclic but pathologically deep ancestry chain must
+    raise a clear error once the walk's depth safety bound is reached,
+    rather than the old behavior of silently stopping and treating "not
+    found within the bound" as proof the hierarchy is acyclic. Built in
+    bulk with the trigger disabled — 10,000+ individual inserts through the
+    real trigger would be prohibitively slow for a test — and restored
+    explicitly before the one real check this test exercises."""
+    world_id = make_world(db_connection, slug="mutation-safety-depth-bound-world")
+    region_type = lookup_id(db_connection, "core", "entity_types", "entity_type_id", "region")
+    canon = status_id(db_connection, "canon_statuses", "draft")
+    lifecycle = status_id(db_connection, "lifecycle_statuses", "active")
+
+    db_connection.execute(
+        text("ALTER TABLE world.locations DISABLE TRIGGER tr_locations_enforce_no_cycle")
+    )
+    db_connection.execute(
+        text("""
+            CREATE TEMP TABLE deep_chain ON COMMIT DROP AS
+            SELECT gen_random_uuid() AS entity_id, gs AS n
+            FROM generate_series(1, 10001) AS gs
+        """)
+    )
+    db_connection.execute(
+        text("""
+            INSERT INTO core.entities
+                (entity_id, world_id, entity_type_id, canonical_name, canon_status_id,
+                 lifecycle_status_id)
+            SELECT entity_id, :world, :etype, 'Deep ' || n, :canon, :lifecycle
+            FROM deep_chain
+        """),
+        {"world": world_id, "etype": region_type, "canon": canon, "lifecycle": lifecycle},
+    )
+    db_connection.execute(
+        text("""
+            INSERT INTO world.locations (location_id, parent_location_id)
+            SELECT c.entity_id, p.entity_id
+            FROM deep_chain c
+            LEFT JOIN deep_chain p ON p.n = c.n - 1
+            ORDER BY c.n
+        """)
+    )
+    deepest = db_connection.execute(
+        text("SELECT entity_id FROM deep_chain WHERE n = 10001")
+    ).scalar()
+    db_connection.execute(
+        text("ALTER TABLE world.locations ENABLE TRIGGER tr_locations_enforce_no_cycle")
+    )
+
+    new_location = make_location(
+        db_connection, world_id, entity_type_code="region", name="Too Deep"
+    )
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE world.locations SET parent_location_id = :d WHERE location_id = :l"),
+            {"d": deepest, "l": new_location},
+        )
+    message = str(exc.value)
+    assert "exceeds" in message and "ancestors without completing" in message
 
 
 # ---------------------------------------------------------------------------

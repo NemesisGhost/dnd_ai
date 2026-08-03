@@ -2548,11 +2548,12 @@ area_connections = Table(
         Text(),
         comment=(
             'Free-text description of what the condition is (e.g. "requires the brass '
-            'key" or "only open while the beacon is lit"). Required and non-blank when '
-            "is_conditional is true; must be NULL when is_conditional is false "
-            "(ck_area_connections_conditional_description_paired). Not yet machine-"
-            "evaluable — same placeholder shape as "
-            "campaign.character_conditions.source_description."
+            'key" or "only open while the beacon is lit"). Required when is_conditional '
+            "is true, and must contain at least one non-whitespace character — space, "
+            "tab, newline, and carriage-return-only values are all treated as blank and "
+            "rejected (ck_area_connections_conditional_description_paired). Must be "
+            "NULL when is_conditional is false. Not yet machine-evaluable — same "
+            "placeholder shape as campaign.character_conditions.source_description."
         ),
     ),
     *_timestamps(),
