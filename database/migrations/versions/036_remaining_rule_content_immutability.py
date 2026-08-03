@@ -40,7 +40,7 @@ Locking considerations:
 See: PHASE4_REMAINING_ISSUES.md §2
      docs/architecture/DATABASE_MODEL.md §8 (rules model)
      database/migrations/versions/033_rules_identity_immutability.py
-     tests/database/test_phase4_remaining_issues.py (the table-driven
+     tests/database/test_immutable_identity.py (the table-driven
      coverage test this revision closes)
 """
 

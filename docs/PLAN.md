@@ -1233,14 +1233,12 @@ Every phase ends with a review, before the next one starts. Phase 1 produced six
 
 ### Phase 6: Events and interactions
 
-**Entry gate — repository context modularization.** Phase 5 is closed. Before adding any Phase 6 schema, complete the mechanical source/test split in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain). This is required now because `src/dnd_ai/persistence/tables.py` already contains every Phase 2–5 table in one 3,000+ line module, while `test_phase4_remaining_issues.py` and `test_phase4_corrections.py` retain closed review history in two phase-oriented files. Adding events/interactions first would make the recurring context cost and later refactor risk larger.
-
-The gate is complete only when:
+**Entry gate — repository context modularization. Closed.** Phase 5 is closed. The mechanical source/test split in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain) is done, verified against AWS `dev`:
 
 - table metadata is split into bounded domain modules behind a compatibility-preserving `dnd_ai.persistence.tables` package;
-- the two closed Phase 4 test monoliths are redistributed into invariant/topic-oriented test modules;
-- no migration or live-schema change results, existing imports continue to work, and a metadata-completeness test plus `alembic check` prove the split is behaviorally neutral; and
-- the full quality and database/scenario test suite remains green against AWS `dev`.
+- the two closed Phase 4 test monoliths are redistributed into invariant/topic-oriented test modules (`test_session_chronology.py`, `test_ruleset_provenance.py`, `test_ruleset_version_consistency.py`, `test_immutable_identity.py`, `test_world_ruleset_dependency_and_concurrency.py`, `test_character_language_integrity.py`, `test_metadata_server_defaults.py`);
+- no migration or live-schema change resulted, existing imports continue to work, and a metadata-completeness test (`tests/unit/test_persistence_tables_package.py`) plus `alembic check` proved the split behaviorally neutral (85 tables, identical names, before and after); and
+- the full quality and database test suite is green against AWS `dev` (366 tests collected from the split test files before and after, same as the two monoliths combined).
 
 Deliver:
 

@@ -209,6 +209,32 @@ def make_ruleset_version(connection: Connection, code: str | None = None) -> uui
     return value
 
 
+def make_bare_ruleset(connection: Connection, code: str) -> uuid.UUID:
+    """A ruleset row with no version at all — for tests that manage the
+    ruleset_versions insert themselves (e.g. moving a version between two
+    rulesets to prove ruleset_id is immutable)."""
+    value = connection.execute(
+        text(
+            "INSERT INTO rules.rulesets (code, display_name) VALUES (:c, :c) RETURNING ruleset_id"
+        ),
+        {"c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def current_ruleset_version_id(connection: Connection, ruleset_id: uuid.UUID) -> uuid.UUID:
+    value = connection.execute(
+        text(
+            "SELECT ruleset_version_id FROM rules.ruleset_versions "
+            "WHERE ruleset_id = :r AND is_current"
+        ),
+        {"r": ruleset_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_species(
     connection: Connection, ruleset_version_id: uuid.UUID, code: str = "human"
 ) -> uuid.UUID:

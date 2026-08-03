@@ -1,0 +1,228 @@
+"""SQLAlchemy Core table metadata.
+
+This is the single `MetaData` that `alembic check` compares against the live
+database, so it must stay in step with the migrations — a table added in a
+revision and not declared here shows up as a spurious "remove_table" diff and
+fails CI. That comparison is the point: it is what proves migrations and
+application metadata agree (docs/DEVELOPMENT.md §8).
+
+Core, not the ORM, per docs/DEVELOPMENT.md §1 — the domain model is
+class-table inheritance across bounded schemas with typed state tables, and an
+ORM identity map fights that more than it helps.
+
+What autogenerate compares is declared here: tables, columns, types,
+nullability, primary keys, foreign keys, indexes, and **comments** — Alembic
+compares comments unconditionally, with no opt-out. That means every comment
+appears both here and in the migration that creates it. The duplication is
+deliberate rather than unfortunate: `alembic check` fails the moment the two
+disagree, so drift is loud instead of silent. Sharing one constant between
+them is not an option, because a migration must produce the same result on
+every replay and cannot depend on a value that later edits can change.
+
+CHECK constraints, triggers, and default privileges are *not* declared here.
+Alembic does not compare them, so listing them would add maintenance with no
+enforcement behind it. They are covered by tests instead — see
+tests/database/test_core_lookups_and_security.py and test_role_grants.py.
+"""
+
+from ._shared import (
+    LOOKUP_CODE_COMMENT,
+    NONNEGATIVE_INTEGER,
+    PERCENTAGE_0_100,
+    RATING_1_10,
+    metadata,
+)
+from .audit import (
+    change_actions,
+    change_log,
+)
+from .campaign import (
+    area_connection_state,
+    area_feature_state,
+    campaign_parties,
+    campaigns,
+    character_conditions,
+    character_location_history,
+    character_resources,
+    character_state,
+    connection_statuses,
+    hazard_state,
+    hazard_statuses,
+    interactable_state,
+    interactable_statuses,
+    location_state,
+    parties,
+    party_memberships,
+    sessions,
+    timelines,
+)
+from .characters import (
+    character_ability_scores,
+    character_builds,
+    character_class_levels,
+    character_descriptions,
+    character_features,
+    character_known_spells,
+    character_languages,
+    character_movements,
+    character_prepared_spells,
+    character_proficiencies,
+    character_senses,
+    character_spellcasting_profiles,
+    characters,
+    npcs,
+    player_characters,
+)
+from .core import (
+    calendar_months,
+    calendars,
+    canon_statuses,
+    entities,
+    entity_names,
+    entity_tags,
+    entity_types,
+    lifecycle_statuses,
+    name_types,
+    source_types,
+    sources,
+    tags,
+    world_time_precisions,
+    world_times,
+    worlds,
+)
+from .knowledge import (
+    entity_knowledge,
+    knowledge_items,
+    knowledge_types,
+    party_discoveries,
+    truth_statuses,
+)
+from .locations import (
+    area_connections,
+    area_features,
+    area_hazards,
+    area_interactables,
+    buildings,
+    connection_types,
+    dungeon_areas,
+    dungeons,
+    locations,
+    settlements,
+)
+from .rules import (
+    abilities,
+    classes,
+    conditions,
+    creature_types,
+    damage_types,
+    feats,
+    features,
+    languages,
+    proficiency_types,
+    resource_definitions,
+    ruleset_versions,
+    rulesets,
+    skills,
+    species,
+    spells,
+    subclasses,
+    world_rulesets,
+)
+from .security import (
+    roles,
+    user_roles,
+    users,
+)
+
+__all__ = [
+    "LOOKUP_CODE_COMMENT",
+    "NONNEGATIVE_INTEGER",
+    "PERCENTAGE_0_100",
+    "RATING_1_10",
+    "abilities",
+    "area_connection_state",
+    "area_connections",
+    "area_feature_state",
+    "area_features",
+    "area_hazards",
+    "area_interactables",
+    "buildings",
+    "calendar_months",
+    "calendars",
+    "campaign_parties",
+    "campaigns",
+    "canon_statuses",
+    "change_actions",
+    "change_log",
+    "character_ability_scores",
+    "character_builds",
+    "character_class_levels",
+    "character_conditions",
+    "character_descriptions",
+    "character_features",
+    "character_known_spells",
+    "character_languages",
+    "character_location_history",
+    "character_movements",
+    "character_prepared_spells",
+    "character_proficiencies",
+    "character_resources",
+    "character_senses",
+    "character_spellcasting_profiles",
+    "character_state",
+    "characters",
+    "classes",
+    "conditions",
+    "connection_statuses",
+    "connection_types",
+    "creature_types",
+    "damage_types",
+    "dungeon_areas",
+    "dungeons",
+    "entities",
+    "entity_knowledge",
+    "entity_names",
+    "entity_tags",
+    "entity_types",
+    "feats",
+    "features",
+    "hazard_state",
+    "hazard_statuses",
+    "interactable_state",
+    "interactable_statuses",
+    "knowledge_items",
+    "knowledge_types",
+    "languages",
+    "lifecycle_statuses",
+    "location_state",
+    "locations",
+    "metadata",
+    "name_types",
+    "npcs",
+    "parties",
+    "party_discoveries",
+    "party_memberships",
+    "player_characters",
+    "proficiency_types",
+    "resource_definitions",
+    "roles",
+    "ruleset_versions",
+    "rulesets",
+    "sessions",
+    "settlements",
+    "skills",
+    "source_types",
+    "sources",
+    "species",
+    "spells",
+    "subclasses",
+    "tags",
+    "timelines",
+    "truth_statuses",
+    "user_roles",
+    "users",
+    "world_rulesets",
+    "world_time_precisions",
+    "world_times",
+    "worlds",
+]
