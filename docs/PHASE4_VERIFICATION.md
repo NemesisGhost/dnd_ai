@@ -185,7 +185,11 @@ Also fixed a pre-existing test that the new enforcement correctly broke: `test_c
 
 Verified the same way as the prior closeout passes: full `downgrade base` → `upgrade head` round trip (through all 37 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean (confirmed only after adding the table-comment update above — the first pass correctly caught the comment-only drift between `tables.py` and the live schema), `ruff format --check`/`ruff check`/`mypy src` clean, seed idempotency green, and the full suite — 858 tests (up from 847) — green against AWS `dev`.
 
-The push-triggered GitHub Actions AWS workflow independently confirmed this result; its run link is recorded in a follow-up commit once the run completes.
+The push-triggered GitHub Actions workflow independently confirmed that result in
+run [`30776286733`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30776286733):
+migration through revision 037, full downgrade/upgrade round trip, seed verification,
+`alembic check`, formatting, Ruff, mypy, all 858 tests, database removal, and
+ingress revocation passed.
 
 ## Outstanding
 
