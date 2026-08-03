@@ -1,8 +1,8 @@
 # AI Assistant Operating Guide — D&D AI World Platform
 
-**Purpose**: This is the primary operating manual for AI assistants (Claude, Copilot, etc.) working in this repository. It synthesizes the complete documentation set into actionable guidance.
+**Purpose**: This is an on-demand catalog of worked examples, anti-patterns, and decision trees for AI assistants (Claude, Copilot, etc.) working in this repository.
 
-**Scope**: Detailed examples, anti-patterns, and decision trees. For the short version, see [CLAUDE.md](../CLAUDE.md). Where the two disagree, the linked source document wins and both should be corrected.
+**Scope**: Start with [CLAUDE.md](../CLAUDE.md), which contains the required operating rules and task-scoped documentation routing policy. Do **not** preload this entire guide at task start or read it in parallel with `CLAUDE.md`. Search its headings and open only the example or decision tree needed after the authoritative topic document leaves a concrete question unresolved. Where documents disagree, the linked authoritative source wins and the drift should be corrected.
 
 ---
 
@@ -39,6 +39,8 @@ A **persistent-world simulation platform** for tabletop RPGs (initially D&D 5e 2
 - What remains: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) — not tied to the old schema, reasonable to build on
 
 ### Where to look when stuck
+
+Search the candidate documents first, then open only the matching sections. The list below is a routing order, not a mandatory full-document read list.
 
 1. **Check current phase**: [docs/PLAN.md](PLAN.md) — are you working on something that's supposed to be implemented yet?
 2. **Clarify concepts**: [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — what does this term actually mean?
@@ -236,17 +238,17 @@ See [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [ADR 0008](adr/000
 
 All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md` in repo root).
 
-### Primary Documents (read these first)
+### Primary Documents (route by task)
 
 | Document | Purpose | When to Read |
 |----------|---------|--------------|
-| [README.md](../README.md) | High-level project vision and architecture overview | First time in repo |
-| [CLAUDE.md](../CLAUDE.md) | Concise operating instructions for Claude | Quick reference |
-| [docs/PLAN.md](PLAN.md) | **Source of truth** for implementation phases and deliverables | Before starting any feature |
-| [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) | Conceptual vocabulary and domain boundaries | Before naming anything |
-| [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) | Hard rules for schema design | Before writing any schema |
-| [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) | Create/mutate/archive/delete workflows | Before implementing entity operations |
-| [docs/DEVELOPMENT.md](DEVELOPMENT.md) | Toolchain, repo layout, migration and test workflow | Before writing any code |
+| [README.md](../README.md) | High-level project vision and architecture overview | First-time orientation only |
+| [CLAUDE.md](../CLAUDE.md) | Required operating rules and context-routing policy | Start of every task |
+| [docs/PLAN.md](PLAN.md) | **Source of truth** for implementation phases and deliverables | §23.0–23.1 plus current phase entry |
+| [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) | Conceptual vocabulary and domain boundaries | Affected concept sections only |
+| [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) | Hard rules for schema design | Sections for mechanisms being changed |
+| [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) | Create/mutate/archive/delete workflows | Matching workflow only, when applicable |
+| [docs/DEVELOPMENT.md](DEVELOPMENT.md) | Toolchain, repo layout, migration and test workflow | Relevant workflow plus §10 definition of done |
 
 ### Architecture Documents
 
@@ -268,22 +270,22 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 
 ## Pre-Implementation Checklist
 
-**Before implementing ANY feature**, complete this checklist:
+**Before implementing any feature**, complete this checklist using targeted searches and section reads. Do not satisfy it by loading every linked document in full.
 
 ### Phase Check
-- [ ] Check [docs/PLAN.md](PLAN.md) for current phase
+- [ ] Read [docs/PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) and the current phase entry
 - [ ] Verify this feature is in the current phase's deliverables
 - [ ] Confirm exit criteria are clear
 
 ### Domain Understanding
-- [ ] Look up concepts in [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md)
+- [ ] Search for and read the affected concepts in [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md)
 - [ ] Verify I'm not inventing new vocabulary that already exists
 - [ ] Check if this crosses domain boundaries (requires coordination)
 
 ### Schema Design
-- [ ] Review relevant sections in [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md)
+- [ ] Search for and read the affected sections in [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md)
 - [ ] Confirm table placement in correct PostgreSQL schema
-- [ ] Check [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) for:
+- [ ] Read the [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms being changed, including as applicable:
   - [ ] Naming conventions (snake_case, plural tables, entity-specific PK names)
   - [ ] Data types (TEXT vs VARCHAR, TIMESTAMPTZ, UUID, avoid JSONB for stable concepts)
   - [ ] Inheritance pattern (class-table, same UUID through chain)
@@ -291,19 +293,19 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
   - [ ] Index strategy
 
 ### Entity Lifecycle
-- [ ] If creating/mutating/deleting entities: read [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md)
+- [ ] If creating/mutating/deleting entities: read the matching workflow in [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md)
 - [ ] Identify correct command/workflow
 - [ ] Ensure atomic transaction for inheritance chain
 - [ ] Plan event creation if state changes
 
 ### Architecture Placement
-- [ ] Check [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md)
+- [ ] For application code, read the affected layer/transaction sections in [docs/architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md)
 - [ ] Identify correct layer (API / Application / Domain / Data)
 - [ ] Confirm not bypassing command/transaction pattern
 - [ ] Ensure clients go through API, not direct to DB
 
 ### Vertical Slice Validation
-- [ ] Review [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md)
+- [ ] For cross-domain or scenario work, read the applicable steps in [docs/architecture/DUNGEON_FLOW.md](architecture/DUNGEON_FLOW.md)
 - [ ] Confirm this feature supports the dungeon exploration flow
 - [ ] Verify it doesn't break the acceptance scenario
 

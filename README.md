@@ -744,7 +744,8 @@ The database will use bounded PostgreSQL schemas:
 │   ├── QUICKSTART.md               # Fast path to deployed infrastructure
 │   ├── CHECKLIST.md                # Pre-deployment checks
 │   ├── INFRASTRUCTURE.md           # Infrastructure reference
-│   ├── AI_ASSISTANT_GUIDE.md
+│   ├── AI_ASSISTANT_GUIDE.md       # On-demand examples; not startup context
+│   ├── PLAN_PHASES_0_5_ARCHIVE.md  # Completed-phase delivery detail
 │   ├── architecture/
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
@@ -852,7 +853,8 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 ### Working with AI assistants
 
 - [CLAUDE.md](CLAUDE.md) — Claude Code operating instructions: tech stack, architectural rules, documentation map
-- [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) — the long form: worked examples, anti-patterns, decision trees
+- [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) — on-demand worked examples, anti-patterns, and decision trees; start with `CLAUDE.md` and open only the relevant section
+- [docs/PLAN_PHASES_0_5_ARCHIVE.md](docs/PLAN_PHASES_0_5_ARCHIVE.md) — completed Phase 0–5 delivery detail, kept out of the active plan's normal context
 - [.github/copilot-instructions.md](.github/copilot-instructions.md) — condensed rules for GitHub Copilot
 
 ### Decision records
