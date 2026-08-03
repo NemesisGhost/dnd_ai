@@ -179,7 +179,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 4 are done.** Phase 5's implementation and two pre-merge corrections passes are merged and verified against live AWS and GitHub Actions, but its post-merge closeout remains open; see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is a closed historical record. Finish the Phase 5 register before beginning [Phase 6](PLAN.md#phase-6-events-and-interactions); follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 5 are done.** Phase 4's implementation, first correction set, and all three closeout passes, and Phase 5's implementation plus its own three exit-review corrections passes — two pre-merge, one post-merge — are all verified against live AWS and GitHub Actions; see [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md), [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md), [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md), [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md), and [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both now closed historical records. The current target is [Phase 6](PLAN.md#phase-6-events-and-interactions); follow [§23.1](PLAN.md#231-phase-exit-review) when it closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

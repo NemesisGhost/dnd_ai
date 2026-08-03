@@ -9,8 +9,10 @@ driven by core.entity_types metadata, and a dungeon-specific one for the
 trigger alone cannot see.
 """
 
+import uuid
+
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError
 
 from tests.factories import (
@@ -188,3 +190,212 @@ def test_a_character_npc_cannot_be_retyped_to_bare_character(db_connection: Conn
             {"t": _entity_type_id(db_connection, "character"), "e": npc},
         )
     assert "cannot change type" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency safety of the parent-side/subtype-side checks (revision 053)
+# ---------------------------------------------------------------------------
+# Two real connections, following the pattern established in
+# test_dungeon_structural_mutation_safety.py::
+# test_a_concurrent_containment_swap_is_serialized_and_rejected: committed
+# setup under a unique slug, a short lock_timeout on the side that must
+# block, and explicit teardown. Each test proves both halves the review
+# asked for: the second write genuinely blocks (not merely fails
+# immediately), and once resolved, no ordering can leave an invalid
+# combined state — the loser is rejected outright, not silently allowed.
+
+
+def _cleanup_world(engine: Engine, slug: str) -> None:
+    with engine.begin() as cleanup:
+        params = {"s": slug}
+        cleanup.execute(
+            text(
+                "DELETE FROM core.entities WHERE world_id IN "
+                "(SELECT world_id FROM core.worlds WHERE slug = :s)"
+            ),
+            params,
+        )
+        cleanup.execute(text("DELETE FROM core.worlds WHERE slug = :s"), params)
+
+
+def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
+    postgres_engine: Engine,
+) -> None:
+    """The generic race: one transaction inserts a subtype row
+    (world.dungeons) for an entity while another concurrently retypes that
+    same entity away from 'dungeon'. core.enforce_entity_subtype() (the
+    generic, table-agnostic check every subtype table shares) and
+    core.enforce_entity_type_change() must serialize on the same entity,
+    not just the dungeon-specific pair."""
+    engine = postgres_engine
+    slug = f"subtype-lock-generic-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            world = make_world(setup, slug=slug)
+            dungeon = make_location(setup, world, entity_type_code="dungeon")
+            region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Transaction 1: insert the subtype row. Still uncommitted.
+            first.execute(
+                text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon}
+            )
+
+            # Transaction 2 concurrently attempts to retype the same entity
+            # away from 'dungeon'. Both started before either committed; the
+            # advisory lock (keyed on the entity) forces this write to wait.
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                    {"t": region_type, "e": dungeon},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected a lock-timeout conflict, got: {message}"
+            )
+
+            second.rollback()
+            first.commit()
+
+            # The subtype row now exists (committed). Retrying the retype
+            # must be rejected outright now that it would strand that row.
+            with engine.begin() as third:
+                with pytest.raises(IntegrityError) as exc2:
+                    third.execute(
+                        text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                        {"t": region_type, "e": dungeon},
+                    )
+                assert "cannot change type" in str(exc2.value)
+    finally:
+        _cleanup_world(engine, slug)
+
+
+def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_serialized(
+    postgres_engine: Engine,
+) -> None:
+    """The compound race the review named explicitly: one transaction
+    removes world.dungeons (permitted per conventions §7.5) and retypes the
+    parent away from 'dungeon' while another concurrently inserts a new
+    dungeon_area parented under that same entity. world.enforce_dungeon_
+    area_parent_dungeon() (checking "is my parent dungeon-typed") and
+    world.enforce_dungeon_type_change_preserves_areas() (checking "do I have
+    dungeon-area children") must serialize on the dungeon's own entity_id."""
+    engine = postgres_engine
+    slug = f"subtype-lock-area-insert-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            world = make_world(setup, slug=slug)
+            dungeon = make_location(setup, world, entity_type_code="dungeon")
+            setup.execute(
+                text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon}
+            )
+            area = make_location(
+                setup, world, parent_location_id=dungeon, entity_type_code="dungeon_area"
+            )
+            region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Transaction 1: remove the marker, then retype the dungeon
+            # away. Still uncommitted.
+            first.execute(text("DELETE FROM world.dungeons WHERE dungeon_id = :d"), {"d": dungeon})
+            first.execute(
+                text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                {"t": region_type, "e": dungeon},
+            )
+
+            # Transaction 2 concurrently attempts to insert the pending
+            # dungeon_area subtype row for `area`, whose parent is the same
+            # dungeon. The advisory lock (keyed on the parent) forces this
+            # to wait on transaction 1.
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
+                    {"a": area},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected a lock-timeout conflict, got: {message}"
+            )
+
+            second.rollback()
+            first.commit()
+
+            # The dungeon is now typed 'region' (committed). Retrying the
+            # dungeon_area insert must be rejected outright — its parent no
+            # longer claims to be a dungeon.
+            with engine.begin() as third:
+                with pytest.raises(IntegrityError) as exc2:
+                    third.execute(
+                        text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
+                        {"a": area},
+                    )
+                assert "not dungeon" in str(exc2.value)
+    finally:
+        _cleanup_world(engine, slug)
+
+
+def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
+    postgres_engine: Engine,
+) -> None:
+    """Reparenting an existing dungeon_area under a dungeon while another
+    transaction concurrently retypes that same dungeon away — the two sides
+    of "does this dungeon still have area children," contended from
+    opposite directions, must serialize rather than each reading a stale
+    snapshot of the other."""
+    engine = postgres_engine
+    slug = f"subtype-lock-reparent-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            world = make_world(setup, slug=slug)
+            old_dungeon = make_dungeon(setup, world, name="Old Dungeon")
+            new_dungeon = make_dungeon(setup, world, name="New Dungeon")
+            area = make_dungeon_area(setup, old_dungeon)
+            region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Transaction 1: reparent the area under new_dungeon. Still
+            # uncommitted.
+            first.execute(
+                text("UPDATE world.locations SET parent_location_id = :d WHERE location_id = :a"),
+                {"d": new_dungeon, "a": area},
+            )
+
+            # Transaction 2 concurrently attempts to retype new_dungeon away
+            # from 'dungeon'. The advisory lock (keyed on new_dungeon) forces
+            # this to wait.
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                    {"t": region_type, "e": new_dungeon},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected a lock-timeout conflict, got: {message}"
+            )
+
+            second.rollback()
+            first.commit()
+
+            # The area is now parented under new_dungeon (committed).
+            # Retrying the retype must be rejected outright.
+            with engine.begin() as third:
+                with pytest.raises(IntegrityError) as exc2:
+                    third.execute(
+                        text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                        {"t": region_type, "e": new_dungeon},
+                    )
+                assert "still has" in str(exc2.value) and "dungeon area" in str(exc2.value)
+    finally:
+        _cleanup_world(engine, slug)

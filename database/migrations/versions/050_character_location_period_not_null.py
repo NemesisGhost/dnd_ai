@@ -1,7 +1,7 @@
 """Make character_location_history.location_period structurally NOT NULL
 
 Revision ID: 050_char_location_period_notnull
-Revises: 049_location_containment_lock
+Revises: 052_char_location_backfill
 Create Date: 2026-08-03 13:00:00.000000
 
 Purpose:
@@ -14,6 +14,23 @@ Purpose:
     trigger already makes a NULL value unreachable through normal writes; the
     column's own nullability just never caught up to that guarantee, leaving
     the schema silently weaker than the invariant it already enforces.
+
+    Amendment (post-merge review, PHASE5_REMAINING_ISSUES.md item 3): this
+    revision's own claim below that "every existing row already has a
+    derived range" was true only for the environments this project has ever
+    actually run, never proven for the general case — a database that
+    reached revision 042 with real history rows, predating revision 043's
+    derivation trigger, would carry a NULL location_period into this
+    revision's guard and correctly fail here with no supported way to
+    proceed, since an ordinary revision placed after 051 cannot repair a
+    database that never reaches it. revision 052_char_location_backfill
+    was inserted between 049 and this revision to close that gap — this
+    revision's own down_revision above was repointed from
+    049_location_containment_lock to 052_char_location_backfill as a
+    narrowly-scoped, explicitly recorded exception to the forward-only
+    migration policy (see 052's docstring for the full justification). This
+    revision's DDL below is otherwise unchanged from what merged and passed
+    CI in PR #5.
 
 Forward migration:
     - Backfill guard: assert no existing row has a NULL location_period
@@ -35,8 +52,10 @@ Rollback:
     only tightens nullability.
 
 Data implications:
-    None found in practice (asserted, not assumed — see above). No backfill
-    UPDATE is needed because every existing row already has a derived range.
+    None found in practice in any environment this project has run — but see
+    the amendment above: this revision performs no backfill itself, only a
+    guard that fails clearly if one was still needed. Revision 052 (now
+    immediately prior in the upgrade chain) performs the actual backfill.
 
 Locking considerations:
     SET NOT NULL on Postgres 12+ can use an existing CHECK constraint to
@@ -57,7 +76,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "050_char_location_period_notnull"
-down_revision = "049_location_containment_lock"
+# Repointed from 049_location_containment_lock to 052_char_location_backfill
+# — see the "Amendment" note in this file's docstring and
+# 052_character_location_period_backfill.py for the full justification.
+down_revision = "052_char_location_backfill"
 branch_labels = None
 depends_on = None
 

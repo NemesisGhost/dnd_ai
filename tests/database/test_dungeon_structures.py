@@ -7,6 +7,8 @@ connections require world agreement but NOT same-dungeon agreement
 structural column with no knowledge-domain coupling.
 """
 
+import uuid
+
 import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
@@ -238,20 +240,75 @@ def test_a_conditional_route_without_a_description_is_rejected(
     assert "ck_area_connections_conditional_description_paired" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "blank_description",
+    [
+        pytest.param("   ", id="spaces_only"),
+        pytest.param("\t\t", id="tabs_only"),
+        pytest.param("\n\n", id="newlines_only"),
+        pytest.param("\r\r", id="carriage_returns_only"),
+        pytest.param(" \t\n\r ", id="mixed_whitespace"),
+        pytest.param("", id="empty_string"),
+    ],
+)
 def test_a_conditional_route_with_a_blank_description_is_rejected(
-    db_connection: Connection,
+    db_connection: Connection, blank_description: str
 ) -> None:
-    """Non-blank, not just non-null — whitespace-only does not count."""
-    world_id = make_world(db_connection, slug="conditional-route-blank-description")
+    """Non-blank, not just non-null — and "blank" means the project's
+    complete whitespace rule (revision 055), not merely "not an ordinary
+    space": a tab-only, newline-only, carriage-return-only, or mixed
+    whitespace-only description must all be rejected exactly like a
+    space-only one."""
+    world_id = make_world(
+        db_connection, slug=f"conditional-route-blank-description-{uuid.uuid4().hex[:8]}"
+    )
     dungeon_id = make_dungeon(db_connection, world_id)
     area_a = make_dungeon_area(db_connection, dungeon_id)
     area_b = make_dungeon_area(db_connection, dungeon_id)
 
     with pytest.raises(IntegrityError) as exc:
         _insert_connection(
-            db_connection, area_a, area_b, is_conditional=True, condition_description="   "
+            db_connection,
+            area_a,
+            area_b,
+            is_conditional=True,
+            condition_description=blank_description,
         )
     assert "ck_area_connections_conditional_description_paired" in str(exc.value)
+
+
+def test_a_conditional_route_with_whitespace_surrounding_real_text_is_accepted(
+    db_connection: Connection,
+) -> None:
+    """The rule is "contains at least one non-whitespace character," not
+    "contains no whitespace at all" — a description padded with whitespace
+    around real content must still be accepted."""
+    world_id = make_world(db_connection, slug="conditional-route-padded-description")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    connection_id = db_connection.execute(
+        text("""
+            INSERT INTO world.area_connections
+                (from_dungeon_area_id, to_dungeon_area_id, connection_type_id,
+                 is_conditional, condition_description)
+            VALUES (
+                :f, :t,
+                (SELECT connection_type_id FROM world.connection_types WHERE code = 'door'),
+                true, '  requires the brass key  '
+            )
+            RETURNING area_connection_id
+        """),
+        {"f": area_a, "t": area_b},
+    ).scalar()
+    description = db_connection.execute(
+        text(
+            "SELECT condition_description FROM world.area_connections WHERE area_connection_id = :c"
+        ),
+        {"c": connection_id},
+    ).scalar()
+    assert description == "  requires the brass key  "
 
 
 def test_an_unconditional_route_with_a_description_is_rejected(
