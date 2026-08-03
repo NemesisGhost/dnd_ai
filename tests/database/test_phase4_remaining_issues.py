@@ -17,7 +17,7 @@ and `scripts/ci_cleanup.py`/its own test module respectively — the seeded
 family/version assertion (§4) and the CI cleanup script test (§5).
 
 A second post-closeout review reopened the register again with one further
-schema blocker and two focused verification gaps, closed below: character-
+schema blocker and three focused verification gaps, closed below: character-
 language allow-list enforcement in both directions plus its concurrency
 safety (§1, revision 037), and a threaded test proving a genuinely blocked
 allow-list DELETE resumes and is rejected once the dependent-creator commits
@@ -1119,13 +1119,13 @@ def test_unrelated_rule_content_columns_remain_freely_updatable(db_connection: C
 # each other's committed state), a short lock_timeout on the side that must
 # block, and explicit teardown in a finally block.
 #
-# All six dependency categories are covered for the DELETE race (the race the
+# All seven dependency categories are covered for the DELETE race (the race the
 # review actually found — a dependent being created while the association is
 # concurrently removed). The identical lock also protects an UPDATE-based
 # repoint, since revision 031's trigger already fires on
 # "BEFORE DELETE OR UPDATE OF world_id, ruleset_id" and repointing needs the
 # same exclusive row lock a DELETE does — proven once (build category) rather
-# than for all six, since the locking mechanism is table/row-level, not
+# than for all seven, since the locking mechanism is table/row-level, not
 # category-specific, and repeating it six times would exercise the same
 # mechanism six times over rather than six different things.
 
@@ -1150,7 +1150,10 @@ class ConcurrencyWorld:
 
 def _cleanup_concurrency_world(engine: Engine, slug: str) -> None:
     with engine.begin() as cleanup:
-        params = {"s": slug}
+        params = {
+            "s": slug,
+            "ruleset_code": f"concurrency_{slug.replace('-', '_')}%",
+        }
         for statement in (
             """DELETE FROM campaign.character_resources WHERE timeline_id IN (
                 SELECT timeline_id FROM campaign.timelines
@@ -1180,9 +1183,9 @@ def _cleanup_concurrency_world(engine: Engine, slug: str) -> None:
                WHERE world_id IN (SELECT world_id FROM core.worlds WHERE slug = :s)""",
             """DELETE FROM rules.ruleset_versions WHERE ruleset_id IN (
                 SELECT ruleset_id FROM rules.rulesets
-                WHERE code LIKE ('concurrency_' || :s || '%')
+                WHERE code LIKE :ruleset_code
             )""",
-            "DELETE FROM rules.rulesets WHERE code LIKE ('concurrency_' || :s || '%')",
+            "DELETE FROM rules.rulesets WHERE code LIKE :ruleset_code",
             "DELETE FROM core.worlds WHERE slug = :s",
         ):
             cleanup.execute(text(statement), params)
@@ -1480,6 +1483,79 @@ def test_concurrent_build_creation_blocks_a_concurrent_repoint(postgres_engine: 
         _cleanup_concurrency_world(engine, slug)
 
 
+def test_concurrent_language_creation_blocks_a_concurrent_repoint(
+    postgres_engine: Engine,
+) -> None:
+    """Character-language creation takes the same shared allow-list lock for
+    an UPDATE-based repoint that the removal test proves for DELETE."""
+    engine = postgres_engine
+    slug = f"conc-lang-repoint-{uuid.uuid4().hex[:8]}"
+    other_ruleset_id: uuid.UUID | None = None
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            other_ruleset_id = _bare_ruleset(
+                setup, f"conc_lang_repoint_target_{uuid.uuid4().hex[:8]}"
+            )
+            language_id = setup.execute(
+                text(
+                    "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'common', 'Common') RETURNING language_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            first.execute(
+                text(
+                    "INSERT INTO character.character_languages (character_id, language_id) "
+                    "VALUES (:c, :l)"
+                ),
+                {"c": cw.character_id, "l": language_id},
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text(
+                        "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                        "WHERE world_id = :w AND ruleset_id = :old"
+                    ),
+                    {"new": other_ruleset_id, "w": cw.world_id, "old": cw.ruleset_id},
+                )
+                second.commit()
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                "expected the repoint to block on the character-language creator's "
+                f"FOR SHARE lock, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+            with engine.begin() as third:
+                with pytest.raises(CONSTRAINT_ERRORS) as exc2:
+                    third.execute(
+                        text(
+                            "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                            "WHERE world_id = :w AND ruleset_id = :old"
+                        ),
+                        {"new": other_ruleset_id, "w": cw.world_id, "old": cw.ruleset_id},
+                    )
+                assert "language from it" in str(exc2.value)
+    finally:
+        if other_ruleset_id is not None:
+            with engine.begin() as cleanup:
+                cleanup.execute(
+                    text("DELETE FROM rules.rulesets WHERE ruleset_id = :r"),
+                    {"r": other_ruleset_id},
+                )
+        _cleanup_concurrency_world(engine, slug)
+
+
 # ---------------------------------------------------------------------------
 # §2 (second post-closeout): a genuinely blocked allow-list DELETE resumes
 # and is rejected once the dependent-creator commits
@@ -1498,8 +1574,8 @@ def test_concurrent_build_creation_blocks_a_concurrent_repoint(postgres_engine: 
 # concurrent exclusive-locking DELETE/UPDATE until the holder's transaction
 # ends — is table/row-level, not category-specific (see the comment above
 # the lock_timeout test section), so a second full thread-and-poll test for
-# each of the other five categories would exercise the same mechanism six
-# times over rather than six different things.
+# each of the other six categories would exercise the same mechanism seven
+# times over rather than seven different things.
 
 
 def _assert_blocked_delete_resumes_and_is_rejected(
