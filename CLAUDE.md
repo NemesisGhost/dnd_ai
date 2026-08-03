@@ -26,22 +26,31 @@ This is an architecture restart. Phases 1 through 5 are complete, including Phas
 
 The full toolchain, with rationale and the process for changing any of it, is in [docs/DEVELOPMENT.md §1](docs/DEVELOPMENT.md#1-toolchain). When a doc doesn't specify a technology choice, default to this stack rather than introducing a new one.
 
-## 4. Documentation map
+## 4. Documentation map and context-loading policy
 
-All project documentation lives under `docs/` (never the repo root, except `README.md` and this file). Read the relevant doc *before* implementing in that area — these are detailed and authoritative; this file is intentionally not a substitute.
+All project documentation lives under `docs/` (never the repo root, except `README.md` and this file). The linked documents are authoritative, but **authoritative does not mean load every document in full for every task**. Use progressive, task-scoped retrieval:
+
+1. Read this file, then identify the task's phase, domain, and change type.
+2. Use a heading or keyword search (`rg -n '^#{1,4} |<term>' <candidate-docs>`) to locate the relevant sections before opening them.
+3. Read only the current phase entry, the affected domain/schema sections, and the convention sections that govern the mechanism being changed. Expand to adjacent sections only when a dependency or conflict requires it.
+4. Do not preload completed-phase verification/history, unrelated domains, or all of `PLAN.md`, `DOMAIN_MODEL.md`, `DATABASE_MODEL.md`, and `DATABASE_CONVENTIONS.md` together.
+5. Read a whole authoritative document only for a cross-cutting design/reconciliation review, or when targeted sections do not resolve an ambiguity. State that reason in the work summary.
+
+`docs/AI_ASSISTANT_GUIDE.md` is an **on-demand example catalog**, not part of normal startup context. Open a specific section only when this file and the authoritative topic document do not provide enough guidance. Never load it alongside this file merely because work is beginning.
 
 | Document | Use it for |
 |---|---|
-| [docs/PLAN.md](docs/PLAN.md) | **Source of truth** for implementation *phasing*: which phase delivers what, exit criteria, first-time obligations. Check current phase before starting work. Its per-phase "Implement" prose is a working sketch, not the schema record — where it names a table, defer to DATABASE_MODEL.md for that table's actual existence, schema, and shape. |
-| [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Conceptual vocabulary — what a World/Timeline/Campaign/Entity/Event/Knowledge Item/etc. *is* and its boundaries. Read before naming or designing anything new. |
-| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | **Source of truth** for database schema and table scope: every table, its schema, key columns, ER diagrams, ownership rules. If PLAN.md and this document disagree on whether a table exists, its name, or its shape, this document wins and PLAN.md should be corrected (§25 there records the last such reconciliation). |
-| [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard rules for naming, types, keys, inheritance, JSONB use, migrations, indexing, anti-patterns (§34). Follow exactly — this is a convention document, not a style suggestion. |
+| [docs/PLAN.md](docs/PLAN.md) | **Source of truth** for implementation *phasing*. Read §23.0–23.1 plus the current phase entry; use completed-phase history only for regression/archaeology work. Its per-phase "Implement" prose is a working sketch, not the schema record — where it names a table, defer to DATABASE_MODEL.md. |
+| [docs/PLAN_PHASES_0_5_ARCHIVE.md](docs/PLAN_PHASES_0_5_ARCHIVE.md) | Completed Phase 0–5 deliverables, exit criteria, and first-time obligations. Read only for historical/regression work involving those phases. |
+| [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Conceptual vocabulary and boundaries. Search for and read the affected concepts before naming or changing them; do not load unrelated domains. |
+| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | **Source of truth** for database schema and table scope. Read the affected schema/domain section and its reconciliation notes. If PLAN.md disagrees on a table's existence, name, or shape, this document wins. |
+| [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard database rules. Read the sections governing the mechanisms being changed plus §34's relevant anti-patterns; follow them exactly. A full-document read is reserved for convention-wide reviews. |
 | [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | How entities are created, approved, mutated, branched, archived, deleted — including the exact command list and required transaction steps. |
 | [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, AI orchestration flow, deployment topology (modular monolith on ECS Fargate). |
 | [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | The reference end-to-end vertical slice (dungeon/quest scenario) — the acceptance test any cross-domain design should be checked against. |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, definition of done. Read before writing code. |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, definition of done. Read the section matching the task plus §10. |
 | [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) | Infrastructure reference — variables, outputs, secrets, verification, teardown, and known gaps in the current Terraform. Deployment path is [docs/QUICKSTART.md](docs/QUICKSTART.md), pre-flight is [docs/CHECKLIST.md](docs/CHECKLIST.md), onboarding is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). The plan for what it should become is [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql). |
-| [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | Long-form version of this file: worked examples, anti-patterns, decision trees. This file is the summary; that one has the detail. |
+| [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) | On-demand worked examples, anti-patterns, and decision trees. Not a startup read and not a second copy of required context. |
 | [docs/adr/](docs/adr/) | One record per architectural decision. Most are stubs pointing back at PLAN.md §2. [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) governs where code runs and is verified; [ADR 0009](docs/adr/0009-separate-owning-role-from-login-roles.md) governs the database role model — read it before touching roles, grants, or object ownership. |
 
 ## 5. Non-negotiable architectural rules
@@ -66,7 +75,7 @@ When any task seems to require breaking one of these, stop and flag it rather th
 
 Full rules are in the linked docs — don't treat this as complete.
 
-- **Database:** `snake_case`, plural table names, `<entity>_id` primary keys (never a bare `id`), always schema-qualified references, `TEXT` over `VARCHAR(n)`, `TIMESTAMPTZ` for real-world time vs. `core.world_times` for fictional time, lookup tables over `ENUM`, no tables in `public`. See [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) in full before writing schema.
+- **Database:** `snake_case`, plural table names, `<entity>_id` primary keys (never a bare `id`), always schema-qualified references, `TEXT` over `VARCHAR(n)`, `TIMESTAMPTZ` for real-world time vs. `core.world_times` for fictional time, lookup tables over `ENUM`, no tables in `public`. Search [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) and read the sections governing the affected tables, constraints, migrations, grants, and tests before writing schema.
 - **Python services:** organize around the command/query and domain-service layering in [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md); commands are the only way to mutate state and must be transactional per §6–7 of that doc.
 - **Terraform:** one module per bounded infrastructure concern (mirroring the existing `database` / `secrets` split), one directory per environment under `terraform/environments/`, no hardcoded credentials, state and variable naming should mirror what's already in `terraform/modules/`.
 - **React:** standard component-based structure; the UI is a client like any other — it talks to the application API, not the database.
@@ -75,11 +84,11 @@ Full rules are in the linked docs — don't treat this as complete.
 
 ## 7. Before implementing a feature
 
-1. Check [docs/PLAN.md](docs/PLAN.md) for the current phase, that feature's exit criteria, and the phase's **first-time obligations** — the mechanisms a phase exercises for the first time are where defects cluster ([§23.1](docs/PLAN.md#231-phase-exit-review)).
-2. Look up the relevant concepts in [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and their schema in [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) — don't invent new domain vocabulary without checking it doesn't already exist under a different name.
+1. Read [docs/PLAN.md §23.0–23.1](docs/PLAN.md#23-delivery-phases) and the **current phase entry only** for its deliverables, exit criteria, and first-time obligations. Completed-phase detail is historical context, not routine input.
+2. Search [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) for the concepts/tables named by the task, then read those sections and directly linked reconciliation notes. Don't invent vocabulary without checking for an existing term.
 3. If it creates, mutates, or removes an entity, follow the matching command/workflow in [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md).
-4. Write schema per [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md); check §34 (anti-patterns) before finishing.
-5. Place the code in the correct architectural layer per [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) — don't let API handlers embed domain rules or let domain services bypass the command/transaction pattern.
-6. Follow the mechanics in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — Alembic revision requirements, test layers, and the definition-of-done checklist in §10.
+4. Search [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) by mechanism (for example: foreign keys, ranges, triggers, concurrency, comments, migrations, or grants), read those sections, and check the applicable §34 anti-patterns before finishing.
+5. For application code, read the affected layer and transaction sections in [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md). For database-only work, do not preload unrelated API/service sections.
+6. Read the relevant workflow plus [docs/DEVELOPMENT.md §10](docs/DEVELOPMENT.md#10-definition-of-done); do not load setup/walkthrough sections unless the task concerns setup or CI mechanics.
 7. If the change introduces a new cross-cutting concept, update the relevant doc under `docs/` in the same change — these documents are meant to stay current, not drift from the implementation.
 8. If the change **completes a phase**, run the phase exit review in [docs/PLAN.md §23.1](docs/PLAN.md#231-phase-exit-review): write `docs/PHASEn_VERIFICATION.md`, re-check the recurring obligations, and review the next phase against what this one taught before starting it. A bug caused by a convention being wrong is a documentation defect too — fix both.
