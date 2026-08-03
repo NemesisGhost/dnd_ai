@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found ("Second closeout"), and the revision-037 pass that closes the character-language integrity defect and two verification gaps a final review of revision 036 found ("Third closeout"). Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record.
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found ("Second closeout"), and the revision-037 pass that closes the character-language integrity defect and three verification gaps a final review of revision 036 found ("Third closeout"). Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record.
 
 ## Exit Criteria
 
@@ -165,13 +165,13 @@ and the completion gate are in
 
 ## Third closeout (2026-08-02)
 
-The one schema blocker and two focused verification gaps from the final review of
+The one schema blocker and three focused verification gaps from the final review of
 revision 036 are closed, by one more forward-only revision plus test additions
 (none touching the 36 already-applied migrations):
 
 | Revision | Closes |
 |---|---|
-| `037_character_language_ruleset` | §1. `character.character_languages` was the one dependency category revisions 029/031/035 never enumerated. A new `character.enforce_character_language_ruleset_allowed()` trigger (`BEFORE INSERT OR UPDATE`, shaped exactly like revision 029's species/build checks) rejects a language whose ruleset family the character's world does not allow, calling the same `rules.ruleset_allowed_for_world()` helper — and therefore inheriting its revision-035 `FOR SHARE` lock — with no new locking code. `rules.enforce_world_ruleset_still_in_use()` (revision 031) gained a sixth usage check so removing or repointing an allow-list association a character's language depends on is rejected the same way the other five categories already were. The table comment (both the live `COMMENT ON TABLE` and `tables.py`'s metadata) was updated to describe the enforcement, keeping `alembic check` clean. |
+| `037_character_language_ruleset` | §1. `character.character_languages` was the one dependency category revisions 029/031/035 never enumerated. A new `character.enforce_character_language_ruleset_allowed()` trigger (`BEFORE INSERT OR UPDATE`, shaped exactly like revision 029's species/build checks) rejects a language whose ruleset family the character's world does not allow, calling the same `rules.ruleset_allowed_for_world()` helper — and therefore inheriting its revision-035 `FOR SHARE` lock — with no new locking code. `rules.enforce_world_ruleset_still_in_use()` (revision 031) gained a seventh usage check so removing or repointing an allow-list association a character's language depends on is rejected the same way the other six categories already were. The table comment (both the live `COMMENT ON TABLE` and `tables.py`'s metadata) was updated to describe the enforcement, keeping `alembic check` clean. |
 
 Verification obligations closed without new migrations:
 
@@ -179,7 +179,7 @@ Verification obligations closed without new migrations:
 - **§3.** `tests/unit/test_ci_cleanup.py` gained three tests patching `ci_cleanup.drop_ephemeral_database`/`ci_cleanup._revoke_real_ingress` (the module-level names `main()` actually calls) to prove `main()` itself — not just `run_cleanup()` — raises `SystemExit(0)` on success and `SystemExit(1)` when either operation fails, without touching AWS.
 - **§4.** `test_seeded_ruleset_family_and_version_are_edition_neutral` now asserts the exact revision-034 family description text (`"The fifth-edition Dungeons & Dragons ruleset family, spanning multiple published editions (e.g. 2014, 2024)."`) rather than only the absence of the old edition-specific string, so a different wrong wording would also fail it.
 
-Positive/negative/reverse-dependency coverage for the new character-language enforcement lives in `tests/database/test_phase4_remaining_issues.py`: a character may know languages from one or several allowed ruleset families; a language from a disallowed family is rejected on both insert and update (the update case proven via a `SAVEPOINT` to show the existing row is unchanged); removing or repointing an allow-list association a character's language depends on is rejected; and a two-connection `lock_timeout` test proves the same concurrency protection as the other five dependency categories.
+Positive/negative/reverse-dependency coverage for the new character-language enforcement lives in `tests/database/test_phase4_remaining_issues.py`: a character may know languages from one or several allowed ruleset families; a language from a disallowed family is rejected on both insert and update (the update case proven via a `SAVEPOINT` to show the existing row is unchanged); removing or repointing an allow-list association a character's language depends on is rejected; and two-connection `lock_timeout` tests prove character-language creation blocks both concurrent removal and concurrent repointing. The concurrency teardown also normalizes its generated ruleset code consistently, so those test rulesets are removed rather than left for the ephemeral-database drop.
 
 Also fixed a pre-existing test that the new enforcement correctly broke: `test_character_shared_data.py::test_a_character_may_know_more_than_one_language` built its languages from a bare `make_ruleset_version()` (no world association), which the new trigger now — correctly — rejects. Changed to `make_ruleset_version_for_world()`, matching how every other rule-content fixture in that world already provisions content.
 
