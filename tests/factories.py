@@ -54,15 +54,27 @@ def make_entity_type(
     *,
     parent_id: uuid.UUID | None = None,
     subtype_table: str | None = None,
+    subtype_pk_column: str | None = None,
 ) -> uuid.UUID:
+    """subtype_pk_column is required whenever subtype_table is set (revision
+    048's ck_entity_types_subtype_pk_column_paired) — the primary-key column
+    name of subtype_table, e.g. "npc_id" for "character.npcs". Left unset
+    when a caller is deliberately testing an invalid/unqualified
+    subtype_table and expects the INSERT to fail regardless."""
     value = connection.execute(
         text("""
             INSERT INTO core.entity_types
-                (code, display_name, parent_entity_type_id, required_subtype_table)
-            VALUES (:code, :code, :parent, :subtype)
+                (code, display_name, parent_entity_type_id, required_subtype_table,
+                 required_subtype_pk_column)
+            VALUES (:code, :code, :parent, :subtype, :pk_column)
             RETURNING entity_type_id
         """),
-        {"code": code, "parent": parent_id, "subtype": subtype_table},
+        {
+            "code": code,
+            "parent": parent_id,
+            "subtype": subtype_table,
+            "pk_column": subtype_pk_column,
+        },
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value

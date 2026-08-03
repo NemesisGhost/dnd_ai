@@ -192,6 +192,151 @@ def test_a_connection_defaults_to_unconditional(db_connection: Connection) -> No
     assert is_conditional is False
 
 
+# ---------------------------------------------------------------------------
+# Conditional-route column semantics (revision 051)
+# ---------------------------------------------------------------------------
+# revision 047 added is_conditional/condition_description with no constraint
+# tying them together; revision 051 makes the pairing explicit rather than
+# leaving both contradictory-looking states silently permitted.
+
+
+def _insert_connection(
+    connection: Connection,
+    area_a: object,
+    area_b: object,
+    *,
+    is_conditional: bool,
+    condition_description: str | None,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO world.area_connections
+                (from_dungeon_area_id, to_dungeon_area_id, connection_type_id,
+                 is_conditional, condition_description)
+            VALUES (
+                :f, :t,
+                (SELECT connection_type_id FROM world.connection_types WHERE code = 'door'),
+                :cond, :desc
+            )
+        """),
+        {"f": area_a, "t": area_b, "cond": is_conditional, "desc": condition_description},
+    )
+
+
+def test_a_conditional_route_without_a_description_is_rejected(
+    db_connection: Connection,
+) -> None:
+    world_id = make_world(db_connection, slug="conditional-route-missing-description")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        _insert_connection(
+            db_connection, area_a, area_b, is_conditional=True, condition_description=None
+        )
+    assert "ck_area_connections_conditional_description_paired" in str(exc.value)
+
+
+def test_a_conditional_route_with_a_blank_description_is_rejected(
+    db_connection: Connection,
+) -> None:
+    """Non-blank, not just non-null — whitespace-only does not count."""
+    world_id = make_world(db_connection, slug="conditional-route-blank-description")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        _insert_connection(
+            db_connection, area_a, area_b, is_conditional=True, condition_description="   "
+        )
+    assert "ck_area_connections_conditional_description_paired" in str(exc.value)
+
+
+def test_an_unconditional_route_with_a_description_is_rejected(
+    db_connection: Connection,
+) -> None:
+    world_id = make_world(db_connection, slug="conditional-route-stray-description")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        _insert_connection(
+            db_connection,
+            area_a,
+            area_b,
+            is_conditional=False,
+            condition_description="requires the brass key",
+        )
+    assert "ck_area_connections_conditional_description_paired" in str(exc.value)
+
+
+def test_updating_a_route_to_conditional_without_a_description_is_rejected(
+    db_connection: Connection,
+) -> None:
+    """The constraint must also hold on UPDATE, not just INSERT."""
+    world_id = make_world(db_connection, slug="conditional-route-update-missing-description")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+    connection_id = make_area_connection(db_connection, area_a, area_b)
+
+    with pytest.raises(IntegrityError) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE world.area_connections SET is_conditional = true "
+                "WHERE area_connection_id = :c"
+            ),
+            {"c": connection_id},
+        )
+    assert "ck_area_connections_conditional_description_paired" in str(exc.value)
+
+
+def test_updating_a_conditional_route_to_unconditional_clears_the_description(
+    db_connection: Connection,
+) -> None:
+    """The valid way to make a route unconditional: both columns change
+    together in the same UPDATE."""
+    world_id = make_world(db_connection, slug="conditional-route-update-to-unconditional")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+    connection_id = db_connection.execute(
+        text("""
+            INSERT INTO world.area_connections
+                (from_dungeon_area_id, to_dungeon_area_id, connection_type_id,
+                 is_conditional, condition_description)
+            VALUES (
+                :f, :t,
+                (SELECT connection_type_id FROM world.connection_types WHERE code = 'door'),
+                true, 'requires the brass key'
+            )
+            RETURNING area_connection_id
+        """),
+        {"f": area_a, "t": area_b},
+    ).scalar()
+
+    db_connection.execute(
+        text(
+            "UPDATE world.area_connections "
+            "SET is_conditional = false, condition_description = NULL "
+            "WHERE area_connection_id = :c"
+        ),
+        {"c": connection_id},
+    )
+    row = db_connection.execute(
+        text(
+            "SELECT is_conditional, condition_description FROM world.area_connections "
+            "WHERE area_connection_id = :c"
+        ),
+        {"c": connection_id},
+    ).one()
+    assert row.is_conditional is False
+    assert row.condition_description is None
+
+
 def test_features_hazards_and_interactables_belong_to_an_area(db_connection: Connection) -> None:
     world_id = make_world(db_connection, slug="dungeon-children-world")
     dungeon_id = make_dungeon(db_connection, world_id)

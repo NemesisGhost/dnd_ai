@@ -93,7 +93,9 @@ def test_entity_type_rejects_unqualified_subtype_table(
 
 
 def test_entity_type_accepts_qualified_subtype_table(db_connection: Connection) -> None:
-    assert make_entity_type(db_connection, "ok_subtype", subtype_table="character.npcs")
+    assert make_entity_type(
+        db_connection, "ok_subtype", subtype_table="character.npcs", subtype_pk_column="npc_id"
+    )
 
 
 def test_entity_type_in_use_cannot_be_deleted(db_connection: Connection) -> None:
@@ -328,7 +330,9 @@ def test_subtype_row_accepted_when_entity_type_requires_that_table(
 ) -> None:
     table = _make_subtype_table(db_connection, "tst_widgets", "widget_id")
     world = make_world(db_connection, slug="subtype-ok")
-    etype = make_entity_type(db_connection, "widget", subtype_table=table)
+    etype = make_entity_type(
+        db_connection, "widget", subtype_table=table, subtype_pk_column="widget_id"
+    )
     entity = make_entity(db_connection, world, etype)
 
     db_connection.execute(
@@ -360,7 +364,9 @@ def test_subtype_row_accepted_via_inherited_type(db_connection: Connection) -> N
     """
     table = _make_subtype_table(db_connection, "tst_characters", "character_id")
     world = make_world(db_connection, slug="subtype-inherited")
-    parent = make_entity_type(db_connection, "tst_character", subtype_table=table)
+    parent = make_entity_type(
+        db_connection, "tst_character", subtype_table=table, subtype_pk_column="character_id"
+    )
     child = make_entity_type(db_connection, "tst_npc", parent_id=parent)
     entity = make_entity(db_connection, world, child)
 

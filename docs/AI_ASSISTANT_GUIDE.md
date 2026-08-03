@@ -65,7 +65,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), 4 (rules and shared characters, including its corrections pass and all three closeout passes), and 5 (locations and dungeon play, including a pre-merge exit-review corrections pass — see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md)) are complete, verified against AWS `dev` and GitHub Actions. [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. The current target is [Phase 6](PLAN.md#phase-6-events-and-interactions). The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), 4 (rules and shared characters, including its corrections pass and all three closeout passes), and 5 (locations and dungeon play, including two pre-merge exit-review corrections passes — see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md)) are complete, verified against AWS `dev` and GitHub Actions. [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. The current target is [Phase 6](PLAN.md#phase-6-events-and-interactions). The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1148,7 +1148,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 5 is complete (including its exit-review corrections pass), so Phase 6 is current
+   - Implement only the current target; Phase 5 is complete (including its two exit-review corrections passes), so Phase 6 is current
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

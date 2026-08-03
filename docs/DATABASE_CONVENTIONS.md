@@ -450,6 +450,8 @@ This may be enforced through:
 
 The implementation should avoid one trigger per subtype when a maintainable centralized solution is possible.
 
+This consistency check must hold from both directions: validating a subtype row against its entity's type when the subtype row is written (`core.enforce_entity_subtype()`) is not sufficient on its own, since nothing then stops `core.entities.entity_type_id` itself from being changed to a type that no longer requires an already-existing subtype row. `core.enforce_entity_type_change()` (revision 048) is the parent-side counterpart — a generic trigger driven by `core.entity_types.required_subtype_table`/`required_subtype_pk_column` metadata rather than a name per subtype. Any migration that sets `required_subtype_table` on a new `core.entity_types` row must set `required_subtype_pk_column` alongside it (a paired `CHECK` enforces this) so that trigger can find the subtype row without guessing its primary-key column name from the table name.
+
 ### 7.5 Delete behavior
 
 Deleting a subtype may cascade to subtype-owned dependent rows.

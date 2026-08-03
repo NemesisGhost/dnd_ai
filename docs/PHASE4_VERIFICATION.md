@@ -200,4 +200,4 @@ Carried forward, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. Phase 5 (Locations and dungeon play) is current; its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. Phase 5 (Locations and dungeon play) closed its first-time obligations (`character.characters.origin_location_id` and `campaign.character_location_history`, both recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play)) and its own two pre-merge exit reviews — see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [Phase 6](PLAN.md#phase-6-events-and-interactions) is current.

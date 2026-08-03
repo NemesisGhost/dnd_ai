@@ -472,3 +472,110 @@ def test_migration_produced_the_extension_and_constraint(db_connection: Connecti
     assert str(definition) == (
         "EXCLUDE USING gist (timeline_id WITH =, character_id WITH =, location_period WITH &&)"
     ), f"constraint shape changed: {definition}"
+
+
+# ---------------------------------------------------------------------------
+# location_period is structurally NOT NULL (revision 050)
+# ---------------------------------------------------------------------------
+
+
+def test_location_period_is_reported_not_nullable_by_the_catalog(
+    db_connection: Connection,
+) -> None:
+    """Catalog introspection, not just behavioural inference — proves the
+    column itself carries the NOT NULL contract, matching
+    campaign.party_memberships.effective_period (ADR 0010), rather than
+    merely happening to always be non-null because the trigger sets it."""
+    is_nullable = db_connection.execute(
+        text("""
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_schema = 'campaign'
+              AND table_name = 'character_location_history'
+              AND column_name = 'location_period'
+        """)
+    ).scalar()
+    assert is_nullable == "NO"
+
+
+def test_inserts_and_updates_continue_to_derive_the_period_under_not_null(
+    db_connection: Connection, w: World
+) -> None:
+    """The NOT NULL tightening must not disturb ordinary derivation — both a
+    fresh open-ended insert and a subsequent close-out UPDATE still produce a
+    correct, non-null range."""
+    _move(db_connection, w, frm=K0, to=None)
+    open_period = db_connection.execute(
+        text("SELECT location_period::text FROM campaign.character_location_history")
+    ).scalar()
+    assert open_period == f"[{K0},)"
+
+    db_connection.execute(
+        text("""
+            UPDATE campaign.character_location_history
+            SET departed_at_world_time_id = :t
+            WHERE timeline_id = :tl AND character_id = :c
+        """),
+        {"t": w.times[K1], "tl": w.timeline_id, "c": w.character_id},
+    )
+    closed_period = db_connection.execute(
+        text("SELECT location_period::text FROM campaign.character_location_history")
+    ).scalar()
+    assert closed_period == f"[{K0},{K1})"
+
+
+def test_a_client_supplied_null_period_cannot_be_persisted(
+    db_connection: Connection, w: World
+) -> None:
+    """An explicit attempt to write location_period = NULL is not silently
+    honored: the derivation trigger overwrites client input, including an
+    explicit NULL, before the NOT NULL constraint is ever at risk — the
+    value actually persisted is always the correct derived range, never
+    NULL."""
+    db_connection.execute(
+        text("""
+            INSERT INTO campaign.character_location_history
+                (timeline_id, character_id, location_id,
+                 arrived_at_world_time_id, departed_at_world_time_id, location_period)
+            VALUES (:tl, :c, :l, :f, :t, NULL)
+        """),
+        {
+            "tl": w.timeline_id,
+            "c": w.character_id,
+            "l": w.area_a,
+            "f": w.times[K0],
+            "t": w.times[K1],
+        },
+    )
+    period = db_connection.execute(
+        text("SELECT location_period::text FROM campaign.character_location_history")
+    ).scalar()
+    assert period == f"[{K0},{K1})"
+
+
+def test_a_client_supplied_fake_period_cannot_bypass_the_exclusion_constraint(
+    db_connection: Connection, w: World
+) -> None:
+    """A caller cannot dodge overlap protection by supplying a
+    location_period that looks non-overlapping while the real endpoints
+    genuinely overlap: the trigger always recomputes from the endpoint IDs
+    first, so the exclusion constraint still sees, and rejects, the true
+    derived range rather than the client's decoy."""
+    _move(db_connection, w, frm=K0, to=K2)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO campaign.character_location_history
+                    (timeline_id, character_id, location_id,
+                     arrived_at_world_time_id, departed_at_world_time_id, location_period)
+                VALUES (:tl, :c, :l, :f, :t, int8range(9000, 9001, '[)'))
+            """),
+            {
+                "tl": w.timeline_id,
+                "c": w.character_id,
+                "l": w.area_b,
+                "f": w.times[K1],
+                "t": w.times[K3],
+            },
+        )
+    assert "ex_character_location_history_no_overlap" in str(exc.value)

@@ -8,8 +8,10 @@ containment rejects cycles of any length, and a dungeon area's parent is
 re-checked whenever it changes via world.locations directly.
 """
 
+import uuid
+
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
@@ -127,6 +129,41 @@ def test_a_feature_cannot_be_reassigned_to_another_area(db_connection: Connectio
     assert "immutable" in str(exc.value)
 
 
+def test_a_feature_cannot_be_reassigned_to_an_area_in_another_world(
+    db_connection: Connection,
+) -> None:
+    """The cross-world variant of the immediately preceding test — same
+    coverage test_a_hazard_cannot_be_reassigned_to_an_area_in_another_world
+    already has, extended to features (previously only same-world reassignment
+    was exercised for this table)."""
+    world_a = make_world(db_connection, slug="mutation-safety-feature-world-a")
+    world_b = make_world(db_connection, slug="mutation-safety-feature-world-b")
+    dungeon_a = make_dungeon(db_connection, world_a)
+    dungeon_b = make_dungeon(db_connection, world_b)
+    area_a = make_dungeon_area(db_connection, dungeon_a)
+    area_b = make_dungeon_area(db_connection, dungeon_b)
+    feature_id = make_area_feature(db_connection, area_a, is_hidden=True)
+
+    # SAVEPOINT (begin_nested): the failed UPDATE aborts the outer
+    # transaction in PostgreSQL, which would poison the follow-up SELECT
+    # below unless the failure is scoped to a sub-transaction.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE world.area_features SET dungeon_area_id = :a WHERE area_feature_id = :id"),
+            {"a": area_b, "id": feature_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    row = db_connection.execute(
+        text(
+            "SELECT dungeon_area_id, is_hidden FROM world.area_features WHERE area_feature_id = :id"
+        ),
+        {"id": feature_id},
+    ).one()
+    assert row.dungeon_area_id == area_a, "the rejected update must not have moved the feature"
+    assert row.is_hidden is True, "the rejected update must not have corrupted other columns"
+
+
 def test_a_hazard_cannot_be_reassigned_to_an_area_in_another_world(
     db_connection: Connection,
 ) -> None:
@@ -136,14 +173,26 @@ def test_a_hazard_cannot_be_reassigned_to_an_area_in_another_world(
     dungeon_b = make_dungeon(db_connection, world_b)
     area_a = make_dungeon_area(db_connection, dungeon_a)
     area_b = make_dungeon_area(db_connection, dungeon_b)
-    hazard_id = make_area_hazard(db_connection, area_a)
+    hazard_id = make_area_hazard(db_connection, area_a, is_hidden=True)
 
-    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+    # SAVEPOINT (begin_nested): the failed UPDATE aborts the outer
+    # transaction in PostgreSQL, which would poison the follow-up SELECT
+    # below unless the failure is scoped to a sub-transaction.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
         db_connection.execute(
             text("UPDATE world.area_hazards SET dungeon_area_id = :a WHERE area_hazard_id = :id"),
             {"a": area_b, "id": hazard_id},
         )
     assert "immutable" in str(exc.value)
+
+    row = db_connection.execute(
+        text(
+            "SELECT dungeon_area_id, is_hidden FROM world.area_hazards WHERE area_hazard_id = :id"
+        ),
+        {"id": hazard_id},
+    ).one()
+    assert row.dungeon_area_id == area_a, "the rejected update must not have moved the hazard"
+    assert row.is_hidden is True, "the rejected update must not have corrupted other columns"
 
 
 def test_an_interactable_cannot_be_reassigned_to_another_area(db_connection: Connection) -> None:
@@ -162,6 +211,43 @@ def test_an_interactable_cannot_be_reassigned_to_another_area(db_connection: Con
             {"a": area_b, "id": interactable_id},
         )
     assert "immutable" in str(exc.value)
+
+
+def test_an_interactable_cannot_be_reassigned_to_an_area_in_another_world(
+    db_connection: Connection,
+) -> None:
+    """The cross-world variant — previously only same-world reassignment was
+    exercised for this table, unlike hazards."""
+    world_a = make_world(db_connection, slug="mutation-safety-interactable-world-a")
+    world_b = make_world(db_connection, slug="mutation-safety-interactable-world-b")
+    dungeon_a = make_dungeon(db_connection, world_a)
+    dungeon_b = make_dungeon(db_connection, world_b)
+    area_a = make_dungeon_area(db_connection, dungeon_a)
+    area_b = make_dungeon_area(db_connection, dungeon_b)
+    interactable_id = make_area_interactable(db_connection, area_a, is_hidden=True)
+
+    # SAVEPOINT (begin_nested): the failed UPDATE aborts the outer
+    # transaction in PostgreSQL, which would poison the follow-up SELECT
+    # below unless the failure is scoped to a sub-transaction.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text(
+                "UPDATE world.area_interactables SET dungeon_area_id = :a "
+                "WHERE area_interactable_id = :id"
+            ),
+            {"a": area_b, "id": interactable_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    row = db_connection.execute(
+        text(
+            "SELECT dungeon_area_id, is_hidden FROM world.area_interactables "
+            "WHERE area_interactable_id = :id"
+        ),
+        {"id": interactable_id},
+    ).one()
+    assert row.dungeon_area_id == area_a, "the rejected update must not have moved the interactable"
+    assert row.is_hidden is True, "the rejected update must not have corrupted other columns"
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +400,102 @@ def test_a_location_still_cannot_be_its_own_direct_parent(db_connection: Connect
             text("UPDATE world.locations SET parent_location_id = :a WHERE location_id = :a"),
             {"a": region_a},
         )
+
+
+# ---------------------------------------------------------------------------
+# Concurrency safety of the cycle check (revision 049)
+# ---------------------------------------------------------------------------
+# Two real connections, following the pattern established in
+# test_party_memberships.py::test_concurrent_overlapping_inserts_cannot_both_commit:
+# committed setup under a unique slug (db_connection's auto-rollback
+# transaction can't be shared across two independent connections), a short
+# lock_timeout on the side that must block, and explicit teardown.
+
+
+def test_a_concurrent_containment_swap_is_serialized_and_rejected(postgres_engine: Engine) -> None:
+    """The exact race the review described: two transactions from the same
+    acyclic starting state each try to place the other's location underneath
+    themselves. Without the revision 049 advisory lock, both would read the
+    pre-change hierarchy, see no cycle, and both could commit — producing
+    A -> B -> A that neither transaction alone would have created. This test
+    proves the second write is serialized behind the first (blocks, then
+    times out under a short lock_timeout) and that once the first commits,
+    the same swap is rejected outright rather than silently forming a cycle —
+    i.e. at most one of the two concurrent writers can ever succeed, and the
+    resulting hierarchy stays acyclic."""
+    engine = postgres_engine
+    slug = f"loc-cycle-conc-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            world = make_world(setup, slug=slug)
+            root = make_location(setup, world, entity_type_code="region", name="Root")
+            location_a = make_location(
+                setup, world, parent_location_id=root, entity_type_code="region", name="A"
+            )
+            location_b = make_location(
+                setup, world, parent_location_id=root, entity_type_code="region", name="B"
+            )
+
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Transaction 1: move A under B. Still uncommitted.
+            first.execute(
+                text("UPDATE world.locations SET parent_location_id = :b WHERE location_id = :a"),
+                {"b": location_b, "a": location_a},
+            )
+
+            # Transaction 2 concurrently attempts the opposite: move B under A.
+            # Both transactions started from the same acyclic snapshot (both
+            # under root); the advisory lock keyed on this world forces this
+            # write to wait on transaction 1 rather than proceed independently.
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text(
+                        "UPDATE world.locations SET parent_location_id = :a WHERE location_id = :b"
+                    ),
+                    {"a": location_a, "b": location_b},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected a lock-timeout conflict, got: {message}"
+            )
+
+            second.rollback()
+            first.commit()
+
+            # A is now parented under B (committed). The same swap, retried
+            # after the blocker resolved, must now be rejected outright by
+            # the cycle check itself — proving the final hierarchy stays
+            # acyclic rather than the second writer silently succeeding once
+            # unblocked.
+            with engine.begin() as third:
+                with pytest.raises(IntegrityError) as exc2:
+                    third.execute(
+                        text(
+                            "UPDATE world.locations SET parent_location_id = :a "
+                            "WHERE location_id = :b"
+                        ),
+                        {"a": location_a, "b": location_b},
+                    )
+                assert "containment cycle" in str(exc2.value)
+
+            with engine.connect() as verify:
+                final_parent = verify.execute(
+                    text("SELECT parent_location_id FROM world.locations WHERE location_id = :a"),
+                    {"a": location_a},
+                ).scalar()
+                assert final_parent == location_b, "A should remain parented under B"
+    finally:
+        with engine.begin() as cleanup:
+            params = {"s": slug}
+            cleanup.execute(
+                text(
+                    "DELETE FROM core.entities WHERE world_id IN "
+                    "(SELECT world_id FROM core.worlds WHERE slug = :s)"
+                ),
+                params,
+            )
+            cleanup.execute(text("DELETE FROM core.worlds WHERE slug = :s"), params)

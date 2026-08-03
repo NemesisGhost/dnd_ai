@@ -327,6 +327,16 @@ entity_types = Table(
         ),
     ),
     Column(
+        "required_subtype_pk_column",
+        Text(),
+        comment=(
+            'Primary-key column name of required_subtype_table (e.g. "dungeon_id" for '
+            '"world.dungeons"). Set together with required_subtype_table — never one '
+            "without the other. Lets core.enforce_entity_type_change() check for an "
+            "existing subtype row without guessing a column name from the table name."
+        ),
+    ),
+    Column(
         "is_abstract",
         Boolean(),
         nullable=False,
@@ -2538,8 +2548,11 @@ area_connections = Table(
         Text(),
         comment=(
             'Free-text description of what the condition is (e.g. "requires the brass '
-            'key" or "only open while the beacon is lit"). Not yet machine-evaluable — '
-            "same placeholder shape as campaign.character_conditions.source_description."
+            'key" or "only open while the beacon is lit"). Required and non-blank when '
+            "is_conditional is true; must be NULL when is_conditional is false "
+            "(ck_area_connections_conditional_description_paired). Not yet machine-"
+            "evaluable — same placeholder shape as "
+            "campaign.character_conditions.source_description."
         ),
     ),
     *_timestamps(),
@@ -3152,11 +3165,12 @@ character_location_history = Table(
     Column(
         "location_period",
         INT8RANGE(),
+        nullable=False,
         comment=(
             "Derived, never client-authoritative: an INT8RANGE over "
             "arrived_at_world_time_id/departed_at_world_time_id's sort_key values, "
-            "rebuilt by trigger on every INSERT and UPDATE — same role as "
-            "campaign.party_memberships.effective_period (ADR 0010)."
+            "rebuilt by trigger on every INSERT and UPDATE — same role and same NOT "
+            "NULL contract as campaign.party_memberships.effective_period (ADR 0010)."
         ),
     ),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
@@ -3164,8 +3178,11 @@ character_location_history = Table(
     schema="campaign",
     comment=(
         "Where a character has been on a timeline. The row with "
-        "departed_at_world_time_id IS NULL is the character's current location — at "
-        "most one per (timeline, character), enforced by a partial unique index. "
+        "departed_at_world_time_id IS NULL is the character's current location — the "
+        "single current-location representation, enforced by the derived "
+        "location_period range together with the ex_character_location_history_no_"
+        "overlap exclusion constraint over (timeline_id, character_id, "
+        "location_period), the same ADR 0010 shape as campaign.party_memberships. "
         "Deferred from Phase 4 until world.locations existed "
         "(docs/architecture/DATABASE_MODEL.md §17)."
     ),
