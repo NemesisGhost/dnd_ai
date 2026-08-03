@@ -8,6 +8,7 @@ real database drop / AWS ingress revoke, so this is safe to run anywhere
 security-group rule just to prove the failure path works.
 """
 
+import ci_cleanup
 import pytest
 from ci_cleanup import run_cleanup
 
@@ -63,3 +64,41 @@ def test_both_failing_attempts_both_and_reports_failure_identifying_both(
     err = capsys.readouterr().err
     assert "::error::Failed to drop the ephemeral database" in err
     assert "::error::Failed to revoke security-group ingress" in err
+
+
+# ---------------------------------------------------------------------------
+# ci_cleanup.main() — the actual CI entry point (PHASE4_REMAINING_ISSUES.md
+# §3, second post-closeout review)
+# ---------------------------------------------------------------------------
+# The tests above prove run_cleanup() itself returns False on failure, but CI
+# invokes main(), which must convert that into a failing process exit code —
+# nothing above proved that translation actually happens. Patches the real
+# cleanup callables main() wires up (module-level names, looked up by main()
+# at call time) so this never touches AWS or a real database.
+
+
+def test_main_exits_zero_when_both_operations_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ci_cleanup, "drop_ephemeral_database", _ok)
+    monkeypatch.setattr(ci_cleanup, "_revoke_real_ingress", _ok)
+
+    with pytest.raises(SystemExit) as exc:
+        ci_cleanup.main()
+    assert exc.value.code == 0
+
+
+def test_main_exits_nonzero_when_the_database_drop_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ci_cleanup, "drop_ephemeral_database", _fail)
+    monkeypatch.setattr(ci_cleanup, "_revoke_real_ingress", _ok)
+
+    with pytest.raises(SystemExit) as exc:
+        ci_cleanup.main()
+    assert exc.value.code == 1
+
+
+def test_main_exits_nonzero_when_the_ingress_revoke_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ci_cleanup, "drop_ephemeral_database", _ok)
+    monkeypatch.setattr(ci_cleanup, "_revoke_real_ingress", _fail)
+
+    with pytest.raises(SystemExit) as exc:
+        ci_cleanup.main()
+    assert exc.value.code == 1

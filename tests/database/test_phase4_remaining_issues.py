@@ -1,4 +1,4 @@
-"""Phase 4 closeout register (PHASE4_REMAINING_ISSUES.md, revisions 031-035).
+"""Phase 4 closeout register (PHASE4_REMAINING_ISSUES.md, revisions 031-037).
 
 Covers the seven items the corrections review left open after revision 030:
 complete world-ruleset allow-list protection (§1, revision 031), proficiency-
@@ -15,8 +15,19 @@ rule-definition tables revision 033 omitted (§2, revision 036), a
 proficiency-type UPDATE rejection test (§3), and — in `test_seed_idempotency.py`
 and `scripts/ci_cleanup.py`/its own test module respectively — the seeded
 family/version assertion (§4) and the CI cleanup script test (§5).
+
+A second post-closeout review reopened the register again with one further
+schema blocker and two focused verification gaps, closed below: character-
+language allow-list enforcement in both directions plus its concurrency
+safety (§1, revision 037), and a threaded test proving a genuinely blocked
+allow-list DELETE resumes and is rejected once the dependent-creator commits
+(§2) — the CI-cleanup-entry-point and exact-family-description gaps (§3, §4)
+are closed in `tests/unit/test_ci_cleanup.py` and `test_seed_idempotency.py`
+respectively.
 """
 
+import threading
+import time
 import uuid
 
 import pytest
@@ -28,6 +39,7 @@ from tests.factories import (
     make_campaign,
     make_character,
     make_ruleset_for_world,
+    make_ruleset_version,
     make_ruleset_version_for_world,
     make_timeline,
     make_world,
@@ -267,6 +279,189 @@ def test_repointing_a_ruleset_still_in_use_is_rejected(
     assert "character build" in str(exc.value)
 
 
+def test_removing_a_ruleset_a_characters_language_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    character_id = make_character(db_connection, alf.world_id)
+    language = db_connection.execute(
+        text(
+            "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+            "VALUES (:v, 'common', 'Common') RETURNING language_id"
+        ),
+        {"v": alf.version_id},
+    ).scalar()
+    db_connection.execute(
+        text(
+            "INSERT INTO character.character_languages (character_id, language_id) VALUES (:c, :l)"
+        ),
+        {"c": character_id, "l": language},
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        alf.delete(db_connection)
+    assert "language from it" in str(exc.value)
+
+
+def test_repointing_a_ruleset_a_characters_language_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    character_id = make_character(db_connection, alf.world_id)
+    language = db_connection.execute(
+        text(
+            "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+            "VALUES (:v, 'common', 'Common') RETURNING language_id"
+        ),
+        {"v": alf.version_id},
+    ).scalar()
+    db_connection.execute(
+        text(
+            "INSERT INTO character.character_languages (character_id, language_id) VALUES (:c, :l)"
+        ),
+        {"c": character_id, "l": language},
+    )
+    other_ruleset = _bare_ruleset(db_connection, f"other_lang_used_{uuid.uuid4().hex[:8]}")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                "WHERE world_id = :w AND ruleset_id = :old"
+            ),
+            {"new": other_ruleset, "w": alf.world_id, "old": alf.ruleset_id},
+        )
+    assert "language from it" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# §1 (second post-closeout): a character's languages must come from a
+# ruleset its own world allows (revision 037)
+# ---------------------------------------------------------------------------
+
+
+class CharacterLanguageFixture:
+    """A world with one allowed (non-default) ruleset and a character, plus a
+    second allowed ruleset/language (positive: multiple allowed families) and
+    a third ruleset/language never added to the world's allow-list
+    (negative: disallowed family)."""
+
+    def __init__(self, connection: Connection, slug: str) -> None:
+        base = slug.replace("-", "_")
+        self.world_id = make_world(connection, slug=slug)
+        self.character_id = make_character(connection, self.world_id)
+
+        self.ruleset_id = make_ruleset_for_world(
+            connection, self.world_id, code=f"lang_{base}", is_default=False
+        )
+        self.version_id = _current_version(connection, self.ruleset_id)
+        self.language_id = self._make_language(connection, self.version_id, "common")
+
+        self.other_allowed_ruleset_id = make_ruleset_for_world(
+            connection, self.world_id, code=f"lang_other_{base}", is_default=False
+        )
+        self.other_allowed_version_id = _current_version(connection, self.other_allowed_ruleset_id)
+        self.other_allowed_language_id = self._make_language(
+            connection, self.other_allowed_version_id, "elvish"
+        )
+
+        self.disallowed_version_id = make_ruleset_version(
+            connection, code=f"lang_disallowed_{base}"
+        )
+        self.disallowed_language_id = self._make_language(
+            connection, self.disallowed_version_id, "draconic"
+        )
+
+    @staticmethod
+    def _make_language(connection: Connection, version_id: uuid.UUID, code: str) -> uuid.UUID:
+        return connection.execute(
+            text(
+                "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+                "VALUES (:v, :c, :c) RETURNING language_id"
+            ),
+            {"v": version_id, "c": code},
+        ).scalar()
+
+
+@pytest.fixture
+def clf(db_connection: Connection) -> CharacterLanguageFixture:
+    return CharacterLanguageFixture(db_connection, f"lang-{uuid.uuid4().hex[:6]}")
+
+
+def test_a_character_can_know_a_language_from_its_worlds_allowed_ruleset(
+    db_connection: Connection, clf: CharacterLanguageFixture
+) -> None:
+    db_connection.execute(
+        text(
+            "INSERT INTO character.character_languages (character_id, language_id) VALUES (:c, :l)"
+        ),
+        {"c": clf.character_id, "l": clf.language_id},
+    )
+
+
+def test_a_character_can_know_languages_from_multiple_allowed_ruleset_families(
+    db_connection: Connection, clf: CharacterLanguageFixture
+) -> None:
+    for language_id in (clf.language_id, clf.other_allowed_language_id):
+        db_connection.execute(
+            text(
+                "INSERT INTO character.character_languages (character_id, language_id) "
+                "VALUES (:c, :l)"
+            ),
+            {"c": clf.character_id, "l": language_id},
+        )
+    count = db_connection.execute(
+        text("SELECT count(*) FROM character.character_languages WHERE character_id = :c"),
+        {"c": clf.character_id},
+    ).scalar()
+    assert count == 2
+
+
+def test_a_language_from_a_disallowed_ruleset_family_is_rejected_on_insert(
+    db_connection: Connection, clf: CharacterLanguageFixture
+) -> None:
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO character.character_languages (character_id, language_id) "
+                "VALUES (:c, :l)"
+            ),
+            {"c": clf.character_id, "l": clf.disallowed_language_id},
+        )
+    assert "ruleset is not allowed" in str(exc.value)
+
+
+def test_updating_a_character_language_to_a_disallowed_ruleset_family_is_rejected(
+    db_connection: Connection, clf: CharacterLanguageFixture
+) -> None:
+    db_connection.execute(
+        text(
+            "INSERT INTO character.character_languages (character_id, language_id) VALUES (:c, :l)"
+        ),
+        {"c": clf.character_id, "l": clf.language_id},
+    )
+
+    # SAVEPOINT (begin_nested): the failed UPDATE aborts the outer
+    # transaction in PostgreSQL, which would poison the follow-up SELECT
+    # below unless the failure is scoped to a sub-transaction.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text(
+                "UPDATE character.character_languages SET language_id = :new "
+                "WHERE character_id = :c AND language_id = :old"
+            ),
+            {"new": clf.disallowed_language_id, "c": clf.character_id, "old": clf.language_id},
+        )
+    assert "ruleset is not allowed" in str(exc.value)
+
+    unchanged = db_connection.execute(
+        text(
+            "SELECT count(*) FROM character.character_languages "
+            "WHERE character_id = :c AND language_id = :l"
+        ),
+        {"c": clf.character_id, "l": clf.language_id},
+    ).scalar()
+    assert unchanged == 1, "the failed UPDATE must not have partially applied"
+
+
 # ---------------------------------------------------------------------------
 # §3: Proficiency-type ruleset version (revision 032)
 # ---------------------------------------------------------------------------
@@ -402,8 +597,6 @@ def test_updating_a_proficiencys_type_to_a_different_version_is_rejected(
 
 
 def _make_version_pair(connection: Connection, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
-    from tests.factories import make_ruleset_version
-
     return (
         make_ruleset_version(connection, code=f"{slug}_a"),
         make_ruleset_version(connection, code=f"{slug}_b"),
@@ -1198,6 +1391,36 @@ def test_concurrent_world_default_assignment_blocks_a_concurrent_removal(
         _cleanup_concurrency_world(engine, slug)
 
 
+def test_concurrent_language_creation_blocks_a_concurrent_removal(postgres_engine: Engine) -> None:
+    engine = postgres_engine
+    slug = f"conc-language-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            language_id = setup.execute(
+                text(
+                    "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'common', 'Common') RETURNING language_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO character.character_languages (character_id, language_id) "
+                    "VALUES (:c, :l)"
+                ),
+                {"c": cw.character_id, "l": language_id},
+            )
+
+        _assert_delete_races_dependent_creation(
+            engine, cw.world_id, cw.ruleset_id, create, "language from it"
+        )
+    finally:
+        _cleanup_concurrency_world(engine, slug)
+
+
 def test_concurrent_build_creation_blocks_a_concurrent_repoint(postgres_engine: Engine) -> None:
     """The same FOR SHARE lock protects an UPDATE-based repoint of the
     association, not just a DELETE — revision 031's trigger fires on both."""
@@ -1254,6 +1477,131 @@ def test_concurrent_build_creation_blocks_a_concurrent_repoint(postgres_engine: 
             cleanup.execute(
                 text("DELETE FROM rules.rulesets WHERE code LIKE 'conc_repoint_target_%'")
             )
+        _cleanup_concurrency_world(engine, slug)
+
+
+# ---------------------------------------------------------------------------
+# §2 (second post-closeout): a genuinely blocked allow-list DELETE resumes
+# and is rejected once the dependent-creator commits
+# ---------------------------------------------------------------------------
+# The lock_timeout tests above prove a concurrent DELETE/UPDATE blocks behind
+# the FOR SHARE lock, then prove a *retry in a new transaction* sees the
+# committed dependent and is rejected — but not that the original blocked
+# statement itself, left waiting rather than cancelled, resumes and is
+# rejected once unblocked. This closes that gap with a real second thread
+# (no lock_timeout), a bounded poll of pg_stat_activity proving the DELETE is
+# genuinely waiting on the lock before the creator commits, and a bounded
+# thread.join so a failed assertion cannot hang the test run.
+#
+# Exercised once, for the newly added character-language category (revision
+# 037): the mechanism under test — a FOR SHARE lock on one row, blocking a
+# concurrent exclusive-locking DELETE/UPDATE until the holder's transaction
+# ends — is table/row-level, not category-specific (see the comment above
+# the lock_timeout test section), so a second full thread-and-poll test for
+# each of the other five categories would exercise the same mechanism six
+# times over rather than six different things.
+
+
+def _assert_blocked_delete_resumes_and_is_rejected(
+    engine: Engine,
+    world_id: uuid.UUID,
+    ruleset_id: uuid.UUID,
+    create_dependent: object,
+    expected_message: str,
+) -> None:
+    outcome: list[tuple[str, Exception | None]] = []
+    backend_pid: list[int] = []
+
+    def blocked_delete() -> None:
+        with engine.connect() as second:
+            second.begin()
+            backend_pid.append(second.execute(text("SELECT pg_backend_pid()")).scalar())
+            try:
+                second.execute(
+                    text(
+                        "DELETE FROM rules.world_rulesets WHERE world_id = :w AND ruleset_id = :r"
+                    ),
+                    {"w": world_id, "r": ruleset_id},
+                )
+            except Exception as exc:  # noqa: BLE001 - reported to the main thread, not swallowed
+                second.rollback()
+                outcome.append(("failed", exc))
+            else:
+                second.commit()
+                outcome.append(("committed", None))
+
+    with engine.connect() as first:
+        first.begin()
+        create_dependent(first)
+
+        thread = threading.Thread(target=blocked_delete)
+        thread.start()
+
+        deadline = time.monotonic() + 5.0
+        while not backend_pid and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert backend_pid, "blocked DELETE thread never reported its backend pid"
+        pid = backend_pid[0]
+
+        waiting = False
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            wait_event_type = first.execute(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :p"), {"p": pid}
+            ).scalar()
+            if wait_event_type == "Lock":
+                waiting = True
+                break
+            time.sleep(0.05)
+        assert waiting, (
+            "expected the concurrent DELETE to be genuinely waiting on the "
+            "dependent-creator's FOR SHARE lock before the creator commits"
+        )
+
+        first.commit()
+
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), (
+            "the blocked DELETE did not resume within 10s of the creator's commit"
+        )
+
+    assert outcome, "blocked DELETE thread reported no outcome"
+    result, exc = outcome[0]
+    assert result == "failed", (
+        f"expected the resumed DELETE to be rejected by the still-in-use check, got: {result}"
+    )
+    assert expected_message in str(exc)
+
+
+def test_a_blocked_language_removal_resumes_and_is_rejected_once_the_creator_commits(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-lang-resume-{uuid.uuid4().hex[:8]}"
+    try:
+        with engine.begin() as setup:
+            cw = ConcurrencyWorld(setup, slug)
+            language_id = setup.execute(
+                text(
+                    "INSERT INTO rules.languages (ruleset_version_id, code, display_name) "
+                    "VALUES (:v, 'common', 'Common') RETURNING language_id"
+                ),
+                {"v": cw.version_id},
+            ).scalar()
+
+        def create(conn: Connection) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO character.character_languages (character_id, language_id) "
+                    "VALUES (:c, :l)"
+                ),
+                {"c": cw.character_id, "l": language_id},
+            )
+
+        _assert_blocked_delete_resumes_and_is_rejected(
+            engine, cw.world_id, cw.ruleset_id, create, "language from it"
+        )
+    finally:
         _cleanup_concurrency_world(engine, slug)
 
 

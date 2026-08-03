@@ -1,6 +1,6 @@
 # Phase 4 Verification Checklist
 
-Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, and the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found (see "Second closeout" below). Revision 036 is CI-green, but a final review found one character-language integrity defect and three focused verification gaps. Phase 4 remains open under [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md); Phase 5 must not begin yet.
+Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-delivery-phases), following the exit review in [§23.1](PLAN.md#231-phase-exit-review). The sections below record the phase's original exit review, its first corrections pass, the revision-031–034 closeout pass, the revision-035–036 pass that cleared the two final-schema blockers and three verification obligations a post-closeout review found ("Second closeout"), and the revision-037 pass that closes the character-language integrity defect and two verification gaps a final review of revision 036 found ("Third closeout"). Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record.
 
 ## Exit Criteria
 
@@ -163,6 +163,30 @@ final-schema and coverage paths that suite does not exercise. Acceptance criteri
 and the completion gate are in
 [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md).
 
+## Third closeout (2026-08-02)
+
+The one schema blocker and two focused verification gaps from the final review of
+revision 036 are closed, by one more forward-only revision plus test additions
+(none touching the 36 already-applied migrations):
+
+| Revision | Closes |
+|---|---|
+| `037_character_language_ruleset` | §1. `character.character_languages` was the one dependency category revisions 029/031/035 never enumerated. A new `character.enforce_character_language_ruleset_allowed()` trigger (`BEFORE INSERT OR UPDATE`, shaped exactly like revision 029's species/build checks) rejects a language whose ruleset family the character's world does not allow, calling the same `rules.ruleset_allowed_for_world()` helper — and therefore inheriting its revision-035 `FOR SHARE` lock — with no new locking code. `rules.enforce_world_ruleset_still_in_use()` (revision 031) gained a sixth usage check so removing or repointing an allow-list association a character's language depends on is rejected the same way the other five categories already were. The table comment (both the live `COMMENT ON TABLE` and `tables.py`'s metadata) was updated to describe the enforcement, keeping `alembic check` clean. |
+
+Verification obligations closed without new migrations:
+
+- **§2.** `test_a_blocked_language_removal_resumes_and_is_rejected_once_the_creator_commits` closes the gap the revision-035/036 `lock_timeout` tests left: a real second thread (no `lock_timeout`) issues the allow-list `DELETE`, a bounded poll of `pg_stat_activity` proves it is genuinely waiting on the dependent-creator's `FOR SHARE` lock (not just slow), the creator commits, and the *same* blocked statement — not a retry in a new transaction — is proven to resume and be rejected, with a bounded `thread.join` so a failed assertion cannot hang the suite. Exercised once, for the newly added character-language category; the underlying lock is table/row-level, not category-specific, matching the reasoning already recorded for the six-category delete-race coverage above.
+- **§3.** `tests/unit/test_ci_cleanup.py` gained three tests patching `ci_cleanup.drop_ephemeral_database`/`ci_cleanup._revoke_real_ingress` (the module-level names `main()` actually calls) to prove `main()` itself — not just `run_cleanup()` — raises `SystemExit(0)` on success and `SystemExit(1)` when either operation fails, without touching AWS.
+- **§4.** `test_seeded_ruleset_family_and_version_are_edition_neutral` now asserts the exact revision-034 family description text (`"The fifth-edition Dungeons & Dragons ruleset family, spanning multiple published editions (e.g. 2014, 2024)."`) rather than only the absence of the old edition-specific string, so a different wrong wording would also fail it.
+
+Positive/negative/reverse-dependency coverage for the new character-language enforcement lives in `tests/database/test_phase4_remaining_issues.py`: a character may know languages from one or several allowed ruleset families; a language from a disallowed family is rejected on both insert and update (the update case proven via a `SAVEPOINT` to show the existing row is unchanged); removing or repointing an allow-list association a character's language depends on is rejected; and a two-connection `lock_timeout` test proves the same concurrency protection as the other five dependency categories.
+
+Also fixed a pre-existing test that the new enforcement correctly broke: `test_character_shared_data.py::test_a_character_may_know_more_than_one_language` built its languages from a bare `make_ruleset_version()` (no world association), which the new trigger now — correctly — rejects. Changed to `make_ruleset_version_for_world()`, matching how every other rule-content fixture in that world already provisions content.
+
+Verified the same way as the prior closeout passes: full `downgrade base` → `upgrade head` round trip (through all 37 revisions) against a throwaway database on the deployed AWS `dev` instance, `alembic check` clean (confirmed only after adding the table-comment update above — the first pass correctly caught the comment-only drift between `tables.py` and the live schema), `ruff format --check`/`ruff check`/`mypy src` clean, seed idempotency green, and the full suite — 858 tests (up from 847) — green against AWS `dev`.
+
+The push-triggered GitHub Actions AWS workflow independently confirmed this result; its run link is recorded in a follow-up commit once the run completes.
+
 ## Outstanding
 
 Carried forward, still open:
@@ -172,4 +196,4 @@ Carried forward, still open:
 - **`iam_auth_db_users` duplicates the login-role list** in `001_bootstrap.py`.
 - **No remote Terraform state**, and `staging`/`prod` unbuilt.
 
-Phase 4 remains open under [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md). Do not begin Phase 5 (Locations and dungeon play) until that gate is cleared and a new push-triggered AWS workflow is recorded here. Phase 5's first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) remain recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).
+Phase 4 is complete; [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is now a closed historical record. Phase 5 (Locations and dungeon play) is current; its first-time obligations (closing `character.characters.origin_location_id` and `campaign.character_location_history`) are recorded in [PLAN.md](PLAN.md#phase-5-locations-and-dungeon-play).

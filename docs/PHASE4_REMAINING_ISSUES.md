@@ -1,9 +1,14 @@
 # Phase 4 Remaining Issues
 
-> **OPEN (2026-08-02).** Revision 036 and its push-triggered GitHub Actions
-> workflow are green, but Phase 4 remains open for one final-schema integrity
-> correction and three focused verification gaps. Do not begin Phase 5 until the
-> completion gate below is satisfied.
+> **CLOSED (2026-08-02).** All four items below are implemented, tested, and
+> verified — see
+> [PHASE4_VERIFICATION.md § Third closeout](PHASE4_VERIFICATION.md#third-closeout-2026-08-02)
+> for the resolving revision (`037`) and evidence: full `downgrade base` →
+> `upgrade head` round trip (through all 37 revisions), `alembic check`,
+> `ruff format --check`/`ruff check`/`mypy src`, seed idempotency, and the full
+> suite (858 tests, up from 847), all against the deployed AWS `dev` instance,
+> plus a push-triggered GitHub Actions AWS workflow. Phase 4 is complete; this
+> register is now a closed historical record.
 
 ## Review baseline and scope
 

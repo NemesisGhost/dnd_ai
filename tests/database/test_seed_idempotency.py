@@ -235,7 +235,12 @@ def test_seeded_ruleset_family_and_version_are_edition_neutral(db_connection: Co
     family row is edition-neutral display data, and the edition-specific
     text moved to the version row it actually describes. No YAML file
     backs this — it's set inline by revisions 022/034 — so this is the
-    directly-asserted structured-seed check for it."""
+    directly-asserted structured-seed check for it.
+
+    Second post-closeout review (PHASE4_REMAINING_ISSUES.md §4): asserting
+    only "not the old edition-specific string" would still pass for any
+    other incorrect wording, so this pins the exact revision-034
+    FAMILY_DESCRIPTION text, not just its absence of the old one."""
     ruleset = db_connection.execute(
         text(
             "SELECT ruleset_id, code, display_name, description "
@@ -245,13 +250,10 @@ def test_seeded_ruleset_family_and_version_are_edition_neutral(db_connection: Co
     assert ruleset.code == "dnd5e"
     assert ruleset.display_name == "D&D 5e"
     assert "2024" not in ruleset.display_name
-    # The family description may legitimately *mention* 2024 in passing (it
-    # spans multiple editions, of which 2024 is one) without *being* an
-    # edition-specific description — the thing that must not recur is the
-    # old family-level text that claimed to describe one specific revision.
-    assert ruleset.description != "The 2024 revision of the fifth-edition rules.", (
-        f"family description still reads as edition-specific: {ruleset.description!r}"
-    )
+    assert ruleset.description == (
+        "The fifth-edition Dungeons & Dragons ruleset family, spanning multiple "
+        "published editions (e.g. 2014, 2024)."
+    ), f"family description does not match revision 034's exact text: {ruleset.description!r}"
 
     version = db_connection.execute(
         text(

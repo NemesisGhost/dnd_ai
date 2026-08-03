@@ -8,14 +8,18 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError
 
-from tests.factories import make_character, make_ruleset_version, make_world
+from tests.factories import make_character, make_ruleset_version_for_world, make_world
 
 pytestmark = pytest.mark.database
 
 
 @pytest.fixture
-def character_id(db_connection: Connection) -> uuid.UUID:
-    world_id = make_world(db_connection, slug="shared-data-world")
+def world_id(db_connection: Connection) -> uuid.UUID:
+    return make_world(db_connection, slug="shared-data-world")
+
+
+@pytest.fixture
+def character_id(db_connection: Connection, world_id: uuid.UUID) -> uuid.UUID:
     return make_character(db_connection, world_id)
 
 
@@ -32,9 +36,9 @@ def test_a_character_may_have_a_description(
 
 
 def test_a_character_may_know_more_than_one_language(
-    db_connection: Connection, character_id: uuid.UUID
+    db_connection: Connection, character_id: uuid.UUID, world_id: uuid.UUID
 ) -> None:
-    version = make_ruleset_version(db_connection)
+    version = make_ruleset_version_for_world(db_connection, world_id)
     for code in ("common", "elvish"):
         language = db_connection.execute(
             text(

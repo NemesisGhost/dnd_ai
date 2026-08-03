@@ -1834,7 +1834,9 @@ character_languages = Table(
     schema="character",
     comment=(
         "Languages a character knows. Pure association — a character may know "
-        "languages from more than one ruleset's content."
+        "languages from more than one ruleset's content, as long as every ruleset "
+        "family in play is one the character's world allows (rules.world_rulesets); "
+        "enforced by trigger (revision 037), same as species/build/condition/resource."
     ),
 )
 
