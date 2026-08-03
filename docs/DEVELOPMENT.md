@@ -2,7 +2,7 @@
 
 How to set up a working environment and make changes to this repository.
 
-This document covers the **mechanics** — toolchain, layout, commands, workflow. It deliberately does not restate design rules; those live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Read [PLAN.md](PLAN.md) first to find the current phase.
+This document covers the **mechanics** — toolchain, layout, commands, workflow. It deliberately does not restate design rules; those live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Start with [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy), then read [PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) and the current phase entry rather than loading the whole plan.
 
 ---
 
@@ -47,7 +47,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 
 ## 2. Repository layout
 
-The tree below is the **target**. As of Phase 2, `database/` holds the migrations and seed files, `src/dnd_ai/persistence/` holds the table metadata and seed machinery, and `tests/` holds all three layers plus shared factories. The deeper `src/dnd_ai/` subpackages (`api/`, `commands/`, `queries/`, `domain/`, `ai/`, `integrations/`) do not exist yet — create each as the phase that needs it requires, not in advance.
+The tree below is the **target**. As of Phase 5, `database/` holds the migrations and seed files, `src/dnd_ai/persistence/` holds the table metadata and seed machinery, and `tests/` holds all three layers plus shared factories. The deeper `src/dnd_ai/` subpackages (`api/`, `commands/`, `queries/`, `domain/`, `ai/`, `integrations/`) do not exist yet — create each as the phase that needs it requires, not in advance.
 
 ```text
 .
@@ -58,7 +58,7 @@ The tree below is the **target**. As of Phase 2, `database/` holds the migration
 ├── uv.lock
 ├── .env.example
 ├── Dockerfile                 # The one image all services run from (PLAN.md §30.2)
-├── docs/                      # ALL documentation (see CLAUDE.md §6)
+├── docs/                      # ALL documentation (see CLAUDE.md §4)
 ├── terraform/                 # Infrastructure (see docs/INFRASTRUCTURE.md)
 ├── scripts/
 ├── database/
@@ -89,6 +89,38 @@ The tree below is the **target**. As of Phase 2, `database/` holds the migration
 The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering). Keep that mapping — it is how a reviewer checks that a handler didn't grow domain rules.
 
 There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints ([PLAN.md §30.2](PLAN.md#302-compute-ecs-fargate)). It does not exist yet — create it with the first deployable.
+
+### 2.1 Keep source and tests bounded by domain
+
+Repository structure is also a context boundary. Do not keep adding unrelated domains or correction passes to a file merely because the file already exists.
+
+Before Phase 6 feature work, replace the monolithic `src/dnd_ai/persistence/tables.py` with a `src/dnd_ai/persistence/tables/` package organized by bounded schema/domain. The exact names may follow dependency analysis, but the target shape is:
+
+```text
+src/dnd_ai/persistence/tables/
+├── __init__.py       # imports every domain module; preserves public re-exports
+├── _shared.py        # the one MetaData object and shared table helpers
+├── security.py
+├── core.py
+├── audit.py
+├── campaign.py
+├── rules.py
+├── characters.py
+├── locations.py
+└── knowledge.py
+```
+
+Requirements for that split:
+
+- It is a mechanical refactor: no migration, live-schema, table/column name, constraint, comment, or server-default change.
+- All table declarations use the one `MetaData` instance from `_shared.py`. `tables/__init__.py` imports every domain module so Alembic still receives complete metadata, and it re-exports existing public names so current imports remain compatible.
+- Cross-domain foreign keys remain schema-qualified strings. Domain modules must not import each other's table objects merely to declare a foreign key; this keeps import order acyclic.
+- Add a focused metadata-completeness test that compares expected schema-qualified table names/public exports before and after the split, then require `alembic check` to prove no schema diff.
+- Put a new table in the module that owns its PostgreSQL schema/domain. If a module becomes large enough that an unrelated task must scan past several separate concerns, split it again by a stable subdomain rather than by implementation phase.
+
+Database tests follow the invariant they protect, not the phase or review pass that discovered them. `test_phase4_corrections.py` and `test_phase4_remaining_issues.py` are historical accretion points and must be split before Phase 6 feature work. Move their tests without weakening assertions into topic files such as session chronology, ruleset provenance, ruleset-version consistency, immutable identity, world-ruleset dependency/concurrency, and character-language integrity. Shared fixtures belong in a narrowly named fixture/support module or `conftest.py`; do not copy a large fixture block into every destination.
+
+New closeout tests go directly into the stable topic file. A temporary phase-named test file is allowed while a register is open, but closing the register includes distributing those tests by invariant and removing the temporary file. Historical verification documents record why a test exists; the active test filename records what it protects.
 
 ---
 
