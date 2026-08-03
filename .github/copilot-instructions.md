@@ -2,7 +2,7 @@
 
 **Purpose**: Concise coding and architecture rules for GitHub Copilot working in this repository.
 
-**Full Documentation**: See the `docs/` folder, and [docs/AI_ASSISTANT_GUIDE.md](../docs/AI_ASSISTANT_GUIDE.md) for comprehensive details.
+**Operating instructions**: Start with [CLAUDE.md](../CLAUDE.md). Search the `docs/` folder by task and read only relevant sections. [docs/AI_ASSISTANT_GUIDE.md](../docs/AI_ASSISTANT_GUIDE.md) is an on-demand example catalog, not startup context.
 
 ---
 
@@ -65,23 +65,22 @@ Full rationale: [docs/DEVELOPMENT.md §1](../docs/DEVELOPMENT.md#1-toolchain). D
 
 ---
 
-## Documentation Hierarchy (Read Before Implementing)
+## Documentation Routing (Use Task-Scoped Context)
 
 All docs live under `docs/`. Only `README.md` and `CLAUDE.md` belong in the repository root.
 
-**Before starting any feature, consult**:
-1. **`docs/PLAN.md`** — Current phase and deliverables (source of truth)
-2. **`docs/DOMAIN_MODEL.md`** — Conceptual vocabulary (read before naming anything)
-3. **`docs/DATABASE_CONVENTIONS.md`** — Schema design rules (follow exactly)
-4. **`docs/ENTITY_LIFECYCLE.md`** — Create/mutate/archive/delete workflows
-5. **`docs/architecture/SYSTEM_ARCHITECTURE.md`** — Service layers and transactions
-6. **`docs/architecture/DATABASE_MODEL.md`** — Logical schema and ER diagrams
-7. **`docs/architecture/DUNGEON_FLOW.md`** — End-to-end acceptance scenario
-8. **`docs/DEVELOPMENT.md`** — Toolchain, layout, Alembic workflow, tests, definition of done
+Do not load the whole documentation set before every feature. Start with `CLAUDE.md`, identify the phase/domain/change type, search headings or keywords, then read only:
+
+1. **`docs/PLAN.md` §23.0–23.1 and the current phase entry** — deliverables and exit criteria.
+2. **Affected sections of `docs/DOMAIN_MODEL.md` and `docs/architecture/DATABASE_MODEL.md`** — vocabulary and schema.
+3. **Mechanism-specific sections of `docs/DATABASE_CONVENTIONS.md`** — for example ranges, triggers, migrations, grants, or tests.
+4. **A matching workflow document only when applicable** — `ENTITY_LIFECYCLE.md` for entity operations, `SYSTEM_ARCHITECTURE.md` for application layers/transactions, `DUNGEON_FLOW.md` for cross-domain scenario work, and `DEVELOPMENT.md` for the relevant mechanics plus §10.
+
+Expand to a full document only for a cross-cutting reconciliation or when targeted sections leave an unresolved conflict. Do not preload completed-phase history or `AI_ASSISTANT_GUIDE.md`.
 
 **Onboarding**: `docs/CONTRIBUTING.md` — **Deploying**: `docs/QUICKSTART.md` + `docs/CHECKLIST.md` — **Reference**: `docs/INFRASTRUCTURE.md`
 
-**For comprehensive guidance**: See `docs/AI_ASSISTANT_GUIDE.md` (detailed examples, anti-patterns, decision trees)
+**For a specific worked example**: Search `docs/AI_ASSISTANT_GUIDE.md` and open only the matching section.
 
 ---
 
@@ -371,7 +370,7 @@ terraform apply tfplan
 
 ## Summary
 
-1. ✅ **Read relevant docs before implementing** (`docs/PLAN.md` first)
+1. ✅ **Route context before implementing** (`CLAUDE.md`, then the current `docs/PLAN.md` phase and affected topic sections)
 2. ✅ **Follow 11 Non-Negotiable Rules** (no exceptions without approval)
 3. ✅ **Don't extend legacy code** (create new per current architecture)
 4. ✅ **PostgreSQL is truth, AI proposes, clients use API**
@@ -379,7 +378,7 @@ terraform apply tfplan
 6. ✅ **Separate definition/state/knowledge/history**
 7. ✅ **When uncertain: stop and consult docs or user**
 
-**For comprehensive guidance**: See `docs/AI_ASSISTANT_GUIDE.md`
+**For a missing worked example only**: Search `docs/AI_ASSISTANT_GUIDE.md` and open the matching section.
 
 ---
 
