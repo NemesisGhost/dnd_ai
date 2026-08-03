@@ -330,7 +330,7 @@ erDiagram
 
 `character.characters` contains identity-level mechanical references such as species, size and origin. NPCs and player characters both extend it. Potential later subtypes (companions, familiars, summons, special creature actors) reuse `character.characters` when they need full character mechanics, rather than growing a parallel hierarchy.
 
-- `character.characters` — `character_id UUID PK/FK` to `core.entities`; `species_id UUID FK` to `rules.species`, which must be allowed for the character's own world (`rules.world_rulesets`, enforced by trigger since a Phase 4 corrections revision); `size_category TEXT` (a fixed CHECK vocabulary, not a lookup table — the six D&D size categories don't vary by ruleset); `origin_location_id` arrives in Phase 5
+- `character.characters` — `character_id UUID PK/FK` to `core.entities`; `species_id UUID FK` to `rules.species`, which must be allowed for the character's own world (`rules.world_rulesets`, enforced by trigger since a Phase 4 corrections revision); `size_category TEXT` (a fixed CHECK vocabulary, not a lookup table — the six D&D size categories don't vary by ruleset); `origin_location_id UUID FK NULL` to `world.locations`, added by Phase 5 revision 042 once locations existed, same-world enforced by trigger
 - `character.character_descriptions` — free-text background, appearance, and other prose that doesn't drive mechanics
 - `character.character_languages` — reusable character-to-language association. A character may know languages from multiple ruleset families, but every referenced language's family must be present in the character's world's `rules.world_rulesets` allow-list, enforced by trigger (revision 037), same shape as species/build/condition/resource (revision 029) and inheriting the same concurrency-safe locking (revision 035) via the shared `rules.ruleset_allowed_for_world()` helper.
 - `character.character_senses`
@@ -425,35 +425,29 @@ erDiagram
 
 `world.locations` contains a nullable `parent_location_id` for containment. General semantic relationships (adjacency, claims, portals, trade routes, disputed control) use the universal relationship model (§10) instead of dedicated columns.
 
-Specializations may include:
+Built in Phase 5 (revision 038): `world.locations` is the class-table-inheritance root. Leaf location kinds with no structured data of their own beyond "is a location" — plane, continent, nation, region, district, geographic_feature, and **realm** (added by revision 047, closing an oversight in revision 038 — DOMAIN_MODEL.md §9.1 lists it and nothing argues for its removal) — are plain `core.entity_types` rows under `location`, the same pattern `character.characters` already uses for types with no dedicated apparatus. Two kinds get their own subtype table: `world.settlements` (`population` only — government, factions, and economy are later-phase concepts; districts are plain child locations; control/damage state is timeline state) and `world.buildings` (`building_use TEXT`, free text pending a documented vocabulary).
 
-- planes
-- continents / regions / nations
-- settlements
-- districts
-- buildings
-- rooms
-- dungeons
-- dungeon areas
-- geographic features
+`parent_location_id` is mutable (legitimate reparenting — moving a building to a different district — is a real operation), but revision 044 makes every mutation path safe: a trigger rejects a containment cycle of any length (not just direct self-parenting, which the original `ck_locations_not_own_parent` CHECK from revision 038 already caught), and a second trigger re-validates the dungeon-area-must-have-a-dungeon-parent rule whenever `parent_location_id` changes directly, closing the gap left by revision 039's trigger only firing from the `dungeon_areas` side.
 
 ### 9.2 Dungeon structure
 
-- `world.dungeons`
-- `world.dungeon_areas`
-- `world.area_connections`
-- `world.area_features`
-- `world.area_hazards`
-- `world.area_interactables`
-- `world.area_spawn_definitions`
+Built in Phase 5 (revision 039):
 
-Area connections support normal doors, secret doors, passages, portals, stairs/ladders, pits, bridges, one-way routes, and conditional routes.
+- `world.dungeons` — `danger_level` (`core.rating_1_10`, optional)
+- `world.dungeon_areas` — `area_type`, `dimensions`, `environmental_properties`, all free text; a trigger requires `parent_location_id` to reference a `dungeon`-typed location
+- `world.connection_types` — lookup, seeded: door, secret_door, passage, portal, stair, ladder, pit, bridge, teleportation_link
+- `world.area_connections` — links two dungeon areas; requires the same world but deliberately *not* the same dungeon (a teleportation link may cross dungeons); `is_hidden` is a structural fact about the connection, never party knowledge; `from_dungeon_area_id`/`to_dungeon_area_id` are immutable once set (revision 044 — an endpoint has no legitimate "move" operation, the same reasoning revision 030 applied to `core.entities.world_id` and similar identity columns)
+- `world.area_features`, `world.area_hazards`, `world.area_interactables` — plain children of a dungeon area, not entities (modeling principle 5 — a lever or bloodstain has no independent identity the way an NPC or dungeon does); each carries `is_hidden`; `dungeon_area_id` is immutable once set (revision 044, same reasoning as the connection endpoints above)
 
-Definitions describe what can exist. Timeline state (§16) describes what is currently open, destroyed, active, discovered, occupied or depleted.
+Area connections support normal doors, secret doors, passages, portals, stairs/ladders, pits, bridges, one-way routes (`is_one_way`), and **conditional routes** (`is_conditional`/`condition_description`, added by revision 047) — but only the descriptive half: recording that a route is conditional and what the condition is. Evaluating whether a party currently satisfies the condition needs interaction/check resolution (Phase 6) or quest state (Phase 7), neither of which exists yet; see PLAN.md Phase 6's first-time obligations for the explicit deferral. `world.area_spawn_definitions` (named in earlier drafts of this section and in PLAN.md §9.2) was **not built** in Phase 5 — no creature-instance or stat-block model exists anywhere in this schema yet, and Phase 9 (encounters) is the natural first consumer; building it now would either reference nothing meaningful or invent encounter-generation scope ahead of the phase that needs it.
+
+Definitions describe what can exist. Timeline state (§17) describes what is currently open, destroyed, active, occupied, or depleted — kept mutation-safe by the five `campaign.*_state` tables' own `updated_at` triggers (revision 046, closing a gap where revision 040 declared the column but never attached `core.set_updated_at()`).
 
 ### 9.3 Discovery versus existence
 
-A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§14) and may differ by party or character.
+A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§15) and may differ by party or character.
+
+Phase 5 proves this structurally: `world.area_connections.is_hidden` (and the equivalent column on features/hazards/interactables) says the object was built to be concealed, never who has found it. Discovery itself is recorded in `knowledge.party_discoveries`, pulled forward from Phase 7 for this reason — see §15's note and §26.
 
 ## 10. Organizations and relationships
 
@@ -626,18 +620,24 @@ erDiagram
 
 Primary tables:
 
-- `knowledge.knowledge_items`
-- `knowledge.knowledge_versions`
-- `knowledge.entity_knowledge`
-- `knowledge.information_transfers`
-- `knowledge.expertise_domains` — lookup for `character_expertise.expertise_domain_id`
-- `knowledge.character_expertise`
-- `knowledge.party_discoveries` — the discovery *record*: when and how a party learned a knowledge item
-- `knowledge.public_knowledge` — what is known publicly within a location or region, independent of any one knower
+- `knowledge.knowledge_items` — **built in Phase 5** (revision 041), pulled forward from Phase 7 to satisfy that phase's "hidden connections remain distinct from party knowledge" exit criterion; see §26. Entity-rooted; `truth_status_id`/`knowledge_type_id` lookups; a single nullable typed subject reference (`subject_entity_id` or one of `subject_area_connection_id`/`_feature_id`/`_hazard_id`/`_interactable_id`, at most one set) rather than the plural `knowledge_item_subjects` junction the conceptual model implies — Phase 7 should promote this if a knowledge item genuinely needs more than one subject.
+- `knowledge.knowledge_versions` — deferred to Phase 7 (rumor mutation/distortion; nothing in Phase 5 needed it)
+- `knowledge.entity_knowledge` — **built in Phase 5** (revision 041); references a bare `knowledge_item_id`, not a version, since nothing to version exists yet
+- `knowledge.information_transfers` — deferred to Phase 7
+- `knowledge.expertise_domains` — lookup for `character_expertise.expertise_domain_id`; deferred to Phase 7
+- `knowledge.character_expertise` — deferred to Phase 7
+- `knowledge.party_discoveries` — the discovery *record*: when and how a party learned a knowledge item. **Built in Phase 5** (revision 041); recipient is exactly one of `party_id` or `knower_entity_id` (partial unique indexes per recipient kind). Public/regional discovery is not yet representable — see `public_knowledge` below.
+- `knowledge.public_knowledge` — what is known publicly within a location or region, independent of any one knower; deferred to Phase 7
 
-`campaign.party_knowledge` (§16) is the related but distinct *current effective view* of what a party presently knows — typed state, derived from discoveries and transfers, kept separate from the discovery log the same way `campaign.character_state` is kept separate from the events that produced it.
+`campaign.party_knowledge` (§17) is the related but distinct *current effective view* of what a party presently knows — typed state, derived from discoveries and transfers, kept separate from the discovery log the same way `campaign.character_state` is kept separate from the events that produced it. Not yet built.
 
 A knowledge item represents a claim; truth status, awareness, belief, confidence, interpretation, and willingness to share are distinct fields. Entity knowledge stores what a knower believes, its confidence, interpretation, source, and willingness to share — a false belief is valid game data and must not be overwritten merely because the canonical truth is known to the GM. Discovery may be recorded for an individual character, a party, an organization, or the public within a location or region. Information transfers record source knower, recipient, transferred knowledge, modified interpretation, the causing interaction or event, and world time — this is what supports rumor propagation and misinformation.
+
+**Explicit Phase 5 / Phase 7 boundary** (exit review finding — the pulled-forward slice must not quietly grow into the rest of Phase 7's scope):
+
+- **Temporal validity of knowledge items is NOT built.** `knowledge.knowledge_items` has no `effective_from_world_time_id`/`effective_to_world_time_id` (or equivalent) — a knowledge item cannot yet express "this was true until the tower fell" or "this only becomes relevant after X." Phase 7 owns adding that, likely following the same ADR 0010 shape used everywhere else in the schema.
+- **Discovery source/provenance is a free-text placeholder, not real provenance.** `knowledge.entity_knowledge.learned_source` and `knowledge.party_discoveries.discovery_method` are `TEXT` columns holding a human-readable guess ("search_check", "told_by_npc") until `interaction.interactions`/`narrative.events` exist to reference properly — both tables are Phase 6 deliverables ("events and interactions"), so replacing these placeholders is unambiguously Phase 6's obligation, not Phase 7's (see [PLAN.md's Phase 6 first-time obligations](../PLAN.md#phase-6-events-and-interactions)). Revision 045 validates that the *timestamp* columns next to them (`learned_at_world_time_id`, `discovered_at_world_time_id`) belong to the right world, but does nothing to make the source/method columns machine-checkable.
+- What Phase 5 *does* support: recording that a specific knower or party has learned a specific knowledge item, on a specific timeline, at a specific (world-time-validated) moment, with a free-text note of how — enough for the dungeon-discovery use case (a hidden connection found, a secret learned from an NPC) and nothing broader.
 
 ## 16. Interaction and resolution model
 
@@ -686,12 +686,12 @@ Primary tables:
 - `campaign.character_conditions`
 - `campaign.character_resources`
 - `campaign.character_inventory` — a character-centric read index over `item_ownership`/`inventory_entries` (§11); the source of truth stays with the item-level tables, this is the "what is this character carrying right now" view
-- `campaign.character_location_history` — deferred to Phase 5, which owns locations
-- `campaign.location_state`
-- `campaign.area_connection_state`
-- `campaign.area_feature_state`
-- `campaign.hazard_state`
-- `campaign.interactable_state`
+- `campaign.character_location_history` — built by Phase 5 revision 042, upgraded to the full ADR 0010 interval contract by revision 043 (exit-review finding: revision 042 only had same-world checks and a partial-unique-index shortcut). `arrived_at_world_time_id` is required (the interval's finite start, mirroring `campaign.party_memberships.effective_from_world_time_id`); `location_period INT8RANGE` is derived by trigger from the endpoints' `sort_key` values and, since revision 050, declared `NOT NULL` — matching `party_memberships.effective_period` exactly rather than only behaving as if it were; `EXCLUDE USING gist (timeline_id WITH =, character_id WITH =, location_period WITH &&)` rejects any overlap, open or closed — which also fully subsumes the old "one open row" rule, since two unbounded-upper ranges for the same `(timeline, character)` always overlap. Doubles as the current-location view: the row with `departed_at_world_time_id IS NULL` is current. No `current_location_id` column was added to `campaign.character_state` (revision 021) for this.
+- `campaign.location_state` — built by Phase 5 revision 040 (`is_searched`, `is_destroyed`, `alarm_level`, `condition_notes`)
+- `campaign.area_connection_state` — built by Phase 5 revision 040; `connection_status_id` FK to a seeded lookup (open/closed/locked/broken/destroyed)
+- `campaign.area_feature_state` — built by Phase 5 revision 040 (`is_destroyed`, `condition_notes`)
+- `campaign.hazard_state` — built by Phase 5 revision 040; `hazard_status_id` FK to a seeded lookup (armed/triggered/reset/bypassed/disarmed)
+- `campaign.interactable_state` — built by Phase 5 revision 040; `interactable_status_id` FK to a seeded lookup (active/inactive/activated/deactivated/broken/locked)
 - `campaign.organization_state`
 - `campaign.relationship_state`
 - `campaign.item_state`
@@ -869,4 +869,43 @@ This document and `docs/PLAN.md` had drifted independently: this document's per-
 
 - `campaign.character_inventory` (PLAN.md) is documented in §17 as a character-centric read index over `campaign.item_ownership` / `campaign.inventory_entries` (this document's existing, more granular item-state split). This is a reasonable reconciliation, but it was not validated against any actual query pattern — Phase 9, which owns items, should confirm whether a separate index table is actually warranted or whether a view/query suffices.
 - `campaign.knowledge_discoveries` (PLAN.md, `campaign` schema) was treated as the same concept as `knowledge.party_discoveries` (this document, `knowledge` schema already present) — kept **`knowledge.party_discoveries`** per this document's own schema-responsibility table (§3: discoveries belong to `knowledge`). `campaign.party_knowledge` (PLAN.md) was kept as a **separate**, additional table (§17) for the current-effective-view side, distinct from the discovery log. Phase 7, which owns knowledge, should confirm this split is real and not two names for one table.
-- `campaign.character_location_history` (PLAN.md) is listed in §17 but its ownership is deferred to Phase 5 (locations) rather than built alongside the other Phase 4 character-state tables, since it cannot reference anything before `world.locations` exists. Confirm this at Phase 5 time.
+- `campaign.character_location_history` (PLAN.md) is listed in §17 but its ownership is deferred to Phase 5 (locations) rather than built alongside the other Phase 4 character-state tables, since it cannot reference anything before `world.locations` exists. **Confirmed at Phase 5 time** (revision 042): built as the sole source of truth for both history and current location, per §17's updated entry.
+
+## 26. Reconciliation notes (Phase 5)
+
+Phase 5 ("Locations and dungeon play") surfaced one real drift between PLAN.md's Phase 5 deliverable list and this document's own implementation order (§23), plus several scoping decisions made while building against it. Recorded here so a future pass can revisit them rather than rediscovering the reasoning from scratch — same purpose as §25.
+
+**The "discovery records" drift.** PLAN.md's Phase 5 deliverables name "discovery records" and its exit criteria require "hidden connections remain distinct from party knowledge," but this document's own implementation order (§23) places "Knowledge and discovery" at item 8 — after locations (item 5), interactions/events (item 6), and quests (item 7) — and the documented shape of `knowledge.party_discoveries` (§15) ties it to `knowledge.knowledge_items`, a Phase 7 concept. Discussed with the user rather than resolved unilaterally; the chosen resolution was to pull the minimum slice of the knowledge domain forward into Phase 5 (revision 041) — `knowledge.knowledge_items`, `knowledge.entity_knowledge`, `knowledge.party_discoveries`, plus the two lookups they need — using their documented shape rather than inventing a smaller, Phase-5-only table that Phase 7 would need to reconcile or replace later. `knowledge.knowledge_versions`, `information_transfers`, `expertise_domains`/`character_expertise`, and `public_knowledge` remain genuinely Phase 7's job; nothing in Phase 5's exit criteria needed them. §15's table list above records exactly which three tables exist now versus which four remain deferred.
+
+**Simplified knowledge-item subjects.** DOMAIN_MODEL.md §15.1 describes a knowledge item's subject as plural ("subject entities"), implying a junction table. Revision 041 instead adds a single nullable typed reference directly on `knowledge.knowledge_items` (`subject_entity_id` for the common entity case — NPCs, locations, organizations — plus one column each for the four non-entity dungeon-domain targets, since connections/features/hazards/interactables are not `core.entities` rows). At most one is set. This was sufficient for Phase 5's dungeon-discovery use case (one knowledge item, one concealed thing) and avoids building a junction table against requirements Phase 7 hasn't specified yet. Phase 7 should promote this to a real `knowledge.knowledge_item_subjects` table if a knowledge item genuinely needs more than one subject — a multi-party rumor about several NPCs, for instance.
+
+**`world.area_spawn_definitions` deliberately not built.** Named in both PLAN.md §9.2 and this document's own §9.2 (prior revision), but no creature-instance or stat-block model exists anywhere in this schema — `rules.creature_types` is a bare classification lookup, not a stat block — and Phase 9 (encounters) is the natural first consumer. Building it now would either reference nothing meaningful or invent encounter-generation scope ahead of the phase that needs it. None of Phase 5's three exit criteria required it. PLAN.md §9.2 should be corrected to match.
+
+**`world.settlements` and `world.buildings` are deliberately minimal**, matching the same "build the marker row, defer the apparatus" pattern Phase 4 used for `character.npcs`: settlements carry `population` only (government and factions are Phase 8 organization concepts; economy is an intentionally deferred domain per DOMAIN_MODEL.md §27; districts are plain child locations via `parent_location_id`; control/damage state is timeline state); buildings carry a free-text `building_use` (no documented controlled vocabulary exists, same reasoning as Phase 4's `character_senses.sense_type`). Six DOMAIN_MODEL.md §9.1 location "subtypes" with no structured data of their own (plane, continent, nation, region, district, geographic_feature) were registered as plain `core.entity_types` leaves under `location` rather than given their own CTI tables — the same pattern `character.characters` uses for types needing no dedicated apparatus.
+
+### First exit review corrections (2026-08-03)
+
+A Phase 5 exit review — before the branch was merged — found seven integrity, completeness, and documentation gaps the original schema's own exit criteria didn't happen to exercise, the same shape of review Phase 4 went through (see PHASE4_VERIFICATION.md's corrections/closeout passes). Five forward-only revisions (043–047) closed them, none touching the already-applied revisions 038–042; full account in PHASE5_VERIFICATION.md.
+
+| Revision | Closes |
+|---|---|
+| `043_character_location_temporal` | `campaign.character_location_history` only had same-world checks and a partial-unique-index shortcut, not the full ADR 0010 interval contract `campaign.party_memberships` already implements. Added a required `arrived_at_world_time_id`, a derived `location_period INT8RANGE`, and `EXCLUDE USING gist (timeline_id, character_id, location_period WITH &&)` — the exclusion constraint fully subsumes the old "one open row" partial index, since two unbounded-upper ranges for the same (timeline, character) always overlap. Both world-time endpoints' `ON DELETE` action changed from `SET NULL` to `RESTRICT`, matching `party_memberships`' endpoints — `SET NULL` on a now-`NOT NULL` column can't fire cleanly, and on the nullable end it would silently reopen a closed period without re-deriving the range. |
+| `044_dungeon_mutation_safety` | Revision 039's dungeon-structure rules validated only at insert time (or, for dungeon areas, only when `dungeon_areas` itself changed). Made `world.area_connections.from_dungeon_area_id`/`to_dungeon_area_id` and `world.area_features/area_hazards/area_interactables.dungeon_area_id` immutable via the existing `core.enforce_immutable_columns()` (revision 030) rather than a new mechanism; added a cycle-of-any-length guard and a dungeon-parent revalidation trigger to `world.locations`, closing the case where `parent_location_id` changes directly rather than through `world.dungeon_areas`. |
+| `045_knowledge_timestamp_world` | `knowledge.entity_knowledge.learned_at_world_time_id` and `knowledge.party_discoveries.discovered_at_world_time_id` were nullable `core.world_times` references revision 041's world-agreement triggers never checked. Extended (`CREATE OR REPLACE`) both existing functions rather than adding new ones — same one-function-owns-the-contract shape revision 041 and revision 009 both already use. |
+| `046_dungeon_state_updated_at` | The five `campaign.*_state` tables from revision 040 each declared an `updated_at` column but revision 040 never attached `core.set_updated_at()` to any of them — unlike revision 040's own three status lookups, which do have it. |
+| `047_realm_conditional_routes` | Two completeness gaps: the `realm` location kind DOMAIN_MODEL.md §9.1 lists (revision 038 registered the other six no-subtype-table kinds but omitted this one by oversight), and the descriptive half of conditional routes PLAN.md §9.2 names (`is_conditional`/`condition_description` on `world.area_connections` — evaluating the condition is deferred to Phase 6, plus Phase 7 for quest-gated conditions specifically (§15's distinction below applies the same way here), recorded explicitly in PLAN.md rather than left silent). |
+
+**Judgment call carried forward, not fully resolved:** the knowledge-domain Phase 5/Phase 7 boundary (temporal validity of knowledge items) is now documented explicitly in §15 rather than left implicit, but the gap was not closed — it remains genuinely Phase 7's job. Real discovery source/provenance is a separate gap with a different, single owner: Phase 6 (see §15's revised wording — `interaction.interactions`/`narrative.events` are Phase 6 deliverables, so replacing the free-text placeholder can happen as soon as both exist, with no dependency on Phase 7's quest or knowledge-versioning work).
+
+### Second exit review corrections (2026-08-03)
+
+A second Phase 5 exit review — also before the branch was merged — found four further integrity gaps a purely sequential, single-transaction test suite hadn't exercised (parent-side type mutation, a genuine concurrent write race, an incompletely-tightened NOT NULL, and an under-constrained pair of columns), plus documentation drift including the Phase 6/7 ambiguity resolved just above. Four more forward-only revisions (048–051) closed the schema-level gaps, none touching 038–047; full account in PHASE5_VERIFICATION.md.
+
+| Revision | Closes |
+|---|---|
+| `048_entity_type_change_protect` | `core.enforce_entity_subtype()` (revision 004) only validates from the subtype side (INSERT/UPDATE on e.g. `world.dungeons`); nothing stopped `UPDATE core.entities SET entity_type_id = ...` from retyping an entity out from under an existing subtype row. Added `core.entity_types.required_subtype_pk_column` (paired explicitly with `required_subtype_table`, not derived from it) and `core.enforce_entity_type_change()`, a generic `BEFORE UPDATE OF entity_type_id` trigger on `core.entities` that rejects a type change stranding any subtype row still present — protects every registered subtype (character/npc/player_character, location/settlement/building/dungeon/dungeon_area, knowledge_item), not just dungeons. A second, dungeon-specific trigger (`world.enforce_dungeon_type_change_preserves_areas()`) closes the deeper case: `world.dungeons` rows are deletable (conventions §7.5), and once deleted the generic trigger has nothing left to check, but `world.dungeon_areas` children may still depend on the parent staying dungeon-typed — this trigger checks for those children directly. |
+| `049_location_containment_lock` | Revision 044's cycle check read the containment ancestry with no lock, so two concurrent transactions (A placed under B; B placed under A, started from the same acyclic snapshot) could each observe no cycle and both commit, together forming one neither transaction alone would create — classic write skew, since the two writes touch disjoint rows. `CREATE OR REPLACE` on `world.enforce_location_no_cycle()` (revision 044's function, not re-created) now takes a per-world `pg_advisory_xact_lock` before reading the ancestry, locked in sorted order across both worlds involved so two transactions naming the same pair can never deadlock. The recursive walk also gained a depth bound, so a hypothetical pre-existing cycle in the data fails with a bounded error instead of recursing forever. Proven with a genuine two-connection integration test (not two sequential updates on one connection) — see PHASE5_VERIFICATION.md. |
+| `050_char_location_period_notnull` | `campaign.character_location_history.location_period` (revision 043) was never declared `NOT NULL`, unlike `campaign.party_memberships.effective_period`, even though the derivation trigger already makes a NULL value unreachable through normal writes. Backfill-guard-then-`ALTER COLUMN ... SET NOT NULL`, plus corrected the column and table `COMMENT`s, which still described the superseded revision-042 partial-unique-index design. |
+| `051_conditional_route_semantics` | Revision 047's `is_conditional`/`condition_description` had no constraint tying them together, silently permitting `is_conditional = true` with no description and `is_conditional = false` with one. Added `ck_area_connections_conditional_description_paired`: a conditional route requires a non-null, non-blank description; an unconditional route must have none. |
+
+**Judgment call:** `core.enforce_entity_type_change()` is deliberately not a blanket immutability lock on `entity_type_id` the way `core.enforce_immutable_columns()` treats `world_id` — a type correction before any subtype row exists remains legitimate, since nothing depends on it yet. Only a change that would strand an *existing* subtype row (or, for dungeons specifically, existing dungeon-area children) is rejected.

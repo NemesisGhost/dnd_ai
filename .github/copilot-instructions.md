@@ -16,7 +16,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 **What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
 
-**Current implementation status**: Phases 1 through 4 are complete, including Phase 4's initial ruleset/shared-character schema, its first corrections pass, and all three closeout passes ([../docs/PHASE4_REMAINING_ISSUES.md](../docs/PHASE4_REMAINING_ISSUES.md) is now a closed historical record). The current target is [Phase 5](../docs/PLAN.md#phase-5-locations-and-dungeon-play). No API or UI exists yet.
+**Current implementation status**: Phases 1 through 5 are complete, including Phase 4's initial ruleset/shared-character schema, its first corrections pass, and all three closeout passes, and Phase 5's location/dungeon schema plus its own two pre-merge exit-review corrections passes ([../docs/PHASE4_REMAINING_ISSUES.md](../docs/PHASE4_REMAINING_ISSUES.md) is now a closed historical record). The current target is [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions). No API or UI exists yet.
 
 ---
 
