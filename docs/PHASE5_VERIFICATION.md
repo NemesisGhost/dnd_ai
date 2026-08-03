@@ -116,7 +116,7 @@ Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-ve
 | `mypy src` | `Success: no issues found in 5 source files` |
 | `pytest -q` (unit + database + scenario, the same bare invocation CI uses) | `1066 passed` (13 unit, 1052 database, 1 scenario) — run twice in direct succession (once before the `ruff format` pass, once after) to confirm stability, the same discipline that caught the first pass's flaky test — a fresh ephemeral database created and migrated from `base` to `head` by `tests/conftest.py` each time, so each run is also independent proof the full 51-revision chain applies cleanly from empty |
 
-Not re-run in this pass, for the same reason as the first: a full downgrade to `base` against `dev` (destructive on shared infrastructure — the bounded round trip above plus CI's own from-`base` ephemeral-database run remain the accepted substitute). *(GitHub Actions run URL and outcome to be filled in once this pass's push completes CI.)*
+Not re-run locally in this pass, for the same reason as the first: a full downgrade to `base` against `dev` (destructive on shared infrastructure). GitHub Actions run [`30801159031`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30801159031) on commit `3c8b2c6` ran it instead ("Test downgrade (full round trip to base)") and passed, alongside every other required step — `Lint and Type Check` and `Migrations and Tests (AWS dev)` both concluded `success`, including seed idempotency, schema comparison, and the full test suite.
 
 ## Deliberate Scoping Decisions
 
