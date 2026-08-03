@@ -330,7 +330,7 @@ erDiagram
 
 `character.characters` contains identity-level mechanical references such as species, size and origin. NPCs and player characters both extend it. Potential later subtypes (companions, familiars, summons, special creature actors) reuse `character.characters` when they need full character mechanics, rather than growing a parallel hierarchy.
 
-- `character.characters` — `character_id UUID PK/FK` to `core.entities`; `species_id UUID FK` to `rules.species`, which must be allowed for the character's own world (`rules.world_rulesets`, enforced by trigger since a Phase 4 corrections revision); `size_category TEXT` (a fixed CHECK vocabulary, not a lookup table — the six D&D size categories don't vary by ruleset); `origin_location_id` arrives in Phase 5
+- `character.characters` — `character_id UUID PK/FK` to `core.entities`; `species_id UUID FK` to `rules.species`, which must be allowed for the character's own world (`rules.world_rulesets`, enforced by trigger since a Phase 4 corrections revision); `size_category TEXT` (a fixed CHECK vocabulary, not a lookup table — the six D&D size categories don't vary by ruleset); `origin_location_id UUID FK NULL` to `world.locations`, added by Phase 5 revision 042 once locations existed, same-world enforced by trigger
 - `character.character_descriptions` — free-text background, appearance, and other prose that doesn't drive mechanics
 - `character.character_languages` — reusable character-to-language association. A character may know languages from multiple ruleset families, but every referenced language's family must be present in the character's world's `rules.world_rulesets` allow-list, enforced by trigger (revision 037), same shape as species/build/condition/resource (revision 029) and inheriting the same concurrency-safe locking (revision 035) via the shared `rules.ruleset_allowed_for_world()` helper.
 - `character.character_senses`
@@ -425,35 +425,27 @@ erDiagram
 
 `world.locations` contains a nullable `parent_location_id` for containment. General semantic relationships (adjacency, claims, portals, trade routes, disputed control) use the universal relationship model (§10) instead of dedicated columns.
 
-Specializations may include:
-
-- planes
-- continents / regions / nations
-- settlements
-- districts
-- buildings
-- rooms
-- dungeons
-- dungeon areas
-- geographic features
+Built in Phase 5 (revision 038): `world.locations` is the class-table-inheritance root. Leaf location kinds with no structured data of their own beyond "is a location" — plane, continent, nation, region, district, geographic_feature — are plain `core.entity_types` rows under `location`, the same pattern `character.characters` already uses for types with no dedicated apparatus. Two kinds get their own subtype table: `world.settlements` (`population` only — government, factions, and economy are later-phase concepts; districts are plain child locations; control/damage state is timeline state) and `world.buildings` (`building_use TEXT`, free text pending a documented vocabulary).
 
 ### 9.2 Dungeon structure
 
-- `world.dungeons`
-- `world.dungeon_areas`
-- `world.area_connections`
-- `world.area_features`
-- `world.area_hazards`
-- `world.area_interactables`
-- `world.area_spawn_definitions`
+Built in Phase 5 (revision 039):
 
-Area connections support normal doors, secret doors, passages, portals, stairs/ladders, pits, bridges, one-way routes, and conditional routes.
+- `world.dungeons` — `danger_level` (`core.rating_1_10`, optional)
+- `world.dungeon_areas` — `area_type`, `dimensions`, `environmental_properties`, all free text; a trigger requires `parent_location_id` to reference a `dungeon`-typed location
+- `world.connection_types` — lookup, seeded: door, secret_door, passage, portal, stair, ladder, pit, bridge, teleportation_link
+- `world.area_connections` — links two dungeon areas; requires the same world but deliberately *not* the same dungeon (a teleportation link may cross dungeons); `is_hidden` is a structural fact about the connection, never party knowledge
+- `world.area_features`, `world.area_hazards`, `world.area_interactables` — plain children of a dungeon area, not entities (modeling principle 5 — a lever or bloodstain has no independent identity the way an NPC or dungeon does); each carries `is_hidden`
 
-Definitions describe what can exist. Timeline state (§16) describes what is currently open, destroyed, active, discovered, occupied or depleted.
+Area connections support normal doors, secret doors, passages, portals, stairs/ladders, pits, bridges, and one-way routes (`is_one_way`). Conditional routes and `world.area_spawn_definitions` (named in earlier drafts of this section and in PLAN.md §9.2) were **not built** in Phase 5 — no creature-instance or stat-block model exists anywhere in this schema yet, and Phase 9 (encounters) is the natural first consumer; building it now would either reference nothing meaningful or invent encounter-generation scope ahead of the phase that needs it.
+
+Definitions describe what can exist. Timeline state (§17) describes what is currently open, destroyed, active, occupied, or depleted.
 
 ### 9.3 Discovery versus existence
 
-A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§14) and may differ by party or character.
+A hidden feature exists independently of whether a party knows about it. Do not store `is_discovered` as a global property of a feature — discovery belongs to the knowledge model (§15) and may differ by party or character.
+
+Phase 5 proves this structurally: `world.area_connections.is_hidden` (and the equivalent column on features/hazards/interactables) says the object was built to be concealed, never who has found it. Discovery itself is recorded in `knowledge.party_discoveries`, pulled forward from Phase 7 for this reason — see §15's note and §26.
 
 ## 10. Organizations and relationships
 
@@ -626,16 +618,16 @@ erDiagram
 
 Primary tables:
 
-- `knowledge.knowledge_items`
-- `knowledge.knowledge_versions`
-- `knowledge.entity_knowledge`
-- `knowledge.information_transfers`
-- `knowledge.expertise_domains` — lookup for `character_expertise.expertise_domain_id`
-- `knowledge.character_expertise`
-- `knowledge.party_discoveries` — the discovery *record*: when and how a party learned a knowledge item
-- `knowledge.public_knowledge` — what is known publicly within a location or region, independent of any one knower
+- `knowledge.knowledge_items` — **built in Phase 5** (revision 041), pulled forward from Phase 7 to satisfy that phase's "hidden connections remain distinct from party knowledge" exit criterion; see §26. Entity-rooted; `truth_status_id`/`knowledge_type_id` lookups; a single nullable typed subject reference (`subject_entity_id` or one of `subject_area_connection_id`/`_feature_id`/`_hazard_id`/`_interactable_id`, at most one set) rather than the plural `knowledge_item_subjects` junction the conceptual model implies — Phase 7 should promote this if a knowledge item genuinely needs more than one subject.
+- `knowledge.knowledge_versions` — deferred to Phase 7 (rumor mutation/distortion; nothing in Phase 5 needed it)
+- `knowledge.entity_knowledge` — **built in Phase 5** (revision 041); references a bare `knowledge_item_id`, not a version, since nothing to version exists yet
+- `knowledge.information_transfers` — deferred to Phase 7
+- `knowledge.expertise_domains` — lookup for `character_expertise.expertise_domain_id`; deferred to Phase 7
+- `knowledge.character_expertise` — deferred to Phase 7
+- `knowledge.party_discoveries` — the discovery *record*: when and how a party learned a knowledge item. **Built in Phase 5** (revision 041); recipient is exactly one of `party_id` or `knower_entity_id` (partial unique indexes per recipient kind). Public/regional discovery is not yet representable — see `public_knowledge` below.
+- `knowledge.public_knowledge` — what is known publicly within a location or region, independent of any one knower; deferred to Phase 7
 
-`campaign.party_knowledge` (§16) is the related but distinct *current effective view* of what a party presently knows — typed state, derived from discoveries and transfers, kept separate from the discovery log the same way `campaign.character_state` is kept separate from the events that produced it.
+`campaign.party_knowledge` (§17) is the related but distinct *current effective view* of what a party presently knows — typed state, derived from discoveries and transfers, kept separate from the discovery log the same way `campaign.character_state` is kept separate from the events that produced it. Not yet built.
 
 A knowledge item represents a claim; truth status, awareness, belief, confidence, interpretation, and willingness to share are distinct fields. Entity knowledge stores what a knower believes, its confidence, interpretation, source, and willingness to share — a false belief is valid game data and must not be overwritten merely because the canonical truth is known to the GM. Discovery may be recorded for an individual character, a party, an organization, or the public within a location or region. Information transfers record source knower, recipient, transferred knowledge, modified interpretation, the causing interaction or event, and world time — this is what supports rumor propagation and misinformation.
 
@@ -686,12 +678,12 @@ Primary tables:
 - `campaign.character_conditions`
 - `campaign.character_resources`
 - `campaign.character_inventory` — a character-centric read index over `item_ownership`/`inventory_entries` (§11); the source of truth stays with the item-level tables, this is the "what is this character carrying right now" view
-- `campaign.character_location_history` — deferred to Phase 5, which owns locations
-- `campaign.location_state`
-- `campaign.area_connection_state`
-- `campaign.area_feature_state`
-- `campaign.hazard_state`
-- `campaign.interactable_state`
+- `campaign.character_location_history` — built by Phase 5 revision 042. Doubles as the current-location view: the row with `departed_at_world_time_id IS NULL` is current, at most one per `(timeline, character)` via partial unique index — no `current_location_id` column was added to `campaign.character_state` (revision 021) for this; see revision 042's docstring.
+- `campaign.location_state` — built by Phase 5 revision 040 (`is_searched`, `is_destroyed`, `alarm_level`, `condition_notes`)
+- `campaign.area_connection_state` — built by Phase 5 revision 040; `connection_status_id` FK to a seeded lookup (open/closed/locked/broken/destroyed)
+- `campaign.area_feature_state` — built by Phase 5 revision 040 (`is_destroyed`, `condition_notes`)
+- `campaign.hazard_state` — built by Phase 5 revision 040; `hazard_status_id` FK to a seeded lookup (armed/triggered/reset/bypassed/disarmed)
+- `campaign.interactable_state` — built by Phase 5 revision 040; `interactable_status_id` FK to a seeded lookup (active/inactive/activated/deactivated/broken/locked)
 - `campaign.organization_state`
 - `campaign.relationship_state`
 - `campaign.item_state`
@@ -869,4 +861,16 @@ This document and `docs/PLAN.md` had drifted independently: this document's per-
 
 - `campaign.character_inventory` (PLAN.md) is documented in §17 as a character-centric read index over `campaign.item_ownership` / `campaign.inventory_entries` (this document's existing, more granular item-state split). This is a reasonable reconciliation, but it was not validated against any actual query pattern — Phase 9, which owns items, should confirm whether a separate index table is actually warranted or whether a view/query suffices.
 - `campaign.knowledge_discoveries` (PLAN.md, `campaign` schema) was treated as the same concept as `knowledge.party_discoveries` (this document, `knowledge` schema already present) — kept **`knowledge.party_discoveries`** per this document's own schema-responsibility table (§3: discoveries belong to `knowledge`). `campaign.party_knowledge` (PLAN.md) was kept as a **separate**, additional table (§17) for the current-effective-view side, distinct from the discovery log. Phase 7, which owns knowledge, should confirm this split is real and not two names for one table.
-- `campaign.character_location_history` (PLAN.md) is listed in §17 but its ownership is deferred to Phase 5 (locations) rather than built alongside the other Phase 4 character-state tables, since it cannot reference anything before `world.locations` exists. Confirm this at Phase 5 time.
+- `campaign.character_location_history` (PLAN.md) is listed in §17 but its ownership is deferred to Phase 5 (locations) rather than built alongside the other Phase 4 character-state tables, since it cannot reference anything before `world.locations` exists. **Confirmed at Phase 5 time** (revision 042): built as the sole source of truth for both history and current location, per §17's updated entry.
+
+## 26. Reconciliation notes (Phase 5)
+
+Phase 5 ("Locations and dungeon play") surfaced one real drift between PLAN.md's Phase 5 deliverable list and this document's own implementation order (§23), plus several scoping decisions made while building against it. Recorded here so a future pass can revisit them rather than rediscovering the reasoning from scratch — same purpose as §25.
+
+**The "discovery records" drift.** PLAN.md's Phase 5 deliverables name "discovery records" and its exit criteria require "hidden connections remain distinct from party knowledge," but this document's own implementation order (§23) places "Knowledge and discovery" at item 8 — after locations (item 5), interactions/events (item 6), and quests (item 7) — and the documented shape of `knowledge.party_discoveries` (§15) ties it to `knowledge.knowledge_items`, a Phase 7 concept. Discussed with the user rather than resolved unilaterally; the chosen resolution was to pull the minimum slice of the knowledge domain forward into Phase 5 (revision 041) — `knowledge.knowledge_items`, `knowledge.entity_knowledge`, `knowledge.party_discoveries`, plus the two lookups they need — using their documented shape rather than inventing a smaller, Phase-5-only table that Phase 7 would need to reconcile or replace later. `knowledge.knowledge_versions`, `information_transfers`, `expertise_domains`/`character_expertise`, and `public_knowledge` remain genuinely Phase 7's job; nothing in Phase 5's exit criteria needed them. §15's table list above records exactly which three tables exist now versus which four remain deferred.
+
+**Simplified knowledge-item subjects.** DOMAIN_MODEL.md §15.1 describes a knowledge item's subject as plural ("subject entities"), implying a junction table. Revision 041 instead adds a single nullable typed reference directly on `knowledge.knowledge_items` (`subject_entity_id` for the common entity case — NPCs, locations, organizations — plus one column each for the four non-entity dungeon-domain targets, since connections/features/hazards/interactables are not `core.entities` rows). At most one is set. This was sufficient for Phase 5's dungeon-discovery use case (one knowledge item, one concealed thing) and avoids building a junction table against requirements Phase 7 hasn't specified yet. Phase 7 should promote this to a real `knowledge.knowledge_item_subjects` table if a knowledge item genuinely needs more than one subject — a multi-party rumor about several NPCs, for instance.
+
+**`world.area_spawn_definitions` deliberately not built.** Named in both PLAN.md §9.2 and this document's own §9.2 (prior revision), but no creature-instance or stat-block model exists anywhere in this schema — `rules.creature_types` is a bare classification lookup, not a stat block — and Phase 9 (encounters) is the natural first consumer. Building it now would either reference nothing meaningful or invent encounter-generation scope ahead of the phase that needs it. None of Phase 5's three exit criteria required it. PLAN.md §9.2 should be corrected to match.
+
+**`world.settlements` and `world.buildings` are deliberately minimal**, matching the same "build the marker row, defer the apparatus" pattern Phase 4 used for `character.npcs`: settlements carry `population` only (government and factions are Phase 8 organization concepts; economy is an intentionally deferred domain per DOMAIN_MODEL.md §27; districts are plain child locations via `parent_location_id`; control/damage state is timeline state); buildings carry a free-text `building_use` (no documented controlled vocabulary exists, same reasoning as Phase 4's `character_senses.sense_type`). Six DOMAIN_MODEL.md §9.1 location "subtypes" with no structured data of their own (plane, continent, nation, region, district, geographic_feature) were registered as plain `core.entity_types` leaves under `location` rather than given their own CTI tables — the same pattern `character.characters` uses for types needing no dedicated apparatus.

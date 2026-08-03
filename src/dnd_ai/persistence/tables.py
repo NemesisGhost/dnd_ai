@@ -43,7 +43,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import DOMAIN, INT8RANGE, JSONB, TIMESTAMP, UUID
-from sqlalchemy.types import Integer
+from sqlalchemy.types import Integer, SmallInteger
 
 metadata = MetaData()
 
@@ -53,6 +53,18 @@ metadata = MetaData()
 NONNEGATIVE_INTEGER = DOMAIN(
     "nonnegative_integer",
     Integer(),
+    schema="core",
+    create_type=False,
+)
+RATING_1_10 = DOMAIN(
+    "rating_1_10",
+    SmallInteger(),
+    schema="core",
+    create_type=False,
+)
+PERCENTAGE_0_100 = DOMAIN(
+    "percentage_0_100",
+    SmallInteger(),
     schema="core",
     create_type=False,
 )
@@ -1730,6 +1742,17 @@ characters = Table(
     ),
     Column("size_category", Text(), nullable=False),
     *_timestamps(),
+    # Added by revision 042, once world.locations existed to point at.
+    Column(
+        "origin_location_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="SET NULL"),
+        comment=(
+            "Where this character is from. Deferred from Phase 4 until world.locations "
+            "existed (docs/architecture/DATABASE_MODEL.md §7.1). Must belong to the "
+            "character's own world, enforced by trigger."
+        ),
+    ),
     schema="character",
     comment=(
         "Identity-level mechanical data shared by every character: species and size. "
@@ -1740,6 +1763,11 @@ characters = Table(
 )
 
 Index("ix_characters_species_id", characters.c.species_id)
+Index(
+    "ix_characters_origin_location_id",
+    characters.c.origin_location_id,
+    postgresql_where=characters.c.origin_location_id.isnot(None),
+)
 
 npcs = Table(
     "npcs",
@@ -2314,4 +2342,808 @@ Index("ix_character_resources_character_id", character_resources.c.character_id)
 Index(
     "ix_character_resources_resource_definition_id",
     character_resources.c.resource_definition_id,
+)
+
+
+# ---------------------------------------------------------------------------
+# world — location hierarchy (revision 038)
+# ---------------------------------------------------------------------------
+
+locations = Table(
+    "locations",
+    metadata,
+    Column(
+        "location_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "parent_location_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="RESTRICT"),
+        comment=(
+            "The location this one is contained within, e.g. a building's settlement, a "
+            "settlement's region. NULL for top-level locations (planes, continents). Must "
+            "belong to the same world as this location, enforced by trigger."
+        ),
+    ),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "Class-table-inheritance root for every spatial entity. Containment is "
+        "expressed through parent_location_id; general semantic relationships "
+        "(adjacency, claims, portals, trade routes, disputed control) use the "
+        "universal relationship model instead (docs/architecture/DATABASE_MODEL.md §9.1)."
+    ),
+)
+
+Index(
+    "ix_locations_parent_location_id",
+    locations.c.parent_location_id,
+    postgresql_where=locations.c.parent_location_id.isnot(None),
+)
+
+settlements = Table(
+    "settlements",
+    metadata,
+    Column(
+        "settlement_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("population", NONNEGATIVE_INTEGER),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "Marks a location as a populated settlement. Deliberately minimal (population "
+        "only) — government, factions, and economy are later-phase concepts; districts "
+        "are plain child locations; control/damage state is timeline state "
+        "(campaign.location_state, revision 040). See this revision's docstring."
+    ),
+)
+
+buildings = Table(
+    "buildings",
+    metadata,
+    Column(
+        "building_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("building_use", Text()),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "Marks a location as a constructed building. building_use is free text "
+        "(tavern, temple, shop, warehouse, ...) — no documented controlled vocabulary "
+        "exists yet (docs/DOMAIN_MODEL.md §9.3)."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# world — dungeon structures (revision 039)
+# ---------------------------------------------------------------------------
+
+dungeons = Table(
+    "dungeons",
+    metadata,
+    Column(
+        "dungeon_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("danger_level", RATING_1_10),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "Marks a location as a dungeon: a location composed of connected areas and "
+        "stateful gameplay elements (docs/DOMAIN_MODEL.md §9.4). danger_level is an "
+        "optional GM-facing difficulty rating."
+    ),
+)
+
+dungeon_areas = Table(
+    "dungeon_areas",
+    metadata,
+    Column(
+        "dungeon_area_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("area_type", Text()),
+    Column(
+        "dimensions",
+        Text(),
+        comment=(
+            'Free-text size description (e.g. "30 ft by 40 ft"). No structured unit '
+            "system exists yet."
+        ),
+    ),
+    Column("environmental_properties", Text()),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A room, chamber, corridor, platform, cavern, or similar navigable unit "
+        "(docs/DOMAIN_MODEL.md §9.5). Parent dungeon is expressed through "
+        "world.locations.parent_location_id, required to be a dungeon-typed location "
+        "by trigger."
+    ),
+)
+
+connection_types = _lookup_table(
+    "world",
+    "connection_types",
+    "connection_type_id",
+    "Kinds of link between two dungeon areas (door, secret door, passage, portal, "
+    "stair, ladder, pit, bridge, teleportation link) — docs/DOMAIN_MODEL.md §9.6.",
+)
+
+area_connections = Table(
+    "area_connections",
+    metadata,
+    _uuid_pk("area_connection_id"),
+    Column(
+        "from_dungeon_area_id",
+        UUID(),
+        ForeignKey("world.dungeon_areas.dungeon_area_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "to_dungeon_area_id",
+        UUID(),
+        ForeignKey("world.dungeon_areas.dungeon_area_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "connection_type_id",
+        UUID(),
+        ForeignKey("world.connection_types.connection_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "is_one_way",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "True for a connection traversable only from from_dungeon_area_id to "
+            "to_dungeon_area_id (a one-way chute, a collapsing bridge behind the party, ...)."
+        ),
+    ),
+    Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
+    Column("description", Text()),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A link between two dungeon areas (docs/DOMAIN_MODEL.md §9.6). Not an entity — "
+        "a structural child of the areas it joins. is_hidden is a fact about the "
+        "connection itself (built to be concealed), never about whether any party has "
+        "found it — party knowledge is tracked separately (docs/architecture/"
+        "DATABASE_MODEL.md §9.3, revision 041)."
+    ),
+)
+
+Index("ix_area_connections_from_dungeon_area_id", area_connections.c.from_dungeon_area_id)
+Index("ix_area_connections_to_dungeon_area_id", area_connections.c.to_dungeon_area_id)
+Index("ix_area_connections_connection_type_id", area_connections.c.connection_type_id)
+
+area_features = Table(
+    "area_features",
+    metadata,
+    _uuid_pk("area_feature_id"),
+    Column(
+        "dungeon_area_id",
+        UUID(),
+        ForeignKey("world.dungeon_areas.dungeon_area_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("feature_type", Text()),
+    Column("description", Text()),
+    Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A notable but not necessarily interactive part of an area — mural, blood "
+        "trail, altar, broken machinery, drag marks, statue (docs/DOMAIN_MODEL.md §9.7). "
+        "Not an entity. is_hidden is a fact about the feature itself, never party "
+        "knowledge (see world.area_connections comment)."
+    ),
+)
+
+Index("ix_area_features_dungeon_area_id", area_features.c.dungeon_area_id)
+
+area_hazards = Table(
+    "area_hazards",
+    metadata,
+    _uuid_pk("area_hazard_id"),
+    Column(
+        "dungeon_area_id",
+        UUID(),
+        ForeignKey("world.dungeon_areas.dungeon_area_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("hazard_type", Text()),
+    Column("description", Text()),
+    Column("severity", RATING_1_10),
+    Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "A dangerous environmental object or condition — trap, collapsing floor, "
+        "electrical arc, poisonous gas, magical ward (docs/DOMAIN_MODEL.md §9.8). Not "
+        "an entity. is_hidden is a fact about the hazard itself, never party knowledge "
+        "(see world.area_connections comment)."
+    ),
+)
+
+Index("ix_area_hazards_dungeon_area_id", area_hazards.c.dungeon_area_id)
+
+area_interactables = Table(
+    "area_interactables",
+    metadata,
+    _uuid_pk("area_interactable_id"),
+    Column(
+        "dungeon_area_id",
+        UUID(),
+        ForeignKey("world.dungeon_areas.dungeon_area_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("interactable_type", Text()),
+    Column("description", Text()),
+    Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
+    *_timestamps(),
+    schema="world",
+    comment=(
+        "An object or mechanism intended to receive actions — lever, control panel, "
+        "lock, pylon, puzzle component, sealed hatch (docs/DOMAIN_MODEL.md §9.9). Not "
+        "an entity. is_hidden is a fact about the interactable itself, never party "
+        "knowledge (see world.area_connections comment)."
+    ),
+)
+
+Index("ix_area_interactables_dungeon_area_id", area_interactables.c.dungeon_area_id)
+
+
+# ---------------------------------------------------------------------------
+# campaign — dungeon timeline state (revision 040)
+# ---------------------------------------------------------------------------
+
+location_state = Table(
+    "location_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "location_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("is_searched", Boolean(), nullable=False, server_default=text("false")),
+    Column("is_destroyed", Boolean(), nullable=False, server_default=text("false")),
+    Column("alarm_level", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
+    Column("condition_notes", Text()),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "location_id"),
+    schema="campaign",
+    comment=(
+        "Current per-timeline condition of a location: searched, destroyed, alarm "
+        'level, free-text notes (e.g. "flooded", "smoldering ruins"). One row per '
+        "(timeline, location) — see this revision's docstring on event linkage."
+    ),
+)
+
+Index("ix_location_state_location_id", location_state.c.location_id)
+
+connection_statuses = _lookup_table(
+    "campaign",
+    "connection_statuses",
+    "connection_status_id",
+    "Current condition of an area connection (open, closed, locked, broken, "
+    "destroyed) — docs/architecture/DATABASE_MODEL.md §17.",
+)
+
+area_connection_state = Table(
+    "area_connection_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "area_connection_id",
+        UUID(),
+        ForeignKey("world.area_connections.area_connection_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "connection_status_id",
+        UUID(),
+        ForeignKey("campaign.connection_statuses.connection_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "area_connection_id"),
+    schema="campaign",
+    comment=(
+        "Current per-timeline condition of an area connection. Deliberately separate "
+        "from whether any party has discovered the connection exists — that is "
+        "knowledge state (docs/architecture/DATABASE_MODEL.md §9.3, revision 041), "
+        "never stored here."
+    ),
+)
+
+Index(
+    "ix_area_connection_state_area_connection_id",
+    area_connection_state.c.area_connection_id,
+)
+Index(
+    "ix_area_connection_state_connection_status_id",
+    area_connection_state.c.connection_status_id,
+)
+
+area_feature_state = Table(
+    "area_feature_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "area_feature_id",
+        UUID(),
+        ForeignKey("world.area_features.area_feature_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("is_destroyed", Boolean(), nullable=False, server_default=text("false")),
+    Column("condition_notes", Text()),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "area_feature_id"),
+    schema="campaign",
+    comment=(
+        "Current per-timeline condition of an area feature (defaced, destroyed, "
+        "altered) — never whether a party has noticed it (revision 041)."
+    ),
+)
+
+Index("ix_area_feature_state_area_feature_id", area_feature_state.c.area_feature_id)
+
+hazard_statuses = _lookup_table(
+    "campaign",
+    "hazard_statuses",
+    "hazard_status_id",
+    "Current status of a hazard (armed, triggered, reset, bypassed, disarmed) — "
+    "docs/architecture/DATABASE_MODEL.md §17.",
+)
+
+hazard_state = Table(
+    "hazard_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "area_hazard_id",
+        UUID(),
+        ForeignKey("world.area_hazards.area_hazard_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "hazard_status_id",
+        UUID(),
+        ForeignKey("campaign.hazard_statuses.hazard_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "area_hazard_id"),
+    schema="campaign",
+    comment=(
+        "Current per-timeline status of a hazard. Separate from whether any party "
+        "knows the hazard exists (revision 041)."
+    ),
+)
+
+Index("ix_hazard_state_area_hazard_id", hazard_state.c.area_hazard_id)
+Index("ix_hazard_state_hazard_status_id", hazard_state.c.hazard_status_id)
+
+interactable_statuses = _lookup_table(
+    "campaign",
+    "interactable_statuses",
+    "interactable_status_id",
+    "Current status of an interactable (active, inactive, activated, "
+    "deactivated, broken, locked) — docs/architecture/DATABASE_MODEL.md §17.",
+)
+
+interactable_state = Table(
+    "interactable_state",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "area_interactable_id",
+        UUID(),
+        ForeignKey("world.area_interactables.area_interactable_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "interactable_status_id",
+        UUID(),
+        ForeignKey("campaign.interactable_statuses.interactable_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint("timeline_id", "area_interactable_id"),
+    schema="campaign",
+    comment=(
+        "Current per-timeline status of an interactable (a shrine activated, a lever "
+        "thrown, a pylon powered). Separate from whether any party knows it exists "
+        "(revision 041)."
+    ),
+)
+
+Index(
+    "ix_interactable_state_area_interactable_id",
+    interactable_state.c.area_interactable_id,
+)
+Index(
+    "ix_interactable_state_interactable_status_id",
+    interactable_state.c.interactable_status_id,
+)
+
+
+# ---------------------------------------------------------------------------
+# knowledge — knowledge items, entity knowledge, party discoveries (revision 041)
+# ---------------------------------------------------------------------------
+
+knowledge_types = _lookup_table(
+    "knowledge",
+    "knowledge_types",
+    "knowledge_type_id",
+    "The kind of claim a knowledge item represents (claim, belief, secret, "
+    "rumor, memory, instruction, theory) — docs/DOMAIN_MODEL.md §15.1.",
+)
+
+truth_statuses = _lookup_table(
+    "knowledge",
+    "truth_statuses",
+    "truth_status_id",
+    "How a knowledge item relates to canonical truth (true, false, partially "
+    "true, disputed, unknown, no objective truth) — "
+    "docs/DATABASE_CONVENTIONS.md §15.2.",
+)
+
+knowledge_items = Table(
+    "knowledge_items",
+    metadata,
+    Column(
+        "knowledge_item_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "knowledge_type_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_types.knowledge_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "truth_status_id",
+        UUID(),
+        ForeignKey("knowledge.truth_statuses.truth_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("canonical_statement", Text(), nullable=False),
+    Column(
+        "sensitivity",
+        Text(),
+        nullable=False,
+        server_default=text("'public'::text"),
+        comment=(
+            "A fixed, universal classification (public, restricted, secret, dangerous), "
+            "not a lookup — same reasoning as character.characters.size_category (Phase 4)."
+        ),
+    ),
+    Column(
+        "subject_entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="SET NULL"),
+        comment=(
+            "The core.entities row this knowledge is about (an NPC, a location, an "
+            "organization, ...), when it has one. At most one subject_* column is set."
+        ),
+    ),
+    Column(
+        "subject_area_connection_id",
+        UUID(),
+        ForeignKey("world.area_connections.area_connection_id", ondelete="SET NULL"),
+        comment=(
+            'The area connection this knowledge is about (e.g. "a secret door exists '
+            'here"), when it has one. Connections are not entities (revision 039), so '
+            "this direct reference exists alongside subject_entity_id rather than "
+            "through it."
+        ),
+    ),
+    Column(
+        "subject_area_feature_id",
+        UUID(),
+        ForeignKey("world.area_features.area_feature_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "subject_area_hazard_id",
+        UUID(),
+        ForeignKey("world.area_hazards.area_hazard_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "subject_area_interactable_id",
+        UUID(),
+        ForeignKey("world.area_interactables.area_interactable_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="knowledge",
+    comment=(
+        "A specific claim, belief, secret, rumor, memory, instruction, or theory "
+        "(docs/DOMAIN_MODEL.md §15.1). Entity-rooted like any other important world "
+        "object. subject_* columns are a deliberately simplified single-subject "
+        "reference — see this revision's docstring."
+    ),
+)
+
+Index("ix_knowledge_items_knowledge_type_id", knowledge_items.c.knowledge_type_id)
+Index("ix_knowledge_items_truth_status_id", knowledge_items.c.truth_status_id)
+Index(
+    "ix_knowledge_items_subject_entity_id",
+    knowledge_items.c.subject_entity_id,
+    postgresql_where=knowledge_items.c.subject_entity_id.isnot(None),
+)
+Index(
+    "ix_knowledge_items_subject_area_connection_id",
+    knowledge_items.c.subject_area_connection_id,
+    postgresql_where=knowledge_items.c.subject_area_connection_id.isnot(None),
+)
+Index(
+    "ix_knowledge_items_subject_area_feature_id",
+    knowledge_items.c.subject_area_feature_id,
+    postgresql_where=knowledge_items.c.subject_area_feature_id.isnot(None),
+)
+Index(
+    "ix_knowledge_items_subject_area_hazard_id",
+    knowledge_items.c.subject_area_hazard_id,
+    postgresql_where=knowledge_items.c.subject_area_hazard_id.isnot(None),
+)
+Index(
+    "ix_knowledge_items_subject_area_interactable_id",
+    knowledge_items.c.subject_area_interactable_id,
+    postgresql_where=knowledge_items.c.subject_area_interactable_id.isnot(None),
+)
+
+entity_knowledge = Table(
+    "entity_knowledge",
+    metadata,
+    _uuid_pk("entity_knowledge_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "knowledge_item_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_items.knowledge_item_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "knower_entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("awareness_level", Text(), nullable=False, server_default=text("'aware'::text")),
+    Column("confidence", PERCENTAGE_0_100),
+    Column("interpretation", Text()),
+    Column(
+        "learned_source",
+        Text(),
+        comment=(
+            "Free-text placeholder for how this was learned until interaction/event "
+            "records exist (Phase 6) to reference instead."
+        ),
+    ),
+    Column(
+        "learned_at_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+    ),
+    Column("willing_to_share", Boolean(), nullable=False, server_default=text("true")),
+    *_timestamps(),
+    UniqueConstraint(
+        "timeline_id", "knowledge_item_id", "knower_entity_id", name="ux_entity_knowledge_current"
+    ),
+    schema="knowledge",
+    comment=(
+        "What a knower believes about a knowledge item on a timeline: awareness, "
+        "confidence, interpretation, source, sharing willingness "
+        "(docs/DOMAIN_MODEL.md §15.3). A false belief is valid game data and is never "
+        "overwritten merely because the canonical truth is known elsewhere. One row "
+        "per (timeline, knowledge item, knower) — see revision 021's docstring on "
+        "event linkage, which applies unchanged here."
+    ),
+)
+
+Index("ix_entity_knowledge_knowledge_item_id", entity_knowledge.c.knowledge_item_id)
+Index("ix_entity_knowledge_knower_entity_id", entity_knowledge.c.knower_entity_id)
+Index(
+    "ix_entity_knowledge_learned_at_world_time_id",
+    entity_knowledge.c.learned_at_world_time_id,
+    postgresql_where=entity_knowledge.c.learned_at_world_time_id.isnot(None),
+)
+
+party_discoveries = Table(
+    "party_discoveries",
+    metadata,
+    _uuid_pk("party_discovery_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "knowledge_item_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_items.knowledge_item_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("party_id", UUID(), ForeignKey("campaign.parties.party_id", ondelete="CASCADE")),
+    Column("knower_entity_id", UUID(), ForeignKey("core.entities.entity_id", ondelete="CASCADE")),
+    Column(
+        "discovered_at_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "discovery_method",
+        Text(),
+        comment=(
+            "Free-text placeholder for how this was discovered until interaction/event "
+            "records exist (Phase 6) to reference instead."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="knowledge",
+    comment=(
+        "The discovery record: when and how a party or individual knower learned a "
+        "knowledge item (docs/architecture/DATABASE_MODEL.md §15). Recipient is "
+        "exactly one of party_id (party-level discovery) or knower_entity_id "
+        "(individual character, NPC, or organization discovery) — public/regional "
+        "discovery (knowledge.public_knowledge) is deferred to Phase 7."
+    ),
+)
+
+Index("ix_party_discoveries_knowledge_item_id", party_discoveries.c.knowledge_item_id)
+Index(
+    "ix_party_discoveries_party_id",
+    party_discoveries.c.party_id,
+    postgresql_where=party_discoveries.c.party_id.isnot(None),
+)
+Index(
+    "ix_party_discoveries_knower_entity_id",
+    party_discoveries.c.knower_entity_id,
+    postgresql_where=party_discoveries.c.knower_entity_id.isnot(None),
+)
+Index(
+    "ix_party_discoveries_discovered_at_world_time_id",
+    party_discoveries.c.discovered_at_world_time_id,
+    postgresql_where=party_discoveries.c.discovered_at_world_time_id.isnot(None),
+)
+Index(
+    "ux_party_discoveries_party",
+    party_discoveries.c.timeline_id,
+    party_discoveries.c.knowledge_item_id,
+    party_discoveries.c.party_id,
+    unique=True,
+    postgresql_where=party_discoveries.c.party_id.isnot(None),
+)
+Index(
+    "ux_party_discoveries_knower",
+    party_discoveries.c.timeline_id,
+    party_discoveries.c.knowledge_item_id,
+    party_discoveries.c.knower_entity_id,
+    unique=True,
+    postgresql_where=party_discoveries.c.knower_entity_id.isnot(None),
+)
+
+
+# ---------------------------------------------------------------------------
+# campaign — character_location_history (revision 042)
+# ---------------------------------------------------------------------------
+
+character_location_history = Table(
+    "character_location_history",
+    metadata,
+    _uuid_pk("character_location_history_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "location_id",
+        UUID(),
+        ForeignKey("world.locations.location_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "arrived_at_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "departed_at_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+        comment=(
+            "NULL means the character is still at this location — the single "
+            'representation of "current location", same convention as '
+            "campaign.party_memberships.effective_to_world_time_id."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="campaign",
+    comment=(
+        "Where a character has been on a timeline. The row with "
+        "departed_at_world_time_id IS NULL is the character's current location — at "
+        "most one per (timeline, character), enforced by a partial unique index. "
+        "Deferred from Phase 4 until world.locations existed "
+        "(docs/architecture/DATABASE_MODEL.md §17)."
+    ),
+)
+
+Index("ix_character_location_history_character_id", character_location_history.c.character_id)
+Index("ix_character_location_history_location_id", character_location_history.c.location_id)
+Index(
+    "ix_character_location_history_arrived_at_world_time_id",
+    character_location_history.c.arrived_at_world_time_id,
+    postgresql_where=character_location_history.c.arrived_at_world_time_id.isnot(None),
+)
+Index(
+    "ix_character_location_history_departed_at_world_time_id",
+    character_location_history.c.departed_at_world_time_id,
+    postgresql_where=character_location_history.c.departed_at_world_time_id.isnot(None),
+)
+Index(
+    "ux_character_location_history_one_open_per_character",
+    character_location_history.c.timeline_id,
+    character_location_history.c.character_id,
+    unique=True,
+    postgresql_where=character_location_history.c.departed_at_world_time_id.is_(None),
 )

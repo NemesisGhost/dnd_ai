@@ -408,6 +408,212 @@ def make_session(
     return value
 
 
+def make_location(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    parent_location_id: uuid.UUID | None = None,
+    entity_type_code: str = "location",
+    name: str = "Test Location",
+) -> uuid.UUID:
+    """A core.entities row plus its world.locations row. Returns the shared
+    UUID (the location_id, same as the entity_id).
+
+    entity_type_code defaults to the bare 'location' type; pass 'settlement',
+    'building', 'dungeon', or 'dungeon_area' when the caller also needs to
+    insert the corresponding subtype row — core.enforce_entity_subtype()
+    rejects that subtype row otherwise.
+    """
+    location_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", entity_type_code
+    )
+    location_id = make_entity(connection, world_id, location_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO world.locations (location_id, parent_location_id)
+            VALUES (:l, :p)
+        """),
+        {"l": location_id, "p": parent_location_id},
+    )
+    return location_id
+
+
+def make_dungeon(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    parent_location_id: uuid.UUID | None = None,
+    name: str = "Test Dungeon",
+) -> uuid.UUID:
+    """A location plus its world.dungeons row. Returns the shared UUID."""
+    dungeon_id = make_location(
+        connection,
+        world_id,
+        parent_location_id=parent_location_id,
+        entity_type_code="dungeon",
+        name=name,
+    )
+    connection.execute(
+        text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon_id}
+    )
+    return dungeon_id
+
+
+def make_dungeon_area(
+    connection: Connection,
+    dungeon_id: uuid.UUID,
+    *,
+    name: str = "Test Area",
+) -> uuid.UUID:
+    """A dungeon area belonging to the given dungeon. Returns the shared UUID.
+
+    world_id is derived from the dungeon's own entity row.
+    """
+    world_id = connection.execute(
+        text("SELECT world_id FROM core.entities WHERE entity_id = :d"), {"d": dungeon_id}
+    ).scalar()
+    assert isinstance(world_id, uuid.UUID)
+    area_id = make_location(
+        connection,
+        world_id,
+        parent_location_id=dungeon_id,
+        entity_type_code="dungeon_area",
+        name=name,
+    )
+    connection.execute(
+        text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"), {"a": area_id}
+    )
+    return area_id
+
+
+def make_area_connection(
+    connection: Connection,
+    from_dungeon_area_id: uuid.UUID,
+    to_dungeon_area_id: uuid.UUID,
+    *,
+    connection_type_code: str = "door",
+    is_hidden: bool = False,
+    is_one_way: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.area_connections
+                (from_dungeon_area_id, to_dungeon_area_id, connection_type_id, is_hidden,
+                 is_one_way)
+            VALUES (:f, :t, :ct, :hidden, :one_way)
+            RETURNING area_connection_id
+        """),
+        {
+            "f": from_dungeon_area_id,
+            "t": to_dungeon_area_id,
+            "ct": lookup_id(
+                connection,
+                "world",
+                "connection_types",
+                "connection_type_id",
+                connection_type_code,
+            ),
+            "hidden": is_hidden,
+            "one_way": is_one_way,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_area_feature(
+    connection: Connection, dungeon_area_id: uuid.UUID, *, is_hidden: bool = False
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.area_features (dungeon_area_id, feature_type, is_hidden)
+            VALUES (:a, 'statue', :hidden)
+            RETURNING area_feature_id
+        """),
+        {"a": dungeon_area_id, "hidden": is_hidden},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_area_hazard(
+    connection: Connection, dungeon_area_id: uuid.UUID, *, is_hidden: bool = False
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.area_hazards (dungeon_area_id, hazard_type, is_hidden)
+            VALUES (:a, 'trap', :hidden)
+            RETURNING area_hazard_id
+        """),
+        {"a": dungeon_area_id, "hidden": is_hidden},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_area_interactable(
+    connection: Connection, dungeon_area_id: uuid.UUID, *, is_hidden: bool = False
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.area_interactables (dungeon_area_id, interactable_type, is_hidden)
+            VALUES (:a, 'lever', :hidden)
+            RETURNING area_interactable_id
+        """),
+        {"a": dungeon_area_id, "hidden": is_hidden},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_knowledge_item(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    knowledge_type_code: str = "secret",
+    truth_status_code: str = "true",
+    statement: str = "There is a secret door here.",
+    subject_area_connection_id: uuid.UUID | None = None,
+    subject_area_feature_id: uuid.UUID | None = None,
+    subject_area_hazard_id: uuid.UUID | None = None,
+    subject_area_interactable_id: uuid.UUID | None = None,
+    subject_entity_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A core.entities row plus its knowledge.knowledge_items row. Returns
+    the shared UUID (the knowledge_item_id, same as the entity_id)."""
+    knowledge_item_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", "knowledge_item"
+    )
+    knowledge_item_id = make_entity(connection, world_id, knowledge_item_type_id, name=statement)
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.knowledge_items
+                (knowledge_item_id, knowledge_type_id, truth_status_id, canonical_statement,
+                 subject_entity_id, subject_area_connection_id, subject_area_feature_id,
+                 subject_area_hazard_id, subject_area_interactable_id)
+            VALUES (
+                :id,
+                (SELECT knowledge_type_id FROM knowledge.knowledge_types WHERE code = :kt),
+                (SELECT truth_status_id FROM knowledge.truth_statuses WHERE code = :ts),
+                :statement, :subject_entity, :subject_connection, :subject_feature,
+                :subject_hazard, :subject_interactable
+            )
+        """),
+        {
+            "id": knowledge_item_id,
+            "kt": knowledge_type_code,
+            "ts": truth_status_code,
+            "statement": statement,
+            "subject_entity": subject_entity_id,
+            "subject_connection": subject_area_connection_id,
+            "subject_feature": subject_area_feature_id,
+            "subject_hazard": subject_area_hazard_id,
+            "subject_interactable": subject_area_interactable_id,
+        },
+    )
+    return knowledge_item_id
+
+
 def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:
     """A world plus a throwaway entity type plus one entity, for tests that need
     an entity but do not care about its world or type."""
