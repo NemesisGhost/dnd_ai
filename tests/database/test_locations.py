@@ -23,6 +23,13 @@ def test_a_bare_location_needs_no_subtype_row(db_connection: Connection) -> None
     make_location(db_connection, world_id, entity_type_code="plane", name="The Material Plane")
 
 
+def test_a_realm_location_can_be_created(db_connection: Connection) -> None:
+    """docs/DOMAIN_MODEL.md §9.1 lists 'realm' among the location subtypes;
+    revision 038 omitted it by oversight and revision 047 closes the gap."""
+    world_id = make_world(db_connection, slug="locations-realm-world")
+    make_location(db_connection, world_id, entity_type_code="realm", name="The Sundered Realm")
+
+
 def test_a_settlement_row_with_population_succeeds(db_connection: Connection) -> None:
     world_id = make_world(db_connection, slug="locations-settlement-ok-world")
     settlement_id = make_location(

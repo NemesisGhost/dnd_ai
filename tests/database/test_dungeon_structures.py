@@ -141,6 +141,57 @@ def test_a_hidden_connection_is_indistinguishable_from_a_visible_one_except_for_
     assert row.is_hidden is True
 
 
+def test_a_connection_can_be_marked_conditional_with_a_description(
+    db_connection: Connection,
+) -> None:
+    """docs/PLAN.md §9.2 names conditional routes; revision 047 adds the
+    descriptive columns (evaluating the condition is a later-phase concern —
+    see that revision's docstring)."""
+    world_id = make_world(db_connection, slug="dungeon-conditional-route-world")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    connection_id = db_connection.execute(
+        text("""
+            INSERT INTO world.area_connections
+                (from_dungeon_area_id, to_dungeon_area_id, connection_type_id,
+                 is_conditional, condition_description)
+            VALUES (
+                :f, :t,
+                (SELECT connection_type_id FROM world.connection_types WHERE code = 'portal'),
+                true, 'requires the brass key'
+            )
+            RETURNING area_connection_id
+        """),
+        {"f": area_a, "t": area_b},
+    ).scalar()
+
+    row = db_connection.execute(
+        text(
+            "SELECT is_conditional, condition_description FROM world.area_connections "
+            "WHERE area_connection_id = :c"
+        ),
+        {"c": connection_id},
+    ).one()
+    assert row.is_conditional is True
+    assert row.condition_description == "requires the brass key"
+
+
+def test_a_connection_defaults_to_unconditional(db_connection: Connection) -> None:
+    world_id = make_world(db_connection, slug="dungeon-unconditional-route-world")
+    dungeon_id = make_dungeon(db_connection, world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+
+    connection_id = make_area_connection(db_connection, area_a, area_b)
+    is_conditional = db_connection.execute(
+        text("SELECT is_conditional FROM world.area_connections WHERE area_connection_id = :c"),
+        {"c": connection_id},
+    ).scalar()
+    assert is_conditional is False
+
+
 def test_features_hazards_and_interactables_belong_to_an_area(db_connection: Connection) -> None:
     world_id = make_world(db_connection, slug="dungeon-children-world")
     dungeon_id = make_dungeon(db_connection, world_id)

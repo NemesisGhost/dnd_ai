@@ -2518,6 +2518,30 @@ area_connections = Table(
     ),
     Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
     Column("description", Text()),
+    # Added by revision 047: the descriptive half of "conditional routes"
+    # (docs/PLAN.md §9.2). Evaluating the condition is deferred — see the
+    # column comments and PLAN.md Phase 6's first-time obligations.
+    Column(
+        "is_conditional",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "True for a conditional route (docs/PLAN.md §9.2) — traversable only when "
+            "some condition holds. Descriptive only: evaluating the condition requires "
+            "interaction/check resolution (Phase 6) or quest state (Phase 7), neither "
+            "of which exists yet. See PLAN.md Phase 6's first-time obligations."
+        ),
+    ),
+    Column(
+        "condition_description",
+        Text(),
+        comment=(
+            'Free-text description of what the condition is (e.g. "requires the brass '
+            'key" or "only open while the beacon is lit"). Not yet machine-evaluable — '
+            "same placeholder shape as campaign.character_conditions.source_description."
+        ),
+    ),
     *_timestamps(),
     schema="world",
     comment=(
@@ -3105,19 +3129,38 @@ character_location_history = Table(
     Column(
         "arrived_at_world_time_id",
         UUID(),
-        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Required — the interval's finite start (ADR 0010). Renamed in spirit to "
+            "effective_from: every history row needs a real endpoint to participate in "
+            "range overlap."
+        ),
     ),
     Column(
         "departed_at_world_time_id",
         UUID(),
-        ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
         comment=(
             "NULL means the character is still at this location — the single "
             'representation of "current location", same convention as '
             "campaign.party_memberships.effective_to_world_time_id."
         ),
     ),
+    # Added by revision 043, replacing the revision-042 partial unique index
+    # with the full ADR 0010 interval contract.
+    Column(
+        "location_period",
+        INT8RANGE(),
+        comment=(
+            "Derived, never client-authoritative: an INT8RANGE over "
+            "arrived_at_world_time_id/departed_at_world_time_id's sort_key values, "
+            "rebuilt by trigger on every INSERT and UPDATE — same role as "
+            "campaign.party_memberships.effective_period (ADR 0010)."
+        ),
+    ),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
     schema="campaign",
     comment=(
         "Where a character has been on a timeline. The row with "
@@ -3128,22 +3171,18 @@ character_location_history = Table(
     ),
 )
 
+# The exclusion constraint (ex_character_location_history_no_overlap,
+# revision 043) is intentionally absent from this metadata, same reasoning as
+# campaign.party_memberships — alembic check does not compare exclusion
+# constraints. Covered by tests/database/test_character_location_temporal_integrity.py.
 Index("ix_character_location_history_character_id", character_location_history.c.character_id)
 Index("ix_character_location_history_location_id", character_location_history.c.location_id)
 Index(
     "ix_character_location_history_arrived_at_world_time_id",
     character_location_history.c.arrived_at_world_time_id,
-    postgresql_where=character_location_history.c.arrived_at_world_time_id.isnot(None),
 )
 Index(
     "ix_character_location_history_departed_at_world_time_id",
     character_location_history.c.departed_at_world_time_id,
     postgresql_where=character_location_history.c.departed_at_world_time_id.isnot(None),
-)
-Index(
-    "ux_character_location_history_one_open_per_character",
-    character_location_history.c.timeline_id,
-    character_location_history.c.character_id,
-    unique=True,
-    postgresql_where=character_location_history.c.departed_at_world_time_id.is_(None),
 )
