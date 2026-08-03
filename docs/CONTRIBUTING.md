@@ -110,7 +110,7 @@ uv run alembic -c database/alembic.ini current
 
 Run `scripts/aws-db-allow-my-ip.sh close` when you're done for the session — it isn't automatic outside CI.
 
-Then read, in order: [PLAN.md](PLAN.md) for the current phase, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for vocabulary, [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) before writing schema, and [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) for where code belongs.
+Then follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy): read [PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) plus the current phase entry, search [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the affected vocabulary, read only the [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms you will change, and consult [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) when application-layer placement is in scope. Do not preload the complete documentation set.
 
 Skip to §4 unless you specifically need to change infrastructure itself, rather than just using the deployed `dev` environment.
 
@@ -140,7 +140,7 @@ uv run pytest
 
 All four must pass before opening a pull request. The full workflow — Alembic revision requirements, the three test layers, CI expectations — is [DEVELOPMENT.md §4–§8](DEVELOPMENT.md#4-database-and-migrations), and the definition of done is [§10](DEVELOPMENT.md#10-definition-of-done).
 
-Before writing anything, confirm it belongs to the current phase in [PLAN.md](PLAN.md), and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
+Before writing anything, confirm it belongs to the current phase entry in [PLAN.md](PLAN.md), and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
 
 ---
 
