@@ -1229,20 +1229,19 @@ Every phase ends with a review, before the next one starts. Phase 1 produced six
 
 ### Phase 5: Locations and dungeon play
 
-**Complete.** The implementation and four corrections passes (two pre-merge, two post-merge) are merged and CI-verified. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is now a closed historical record.
+**Complete.** The implementation and five corrections passes (two pre-merge, three post-merge) are merged; the last pass hardened the child-location concurrency tests (final-state assertions, failure-safe cleanup) and is verified by CI. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is now a closed historical record.
 
 ### Phase 6: Events and interactions
 
-**Entry gate — repository context modularization.** Before adding any Phase 6 schema, complete the mechanical source/test split in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain). The Phase 5 correctness gate closed with revision 056 (see [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md)); the modularization gate remains because `src/dnd_ai/persistence/tables.py` already contains every Phase 2–5 table in one 3,000+ line module, and `test_phase4_remaining_issues.py`/`test_phase4_corrections.py` retain closed review history in two phase-oriented files. Adding events/interactions before this gate closes would compound recurring context cost.
+**Entry gates — both closed.** The repository context modularization gate in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain) is closed (see bullets below): `src/dnd_ai/persistence/tables.py` is now a domain-bounded `tables/` package, and the two closed Phase 4 test monoliths are redistributed into invariant-oriented modules. The Phase 5 correctness gate is closed: revision 056's child-location lock is merged, its concurrency tests were hardened to prove resumed-waiter behavior with independent final-state assertions and failure-safe cleanup, and both are confirmed by a passing CI run (see [PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03)). Phase 6 feature/schema work may begin.
 
-The Phase 6 entry gate is complete only when:
+The Phase 6 entry gates were complete once:
 
-- table metadata is split into bounded domain modules behind a compatibility-preserving `dnd_ai.persistence.tables` package;
-- the two closed Phase 4 test monoliths are redistributed into invariant/topic-oriented test modules (`test_session_chronology.py`, `test_ruleset_provenance.py`, `test_ruleset_version_consistency.py`, `test_immutable_identity.py`, `test_world_ruleset_dependency_and_concurrency.py`, `test_character_language_integrity.py`, `test_metadata_server_defaults.py`);
-- no migration or live-schema change resulted, existing imports continue to work, and a metadata-completeness test (`tests/unit/test_persistence_tables_package.py`) plus `alembic check` proved the split behaviorally neutral (85 tables, identical names, before and after); and
-- the full quality and database test suite is green against AWS `dev` (366 tests collected from the split test files before and after, same as the two monoliths combined).
-
-The Phase 5 correctness gate remains the only thing blocking Phase 6 feature/schema work on `main`; it closes as soon as the branch that resolves `PHASE5_REMAINING_ISSUES.md` merges.
+- table metadata was split into bounded domain modules behind a compatibility-preserving `dnd_ai.persistence.tables` package;
+- the two closed Phase 4 test monoliths were redistributed into invariant/topic-oriented test modules (`test_session_chronology.py`, `test_ruleset_provenance.py`, `test_ruleset_version_consistency.py`, `test_immutable_identity.py`, `test_world_ruleset_dependency_and_concurrency.py`, `test_character_language_integrity.py`, `test_metadata_server_defaults.py`);
+- no migration behavior, schema operation, revision identity, or chain topology changed (revision `036_remaining_rule_content_immutability` received a documentation-only docstring path correction — see [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain)), existing imports continue to work, and a metadata-completeness test (`tests/unit/test_persistence_tables_package.py`) plus `alembic check` proved the split behaviorally neutral (85 tables, identical names, before and after);
+- the full quality and database test suite was green against AWS `dev` (366 tests collected from the split test files before and after, same as the two monoliths combined); and
+- the Phase 5 dungeon-area creation/reparenting race and its genuine waiting-statement verification obligations (including independent final-state assertions and failure-safe test cleanup) were closed as specified in `PHASE5_REMAINING_ISSUES.md`, confirmed by a passing push-triggered GitHub Actions run.
 
 Deliver:
 

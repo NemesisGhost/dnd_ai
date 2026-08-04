@@ -1,13 +1,20 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-03).** Revision 056 closed the current schema blocker below
-> by adding a child-location advisory lock, and the current verification
-> obligation by rewriting the affected concurrency tests (plus two new ones,
-> covering both transaction orderings) to prove the original waiting statement
-> genuinely resumes and revalidates rather than timing out and retrying. See
-> [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
-> for the resolving revision and full evidence. Phase 5 is complete; this
-> register is now a closed historical record.
+> **CLOSED, pending this pass's CI confirmation (2026-08-03).** Revision 056
+> (merged, unchanged this pass) closed the schema blocker by adding a
+> child-location advisory lock. A fifth review found that while its
+> accompanying test rewrite genuinely proved resumed-waiter behavior, two of
+> the original verification acceptance criteria were still not met: no test
+> queried the final committed database state from an independent connection,
+> and the blocking-thread helper had no failure-safe cleanup path. Both are
+> fixed in this pass — see
+> [§ Fifth review](#fifth-review-test-hardening-and-final-state-verification-2026-08-03)
+> below and
+> [PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03)
+> for the full account. No schema or migration change was needed or made —
+> revision 056 was reviewed again and found correct. This register is treated
+> as closed only once this pass's push-triggered GitHub Actions run is
+> confirmed green; see that section for the run and its outcome.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -20,7 +27,11 @@
 > `parent_location_id`, plus a verification gap in the three existing
 > revision-053 concurrency tests (they proved lock attachment via
 > `lock_timeout` and a fresh-transaction retry, not that the original waiting
-> statement itself resumes and revalidates). Both are resolved below.
+> statement itself resumes and revalidates). Both were addressed by revision
+> 056 and its accompanying test rewrite, pushed directly to `main` without a
+> pull request or CI run — a fifth review (below) treated that as insufficient
+> evidence of closure on its own, independent of the two concrete gaps it also
+> found in the same test rewrite.
 
 ## At a glance (resolved by revision 056)
 
@@ -145,6 +156,79 @@ implemented and `PHASE5_VERIFICATION.md` records:
 
 See [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
 for exact commands, results, and the confirmed CI run.
+
+## Fifth review: test-hardening and final-state verification (2026-08-03)
+
+Revision 056 and its first test rewrite were pushed directly to `main`
+without a pull request, so no GitHub Actions run had ever verified them —
+only local `pytest` runs against AWS `dev`. A fifth review started from that
+observation and re-checked the five resumed-waiter tests against the
+acceptance criteria in the "Fourth-review verification obligations" section
+above line by line. Six of the seven were genuinely met (the waiter
+genuinely blocks, is not substituted with a retry, resumes after the blocker
+commits, re-reads committed state, and is asserted to succeed or fail
+accordingly, all with bounded synchronization). Two were not:
+
+1. **No independent, fresh-connection final-state assertion.** Every test
+   asserted only the *exception* the resumed statement raised (or its
+   absence). None of the five then queried the actual committed rows from a
+   third connection to prove directly that no invalid combination
+   survived — a dungeon-area location without a valid dungeon parent, a
+   subtype row incompatible with `core.entities.entity_type`, or a
+   dungeon-area row left dependent on an entity no longer registered as a
+   dungeon. Message-matching proves the rejected statement failed for the
+   expected *reason*; it does not by itself prove the *database* ended up in
+   a valid state — a defect in an unrelated code path could raise the same
+   message text without actually protecting the invariant.
+2. **No failure-safe cleanup for the blocking thread.** Each test's
+   `thread.join(timeout=10.0)` was followed by a plain
+   `assert not thread.is_alive()`. If that assertion ever failed — a real
+   regression reintroducing the deadlock the lock protocol exists to
+   prevent, for example — the background thread and its open connection/
+   transaction would be abandoned: no code path terminated it, closed its
+   connection, or released whatever lock it still held. A single failing
+   assertion could therefore leak an advisory lock into every later test in
+   the same session (each keyed by fresh per-test UUIDs, so the leaked lock
+   itself would not block *those* tests' own operations, but the leaked
+   thread and open transaction would persist until the test process exited)
+   and would not be guaranteed to unblock promptly even then.
+
+**Fix:** no schema or migration change — revision 056 and the revision-053
+trigger functions were reviewed again (see
+[PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03))
+and found correct: both dungeon-area subtype writes and child
+`parent_location_id` mutations still acquire the same child-location
+advisory lock before any read, state is re-read after the lock is acquired,
+the existing parent-dungeon/entity-type protections from revision 053 are
+intact, lock ordering remains deterministic (child-location namespace always
+before entity-subtype namespace) with no new deadlock path, both concurrency
+orderings are still covered, and no other Phase 5 structural relationship has
+the same uncoordinated child-side gap. All changes are confined to
+`tests/database/test_entity_type_change_protection.py`:
+
+- A new `_BackgroundStatement` context-manager class replaces the previous
+  free-function-plus-tuple helper. Its `__exit__` guarantees the background
+  thread and its backend connection cannot outlive the `with` block: if the
+  thread is still alive when the block exits — for any reason, including an
+  assertion failure or a timeout — it force-terminates the backend via
+  `SELECT pg_terminate_backend(:pid)` (which releases any advisory lock or
+  open transaction that backend still holds) and only then joins with a
+  bounded timeout. Cleanup failures are caught and discarded rather than
+  raised, so a broken lock protocol can hang neither the test run nor a
+  later test, and cleanup can never replace the original failure as the
+  reported cause.
+- Each of the five tests now opens a third, independent connection after
+  asserting the resumed statement's outcome and queries the committed rows
+  directly: entity type versus subtype-table presence for the two
+  entity-type-change races, `parent_location_id` versus dungeon-area-row
+  presence for the reparent and both child-lock races. Every assertion
+  states the specific invalid combination it rules out.
+
+**Tests:** the same five tests (three revision-053, two revision-056), all
+rewritten in place — no test was added, removed, or renamed. All 14 tests in
+the file, including the nine pre-existing sequential cases, pass locally
+against AWS `dev`; see the verification commands in
+[PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03).
 
 ## Previously resolved register (historical)
 
@@ -291,9 +375,10 @@ Acceptance criteria:
 
 - Add a forward-only migration that defines “blank” using the project's chosen
   complete whitespace rule. Do not mirror the CHECK in SQLAlchemy metadata:
-  `src/dnd_ai/persistence/tables.py` intentionally excludes all CHECK
-  constraints, triggers, and default privileges from the metadata model. Record
-  that project-wide exception explicitly and cover the live constraint through
+  `src/dnd_ai/persistence/tables/` (the `dnd_ai.persistence.tables` package;
+  see its `__init__.py`) intentionally excludes all CHECK constraints,
+  triggers, and default privileges from the metadata model. Record that
+  project-wide exception explicitly and cover the live constraint through
   migration/integration tests.
 - Reject space-only, tab-only, newline-only, carriage-return-only, and mixed
   whitespace descriptions on INSERT and UPDATE.

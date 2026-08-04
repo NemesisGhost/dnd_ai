@@ -67,7 +67,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), 4 (rules and shared characters, including its corrections pass and all three closeout passes), and 5 (locations and dungeon play, including four corrections passes — two pre-merge, two post-merge) are complete and verified. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Phase 6 feature/schema work is queued behind the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions). The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), 4 (rules and shared characters, including its corrections pass and all three closeout passes), and 5 (locations and dungeon play, including five corrections passes — two pre-merge, three post-merge) are complete and verified. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Both Phase 6 entry gates in [PLAN.md](PLAN.md#phase-6-events-and-interactions) (repository context modularization, Phase 5 correctness) are closed, pending confirmation from the CI run for the pass that closed the second one. The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1150,7 +1150,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; close the Phase 6 context-modularization entry gate before starting Phase 6 feature/schema work
+   - Implement only the current target; both Phase 6 entry gates are closed, so Phase 6 feature/schema work may begin
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

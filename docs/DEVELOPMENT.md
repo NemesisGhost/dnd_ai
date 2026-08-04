@@ -112,7 +112,7 @@ src/dnd_ai/persistence/tables/
 
 Requirements for that split:
 
-- It is a mechanical refactor: no migration, live-schema, table/column name, constraint, comment, or server-default change.
+- It is a mechanical refactor: no migration behavior, schema operation, revision identity, or chain topology changed, and no table/column name, constraint, comment, or server-default changed. One migration, `036_remaining_rule_content_immutability`, received a documentation-only fix as part of this split: its docstring's "See:" pointer to the test file covering it was updated from the deleted `test_phase4_remaining_issues.py` to its replacement, `test_immutable_identity.py` — no change to `upgrade()`, `downgrade()`, or any other migration behavior.
 - All table declarations use the one `MetaData` instance from `_shared.py`. `tables/__init__.py` imports every domain module so Alembic still receives complete metadata, and it re-exports existing public names so current imports remain compatible.
 - Cross-domain foreign keys remain schema-qualified strings. Domain modules must not import each other's table objects merely to declare a foreign key; this keeps import order acyclic.
 - Add a focused metadata-completeness test that compares expected schema-qualified table names/public exports before and after the split, then require `alembic check` to prove no schema diff.
@@ -211,7 +211,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 5 are done.** Phase 5's implementation and four corrections passes (two pre-merge, two post-merge) are merged and verified against live AWS and GitHub Actions. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Phase 6 feature/schema work remains queued until the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) closes; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 5 are done.** Phase 5's implementation and five corrections passes (two pre-merge, three post-merge) are merged; the last pass hardened the child-location concurrency tests and is being verified against live AWS and GitHub Actions. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Both entry gates for [PLAN.md](PLAN.md#phase-6-events-and-interactions)'s Phase 6 (repository context modularization, Phase 5 correctness) are closed, pending confirmation from the CI run for the pass that closed the second one; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

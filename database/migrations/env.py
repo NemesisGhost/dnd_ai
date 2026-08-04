@@ -31,13 +31,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Target metadata for autogenerate support — the real table definitions from
-# src/dnd_ai/persistence/tables.py, imported above.
+# the dnd_ai.persistence.tables package (src/dnd_ai/persistence/tables/),
+# imported above via its __init__.py re-export.
 #
 # This was an empty MetaData() through Phase 1, which was correct only while
 # the database had no tables: once revision 003 created some, autogenerate
 # compared them against nothing and reported every one as a table to drop.
-# Any table added by a migration must also be declared in tables.py, and CI's
-# `alembic check` step is what enforces that.
+# Any table added by a migration must also be declared in the appropriate
+# domain module under tables/, and CI's `alembic check` step is what
+# enforces that.
 
 
 # Database URL from environment
