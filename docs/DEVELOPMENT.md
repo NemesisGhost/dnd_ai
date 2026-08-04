@@ -112,7 +112,7 @@ src/dnd_ai/persistence/tables/
 
 Requirements for that split:
 
-- It is a mechanical refactor: no migration, live-schema, table/column name, constraint, comment, or server-default change.
+- It is a mechanical refactor: no migration behavior, schema operation, revision identity, or chain topology changed, and no table/column name, constraint, comment, or server-default changed. One migration, `036_remaining_rule_content_immutability`, received a documentation-only fix as part of this split: its docstring's "See:" pointer to the test file covering it was updated from the deleted `test_phase4_remaining_issues.py` to its replacement, `test_immutable_identity.py` — no change to `upgrade()`, `downgrade()`, or any other migration behavior.
 - All table declarations use the one `MetaData` instance from `_shared.py`. `tables/__init__.py` imports every domain module so Alembic still receives complete metadata, and it re-exports existing public names so current imports remain compatible.
 - Cross-domain foreign keys remain schema-qualified strings. Domain modules must not import each other's table objects merely to declare a foreign key; this keeps import order acyclic.
 - Add a focused metadata-completeness test that compares expected schema-qualified table names/public exports before and after the split, then require `alembic check` to prove no schema diff.
@@ -157,6 +157,14 @@ uv run pytest tests/unit          # no database, always runs
 uv run pytest tests/database       # against dev RDS, needs the tunnel above open
 ```
 
+Or run `scripts/verify.sh` (the `verify` skill for Claude Code) instead of
+the individual commands above plus ruff/mypy/`alembic check`/seed-idempotency
+— it runs the full [§10](#10-definition-of-done) checklist that's safe
+against the shared `dev` database in one call, opens and always closes the
+ingress rule itself, and reports one line per step. `scripts/verify.sh
+--skip-db` is the fast lint/type-check-only loop while iterating on
+non-schema code.
+
 **Fallback only** — if AWS is genuinely unreachable (no network, an account-wide outage), a local container is acceptable per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy):
 
 ```bash
@@ -197,6 +205,8 @@ Additional rules that bite in this schema specifically:
 - **Index every foreign key** (§19.1) with the naming scheme in §19.2.
 - **Subtype tables take the parent UUID as their primary key** — no new UUID per level (§7.3).
 
+The `new-migration` skill (Claude Code) runs the `alembic revision` command above and repeats this checklist inline, so a routine schema change doesn't need a full read of DATABASE_CONVENTIONS.md.
+
 ### Running
 
 ```bash
@@ -211,7 +221,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 5 are done.** Phase 5's implementation and four corrections passes (two pre-merge, two post-merge) are merged and verified against live AWS and GitHub Actions. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Phase 6 feature/schema work remains queued until the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) closes; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 5 are done.** Phase 5's implementation and five corrections passes (two pre-merge, three post-merge) are merged; the last pass hardened the child-location concurrency tests and is being verified against live AWS and GitHub Actions. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Both entry gates for [PLAN.md](PLAN.md#phase-6-events-and-interactions)'s Phase 6 (repository context modularization, Phase 5 correctness) are closed, pending confirmation from the CI run for the pass that closed the second one; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 
@@ -331,3 +341,5 @@ Before opening a pull request:
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later
 - [ ] If this change completes a phase, the phase exit review in [PLAN.md §23.1](PLAN.md#231-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended
+
+`scripts/verify.sh` (the `verify` skill) covers the migration/constraint/quality-tool rows above in one call — see [§3](#3-local-setup). It does not check phase fit, layer placement, docs-in-the-same-change, or the phase exit review; those still need a human or Claude judgment call. `scripts/check_doc_table_drift.py` is a separate, occasional hygiene check — not part of this checklist — that compares live table names against `docs/architecture/DATABASE_MODEL.md`'s mentions of them; run it after a schema change that might have left the doc behind. Its "phantom" section is expected to be long and dominated by tables `DATABASE_MODEL.md` describes for phases not yet built — read its own docstring before treating either section as a bug list.
