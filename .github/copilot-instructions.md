@@ -16,7 +16,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 **What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
 
-**Current implementation status**: Phases 1 through 5 are complete ([../docs/PHASE4_REMAINING_ISSUES.md](../docs/PHASE4_REMAINING_ISSUES.md) and [../docs/PHASE5_REMAINING_ISSUES.md](../docs/PHASE5_REMAINING_ISSUES.md) are both closed historical records). Both [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions) entry gates (repository context modularization, Phase 5 correctness) are closed, confirmed by GitHub Actions run 30878624056 on PR #10 — see [../docs/PHASE5_VERIFICATION.md § Fifth exit review corrections](../docs/PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03). No API or UI exists yet.
+**Current implementation status**: Phases 1 through 4 are complete. Phase 5's production implementation is complete and CI-verified, but [its remaining-issues register](../docs/PHASE5_REMAINING_ISSUES.md) stays open for one concurrency-test cleanup guarantee. The [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions) repository-context modularization gate is closed; Phase 6 feature/schema work remains blocked until the Phase 5 test-infrastructure fix and final CI pass. No API or UI exists yet.
 
 ---
 
