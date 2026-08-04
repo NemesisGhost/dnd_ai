@@ -1,44 +1,49 @@
 # Phase 5 Remaining Issues
 
-> **OPEN — PHASE 5 REQUIREMENTS ARE NOT YET FULLY MET (2026-08-03).** Revisions 052–055 resolved the five findings in
-> the original register below, and GitHub Actions run
-> [`30835071145`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30835071145)
-> passed migrations, schema checks, cleanup, and all 1,080 tests. A fourth
-> review of merged PR #6 found one opposing write path that revision 053 does
-> not serialize: inserting a `world.dungeon_areas` subtype row while another
-> transaction changes the same child location's `parent_location_id`. Phase 5
-> remains in closeout until the current item and its concurrency-proof
-> requirements below are complete. A subsequent confirmation against the
-> pre-documentation-update `main` baseline at `d483f9e` found no migration after
-> `055_conditional_route_whitespace`; the executable schema therefore still
-> contains this defect.
+> **CLOSED (2026-08-03).** Revision 056 closed the current schema blocker below
+> by adding a child-location advisory lock, and the current verification
+> obligation by rewriting the affected concurrency tests (plus two new ones,
+> covering both transaction orderings) to prove the original waiting statement
+> genuinely resumes and revalidates rather than timing out and retrying. See
+> [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
+> for the resolving revision and full evidence. Phase 5 is complete; this
+> register is now a closed historical record.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
 > commit `bcc22ee`, but the post-merge review found three database-integrity
 > blockers and two smaller correctness/documentation gaps that the green
-> verification suite did not exercise.
+> verification suite did not exercise. Revisions 052–055 resolved those five
+> findings. A fourth review of merged PR #6 then found one opposing write path
+> that revision 053 did not serialize: inserting a `world.dungeon_areas`
+> subtype row while another transaction changed the same child location's
+> `parent_location_id`, plus a verification gap in the three existing
+> revision-053 concurrency tests (they proved lock attachment via
+> `lock_timeout` and a fresh-transaction retry, not that the original waiting
+> statement itself resumes and revalidates). Both are resolved below.
 
-## At a glance
+## At a glance (resolved by revision 056)
 
-Phase 5's documented gameplay capabilities are implemented, merged, and
-verified. It nevertheless fails its full database-integrity exit requirement
-until both parts of this gate close:
+Phase 5's documented gameplay capabilities were implemented, merged, and
+verified before this register was reopened. It failed its full
+database-integrity exit requirement until both parts of the gate below closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
-   same child location's parent do not use a shared child-location lock, so two
-   incompatible writes can both commit.
-2. **Verification blocker:** the existing revision-053 concurrency tests prove
-   lock attachment by timing out the waiter, but do not prove that the original
-   waiting statement resumes, re-reads committed state, and rejects an invalid
-   result.
+   same child location's parent did not use a shared child-location lock, so
+   two incompatible writes could both commit. **Resolved** by revision 056's
+   child-location `pg_advisory_xact_lock`, acquired first in both
+   `world.enforce_dungeon_area_parent_dungeon()` and
+   `world.enforce_dungeon_area_parent_dungeon_on_update()`.
+2. **Verification blocker:** the existing revision-053 concurrency tests proved
+   lock attachment by timing out the waiter, but did not prove that the
+   original waiting statement resumes, re-reads committed state, and rejects
+   an invalid result. **Resolved** by rewriting all three revision-053
+   concurrency tests plus two new tests (covering both orderings of the
+   child-lock race) to use a real background thread, a `pg_stat_activity`
+   poll confirming a genuine lock wait, and an assertion on the resumed
+   statement's actual outcome.
 
-These are not documentation-only follow-ups. Phase 6 feature/schema work must
-remain blocked even though the existing AWS workflow and all 1,080 tests are
-green, because that suite does not exercise the remaining race or resumed-waiter
-behavior.
-
-## Current review baseline and scope
+## Fourth review baseline and scope
 
 The fourth review examined `main` at merge commit `7ae606c`, with implementation
 commit `ea75f65` and Alembic head `055_conditional_route_whitespace`. PR #6 is
@@ -49,10 +54,11 @@ seed idempotency, schema comparison, cleanup, and 1,080 tests (13 unit, 1,066
 database, and 1 scenario). Local formatting, Ruff, mypy, and all 13 unit tests
 also passed during the review.
 
-That evidence remains valid for the behavior it covers. It does not exercise
-the race or waiting-statement behavior below.
+That evidence remains valid for the behavior it covers. It did not exercise
+the race or waiting-statement behavior below, which revision 056 and its
+tests now do.
 
-## Current schema blocker
+## Fourth-review schema blocker (resolved by revision 056)
 
 ### 1. Serialize dungeon-area creation with child-location parent changes
 
@@ -95,7 +101,7 @@ Acceptance criteria:
   structural relationship. Record the review result even if no additional
   function requires changes.
 
-## Current verification obligations
+## Fourth-review verification obligations (resolved by revision 056)
 
 The revision-053 concurrency tests prove that a second statement encounters a
 lock by intentionally causing `lock_timeout`, rolling that transaction back,
@@ -122,9 +128,9 @@ Acceptance criteria:
   at most one incompatible operation may succeed, and no invalid state may
   remain.
 
-## Current completion gate
+## Fourth-review completion gate (satisfied by revision 056)
 
-Close Phase 5 only after the blocker and verification obligations above are
+Phase 5 closes only once the blocker and verification obligations above are
 implemented and `PHASE5_VERIFICATION.md` records:
 
 - the new forward-only revision and exact child-location/parent lock protocol;
@@ -137,9 +143,8 @@ implemented and `PHASE5_VERIFICATION.md` records:
   Phase 6 feature/schema work, assuming its separate context-modularization gate
   is also complete.
 
-Until every item above is satisfied, this file remains an active blocker rather
-than a historical punch list. Do not mark Phase 5 complete based only on the
-functional scenario tests or the previously green workflow.
+See [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
+for exact commands, results, and the confirmed CI run.
 
 ## Previously resolved register (historical)
 
