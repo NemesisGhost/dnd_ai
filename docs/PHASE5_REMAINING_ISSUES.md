@@ -1,21 +1,21 @@
 # Phase 5 Remaining Issues
 
-> **OPEN (2026-08-04).** Revision 056 closed the production-schema blocker,
-> all five resumed-waiter tests prove genuine resumption, and each queries
-> final committed state from an independent connection. A seventh review of
-> the sixth pass found that its test-only `_BackgroundStatement` helper still
-> does not guarantee teardown on every exit path: startup timeout can raise
-> while connection acquisition remains alive, and failed backend termination
-> plus cancellation can propagate an error while the worker remains alive.
-> The two fault-injection tests demonstrate the latter by manually terminating
-> the real backend after the context manager exits, and that safety-net cleanup
-> is not protected by `finally`. No schema, migration, or production-locking
-> change is needed. See
-> [§ Seventh review: startup and failed-cancellation containment](#seventh-review-startup-and-failed-cancellation-containment-2026-08-04)
-> and
-> [PHASE5_VERIFICATION.md § Seventh exit review findings](PHASE5_VERIFICATION.md#seventh-exit-review-findings-2026-08-04).
-> Phase 5 production correctness is complete; formal verification and the
-> Phase 6 correctness entry gate remain open.
+> **CLOSED (2026-08-04).** An eighth pass closed both containment gaps the
+> seventh review found, entirely within
+> `tests/database/test_entity_type_change_protection.py` — see
+> [PHASE5_VERIFICATION.md § Eighth exit review corrections](PHASE5_VERIFICATION.md#eighth-exit-review-corrections-2026-08-04)
+> for the fix and evidence: `_BackgroundStatement`'s worker connection is now
+> bounded by a driver-level `connect_timeout` shorter than every join/poll
+> deadline above it (closing the startup-timeout gap at its root, not just
+> bounding how long `__enter__` waits to be told about a stall), `__enter__`
+> verifies the thread actually stopped before raising, all three regression
+> tests' safety-net cleanup now runs unconditionally in `finally`, and a new
+> regression test proves the failure path end to end against a real refused
+> connection. `ruff format --check`/`ruff check`/`mypy src` clean, the target
+> file's 18 tests (up from 17) stable across three repeated runs, and the
+> full 1,097-test suite (up from 1,096) green against a fresh ephemeral AWS
+> `dev` database. Phase 5 is complete; both the Phase 6 repository-context
+> modularization gate and the Phase 5 formal-correctness gate are closed.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -38,7 +38,7 @@
 > review found the sixth pass still did not contain startup-timeout and
 > failed-cancellation paths.
 
-## Seventh review: startup and failed-cancellation containment (2026-08-04)
+## Seventh review: startup and failed-cancellation containment (resolved by eighth pass, 2026-08-04)
 
 The sixth pass correctly improved successful forced cleanup, failure reporting,
 connection invalidation, and liveness checks, and its pushed `main` head passed
@@ -157,12 +157,11 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production blockers resolved; formal verification open)
+## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified before this register was reopened. The production and primary
-concurrency-verification blockers are closed; the helper containment blocker
-below remains open:
+verified before this register was reopened. All three blockers this register
+tracked are now closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -181,11 +180,13 @@ below remains open:
 3. **Test-infrastructure blocker:** the fifth-pass helper attempted to
    terminate a blocked backend during cleanup, but did not prove termination
    succeeded or that the worker stopped, and the forced-cleanup path was
-   untested. The sixth pass added explicit checks and focused regression tests,
-   but the seventh review proved startup-timeout and failed-cancellation paths
-   can still leave a worker alive. **Open** until the acceptance criteria in
-   [§ Seventh review](#seventh-review-startup-and-failed-cancellation-containment-2026-08-04)
-   are implemented and the final pushed head passes the complete workflow.
+   untested. The sixth pass added explicit checks and focused regression tests;
+   the seventh review found startup-timeout and failed-cancellation paths could
+   still leave a worker alive. **Resolved** by the eighth pass: a driver-level
+   `connect_timeout` bounds the worker's own connection acquisition, `__enter__`
+   verifies the thread stopped before raising, and every regression test's
+   safety-net cleanup now runs unconditionally in `finally` — see
+   [PHASE5_VERIFICATION.md § Eighth exit review corrections](PHASE5_VERIFICATION.md#eighth-exit-review-corrections-2026-08-04).
 
 ## Fourth review baseline and scope
 

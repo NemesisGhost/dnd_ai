@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 
 import pytest
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from tests.factories import (
@@ -237,10 +237,15 @@ class _BackgroundStatement:
     back on failure.
 
     `__enter__` blocks until the worker's connection is established and its
-    backend pid recorded before returning control to the caller. If startup
-    fails (or never completes within the startup deadline), the thread is
-    joined and `__enter__` raises — a `with` block is never entered with a
-    worker of unknown or unowned state.
+    backend pid recorded before returning control to the caller. Connection
+    acquisition itself is bounded: the worker connects through a private,
+    single-use engine with a driver-level `connect_timeout` shorter than
+    every join/poll deadline below it, so a stalled connection attempt
+    cannot hang past that interval — it raises on its own, on the worker
+    thread, like any other startup failure. If startup fails (for that
+    reason or any other) or the thread has not stopped by the end of a
+    further bounded join, `__enter__` raises — a `with` block is never
+    entered with a worker of unknown, unowned, or still-running state.
 
     `__exit__` guarantees that by the time it returns or raises, the worker
     thread is provably no longer running. If the thread is still alive when
@@ -252,7 +257,12 @@ class _BackgroundStatement:
     actually worked, not just that a signal was sent. Ending the backend's
     transaction this way also releases anything it held, including any
     transaction-scoped advisory lock. A final, independent liveness check
-    backstops both attempts.
+    backstops both attempts. If the tracked backend pid is wrong (as the
+    fault-injection tests below deliberately arrange), no signal-based
+    mechanism can reach the real worker — `_force_stop()` reports that
+    failure rather than claiming success, and the caller who broke the
+    ownership contract is responsible for its own `finally`-guaranteed
+    recovery (see those tests).
 
     Cleanup failures are never silently discarded. If an exception was
     already propagating out of the `with` block, the cleanup failure is
@@ -260,6 +270,8 @@ class _BackgroundStatement:
     reported cause; if nothing was already propagating, the cleanup failure
     is raised directly and becomes the `with` block's failure.
     """
+
+    _CONNECT_TIMEOUT_SECONDS = 3
 
     def __init__(self, engine: Engine, statement: Callable[[Connection], None]) -> None:
         self._engine = engine
@@ -270,34 +282,50 @@ class _BackgroundStatement:
 
     def _run(self) -> None:
         connection: Connection | None = None
+        # A private, single-use engine for the worker's own connection only:
+        # bounding connect_timeout at the driver level means connection
+        # acquisition itself cannot hang indefinitely — it raises here, on
+        # this thread, within that many seconds — closing the "connection
+        # acquisition can outlive __enter__" gap at its root rather than
+        # merely bounding how long __enter__ waits to be told about it.
+        worker_engine = create_engine(
+            self._engine.url,
+            connect_args={"connect_timeout": self._CONNECT_TIMEOUT_SECONDS},
+        )
         try:
-            connection = self._engine.connect()
-            connection.begin()
-            self.backend_pid.append(connection.execute(text("SELECT pg_backend_pid()")).scalar())
             try:
-                self._statement(connection)
-            except Exception as exc:  # noqa: BLE001 - reported via self.outcome, not swallowed
-                # This connection may have been externally terminated or
-                # canceled by __exit__'s cleanup, or the statement may simply
-                # have been rejected by a trigger while the connection itself
-                # stays healthy — either way, invalidate rather than pool it.
-                # Some server-side disconnect conditions (e.g. psycopg's
-                # AdminShutdown, raised by pg_terminate_backend) are not
-                # always recognized by SQLAlchemy's own disconnect detection,
-                # so relying on plain close() risked silently handing a dead
-                # connection to a later, unrelated test.
-                with contextlib.suppress(Exception):
-                    connection.invalidate()
+                connection = worker_engine.connect()
+                connection.begin()
+                self.backend_pid.append(
+                    connection.execute(text("SELECT pg_backend_pid()")).scalar()
+                )
+                try:
+                    self._statement(connection)
+                except Exception as exc:  # noqa: BLE001 - reported via self.outcome, not swallowed
+                    # This connection may have been externally terminated or
+                    # canceled by __exit__'s cleanup, or the statement may
+                    # simply have been rejected by a trigger while the
+                    # connection itself stays healthy — either way,
+                    # invalidate rather than pool it. Some server-side
+                    # disconnect conditions (e.g. psycopg's AdminShutdown,
+                    # raised by pg_terminate_backend) are not always
+                    # recognized by SQLAlchemy's own disconnect detection,
+                    # so relying on plain close() risked silently handing a
+                    # dead connection to a later, unrelated test.
+                    with contextlib.suppress(Exception):
+                        connection.invalidate()
+                    self.outcome.append(("failed", exc))
+                else:
+                    connection.commit()
+                    self.outcome.append(("committed", None))
+            except Exception as exc:  # noqa: BLE001 - connecting, begin, or pid lookup failed
                 self.outcome.append(("failed", exc))
-            else:
-                connection.commit()
-                self.outcome.append(("committed", None))
-        except Exception as exc:  # noqa: BLE001 - connecting, begin, or pid lookup failed
-            self.outcome.append(("failed", exc))
+            finally:
+                if connection is not None:
+                    with contextlib.suppress(Exception):
+                        connection.close()
         finally:
-            if connection is not None:
-                with contextlib.suppress(Exception):
-                    connection.close()
+            worker_engine.dispose()
 
     def __enter__(self) -> "_BackgroundStatement":
         self._thread.start()
@@ -307,12 +335,19 @@ class _BackgroundStatement:
         if self.backend_pid:
             return self
         # No backend pid yet: either startup already failed (self.outcome is
-        # populated) or it is hanging. Join before raising so __enter__
-        # never returns control — by raising — while a worker might still be
-        # running; if it really is hung establishing a connection (not
-        # observed against this codebase's Postgres), there is no backend
-        # pid yet to cancel and this is a best-effort bound, not a guarantee.
+        # populated) or it is still in flight. The worker's own
+        # connect_timeout (shorter than this deadline) bounds how long
+        # connection acquisition itself can take, so the join below has
+        # ample margin to observe the thread finishing on its own; verify
+        # that explicitly rather than assuming it, so __enter__ never
+        # raises while a worker of unowned state might still be running.
         self._thread.join(timeout=5.0)
+        if self._thread.is_alive():
+            raise RuntimeError(
+                "background statement thread is still alive after its connect_timeout-bounded "
+                "startup window and a further 5s join — refusing to enter the with block with "
+                "a worker of unverified state"
+            )
         if self.outcome:
             _status, exc = self.outcome[0]
             raise RuntimeError(
@@ -449,42 +484,50 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
         first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
 
         worker_pid: int | None = None
-        with (
-            pytest.raises(_SentinelFailure),
-            _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
-        ):
-            blocked.wait_until_blocked(first, "the sentinel-blocked worker")
-            worker_pid = blocked.backend_pid[0]
-            raise _SentinelFailure("deliberate failure while the worker is still blocked")
+        try:
+            with (
+                pytest.raises(_SentinelFailure),
+                _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
+            ):
+                blocked.wait_until_blocked(first, "the sentinel-blocked worker")
+                worker_pid = blocked.backend_pid[0]
+                raise _SentinelFailure("deliberate failure while the worker is still blocked")
 
-        assert worker_pid is not None
-        # Checked from a fresh, independent connection rather than `first`:
-        # `first` still holds the lock the worker was waiting on, and a
-        # backend that dies while queued as a *waiter* on a lock a live
-        # session still holds can keep appearing in that same session's view
-        # of pg_stat_activity until the lock itself is released — even
-        # though the backend is already fully gone from every other
-        # connection's point of view. A fresh connection is what proves the
-        # worker's backend, connection, transaction, and advisory lock are
-        # actually gone, not an artifact of asking the lock holder itself.
-        still_present = True
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            with engine.connect() as checker:
-                still_present = checker.execute(
-                    text("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = :p)"),
-                    {"p": worker_pid},
-                ).scalar()
-            if not still_present:
-                break
-            time.sleep(0.05)
-        assert still_present is False, (
-            "forced cleanup must terminate the blocked worker's backend itself, not "
-            "merely stop waiting on its thread — otherwise its connection, transaction, "
-            "and advisory lock could all outlive the with block"
-        )
-
-        first.rollback()
+            assert worker_pid is not None
+            # Checked from a fresh, independent connection rather than
+            # `first`: `first` still holds the lock the worker was waiting
+            # on, and a backend that dies while queued as a *waiter* on a
+            # lock a live session still holds can keep appearing in that
+            # same session's view of pg_stat_activity until the lock itself
+            # is released — even though the backend is already fully gone
+            # from every other connection's point of view. A fresh
+            # connection is what proves the worker's backend, connection,
+            # transaction, and advisory lock are actually gone, not an
+            # artifact of asking the lock holder itself.
+            still_present = True
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with engine.connect() as checker:
+                    still_present = checker.execute(
+                        text("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = :p)"),
+                        {"p": worker_pid},
+                    ).scalar()
+                if not still_present:
+                    break
+                time.sleep(0.05)
+            assert still_present is False, (
+                "forced cleanup must terminate the blocked worker's backend itself, not "
+                "merely stop waiting on its thread — otherwise its connection, transaction, "
+                "and advisory lock could all outlive the with block"
+            )
+        finally:
+            # Safety-net cleanup in finally, not sequential code: if any
+            # assertion above ever fails, `first` (and the advisory lock it
+            # holds) must still be released rather than leaking into later
+            # tests. __exit__ should already have terminated the worker via
+            # its genuine, uncorrupted pid in this test — this is a backstop,
+            # not the primary proof point (the still_present assertion is).
+            first.rollback()
 
 
 def test_background_statement_reports_cleanup_failure_without_losing_the_original_exception(
@@ -505,45 +548,57 @@ def test_background_statement_reports_cleanup_failure_without_losing_the_origina
         first.begin()
         first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
 
-        with (
-            pytest.raises(_SentinelFailure) as excinfo,
-            _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
-        ):
-            blocked.wait_until_blocked(first, "the fault-injected worker")
-            real_pid = blocked.backend_pid[0]
-            # Corrupt the tracked pid only — the real backend below is
-            # untouched by this and is cleaned up directly, below, by
-            # this test itself.
-            blocked.backend_pid[0] = 2**31 - 1
-            raise _SentinelFailure("deliberate failure with a corrupted cleanup target")
+        try:
+            with (
+                pytest.raises(_SentinelFailure) as excinfo,
+                _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
+            ):
+                blocked.wait_until_blocked(first, "the fault-injected worker")
+                real_pid = blocked.backend_pid[0]
+                # Corrupt the tracked pid only — the real backend below is
+                # untouched by this and is cleaned up directly, below, by
+                # this test itself.
+                blocked.backend_pid[0] = 2**31 - 1
+                raise _SentinelFailure("deliberate failure with a corrupted cleanup target")
 
-        assert isinstance(excinfo.value, _SentinelFailure), (
-            "the original sentinel failure must still be what propagates"
-        )
-        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
-        assert "cleanup" in notes.lower() and "fail" in notes.lower(), (
-            f"expected the cleanup failure to be reported on the propagated exception "
-            f"via add_note, got notes: {notes!r}"
-        )
-
-        # Clean up the real worker backend now, while `first` still holds
-        # the lock it is blocked on. Doing this before `first.rollback()`
-        # is deliberate: once `first` releases the lock, the real
-        # (uncorrupted) worker is free to resume and finish — racing this
-        # termination against that natural resolution risks killing a
-        # connection exactly as it is finishing its own normal close(),
-        # which can leave a corrupted connection looking healthy to the
-        # pool. Terminating first, while the worker is still guaranteed
-        # blocked, is deterministic.
-        with contextlib.suppress(Exception), engine.connect() as canceller:
-            canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
-            canceller.commit()
-        blocked._thread.join(timeout=5.0)
-        assert not blocked._thread.is_alive(), (
-            "the real (uncorrupted) worker backend must not survive test teardown"
-        )
-
-        first.rollback()
+            assert isinstance(excinfo.value, _SentinelFailure), (
+                "the original sentinel failure must still be what propagates"
+            )
+            notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+            assert "cleanup" in notes.lower() and "fail" in notes.lower(), (
+                f"expected the cleanup failure to be reported on the propagated exception "
+                f"via add_note, got notes: {notes!r}"
+            )
+        finally:
+            # Safety-net cleanup in finally, unconditionally: __exit__'s own
+            # signal-based termination could not reach the real worker (its
+            # tracked pid was deliberately corrupted above), so it is still
+            # genuinely blocked on `first`'s advisory lock. This must run
+            # regardless of whether the assertions above passed, or a
+            # failing assertion here would leave the real backend, its
+            # connection, and the lock it depends on outliving the test —
+            # redesigning "ownership" per PHASE5_REMAINING_ISSUES.md means
+            # exactly this: the caller that broke `_BackgroundStatement`'s
+            # pid-tracking contract owns deterministically unblocking and
+            # verifying the worker it corrupted, in `finally`, not in
+            # sequential code an earlier assertion can skip.
+            #
+            # Terminating the real backend before releasing `first`'s lock
+            # (rather than after) is deliberate: once the lock is released,
+            # the real (uncorrupted) worker is free to resume and finish on
+            # its own — racing this termination against that natural
+            # resolution risks killing a connection exactly as it is
+            # finishing its own normal close(), which can leave a corrupted
+            # connection looking healthy to the pool.
+            if real_pid is not None and blocked is not None:
+                with contextlib.suppress(Exception), engine.connect() as canceller:
+                    canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
+                    canceller.commit()
+                blocked._thread.join(timeout=5.0)
+                assert not blocked._thread.is_alive(), (
+                    "the real (uncorrupted) worker backend must not survive test teardown"
+                )
+            first.rollback()
 
 
 def test_background_statement_cleanup_failure_fails_the_test_when_no_original_exception(
@@ -563,30 +618,60 @@ def test_background_statement_cleanup_failure_fails_the_test_when_no_original_ex
         first.begin()
         first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
 
-        with (
-            pytest.raises(RuntimeError, match="could not verify"),
-            _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
-        ):
-            blocked.wait_until_blocked(first, "the fault-injected worker")
-            real_pid = blocked.backend_pid[0]
-            blocked.backend_pid[0] = 2**31 - 1
-            # No exception here: the block exits normally while the
-            # worker is still blocked, so cleanup failing is the only
-            # thing that can fail this test.
+        try:
+            with (
+                pytest.raises(RuntimeError, match="could not verify"),
+                _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
+            ):
+                blocked.wait_until_blocked(first, "the fault-injected worker")
+                real_pid = blocked.backend_pid[0]
+                blocked.backend_pid[0] = 2**31 - 1
+                # No exception here: the block exits normally while the
+                # worker is still blocked, so cleanup failing is the only
+                # thing that can fail this test.
+        finally:
+            # Safety-net cleanup in finally, unconditionally — see the
+            # identical rationale in
+            # test_background_statement_reports_cleanup_failure_without_losing_the_original_exception.
+            # Here it also guards against pytest.raises itself failing (if
+            # __exit__ ever stopped raising as expected), which would
+            # otherwise propagate past this point with no cleanup at all.
+            if real_pid is not None and blocked is not None:
+                with contextlib.suppress(Exception), engine.connect() as canceller:
+                    canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
+                    canceller.commit()
+                blocked._thread.join(timeout=5.0)
+                assert not blocked._thread.is_alive(), (
+                    "the real (uncorrupted) worker backend must not survive test teardown"
+                )
+            first.rollback()
 
-        # As above: terminate the real worker deterministically while
-        # `first` still holds the lock, before releasing it, to avoid
-        # racing a safety-net termination against the worker's own natural
-        # resolution and normal connection close.
-        with contextlib.suppress(Exception), engine.connect() as canceller:
-            canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
-            canceller.commit()
-        blocked._thread.join(timeout=5.0)
-        assert not blocked._thread.is_alive(), (
-            "the real (uncorrupted) worker backend must not survive test teardown"
-        )
 
-        first.rollback()
+def test_background_statement_enter_reports_failure_and_leaves_no_thread_when_connection_fails(
+    postgres_engine: Engine,
+) -> None:
+    """PHASE5_REMAINING_ISSUES.md's seventh review: connection acquisition
+    must not be able to outlive `__enter__`. Points the worker at a
+    definitively refused local port (not a genuinely stalled one — that
+    would depend on network topology the test process doesn't control, and
+    risk flakiness rather than proving anything) so `worker_engine.connect()`
+    inside `_run()` raises for real, on a real connection attempt, not a
+    mock. This exercises the same failure path a driver-level
+    `connect_timeout` firing would take — `_run()` catches the failure into
+    `self.outcome`, and `__enter__` must surface it as a `RuntimeError`
+    without ever returning control to the caller, leaving no thread behind."""
+    unreachable_engine = create_engine(postgres_engine.url.set(host="127.0.0.1", port=1))
+    attempt = _BackgroundStatement(unreachable_engine, _lock_statement(1))
+
+    with pytest.raises(RuntimeError, match="failed to establish a connection"):
+        attempt.__enter__()
+
+    assert not attempt._thread.is_alive(), (
+        "a failed __enter__ must never leave its worker thread running"
+    )
+    assert attempt.outcome and attempt.outcome[0][0] == "failed", (
+        "the worker's own connection failure must be recorded as the outcome"
+    )
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(

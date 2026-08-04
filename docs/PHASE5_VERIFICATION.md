@@ -265,9 +265,32 @@ The review found that the sixth pass's universal teardown claim is still too bro
 
 The normal forced-termination path, cleanup-error reporting, connection invalidation, and all production invariant tests remain valid improvements. GitHub Actions run [`30924888684`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30924888684) passed the final reviewed `main` head, including all 1,096 tests, migration from `base`, full downgrade/upgrade, seed idempotency, schema comparison, and cleanup. That successful workflow is evidence for the paths it executes; it does not close the unexercised containment cases above.
 
+## Eighth exit review corrections (2026-08-04)
+
+An eighth pass closed both containment gaps the seventh review found, entirely within `tests/database/test_entity_type_change_protection.py` — no schema, migration, or production-code change was needed or made, matching every prior review's finding that revision 056 and the revision-053 trigger functions remain correct.
+
+1. **Startup timeout could outlive `__enter__`.** `_BackgroundStatement._run()` now opens its worker's own connection through a private, single-use engine created with a driver-level `connect_args={"connect_timeout": 3}` — three seconds, comfortably shorter than every join/poll deadline above it. Connection acquisition itself therefore cannot hang past that interval: a stalled attempt raises on the worker thread, on its own, the same as any other startup failure, closing the gap at its root rather than only bounding how long `__enter__` waits to be told about it. `__enter__`'s existing bounded join is now followed by an explicit `is_alive()` check before it raises, so a thread that somehow survived would be reported as a distinct fatal error instead of allowed to leak silently.
+2. **Failed termination/cancellation could outlive `__exit__`.** No code can force-stop a backend once its own signaling contract is broken (the two fault-injection tests deliberately corrupt the tracked pid to prove exactly that failure is reported, not swallowed) — `_force_stop()`'s reported failure is therefore correct, expected behavior for that scenario, not a defect to code around. What was missing was that the caller who corrupts the pid — and therefore owns recovering from that self-inflicted state — was still doing its safety-net cleanup as plain sequential code after the `with` block, not in `finally`. **Fix:** all three `_BackgroundStatement` regression tests now wrap their post-`with`-block assertions and safety-net cleanup in `try`/`finally`, so an intermediate assertion failure can never skip terminating the real (uncorrupted) worker backend, joining its thread, and verifying it stopped. This is the "redesign ownership so releasing the context's controlled resource deterministically unblocks it" the register asked for: the resource in question (the real worker, blocked on `first`'s advisory lock) is now unconditionally reclaimed by its actual owner — the test that broke the tracking contract — rather than by best-effort code an earlier failure could bypass.
+
+**New test:** `test_background_statement_enter_reports_failure_and_leaves_no_thread_when_connection_fails` proves `__enter__`'s failure path end to end against a real, definitively-refused local connection (port 1 on `127.0.0.1` — a real backend that never listens, not a mock, and not a genuinely stalled one, since a stall's exact timing depends on network topology the test process doesn't control and would risk the flakiness this project's own conventions rule out): the worker's connection failure is captured, `__enter__` raises rather than returning control, and no thread survives. This exercises the same code path a driver-level `connect_timeout` firing would take, without depending on an actual multi-second network stall to prove it.
+
+### Verification commands and results
+
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+
+| Command | Result |
+|---|---|
+| `ruff format --check .` | `125 files already formatted` |
+| `ruff check .` | `All checks passed!` |
+| `mypy src` | `Success: no issues found in 14 source files` |
+| `pytest tests/database/test_entity_type_change_protection.py -v` (x3) | `18 passed` every run (9 sequential, 4 helper regression tests including the new one, 5 hardened concurrency) — confirmed stable across repeated runs |
+| `pytest -v` (unit + database + scenario, the same invocation CI uses) | `1097 passed` (24 unit, 1072 database, 1 scenario) — a fresh ephemeral database created and migrated from `base` to `head` by `tests/conftest.py`, so this run is also independent proof the full 56-revision chain still applies cleanly from empty (unchanged this pass) |
+
+No migration, downgrade/upgrade, seed-idempotency, or `alembic check` verification was needed this pass — revision 056 remains the unchanged head, and nothing under `database/` changed.
+
 ## Current formal-closeout status
 
-Phase 5 production correctness is complete. Revision 056 is unchanged, and the five concurrency tests prove genuine waiter resumption with independent final-state assertions. Formal closeout remains open until `_BackgroundStatement` contains startup-timeout and failed-cancellation paths within a bounded interval, the fault-injection tests put safety-net cleanup in `finally`, no worker/backend transaction/advisory lock survives any helper exit path, and the final pushed head passes the complete workflow. [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is the open acceptance register. The Phase 6 repository-context modularization gate is closed, but the Phase 5 formal-correctness gate remains open, so Phase 6 feature/schema work is still blocked.
+Phase 5 is complete. Revision 056 is unchanged, all five concurrency tests prove genuine waiter resumption with independent final-state assertions, and `_BackgroundStatement` now contains startup-timeout and failed-cancellation paths within a bounded interval with every regression test's safety-net cleanup guaranteed by `finally`. [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is now a closed historical record. Both the Phase 6 repository-context modularization gate and the Phase 5 formal-correctness gate are closed; Phase 6 feature/schema work may begin.
 
 ## Deliberate Scoping Decisions
 
