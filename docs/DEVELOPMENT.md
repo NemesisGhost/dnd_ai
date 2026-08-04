@@ -211,7 +211,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 5 are done.** Phase 5's production implementation, resumed-waiter tests, independent final-state assertions, and formal-verification closeout are all merged and verified against live AWS and GitHub Actions ([PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is now a closed historical record). Both the Phase 6 repository-context modularization gate and the Phase 5 formal-correctness gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) are closed. Follow [§23.1](PLAN.md#231-phase-exit-review) when Phase 6 closes.
+**Phases 1 through 4 are done.** Phase 5's production implementation, resumed-waiter tests, and independent final-state assertions are merged and verified against live AWS and GitHub Actions, but [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) remains open because a ninth review found the test-only worker helper's prior fix still does not guarantee teardown on every startup-timeout and failed-cancellation path. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate remains open. Follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

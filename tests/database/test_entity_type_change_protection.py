@@ -236,135 +236,161 @@ class _BackgroundStatement:
     thread, inside an explicit transaction committed on success or rolled
     back on failure.
 
-    `__enter__` blocks until the worker's connection is established and its
-    backend pid recorded before returning control to the caller. Connection
-    acquisition itself is bounded: the worker connects through a private,
-    single-use engine with a driver-level `connect_timeout` shorter than
-    every join/poll deadline below it, so a stalled connection attempt
-    cannot hang past that interval — it raises on its own, on the worker
-    thread, like any other startup failure. If startup fails (for that
-    reason or any other) or the thread has not stopped by the end of a
-    further bounded join, `__enter__` raises — a `with` block is never
-    entered with a worker of unknown, unowned, or still-running state.
+    Ownership is established synchronously, in the calling thread, before
+    any worker thread exists: `__enter__` connects through a private,
+    single-use engine (a driver-level `connect_timeout` bounds that connect
+    attempt), begins the transaction, sets a bounded `lock_timeout` on it
+    (see below), and records the real backend pid — all before starting the
+    thread that actually runs `statement`. If any of that fails, `__enter__`
+    raises directly and no thread is ever created; there is no interval
+    during which a worker of unknown or unowned state could outlive a failed
+    context entry, because the entry and the worker's existence are no
+    longer racing each other at all.
 
     `__exit__` guarantees that by the time it returns or raises, the worker
-    thread is provably no longer running. If the thread is still alive when
-    the `with` block exits — normally, or via an exception raised inside it
-    — `__exit__` signals the worker's backend to stop: first
-    `pg_terminate_backend()`, whose boolean result is checked rather than
-    assumed, falling back to `pg_cancel_backend()` if termination was not
-    confirmed; each attempt is followed by a bounded join to verify it
-    actually worked, not just that a signal was sent. Ending the backend's
-    transaction this way also releases anything it held, including any
-    transaction-scoped advisory lock. A final, independent liveness check
-    backstops both attempts. If the tracked backend pid is wrong (as the
-    fault-injection tests below deliberately arrange), no signal-based
-    mechanism can reach the real worker — `_force_stop()` reports that
-    failure rather than claiming success, and the caller who broke the
-    ownership contract is responsible for its own `finally`-guaranteed
-    recovery (see those tests).
+    thread is provably no longer running, via a layered, entirely
+    self-contained fallback (nothing here depends on a caller supplying an
+    unblock action):
 
-    Cleanup failures are never silently discarded. If an exception was
-    already propagating out of the `with` block, the cleanup failure is
-    attached to it via `add_note` so the original failure remains the
-    reported cause; if nothing was already propagating, the cleanup failure
-    is raised directly and becomes the `with` block's failure.
+    1. `pg_terminate_backend()`, then `pg_cancel_backend()` — both issued
+       through the isolated `_send_signal()` seam, which regression tests
+       monkeypatch to inject a false result or a raised exception, proving
+       the fallback chain below without ever touching the real, private,
+       immutable backend pid this class actually depends on.
+    2. Driver-native cancellation via `_cancel_via_driver()` — psycopg's
+       `Connection.cancel_safe()`, called directly on the worker's own
+       connection handle. This is a resource the helper genuinely owns
+       (unlike the SQL signals above, it needs no second connection and no
+       privilege to signal an arbitrary pid), and psycopg documents it as
+       safe to call from another thread while the connection is busy with a
+       blocking operation — confirmed empirically against a genuinely
+       blocked worker before relying on it here.
+    3. The `lock_timeout` set during `__enter__` — a deterministic backstop
+       enforced by PostgreSQL itself, entirely independent of every
+       mechanism above and of anything this thread does or fails to do.
+       Once a lock-waiting statement has been running longer than that
+       bound, PostgreSQL cancels it unconditionally; `__exit__` simply waits
+       out that bound (plus margin) rather than taking any further action.
+       A statement that is not lock-bound at all (`pg_sleep`, exercised by
+       the regression tests below rather than any production statement)
+       is the one case this backstop cannot reach — proving that `__exit__`
+       still reports rather than hangs or silently returns in that case is
+       exactly what those tests are for.
+
+    Each step is followed by a bounded join verifying the worker actually
+    stopped, not just that a signal was sent or accepted. Cleanup failures
+    are never silently discarded: if an exception was already propagating
+    out of the `with` block, the cleanup failure is attached to it via
+    `add_note` so the original failure remains the reported cause; if
+    nothing was already propagating, the cleanup failure is raised directly
+    and becomes the `with` block's failure.
     """
 
     _CONNECT_TIMEOUT_SECONDS = 3
+    _SIGNAL_JOIN_SECONDS = 5.0
 
-    def __init__(self, engine: Engine, statement: Callable[[Connection], None]) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        statement: Callable[[Connection], None],
+        *,
+        lock_timeout_seconds: float = 8.0,
+    ) -> None:
         self._engine = engine
         self._statement = statement
+        self._lock_timeout_seconds = lock_timeout_seconds
         self.outcome: list[tuple[str, Exception | None]] = []
-        self.backend_pid: list[int] = []
-        self._thread = threading.Thread(target=self._run)
+        self._backend_pid_value: int | None = None
+        self._connection: Connection | None = None
+        self._worker_engine: Engine | None = None
+        self._thread: threading.Thread | None = None
 
-    def _run(self) -> None:
-        connection: Connection | None = None
-        # A private, single-use engine for the worker's own connection only:
-        # bounding connect_timeout at the driver level means connection
-        # acquisition itself cannot hang indefinitely — it raises here, on
-        # this thread, within that many seconds — closing the "connection
-        # acquisition can outlive __enter__" gap at its root rather than
-        # merely bounding how long __enter__ waits to be told about it.
+    @property
+    def backend_pid(self) -> int:
+        """The worker's real backend pid — private storage, read-only
+        exposure. There is deliberately no way for a caller to overwrite
+        this: PHASE5_REMAINING_ISSUES.md's ninth review rejected the earlier
+        pattern of tests corrupting a mutable recorded pid to simulate
+        signaling failure, since that tested the *caller* breaking an
+        ownership contract, not the helper's own containment. Regression
+        tests inject failures at the signaling operations themselves
+        (`_send_signal`, `_cancel_via_driver`) instead."""
+        assert self._backend_pid_value is not None, "backend_pid read before __enter__ completed"
+        return self._backend_pid_value
+
+    def _establish_connection(self) -> tuple[Engine, Connection, int]:
+        """Synchronously connects, begins the transaction, sets the
+        deterministic `lock_timeout` backstop, and reads the real backend
+        pid — everything a worker thread needs to safely own before it can
+        be started. Isolated as its own method (rather than inlined in
+        `__enter__`) so regression tests can monkeypatch *this* seam to
+        simulate a slow-then-failing startup deterministically, without
+        depending on real network timing/topology."""
         worker_engine = create_engine(
             self._engine.url,
             connect_args={"connect_timeout": self._CONNECT_TIMEOUT_SECONDS},
         )
         try:
-            try:
-                connection = worker_engine.connect()
-                connection.begin()
-                self.backend_pid.append(
-                    connection.execute(text("SELECT pg_backend_pid()")).scalar()
-                )
-                try:
-                    self._statement(connection)
-                except Exception as exc:  # noqa: BLE001 - reported via self.outcome, not swallowed
-                    # This connection may have been externally terminated or
-                    # canceled by __exit__'s cleanup, or the statement may
-                    # simply have been rejected by a trigger while the
-                    # connection itself stays healthy — either way,
-                    # invalidate rather than pool it. Some server-side
-                    # disconnect conditions (e.g. psycopg's AdminShutdown,
-                    # raised by pg_terminate_backend) are not always
-                    # recognized by SQLAlchemy's own disconnect detection,
-                    # so relying on plain close() risked silently handing a
-                    # dead connection to a later, unrelated test.
-                    with contextlib.suppress(Exception):
-                        connection.invalidate()
-                    self.outcome.append(("failed", exc))
-                else:
-                    connection.commit()
-                    self.outcome.append(("committed", None))
-            except Exception as exc:  # noqa: BLE001 - connecting, begin, or pid lookup failed
-                self.outcome.append(("failed", exc))
-            finally:
-                if connection is not None:
-                    with contextlib.suppress(Exception):
-                        connection.close()
-        finally:
-            worker_engine.dispose()
+            connection = worker_engine.connect()
+            connection.begin()
+            # SET/SET LOCAL do not accept a bind parameter for their value —
+            # PostgreSQL requires a literal there. Safe to interpolate: this
+            # is a float this class itself controls, never external input.
+            connection.execute(text(f"SET LOCAL lock_timeout = '{self._lock_timeout_seconds}s'"))
+            pid = connection.execute(text("SELECT pg_backend_pid()")).scalar()
+        except Exception:
+            with contextlib.suppress(Exception):
+                worker_engine.dispose()
+            raise
+        return worker_engine, connection, pid
 
     def __enter__(self) -> "_BackgroundStatement":
-        self._thread.start()
-        deadline = time.monotonic() + 5.0
-        while not self.backend_pid and not self.outcome and time.monotonic() < deadline:
-            time.sleep(0.02)
-        if self.backend_pid:
-            return self
-        # No backend pid yet: either startup already failed (self.outcome is
-        # populated) or it is still in flight. The worker's own
-        # connect_timeout (shorter than this deadline) bounds how long
-        # connection acquisition itself can take, so the join below has
-        # ample margin to observe the thread finishing on its own; verify
-        # that explicitly rather than assuming it, so __enter__ never
-        # raises while a worker of unowned state might still be running.
-        self._thread.join(timeout=5.0)
-        if self._thread.is_alive():
-            raise RuntimeError(
-                "background statement thread is still alive after its connect_timeout-bounded "
-                "startup window and a further 5s join — refusing to enter the with block with "
-                "a worker of unverified state"
-            )
-        if self.outcome:
-            _status, exc = self.outcome[0]
-            raise RuntimeError(
-                f"background statement failed to establish a connection: {exc}"
-            ) from exc
-        raise RuntimeError(
-            "background statement did not establish a connection within the 5s startup "
-            "deadline, and reported no outcome"
+        # No thread exists yet, and none is created below unless this
+        # succeeds — a `with` block can therefore never be entered with a
+        # worker of unknown or unowned state, by construction rather than
+        # by racing a startup deadline against a poll loop.
+        self._worker_engine, self._connection, self._backend_pid_value = (
+            self._establish_connection()
         )
+        self._thread = threading.Thread(target=self._run)
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        connection = self._connection
+        worker_engine = self._worker_engine
+        assert connection is not None
+        try:
+            self._statement(connection)
+        except Exception as exc:  # noqa: BLE001 - reported via self.outcome, not swallowed
+            # This connection may have been externally terminated or
+            # canceled by __exit__'s cleanup, or the statement may simply
+            # have been rejected by a trigger while the connection itself
+            # stays healthy — either way, invalidate rather than pool it.
+            # Some server-side disconnect conditions (e.g. psycopg's
+            # AdminShutdown, raised by pg_terminate_backend) are not always
+            # recognized by SQLAlchemy's own disconnect detection, so
+            # relying on plain close() risked silently handing a dead
+            # connection to a later, unrelated test.
+            with contextlib.suppress(Exception):
+                connection.invalidate()
+            self.outcome.append(("failed", exc))
+        else:
+            connection.commit()
+            self.outcome.append(("committed", None))
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()
+            if worker_engine is not None:
+                with contextlib.suppress(Exception):
+                    worker_engine.dispose()
 
     def wait_until_blocked(self, poll_connection: Connection, label: str) -> None:
         """Blocks the caller until pg_stat_activity reports this statement's
         backend genuinely waiting on a lock — proof it is truly blocked, not
         merely running slowly. (`__enter__` already guarantees the backend
         connection itself exists by the time this is called.)"""
-        assert self.backend_pid, f"{label}: backend pid missing (invariant violated by __enter__)"
-        pid = self.backend_pid[0]
+        pid = self.backend_pid
 
         waiting = False
         deadline = time.monotonic() + 5.0
@@ -382,6 +408,7 @@ class _BackgroundStatement:
         """Joins the thread (bounded) after the blocker has committed and
         asserts the original waiting statement actually resumed — not a
         substitute retry — then returns its real outcome."""
+        assert self._thread is not None
         self._thread.join(timeout=10.0)
         assert not self._thread.is_alive(), (
             f"{label} did not resume within 10s of the blocking transaction's commit"
@@ -389,48 +416,99 @@ class _BackgroundStatement:
         assert self.outcome, f"{label} thread reported no outcome"
         return self.outcome[0]
 
-    def _force_stop(self, pid: int) -> Exception | None:
-        """Best-effort-but-verified attempt to make the worker's backend
-        stop: signal it to end (pg_terminate_backend, falling back to
-        pg_cancel_backend), then prove via a bounded join that the thread
-        actually stopped. Returns None only once that is confirmed;
-        otherwise returns an Exception describing every attempt made."""
+    def _send_signal(self, description: str, sql: str) -> bool:
+        """Issues one termination/cancellation SQL signal against the
+        tracked (real, immutable) backend pid, via a separate connection.
+        Isolated as its own method, not inlined into `_force_stop`, so
+        regression tests can monkeypatch this exact seam to inject a false
+        result or a raised exception — exercising the fallback chain
+        without corrupting `backend_pid` or targeting the wrong backend."""
+        canceller = self._engine.connect()
+        try:
+            sent = canceller.execute(text(sql), {"p": self.backend_pid}).scalar()
+            canceller.commit()
+            return bool(sent)
+        finally:
+            with contextlib.suppress(Exception):
+                canceller.close()
+
+    def _cancel_via_driver(self) -> None:
+        """Driver-native cancellation on the worker's own connection handle
+        (psycopg's `Connection.cancel_safe()`) — a resource this helper
+        genuinely owns, independent of the SQL-signal path above. Isolated
+        as its own method so regression tests can monkeypatch it to inject
+        a failure and prove the next fallback layer (the `lock_timeout`
+        backstop) takes over."""
+        assert self._connection is not None
+        dbapi_connection = self._connection.connection.dbapi_connection
+        dbapi_connection.cancel_safe(timeout=self._SIGNAL_JOIN_SECONDS)
+
+    def _force_stop(self) -> Exception | None:
+        """Layered, verified attempt to make the worker's backend stop —
+        see the class docstring for the three-step fallback chain. Returns
+        None only once a bounded join has confirmed the thread actually
+        stopped; otherwise returns an Exception describing every attempt
+        made, including the final `lock_timeout` backstop's own bound."""
+        assert self._thread is not None
         attempts: list[str] = []
+
         for description, sql in (
             ("pg_terminate_backend", "SELECT pg_terminate_backend(:p)"),
             ("pg_cancel_backend", "SELECT pg_cancel_backend(:p)"),
         ):
-            canceller: Connection | None = None
             try:
-                canceller = self._engine.connect()
-                sent = canceller.execute(text(sql), {"p": pid}).scalar()
-                canceller.commit()
-                canceller.close()
+                sent = self._send_signal(description, sql)
             except Exception as exc:  # noqa: BLE001 - reported, not swallowed
                 attempts.append(f"{description} raised {type(exc).__name__}: {exc}")
-                if canceller is not None:
-                    # Don't let a canceller connection that itself hit an
-                    # error be silently returned to the shared pool.
-                    with contextlib.suppress(Exception):
-                        canceller.invalidate()
                 continue
             if not sent:
-                attempts.append(f"{description} reported failure (no signalable backend {pid})")
+                attempts.append(
+                    f"{description} reported failure (no signalable backend {self.backend_pid})"
+                )
                 continue
-            self._thread.join(timeout=5.0)
+            self._thread.join(timeout=self._SIGNAL_JOIN_SECONDS)
             if not self._thread.is_alive():
                 return None
             attempts.append(f"{description} signal accepted but worker did not stop within 5s")
+
+        try:
+            self._cancel_via_driver()
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            attempts.append(f"driver-native cancel_safe raised {type(exc).__name__}: {exc}")
+        else:
+            self._thread.join(timeout=self._SIGNAL_JOIN_SECONDS)
+            if not self._thread.is_alive():
+                return None
+            attempts.append("driver-native cancel_safe accepted but worker did not stop within 5s")
+
+        # Deterministic backstop: the worker's own transaction was
+        # configured with a bounded lock_timeout during __enter__, before it
+        # could block on anything, so PostgreSQL itself guarantees a
+        # lock-waiting statement cannot wait longer than that — independent
+        # of every mechanism above. Wait out that bound (plus margin) before
+        # concluding cleanup genuinely failed. This cannot rescue a
+        # statement that was never waiting on a lock in the first place
+        # (pg_sleep, used only by the regression tests proving this exact
+        # limitation) — that is the one case where this method is expected
+        # to return a real failure.
+        backstop_wait = self._lock_timeout_seconds + self._SIGNAL_JOIN_SECONDS
+        self._thread.join(timeout=backstop_wait)
+        if not self._thread.is_alive():
+            return None
+        attempts.append(
+            f"worker did not stop even after its {self._lock_timeout_seconds}s lock_timeout "
+            "backstop elapsed — it was not blocked on anything lock_timeout governs"
+        )
+
         return RuntimeError(
-            f"could not verify backend pid {pid} was stopped: " + "; ".join(attempts)
+            f"could not verify backend pid {self.backend_pid} was stopped: " + "; ".join(attempts)
         )
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
         cleanup_error: Exception | None = None
-        if self._thread.is_alive():
-            pid = self.backend_pid[0]
-            cleanup_error = self._force_stop(pid)
-        if cleanup_error is None and self._thread.is_alive():
+        if self._thread is not None and self._thread.is_alive():
+            cleanup_error = self._force_stop()
+        if cleanup_error is None and self._thread is not None and self._thread.is_alive():
             # Independent final proof point, regardless of what _force_stop
             # believed happened above.
             cleanup_error = RuntimeError(
@@ -462,11 +540,81 @@ class _SentinelFailure(Exception):
     exception was already propagating rather than replacing or losing it."""
 
 
+class _InjectedFailure(Exception):
+    """Marks a deliberately mocked failure in one of `_BackgroundStatement`'s
+    fallback seams (`_send_signal`, `_cancel_via_driver`,
+    `_establish_connection`), distinguishing it from a genuine PostgreSQL or
+    driver error. PHASE5_REMAINING_ISSUES.md's ninth review rejected the
+    earlier pattern of corrupting `backend_pid` to simulate signaling
+    failure — that tested a caller breaking an ownership contract, not the
+    helper's own containment. These tests inject failures at the mechanisms
+    themselves instead, leaving `backend_pid` untouched and correct."""
+
+
 def _lock_statement(key: int) -> Callable[[Connection], None]:
     def _acquire(conn: Connection) -> None:
         conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
 
     return _acquire
+
+
+def _sleep_statement(seconds: float) -> Callable[[Connection], None]:
+    """A statement that blocks for a fixed duration without waiting on any
+    lock — used only by the two tests proving `_force_stop`'s final
+    reporting path, since the `lock_timeout` backstop every other
+    regression test relies on has no effect on a plain sleep."""
+
+    def _sleep(conn: Connection) -> None:
+        conn.execute(text("SELECT pg_sleep(:s)"), {"s": seconds})
+
+    return _sleep
+
+
+def _failing_send_signal(mode: str) -> Callable[[str, str], bool]:
+    """A `_send_signal` replacement for monkeypatching onto one instance:
+    fails every signal attempt, either by returning `False`
+    (`mode="returns_false"`) or by raising (`mode="raises"`) — the two
+    failure shapes the ninth review asks be covered for both
+    `pg_terminate_backend` and `pg_cancel_backend`."""
+
+    def _send(description: str, sql: str) -> bool:
+        if mode == "raises":
+            raise _InjectedFailure(f"simulated {description} failure")
+        return False
+
+    return _send
+
+
+def _failing_cancel_via_driver() -> None:
+    """A `_cancel_via_driver` replacement for monkeypatching: simulates the
+    driver-native cancellation itself failing, so whatever comes after it
+    (the `lock_timeout` backstop, or — for the two `pg_sleep`-based tests —
+    nothing) is what has to take over."""
+    raise _InjectedFailure("simulated cancel_safe failure")
+
+
+def _assert_backend_eventually_gone(engine: Engine, pid: int, timeout: float = 5.0) -> None:
+    """Polls pg_stat_activity from a fresh, independent connection until the
+    given backend pid disappears — proof its connection, transaction, and
+    any advisory lock it held are actually gone, not merely that a Python
+    thread stopped waiting on it. A fresh connection matters because a
+    session that itself still holds the lock the pid was queued as a
+    *waiter* on can keep reporting that waiter as present in its own view
+    of pg_stat_activity until it releases the lock, even though the waiter
+    is already fully gone from every other connection's point of view."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as checker:
+            still_present = checker.execute(
+                text("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = :p)"), {"p": pid}
+            ).scalar()
+        if not still_present:
+            return
+        time.sleep(0.05)
+    raise AssertionError(
+        f"backend pid {pid} was still present in pg_stat_activity after {timeout}s — its "
+        "connection, transaction, or advisory lock may have survived cleanup"
+    )
 
 
 def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_worker(
@@ -475,7 +623,8 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
     """The main thread's transaction never commits — deliberately, since the
     point is proving forced cleanup, not normal resumption — and the `with`
     block exits early via a synthetic failure while the worker is still
-    genuinely blocked on the lock. Cleanup must still terminate it."""
+    genuinely blocked on the lock. Cleanup must still terminate it, via the
+    real (unmocked) primary signal path."""
     engine = postgres_engine
     lock_key = uuid.uuid4().int % (2**63 - 1)
 
@@ -490,188 +639,220 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
                 _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
             ):
                 blocked.wait_until_blocked(first, "the sentinel-blocked worker")
-                worker_pid = blocked.backend_pid[0]
+                worker_pid = blocked.backend_pid
                 raise _SentinelFailure("deliberate failure while the worker is still blocked")
 
             assert worker_pid is not None
-            # Checked from a fresh, independent connection rather than
-            # `first`: `first` still holds the lock the worker was waiting
-            # on, and a backend that dies while queued as a *waiter* on a
-            # lock a live session still holds can keep appearing in that
-            # same session's view of pg_stat_activity until the lock itself
-            # is released — even though the backend is already fully gone
-            # from every other connection's point of view. A fresh
-            # connection is what proves the worker's backend, connection,
-            # transaction, and advisory lock are actually gone, not an
-            # artifact of asking the lock holder itself.
-            still_present = True
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                with engine.connect() as checker:
-                    still_present = checker.execute(
-                        text("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = :p)"),
-                        {"p": worker_pid},
-                    ).scalar()
-                if not still_present:
-                    break
-                time.sleep(0.05)
-            assert still_present is False, (
-                "forced cleanup must terminate the blocked worker's backend itself, not "
-                "merely stop waiting on its thread — otherwise its connection, transaction, "
-                "and advisory lock could all outlive the with block"
-            )
+            _assert_backend_eventually_gone(engine, worker_pid)
         finally:
             # Safety-net cleanup in finally, not sequential code: if any
             # assertion above ever fails, `first` (and the advisory lock it
             # holds) must still be released rather than leaking into later
             # tests. __exit__ should already have terminated the worker via
-            # its genuine, uncorrupted pid in this test — this is a backstop,
-            # not the primary proof point (the still_present assertion is).
+            # the real, primary signal path in this test — this is a
+            # backstop, not the primary proof point.
+            first.rollback()
+
+
+@pytest.mark.parametrize("mode", ["returns_false", "raises"])
+def test_background_statement_falls_back_to_driver_native_cancel_when_sql_signals_fail(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """Both `pg_terminate_backend` and `pg_cancel_backend` are made to fail
+    (as a false result, or by raising, per `mode`) via the `_send_signal`
+    seam — `backend_pid` itself is never touched, so this proves the
+    fallback chain rather than a caller breaking the tracking contract. The
+    real, unmocked driver-native `cancel_safe()` must then take over and
+    stop the genuinely blocked worker."""
+    engine = postgres_engine
+    lock_key = uuid.uuid4().int % (2**63 - 1)
+
+    with engine.connect() as first:
+        first.begin()
+        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+
+        blocked = _BackgroundStatement(engine, _lock_statement(lock_key))
+        monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal(mode))
+
+        worker_pid: int | None = None
+        try:
+            with pytest.raises(_SentinelFailure), blocked:
+                blocked.wait_until_blocked(first, "the worker (SQL signals mocked to fail)")
+                worker_pid = blocked.backend_pid
+                raise _SentinelFailure("deliberate failure with SQL signals disabled")
+
+            assert worker_pid is not None
+            _assert_backend_eventually_gone(engine, worker_pid)
+        finally:
+            first.rollback()
+
+
+def test_background_statement_falls_back_to_lock_timeout_backstop_when_every_active_mechanism_fails(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every *active* fallback — both SQL signals, and driver-native
+    `cancel_safe()` — is mocked to fail, proving the one entirely passive
+    layer still works: the `lock_timeout` PostgreSQL itself enforces on the
+    worker's own transaction, configured during `__enter__` before the
+    worker could block on anything. A short `lock_timeout` keeps this test
+    fast while still proving the mechanism deterministically, not by luck —
+    PostgreSQL guarantees the cancellation, not a race against it."""
+    engine = postgres_engine
+    lock_key = uuid.uuid4().int % (2**63 - 1)
+
+    with engine.connect() as first:
+        first.begin()
+        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+
+        blocked = _BackgroundStatement(engine, _lock_statement(lock_key), lock_timeout_seconds=2.0)
+        monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
+        monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
+
+        worker_pid: int | None = None
+        try:
+            with pytest.raises(_SentinelFailure), blocked:
+                blocked.wait_until_blocked(
+                    first, "the worker (every active mechanism mocked to fail)"
+                )
+                worker_pid = blocked.backend_pid
+                raise _SentinelFailure("deliberate failure with every active mechanism disabled")
+
+            assert worker_pid is not None
+            _assert_backend_eventually_gone(engine, worker_pid)
+        finally:
             first.rollback()
 
 
 def test_background_statement_reports_cleanup_failure_without_losing_the_original_exception(
-    postgres_engine: Engine,
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fault injection: once the worker has genuinely connected and blocked,
-    corrupt the recorded backend pid so __exit__'s termination/cancellation
-    attempts target a backend that does not exist and are guaranteed to
-    report failure — a real false result from Postgres, not a mock. The
-    with block's own synthetic failure must still be what propagates, with
-    the cleanup failure attached rather than discarded."""
+    """The one case `_force_stop` cannot rescue: every active mechanism
+    mocked to fail, and the worker is not waiting on a lock at all
+    (`pg_sleep`, not `pg_advisory_xact_lock`), so the `lock_timeout`
+    backstop every other regression test relies on has nothing to cancel.
+    Proves `__exit__` still reports the cleanup failure — via `add_note` —
+    rather than hanging or silently returning, and that the with block's
+    own sentinel failure remains the primary, reported cause."""
     engine = postgres_engine
-    lock_key = uuid.uuid4().int % (2**63 - 1)
-    real_pid: int | None = None
-    blocked: _BackgroundStatement | None = None
+    # Longer than _force_stop's own bounded backstop wait
+    # (lock_timeout_seconds + _SIGNAL_JOIN_SECONDS = 1.0 + 5.0 = 6.0s), so
+    # the worker is still genuinely running when _force_stop gives up and
+    # reports failure, but short enough to keep this test's own
+    # wait-for-natural-completion bounded afterward.
+    sleep_seconds = 9.0
+    blocked = _BackgroundStatement(
+        engine, _sleep_statement(sleep_seconds), lock_timeout_seconds=1.0
+    )
+    monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
+    monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with engine.connect() as first:
-        first.begin()
-        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+    with pytest.raises(_SentinelFailure) as excinfo, blocked:
+        # No wait_until_blocked here: pg_sleep never reports wait_event_type
+        # 'Lock' in pg_stat_activity, so there is nothing to poll for — the
+        # worker starts sleeping essentially immediately after __enter__
+        # returns (which itself only returns once the connection, its
+        # lock_timeout, and its backend pid are all established).
+        raise _SentinelFailure("deliberate failure while nothing can stop the worker early")
 
-        try:
-            with (
-                pytest.raises(_SentinelFailure) as excinfo,
-                _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
-            ):
-                blocked.wait_until_blocked(first, "the fault-injected worker")
-                real_pid = blocked.backend_pid[0]
-                # Corrupt the tracked pid only — the real backend below is
-                # untouched by this and is cleaned up directly, below, by
-                # this test itself.
-                blocked.backend_pid[0] = 2**31 - 1
-                raise _SentinelFailure("deliberate failure with a corrupted cleanup target")
+    assert isinstance(excinfo.value, _SentinelFailure), (
+        "the original sentinel failure must still be what propagates"
+    )
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert "cleanup" in notes.lower() and "fail" in notes.lower(), (
+        f"expected the cleanup failure to be reported on the propagated exception via "
+        f"add_note, got notes: {notes!r}"
+    )
 
-            assert isinstance(excinfo.value, _SentinelFailure), (
-                "the original sentinel failure must still be what propagates"
-            )
-            notes = "\n".join(getattr(excinfo.value, "__notes__", []))
-            assert "cleanup" in notes.lower() and "fail" in notes.lower(), (
-                f"expected the cleanup failure to be reported on the propagated exception "
-                f"via add_note, got notes: {notes!r}"
-            )
-        finally:
-            # Safety-net cleanup in finally, unconditionally: __exit__'s own
-            # signal-based termination could not reach the real worker (its
-            # tracked pid was deliberately corrupted above), so it is still
-            # genuinely blocked on `first`'s advisory lock. This must run
-            # regardless of whether the assertions above passed, or a
-            # failing assertion here would leave the real backend, its
-            # connection, and the lock it depends on outliving the test —
-            # redesigning "ownership" per PHASE5_REMAINING_ISSUES.md means
-            # exactly this: the caller that broke `_BackgroundStatement`'s
-            # pid-tracking contract owns deterministically unblocking and
-            # verifying the worker it corrupted, in `finally`, not in
-            # sequential code an earlier assertion can skip.
-            #
-            # Terminating the real backend before releasing `first`'s lock
-            # (rather than after) is deliberate: once the lock is released,
-            # the real (uncorrupted) worker is free to resume and finish on
-            # its own — racing this termination against that natural
-            # resolution risks killing a connection exactly as it is
-            # finishing its own normal close(), which can leave a corrupted
-            # connection looking healthy to the pool.
-            if real_pid is not None and blocked is not None:
-                with contextlib.suppress(Exception), engine.connect() as canceller:
-                    canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
-                    canceller.commit()
-                blocked._thread.join(timeout=5.0)
-                assert not blocked._thread.is_alive(), (
-                    "the real (uncorrupted) worker backend must not survive test teardown"
-                )
-            first.rollback()
+    # The worker is still genuinely sleeping at this point — only
+    # _force_stop's own bounded backstop elapsed above, not the full
+    # pg_sleep duration. This is the one scenario in the whole suite where
+    # nothing inside _BackgroundStatement itself can end the worker early;
+    # wait for it to finish naturally and confirm no thread survives test
+    # teardown.
+    assert blocked._thread is not None
+    blocked._thread.join(timeout=sleep_seconds)
+    assert not blocked._thread.is_alive(), (
+        "the worker must finish on its own once pg_sleep's fixed duration elapses, even "
+        "though nothing could stop it early"
+    )
 
 
 def test_background_statement_cleanup_failure_fails_the_test_when_no_original_exception(
-    postgres_engine: Engine,
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Same fault injection as above, but the with block exits normally —
-    no exception of its own — while the worker is still genuinely blocked
-    and its cleanup target has been corrupted. __exit__ itself must raise,
-    since there is no already-propagating exception for it to attach the
-    cleanup failure to."""
+    no exception of its own — while nothing can stop the worker early.
+    `__exit__` itself must raise, since there is no already-propagating
+    exception for it to attach the cleanup failure to."""
     engine = postgres_engine
-    lock_key = uuid.uuid4().int % (2**63 - 1)
-    real_pid: int | None = None
-    blocked: _BackgroundStatement | None = None
+    sleep_seconds = 9.0
+    blocked = _BackgroundStatement(
+        engine, _sleep_statement(sleep_seconds), lock_timeout_seconds=1.0
+    )
+    monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("returns_false"))
+    monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with engine.connect() as first:
-        first.begin()
-        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+    with pytest.raises(RuntimeError, match="could not verify"), blocked:
+        pass  # No exception here: __exit__ not raising is the only way this test can fail.
 
-        try:
-            with (
-                pytest.raises(RuntimeError, match="could not verify"),
-                _BackgroundStatement(engine, _lock_statement(lock_key)) as blocked,
-            ):
-                blocked.wait_until_blocked(first, "the fault-injected worker")
-                real_pid = blocked.backend_pid[0]
-                blocked.backend_pid[0] = 2**31 - 1
-                # No exception here: the block exits normally while the
-                # worker is still blocked, so cleanup failing is the only
-                # thing that can fail this test.
-        finally:
-            # Safety-net cleanup in finally, unconditionally — see the
-            # identical rationale in
-            # test_background_statement_reports_cleanup_failure_without_losing_the_original_exception.
-            # Here it also guards against pytest.raises itself failing (if
-            # __exit__ ever stopped raising as expected), which would
-            # otherwise propagate past this point with no cleanup at all.
-            if real_pid is not None and blocked is not None:
-                with contextlib.suppress(Exception), engine.connect() as canceller:
-                    canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": real_pid})
-                    canceller.commit()
-                blocked._thread.join(timeout=5.0)
-                assert not blocked._thread.is_alive(), (
-                    "the real (uncorrupted) worker backend must not survive test teardown"
-                )
-            first.rollback()
+    assert blocked._thread is not None
+    blocked._thread.join(timeout=sleep_seconds)
+    assert not blocked._thread.is_alive(), (
+        "the worker must finish on its own once pg_sleep's fixed duration elapses"
+    )
 
 
-def test_background_statement_enter_reports_failure_and_leaves_no_thread_when_connection_fails(
+def test_background_statement_enter_fails_predictably_when_startup_is_slow_and_never_starts_a_worker(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PHASE5_REMAINING_ISSUES.md's ninth review: proves the slow/stalled
+    startup branch the review found, deterministically — not by depending on
+    real network timing/topology (flaky across environments), but by
+    mocking `_establish_connection` to genuinely take measurable wall-clock
+    time before failing. Because ownership (connection, `lock_timeout`,
+    backend pid) is now established synchronously before any worker thread
+    is created, `__enter__` raising here can never leave a thread behind —
+    there is no thread object to check, since none was ever constructed."""
+    attempt = _BackgroundStatement(postgres_engine, _lock_statement(1))
+
+    def slow_failing_establish() -> tuple[Engine, Connection, int]:
+        time.sleep(0.5)
+        raise _InjectedFailure("simulated slow, then failed, connection attempt")
+
+    monkeypatch.setattr(attempt, "_establish_connection", slow_failing_establish)
+
+    start = time.monotonic()
+    with pytest.raises(_InjectedFailure, match="simulated slow"):
+        attempt.__enter__()
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= 0.5, "the simulated startup delay must have genuinely elapsed"
+    assert elapsed < 5.0, "startup failure must be reported within a bounded interval"
+    assert attempt._thread is None, (
+        "no worker thread may be created before ownership is established"
+    )
+
+
+def test_background_statement_enter_fails_with_no_thread_when_a_real_connection_is_refused(
     postgres_engine: Engine,
 ) -> None:
-    """PHASE5_REMAINING_ISSUES.md's seventh review: connection acquisition
-    must not be able to outlive `__enter__`. Points the worker at a
-    definitively refused local port (not a genuinely stalled one — that
-    would depend on network topology the test process doesn't control, and
-    risk flakiness rather than proving anything) so `worker_engine.connect()`
-    inside `_run()` raises for real, on a real connection attempt, not a
-    mock. This exercises the same failure path a driver-level
-    `connect_timeout` firing would take — `_run()` catches the failure into
-    `self.outcome`, and `__enter__` must surface it as a `RuntimeError`
-    without ever returning control to the caller, leaving no thread behind."""
+    """Complements the mocked slow-startup test above with a real (not
+    mocked) connection failure — a local port nothing listens on, not a
+    genuinely stalled one, which would depend on network topology the test
+    process doesn't control. Proves the real `_establish_connection` path
+    still leaves `__enter__` raising with no thread and no connection ever
+    recorded, whatever the exact underlying driver error looks like on the
+    platform running the test."""
     unreachable_engine = create_engine(postgres_engine.url.set(host="127.0.0.1", port=1))
     attempt = _BackgroundStatement(unreachable_engine, _lock_statement(1))
 
-    with pytest.raises(RuntimeError, match="failed to establish a connection"):
+    with pytest.raises(Exception):  # noqa: B017 - the exact driver error varies by platform
         attempt.__enter__()
 
-    assert not attempt._thread.is_alive(), (
-        "a failed __enter__ must never leave its worker thread running"
+    assert attempt._thread is None, (
+        "no worker thread may be created before ownership is established"
     )
-    assert attempt.outcome and attempt.outcome[0][0] == "failed", (
-        "the worker's own connection failure must be recorded as the outcome"
-    )
+    assert attempt._connection is None, "no connection may be recorded when startup failed"
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
