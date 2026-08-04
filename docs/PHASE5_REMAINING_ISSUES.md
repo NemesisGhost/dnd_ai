@@ -1,15 +1,14 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-03).** All five items below are implemented, tested, and
-> verified — see
-> [PHASE5_VERIFICATION.md § Third exit review corrections](PHASE5_VERIFICATION.md#third-exit-review-corrections-2026-08-03)
-> for the resolving revisions (`052`–`055`) and evidence: the revision-052
-> splice point exercised in both directions, a fresh from-`base` migration
-> run against an empty database, `alembic check`, `ruff format`/`ruff check`/
-> `mypy src`, and the full suite (1,080 tests, up from 1,066), all against the
-> deployed AWS `dev` instance, plus a push-triggered GitHub Actions AWS
-> workflow. Phase 5 is complete; this register is now a closed historical
-> record.
+> **REOPENED (2026-08-03).** Revisions 052–055 resolved the five findings in
+> the original register below, and GitHub Actions run
+> [`30835071145`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30835071145)
+> passed migrations, schema checks, cleanup, and all 1,080 tests. A fourth
+> review of merged PR #6 found one opposing write path that revision 053 does
+> not serialize: inserting a `world.dungeon_areas` subtype row while another
+> transaction changes the same child location's `parent_location_id`. Phase 5
+> remains in closeout until the current item and its concurrency-proof
+> requirements below are complete.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -17,7 +16,108 @@
 > blockers and two smaller correctness/documentation gaps that the green
 > verification suite did not exercise.
 
-## Review baseline and scope
+## Current review baseline and scope
+
+The fourth review examined `main` at merge commit `7ae606c`, with implementation
+commit `ea75f65` and Alembic head `055_conditional_route_whitespace`. PR #6 is
+merged. Its push-triggered AWS workflow, run
+[`30835071145`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30835071145),
+passed both jobs, including migration from `base`, full downgrade/upgrade,
+seed idempotency, schema comparison, cleanup, and 1,080 tests (13 unit, 1,066
+database, and 1 scenario). Local formatting, Ruff, mypy, and all 13 unit tests
+also passed during the review.
+
+That evidence remains valid for the behavior it covers. It does not exercise
+the race or waiting-statement behavior below.
+
+## Current schema blocker
+
+### 1. Serialize dungeon-area creation with child-location parent changes
+
+Revision 053 coordinates generic subtype insertion with parent entity-type
+changes and coordinates dungeon-area writes with retyping the proposed parent
+dungeon. It does not coordinate the two sides of the child-location
+relationship itself:
+
+- `world.enforce_dungeon_area_parent_dungeon()` reads the child location's
+  `parent_location_id`, then locks the proposed parent dungeon; it never locks
+  the child location before that read.
+- `world.enforce_dungeon_area_parent_dungeon_on_update()` first checks whether
+  the child has a `world.dungeon_areas` row. If the opposing transaction's
+  subtype insert is uncommitted, the check returns false and the function exits
+  without acquiring a lock shared with that insert.
+
+Consequently, one transaction can insert `world.dungeon_areas` for location L
+after validating its old dungeon parent while another transaction changes L's
+`parent_location_id` to a non-dungeon or `NULL`. Each transaction can miss the
+other's uncommitted write, and both can commit an invalid final state. The race
+exists with either transaction starting first.
+
+Acceptance criteria:
+
+- Add a forward-only Alembic revision after 055. Do not edit revisions
+  038–055.
+- Introduce one documented advisory-lock protocol keyed by the child location
+  for both `world.dungeon_areas` INSERT/UPDATE and every
+  `world.locations.parent_location_id` mutation that can create or invalidate
+  the relationship.
+- Acquire the child-location lock before reading either the subtype row or the
+  child's parent. Re-read the protected state after the lock is acquired.
+- Preserve revision 053's proposed-parent/type-change serialization. If a path
+  needs both child and parent locks, document and enforce a deterministic
+  acquisition order so the fix does not introduce a deadlock cycle.
+- Reject clearing a dungeon area's parent or moving it beneath a non-dungeon;
+  continue permitting a valid reparent to another dungeon and ordinary
+  reparenting of locations that are not dungeon areas.
+- Confirm the same child-side gap does not affect another Phase 5 subtype or
+  structural relationship. Record the review result even if no additional
+  function requires changes.
+
+## Current verification obligations
+
+The revision-053 concurrency tests prove that a second statement encounters a
+lock by intentionally causing `lock_timeout`, rolling that transaction back,
+and performing a new sequential retry. This is useful lock-attachment evidence,
+but it does not prove that the original waiting statement resumes after the
+blocker commits, takes a fresh READ COMMITTED snapshot, and revalidates the
+invariant.
+
+Acceptance criteria:
+
+- Add genuine two-connection tests for dungeon-area insertion versus changing
+  the same child location's parent, covering both operation orderings.
+- Keep the original second statement alive while the first transaction commits
+  or rolls back. Prove the waiter resumes and either succeeds or is rejected
+  from the newly committed state; do not substitute a timed-out transaction
+  followed by a third-connection retry.
+- Extend the three existing revision-053 concurrency tests to the same standard,
+  because the original remaining-issues acceptance criterion required the
+  waiting statement itself to resume and revalidate.
+- Use bounded synchronization (for example, futures/events plus a watchdog
+  timeout) and guaranteed teardown so a failure cannot hang CI, leak
+  transactions, or leave the ephemeral database dirty.
+- Assert the final committed graph and type/subtype state after each ordering;
+  at most one incompatible operation may succeed, and no invalid state may
+  remain.
+
+## Current completion gate
+
+Close Phase 5 only after the blocker and verification obligations above are
+implemented and `PHASE5_VERIFICATION.md` records:
+
+- the new forward-only revision and exact child-location/parent lock protocol;
+- two-ordering coverage for dungeon-area creation versus parent mutation;
+- resumed-waiter coverage for all affected revision-053 concurrency cases;
+- formatting, Ruff, mypy, the full unit/database/scenario suite, migration
+  upgrade and downgrade/upgrade checks, seed idempotency, and `alembic check`;
+- a fresh push-triggered GitHub Actions AWS workflow, including cleanup; and
+- repository-wide status reconciliation that closes this register and unblocks
+  Phase 6 feature/schema work, assuming its separate context-modularization gate
+  is also complete.
+
+## Previously resolved register (historical)
+
+### Prior review baseline and scope
 
 The review examined merge commit `bcc22ee`, whose Phase 5 implementation head
 was `f017e67` and whose Alembic head is `051_conditional_route_semantics`.
@@ -32,9 +132,12 @@ database, and 1 scenario), database cleanup, and ingress revocation.
 That evidence remains valid for the cases it covers. The items below concern
 final-schema behavior and upgrade paths that those tests do not model.
 
-## Schema blockers
+### Prior schema blockers
 
-### 1. Serialize entity-type changes with subtype and dungeon-area writes
+> Resolved by revisions 052–055, subject to the narrower revision-053 gap in
+> the current blocker above.
+
+#### 1. Serialize entity-type changes with subtype and dungeon-area writes
 
 Revision 048 added parent-side checks to reject an entity-type change that
 would strand an existing subtype row or dungeon-area children. The checks read
@@ -72,7 +175,7 @@ Acceptance criteria:
 - Use bounded synchronization and cleanup so a failed concurrency assertion
   cannot hang CI or leak data.
 
-### 2. Make containment-cycle validation complete and corruption-safe
+#### 2. Make containment-cycle validation complete and corruption-safe
 
 Revision 049 correctly serializes containment changes per world, closing the
 reported two-writer race. Its recursive CTE stops when `depth` reaches 10,000,
@@ -109,7 +212,7 @@ Acceptance criteria:
   `DATABASE_MODEL.md`, and `PHASE5_VERIFICATION.md` to describe the final
   behavior exactly.
 
-### 3. Repair the populated revision-042/043 upgrade path
+#### 3. Repair the populated revision-042/043 upgrade path
 
 Revision 043 adds nullable `location_period` but does not derive it for rows
 already present in `campaign.character_location_history`. Revision 050 counts
@@ -144,9 +247,9 @@ Acceptance criteria:
 - Correct every claim that revision 050 already performs a backfill; it currently
   performs only a NULL assertion.
 
-## Correctness and documentation gaps
+### Prior correctness and documentation gaps
 
-### 4. Treat all whitespace-only conditional descriptions as blank
+#### 4. Treat all whitespace-only conditional descriptions as blank
 
 `ck_area_connections_conditional_description_paired` uses
 `trim(both ' ' from condition_description)`. PostgreSQL therefore removes
@@ -156,8 +259,11 @@ returns still satisfies the claimed nonblank rule.
 Acceptance criteria:
 
 - Add a forward-only migration that defines “blank” using the project's chosen
-  complete whitespace rule, and mirror the final constraint in SQLAlchemy
-  metadata.
+  complete whitespace rule. Do not mirror the CHECK in SQLAlchemy metadata:
+  `src/dnd_ai/persistence/tables.py` intentionally excludes all CHECK
+  constraints, triggers, and default privileges from the metadata model. Record
+  that project-wide exception explicitly and cover the live constraint through
+  migration/integration tests.
 - Reject space-only, tab-only, newline-only, carriage-return-only, and mixed
   whitespace descriptions on INSERT and UPDATE.
 - Retain positive tests for ordinary descriptive text and the rule that an
@@ -165,7 +271,7 @@ Acceptance criteria:
 - Update schema comments and verification documentation so “nonblank” means the
   behavior the database actually enforces.
 
-### 5. Keep Phase 5 counts and status language exact
+#### 5. Keep Phase 5 counts and status language exact
 
 `PHASE5_VERIFICATION.md` previously said “Nine revisions” while listing the 14
 revisions from 038 through 051. The merged documentation also described Phase 5
@@ -182,7 +288,7 @@ Acceptance criteria:
   `PHASE5_VERIFICATION.md` with the corrective revision(s), tests, exact totals,
   and CI evidence, and advance all current-phase statements together.
 
-## Completion gate
+### Prior five-item completion gate (satisfied by revisions 052–055)
 
 Close Phase 5 only after all five items meet their acceptance criteria and
 `PHASE5_VERIFICATION.md` records:
