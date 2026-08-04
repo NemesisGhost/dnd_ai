@@ -211,7 +211,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 4 are done.** Phase 5's implementation and three corrections passes are merged and verified against live AWS and GitHub Actions, but a fourth review found one unresolved dungeon-area concurrency race; see [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md) and the reopened [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is a closed historical record. Phase 6 feature/schema work remains queued until the Phase 5 closeout and the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) both close; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 4 are done.** Phase 5's implementation and three corrections passes are merged and verified against live AWS and GitHub Actions, but Phase 5 does not yet meet its full correctness requirements: one dungeon-area concurrency race and genuine resumed-waiter verification remain open. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is a closed historical record. Phase 6 feature/schema work remains queued until the Phase 5 closeout and the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) both close; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

@@ -1,6 +1,6 @@
 # Phase 5 Verification Checklist
 
-Records the verification performed for Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Phase 5 also pulled a minimal slice of the knowledge domain forward from Phase 7 to satisfy its own exit criteria — see "Preceded by a scope decision" below and [DATABASE_MODEL.md §26](architecture/DATABASE_MODEL.md#26-reconciliation-notes-phase-5) for the full account. This document covers the original build (revisions 038–042) and three corrections passes: two pre-merge (043–047 and 048–051) and one post-merge (052–055). The post-merge pass resolved the original five-item register, but a fourth review found one opposing dungeon-area write path still lacks shared locking; [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is reopened and supersedes any closure claim below.
+Records the verification performed for Phase 5 (Locations and dungeon play) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Phase 5 also pulled a minimal slice of the knowledge domain forward from Phase 7 to satisfy its own exit criteria — see "Preceded by a scope decision" below and [DATABASE_MODEL.md §26](architecture/DATABASE_MODEL.md#26-reconciliation-notes-phase-5) for the full account. This document covers the original build (revisions 038–042) and three corrections passes: two pre-merge (043–047 and 048–051) and one post-merge (052–055). The post-merge pass resolved the original five-item register, but a fourth review found one opposing dungeon-area write path still lacks shared locking and the existing concurrency tests do not prove that their original waiting statements resume and revalidate. [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is open and supersedes any closure claim below; Phase 5 does not yet meet its full correctness requirements.
 
 ## Exit Criteria
 
@@ -168,7 +168,10 @@ resumes on a fresh snapshot.
 [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) defines the required
 forward-only migration, both transaction orderings, resumed-waiter tests, and
 final completion evidence. Phase 5 is not closed until that register is
-satisfied.
+satisfied. A later confirmation against the pre-documentation-update `main`
+baseline at `d483f9e` found no new migration after
+`055_conditional_route_whitespace`, so the fourth-review result still describes
+the executable schema and remains the authoritative closeout status.
 
 ## Deliberate Scoping Decisions
 
