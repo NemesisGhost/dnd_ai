@@ -9,9 +9,11 @@ driven by core.entity_types metadata, and a dungeon-specific one for the
 trigger alone cannot see.
 """
 
+import contextlib
 import threading
 import time
 import uuid
+from collections.abc import Callable
 
 import pytest
 from sqlalchemy import Connection, Engine, text
@@ -202,13 +204,18 @@ def test_a_character_npc_cannot_be_retyped_to_bare_character(db_connection: Conn
 # retrying in a fresh third connection — useful lock-attachment evidence, but
 # not proof that the *original* waiting statement itself ever resumes and
 # revalidates against the newly committed state. A post-merge review
-# (PHASE5_REMAINING_ISSUES.md) required the stronger standard: keep the
-# second statement genuinely alive on its own thread while the first
-# transaction commits, confirm via pg_stat_activity that it was truly
-# waiting on a lock (not merely slow), then join the thread and assert on
-# its actual outcome. This reuses the pattern already established in
-# test_phase4_remaining_issues.py::_assert_blocked_delete_resumes_and_is_rejected
-# for a FOR SHARE row lock, generalized here to pg_advisory_xact_lock.
+# (PHASE5_REMAINING_ISSUES.md) required the stronger standard, which every
+# test below now meets: keep the second statement genuinely alive on its own
+# thread while the first transaction commits, confirm via pg_stat_activity
+# that it was truly waiting on a lock (not merely slow), join the thread and
+# assert on its actual resumed outcome, and then — on a third, independent
+# connection — query the committed database state directly to prove no
+# invalid combination survived, regardless of which side won. This reuses
+# the pattern already established in
+# test_world_ruleset_dependency_and_concurrency.py::_assert_blocked_delete_resumes_and_is_rejected
+# (redistributed there from the former test_phase4_remaining_issues.py
+# monolith — see DEVELOPMENT.md §2.1) for a FOR SHARE row lock, generalized
+# here to pg_advisory_xact_lock.
 
 
 def _cleanup_world(engine: Engine, slug: str) -> None:
@@ -224,60 +231,94 @@ def _cleanup_world(engine: Engine, slug: str) -> None:
         cleanup.execute(text("DELETE FROM core.worlds WHERE slug = :s"), params)
 
 
-def _run_blocked_statement(
-    engine: Engine, statement: object
-) -> tuple[threading.Thread, list[tuple[str, Exception | None]], list[int]]:
-    """Starts `statement(connection)` on its own connection in a background
-    thread, inside an explicit transaction that is committed on success or
-    rolled back on failure. Returns the thread (not yet joined), a list that
-    will hold exactly one (outcome, exception) pair once the thread finishes,
-    and a list that will hold the connection's backend pid as soon as it is
-    known (before the statement is even issued, so callers can poll
-    pg_stat_activity for it)."""
-    outcome: list[tuple[str, Exception | None]] = []
-    backend_pid: list[int] = []
+class _BackgroundStatement:
+    """Runs `statement(connection)` on its own connection in a background
+    thread, inside an explicit transaction committed on success or rolled
+    back on failure.
 
-    def run() -> None:
-        with engine.connect() as second:
-            second.begin()
-            backend_pid.append(second.execute(text("SELECT pg_backend_pid()")).scalar())
-            try:
-                statement(second)  # type: ignore[operator]
-            except Exception as exc:  # noqa: BLE001 - reported to the main thread, not swallowed
-                second.rollback()
-                outcome.append(("failed", exc))
-            else:
-                second.commit()
-                outcome.append(("committed", None))
+    Used as a context manager. `__exit__` guarantees the thread and its
+    backend connection cannot outlive the `with` block, even if the block's
+    body raises — an assertion failure, a wait timeout, or anything else: if
+    the thread is still running when the block exits, its backend is
+    force-terminated via `pg_terminate_backend()` so any lock or open
+    transaction it holds is released, and only then is the thread joined
+    (now bounded, since the backend can no longer block indefinitely).
+    Cleanup failures are swallowed rather than raised, so a broken lock
+    protocol can never hang the test run, leak an advisory lock into a later
+    test, or mask the real assertion failure that triggered cleanup.
+    """
 
-    thread = threading.Thread(target=run)
-    thread.start()
-    return thread, outcome, backend_pid
+    def __init__(self, engine: Engine, statement: Callable[[Connection], None]) -> None:
+        self._engine = engine
+        self._statement = statement
+        self.outcome: list[tuple[str, Exception | None]] = []
+        self.backend_pid: list[int] = []
+        self._thread = threading.Thread(target=self._run)
 
+    def _run(self) -> None:
+        try:
+            with self._engine.connect() as second:
+                second.begin()
+                self.backend_pid.append(second.execute(text("SELECT pg_backend_pid()")).scalar())
+                try:
+                    self._statement(second)
+                except Exception as exc:  # noqa: BLE001 - reported to the main thread, not swallowed
+                    # Backend may already be force-terminated by __exit__'s cleanup.
+                    with contextlib.suppress(Exception):
+                        second.rollback()
+                    self.outcome.append(("failed", exc))
+                else:
+                    second.commit()
+                    self.outcome.append(("committed", None))
+        except Exception as exc:  # noqa: BLE001 - e.g. the connection itself was force-terminated
+            self.outcome.append(("failed", exc))
 
-def _wait_until_genuinely_waiting_on_a_lock(
-    poll_connection: Connection, backend_pid: list[int], label: str
-) -> None:
-    """Blocks the caller until the background thread's connection both
-    exists and pg_stat_activity reports it waiting on a lock — proof it is
-    truly blocked behind the advisory lock, not merely running slowly."""
-    deadline = time.monotonic() + 5.0
-    while not backend_pid and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert backend_pid, f"{label} thread never reported its backend pid"
-    pid = backend_pid[0]
+    def __enter__(self) -> "_BackgroundStatement":
+        self._thread.start()
+        return self
 
-    waiting = False
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        wait_event_type = poll_connection.execute(
-            text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :p"), {"p": pid}
-        ).scalar()
-        if wait_event_type == "Lock":
-            waiting = True
-            break
-        time.sleep(0.05)
-    assert waiting, f"expected {label} to be genuinely waiting on a lock"
+    def wait_until_blocked(self, poll_connection: Connection, label: str) -> None:
+        """Blocks the caller until this statement's connection both exists
+        and pg_stat_activity reports it waiting on a lock — proof it is
+        truly blocked behind the advisory lock, not merely running slowly."""
+        deadline = time.monotonic() + 5.0
+        while not self.backend_pid and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert self.backend_pid, f"{label} thread never reported its backend pid"
+        pid = self.backend_pid[0]
+
+        waiting = False
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            wait_event_type = poll_connection.execute(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :p"), {"p": pid}
+            ).scalar()
+            if wait_event_type == "Lock":
+                waiting = True
+                break
+            time.sleep(0.05)
+        assert waiting, f"expected {label} to be genuinely waiting on a lock"
+
+    def resume_and_get_outcome(self, label: str) -> tuple[str, Exception | None]:
+        """Joins the thread (bounded) after the blocker has committed and
+        asserts the original waiting statement actually resumed — not a
+        substitute retry — then returns its real outcome."""
+        self._thread.join(timeout=10.0)
+        assert not self._thread.is_alive(), (
+            f"{label} did not resume within 10s of the blocking transaction's commit"
+        )
+        assert self.outcome, f"{label} thread reported no outcome"
+        return self.outcome[0]
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._thread.is_alive():
+            pid = self.backend_pid[0] if self.backend_pid else None
+            if pid is not None:
+                # Best-effort; must never raise and mask the real failure.
+                with contextlib.suppress(Exception), self._engine.connect() as canceller:
+                    canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": pid})
+                    canceller.commit()
+            self._thread.join(timeout=10.0)
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
@@ -290,7 +331,8 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
     core.enforce_entity_type_change() must serialize on the same entity,
     not just the dungeon-specific pair — and the retype, left genuinely
     waiting rather than timed out, must resume and be rejected once the
-    insert commits."""
+    insert commits, leaving the entity's type and its subtype row in
+    agreement."""
     engine = postgres_engine
     slug = f"subtype-lock-generic-{uuid.uuid4().hex[:8]}"
     try:
@@ -298,6 +340,12 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
             world = make_world(setup, slug=slug)
             dungeon = make_location(setup, world, entity_type_code="dungeon")
             region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
+
+        def retype(conn: Connection) -> None:
+            conn.execute(
+                text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                {"t": region_type, "e": dungeon},
+            )
 
         with engine.connect() as first:
             first.begin()
@@ -307,28 +355,34 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
                 text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon}
             )
 
-            def retype(conn: Connection) -> None:
-                conn.execute(
-                    text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
-                    {"t": region_type, "e": dungeon},
-                )
+            with _BackgroundStatement(engine, retype) as blocked:
+                blocked.wait_until_blocked(first, "the concurrent retype away from 'dungeon'")
+                first.commit()
+                result, exc = blocked.resume_and_get_outcome("the concurrent retype")
 
-            thread, outcome, backend_pid = _run_blocked_statement(engine, retype)
-            _wait_until_genuinely_waiting_on_a_lock(
-                first, backend_pid, "the concurrent retype away from 'dungeon'"
-            )
-
-            first.commit()
-
-            thread.join(timeout=10.0)
-            assert not thread.is_alive(), (
-                "the blocked retype did not resume within 10s of the insert's commit"
-            )
-
-        assert outcome, "blocked retype thread reported no outcome"
-        result, exc = outcome[0]
         assert result == "failed", f"expected the resumed retype to be rejected, got: {result}"
         assert "cannot change type" in str(exc)
+
+        with engine.connect() as verify:
+            entity_type = verify.execute(
+                text(
+                    "SELECT et.code FROM core.entities e "
+                    "JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id "
+                    "WHERE e.entity_id = :e"
+                ),
+                {"e": dungeon},
+            ).scalar()
+            has_dungeons_row = verify.execute(
+                text("SELECT EXISTS (SELECT 1 FROM world.dungeons WHERE dungeon_id = :d)"),
+                {"d": dungeon},
+            ).scalar()
+        assert entity_type == "dungeon", (
+            "the committed subtype insert must have kept the entity dungeon-typed"
+        )
+        assert has_dungeons_row is True, (
+            "the committed world.dungeons subtype row must remain — no subtype row may end up "
+            "incompatible with core.entities.entity_type"
+        )
     finally:
         _cleanup_world(engine, slug)
 
@@ -344,7 +398,8 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
     world.enforce_dungeon_type_change_preserves_areas() (checking "do I have
     dungeon-area children") must serialize on the dungeon's own entity_id,
     and the insert, left genuinely waiting, must resume and be rejected once
-    the retype commits."""
+    the retype commits — leaving no dungeon-area row dependent on an entity
+    no longer registered as a dungeon."""
     engine = postgres_engine
     slug = f"subtype-lock-area-insert-{uuid.uuid4().hex[:8]}"
     try:
@@ -359,6 +414,12 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
             )
             region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
 
+        def insert_area(conn: Connection) -> None:
+            conn.execute(
+                text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
+                {"a": area},
+            )
+
         with engine.connect() as first:
             first.begin()
 
@@ -370,28 +431,39 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
                 {"t": region_type, "e": dungeon},
             )
 
-            def insert_area(conn: Connection) -> None:
-                conn.execute(
-                    text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
-                    {"a": area},
-                )
+            with _BackgroundStatement(engine, insert_area) as blocked:
+                blocked.wait_until_blocked(first, "the concurrent dungeon_area insert")
+                first.commit()
+                result, exc = blocked.resume_and_get_outcome("the concurrent dungeon_area insert")
 
-            thread, outcome, backend_pid = _run_blocked_statement(engine, insert_area)
-            _wait_until_genuinely_waiting_on_a_lock(
-                first, backend_pid, "the concurrent dungeon_area insert"
-            )
-
-            first.commit()
-
-            thread.join(timeout=10.0)
-            assert not thread.is_alive(), (
-                "the blocked insert did not resume within 10s of the retype's commit"
-            )
-
-        assert outcome, "blocked insert thread reported no outcome"
-        result, exc = outcome[0]
         assert result == "failed", f"expected the resumed insert to be rejected, got: {result}"
         assert "not dungeon" in str(exc)
+
+        with engine.connect() as verify:
+            entity_type = verify.execute(
+                text(
+                    "SELECT et.code FROM core.entities e "
+                    "JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id "
+                    "WHERE e.entity_id = :e"
+                ),
+                {"e": dungeon},
+            ).scalar()
+            has_dungeons_row = verify.execute(
+                text("SELECT EXISTS (SELECT 1 FROM world.dungeons WHERE dungeon_id = :d)"),
+                {"d": dungeon},
+            ).scalar()
+            has_area_row = verify.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM world.dungeon_areas WHERE dungeon_area_id = :a)"
+                ),
+                {"a": area},
+            ).scalar()
+        assert entity_type == "region", "the committed retype must have taken effect"
+        assert has_dungeons_row is False, "the committed marker removal must have taken effect"
+        assert has_area_row is False, (
+            "the rejected dungeon_area insert must not have taken effect — no dungeon-area row "
+            "may remain dependent on an entity no longer registered as a dungeon"
+        )
     finally:
         _cleanup_world(engine, slug)
 
@@ -404,7 +476,8 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
     of "does this dungeon still have area children," contended from
     opposite directions, must serialize rather than each reading a stale
     snapshot of the other, and the retype, left genuinely waiting, must
-    resume and be rejected once the reparent commits."""
+    resume and be rejected once the reparent commits, leaving the area
+    parented under a location that is still genuinely dungeon-typed."""
     engine = postgres_engine
     slug = f"subtype-lock-reparent-{uuid.uuid4().hex[:8]}"
     try:
@@ -414,6 +487,12 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
             new_dungeon = make_dungeon(setup, world, name="New Dungeon")
             area = make_dungeon_area(setup, old_dungeon)
             region_type = lookup_id(setup, "core", "entity_types", "entity_type_id", "region")
+
+        def retype(conn: Connection) -> None:
+            conn.execute(
+                text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
+                {"t": region_type, "e": new_dungeon},
+            )
 
         with engine.connect() as first:
             first.begin()
@@ -425,28 +504,32 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
                 {"d": new_dungeon, "a": area},
             )
 
-            def retype(conn: Connection) -> None:
-                conn.execute(
-                    text("UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e"),
-                    {"t": region_type, "e": new_dungeon},
-                )
+            with _BackgroundStatement(engine, retype) as blocked:
+                blocked.wait_until_blocked(first, "the concurrent retype away from 'dungeon'")
+                first.commit()
+                result, exc = blocked.resume_and_get_outcome("the concurrent retype")
 
-            thread, outcome, backend_pid = _run_blocked_statement(engine, retype)
-            _wait_until_genuinely_waiting_on_a_lock(
-                first, backend_pid, "the concurrent retype away from 'dungeon'"
-            )
-
-            first.commit()
-
-            thread.join(timeout=10.0)
-            assert not thread.is_alive(), (
-                "the blocked retype did not resume within 10s of the reparent's commit"
-            )
-
-        assert outcome, "blocked retype thread reported no outcome"
-        result, exc = outcome[0]
         assert result == "failed", f"expected the resumed retype to be rejected, got: {result}"
         assert "still has" in str(exc) and "dungeon area" in str(exc)
+
+        with engine.connect() as verify:
+            new_dungeon_type = verify.execute(
+                text(
+                    "SELECT et.code FROM core.entities e "
+                    "JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id "
+                    "WHERE e.entity_id = :e"
+                ),
+                {"e": new_dungeon},
+            ).scalar()
+            area_parent = verify.execute(
+                text("SELECT parent_location_id FROM world.locations WHERE location_id = :a"),
+                {"a": area},
+            ).scalar()
+        assert new_dungeon_type == "dungeon", "the rejected retype must not have taken effect"
+        assert area_parent == new_dungeon, (
+            "the committed reparent must have taken effect, and the area's parent must still be "
+            "genuinely dungeon-typed"
+        )
     finally:
         _cleanup_world(engine, slug)
 
@@ -469,7 +552,8 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
     """Insert starts first: transaction 1 inserts the dungeon_area row for L
     (validating L's current parent while transaction 2 waits), then commits.
     Transaction 2's clear must resume and be rejected — L is now a
-    committed dungeon area and its parent may not be cleared."""
+    committed dungeon area and its parent may not be cleared, so it must
+    never end up without a valid dungeon parent."""
     engine = postgres_engine
     slug = f"child-lock-insert-first-{uuid.uuid4().hex[:8]}"
     try:
@@ -478,6 +562,12 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
             dungeon = make_dungeon(setup, world)
             area = make_location(
                 setup, world, parent_location_id=dungeon, entity_type_code="dungeon_area"
+            )
+
+        def clear_parent(conn: Connection) -> None:
+            conn.execute(
+                text("UPDATE world.locations SET parent_location_id = NULL WHERE location_id = :a"),
+                {"a": area},
             )
 
         with engine.connect() as first:
@@ -489,32 +579,32 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
                 text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"), {"a": area}
             )
 
-            def clear_parent(conn: Connection) -> None:
-                conn.execute(
-                    text(
-                        "UPDATE world.locations SET parent_location_id = NULL "
-                        "WHERE location_id = :a"
-                    ),
-                    {"a": area},
+            with _BackgroundStatement(engine, clear_parent) as blocked:
+                blocked.wait_until_blocked(first, "the concurrent parent-clearing update")
+                first.commit()
+                result, exc = blocked.resume_and_get_outcome(
+                    "the concurrent parent-clearing update"
                 )
 
-            thread, outcome, backend_pid = _run_blocked_statement(engine, clear_parent)
-            _wait_until_genuinely_waiting_on_a_lock(
-                first, backend_pid, "the concurrent parent-clearing update"
-            )
-
-            first.commit()
-
-            thread.join(timeout=10.0)
-            assert not thread.is_alive(), (
-                "the blocked parent-clearing update did not resume within 10s of the insert's "
-                "commit"
-            )
-
-        assert outcome, "blocked parent-clearing update thread reported no outcome"
-        result, exc = outcome[0]
         assert result == "failed", f"expected the resumed update to be rejected, got: {result}"
         assert "cannot be cleared" in str(exc)
+
+        with engine.connect() as verify:
+            has_area_row = verify.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM world.dungeon_areas WHERE dungeon_area_id = :a)"
+                ),
+                {"a": area},
+            ).scalar()
+            area_parent = verify.execute(
+                text("SELECT parent_location_id FROM world.locations WHERE location_id = :a"),
+                {"a": area},
+            ).scalar()
+        assert has_area_row is True, "the committed dungeon_area insert must have taken effect"
+        assert area_parent == dungeon, (
+            "the rejected parent-clearing update must not have taken effect — a dungeon area "
+            "must never end up without a valid dungeon parent"
+        )
     finally:
         _cleanup_world(engine, slug)
 
@@ -525,7 +615,8 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
     """Reverse order: transaction 1 clears L's parent_location_id first
     (L is not yet a dungeon area, so this passes and stays open), then
     commits. Transaction 2's pending dungeon_area insert must resume and be
-    rejected — L's parent is now NULL, not a dungeon."""
+    rejected — L's parent is now NULL, not a dungeon, so no dungeon-area row
+    may end up depending on it."""
     engine = postgres_engine
     slug = f"child-lock-update-first-{uuid.uuid4().hex[:8]}"
     try:
@@ -534,6 +625,12 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
             dungeon = make_dungeon(setup, world)
             area = make_location(
                 setup, world, parent_location_id=dungeon, entity_type_code="dungeon_area"
+            )
+
+        def insert_area(conn: Connection) -> None:
+            conn.execute(
+                text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
+                {"a": area},
             )
 
         with engine.connect() as first:
@@ -549,28 +646,29 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
                 {"a": area},
             )
 
-            def insert_area(conn: Connection) -> None:
-                conn.execute(
-                    text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"),
-                    {"a": area},
-                )
+            with _BackgroundStatement(engine, insert_area) as blocked:
+                blocked.wait_until_blocked(first, "the concurrent dungeon_area insert")
+                first.commit()
+                result, exc = blocked.resume_and_get_outcome("the concurrent dungeon_area insert")
 
-            thread, outcome, backend_pid = _run_blocked_statement(engine, insert_area)
-            _wait_until_genuinely_waiting_on_a_lock(
-                first, backend_pid, "the concurrent dungeon_area insert"
-            )
-
-            first.commit()
-
-            thread.join(timeout=10.0)
-            assert not thread.is_alive(), (
-                "the blocked insert did not resume within 10s of the parent-clearing update's "
-                "commit"
-            )
-
-        assert outcome, "blocked insert thread reported no outcome"
-        result, exc = outcome[0]
         assert result == "failed", f"expected the resumed insert to be rejected, got: {result}"
         assert "no parent_location_id" in str(exc)
+
+        with engine.connect() as verify:
+            has_area_row = verify.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM world.dungeon_areas WHERE dungeon_area_id = :a)"
+                ),
+                {"a": area},
+            ).scalar()
+            area_parent = verify.execute(
+                text("SELECT parent_location_id FROM world.locations WHERE location_id = :a"),
+                {"a": area},
+            ).scalar()
+        assert area_parent is None, "the committed parent-clearing update must have taken effect"
+        assert has_area_row is False, (
+            "the rejected dungeon_area insert must not have taken effect — no dungeon-area row "
+            "may exist without a valid dungeon parent"
+        )
     finally:
         _cleanup_world(engine, slug)

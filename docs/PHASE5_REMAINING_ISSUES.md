@@ -1,13 +1,20 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-03).** Revision 056 closed the current schema blocker below
-> by adding a child-location advisory lock, and the current verification
-> obligation by rewriting the affected concurrency tests (plus two new ones,
-> covering both transaction orderings) to prove the original waiting statement
-> genuinely resumes and revalidates rather than timing out and retrying. See
-> [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
-> for the resolving revision and full evidence. Phase 5 is complete; this
-> register is now a closed historical record.
+> **OPEN (2026-08-04): one formal verification item remains.** Revision 056
+> closed the production-schema blocker by adding the child-location advisory
+> lock, and all five resumed-waiter tests now query final committed state from
+> independent connections. The `_BackgroundStatement` cleanup helper added by
+> the fifth pass is still only best-effort: it can leave a worker alive if no
+> backend PID is available, backend termination fails, or the final bounded
+> join expires. It also has no focused regression test for that forced-cleanup
+> path. No production code or migration change is currently required. See
+> [§ Current unresolved item](#current-unresolved-item-worker-teardown-guarantee)
+> and
+> [PHASE5_VERIFICATION.md § Current formal-closeout status](PHASE5_VERIFICATION.md#current-formal-closeout-status)
+> for the exact acceptance criteria. Phase 5's gameplay and production
+> integrity requirements are met; formal Phase 5 closure and Phase 6
+> feature/schema work remain blocked on this test-infrastructure obligation and
+> a passing workflow for the final fix.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -20,9 +27,42 @@
 > `parent_location_id`, plus a verification gap in the three existing
 > revision-053 concurrency tests (they proved lock attachment via
 > `lock_timeout` and a fresh-transaction retry, not that the original waiting
-> statement itself resumes and revalidates). Both are resolved below.
+> statement itself resumes and revalidates). Both were addressed by revision
+> 056 and its accompanying test rewrite, pushed directly to `main` without a
+> pull request. The integrated `main` workflow subsequently passed in
+> [run 30874081442](https://github.com/NemesisGhost/dnd_ai/actions/runs/30874081442),
+> but a fifth review (below) found two concrete verification-design gaps that a
+> green happy-path run did not exercise.
 
-## At a glance (resolved by revision 056)
+## Current unresolved item: worker teardown guarantee
+
+The fifth pass replaced the original unmanaged thread helper with
+`_BackgroundStatement`, but its failure path does not yet satisfy the register's
+literal guarantee that no worker or transaction survives test cleanup:
+
+- backend termination is attempted only when `backend_pid` is available;
+- errors from the termination connection and a false
+  `pg_terminate_backend()` result are suppressed;
+- the final bounded `join()` is not followed by an `is_alive()` check; and
+- no focused test forces the cleanup path and proves the worker, connection,
+  and transaction are gone afterward.
+
+Acceptance criteria:
+
+- make cancellation available even when normal worker startup is incomplete,
+  or fail setup before the worker can escape ownership;
+- verify that backend termination succeeds when it is required;
+- after the final bounded join, prove the worker is no longer alive;
+- surface cleanup failure without replacing or hiding the original test
+  failure; and
+- add a focused regression test that forces cleanup and proves no worker or
+  database transaction survives.
+
+After the fix, run the complete unit/database/scenario and migration workflow
+on the final pushed commit, record that run in `PHASE5_VERIFICATION.md`, and
+only then convert this register to a closed historical record.
+
+## At a glance (production blockers resolved; formal verification open)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
 verified before this register was reopened. It failed its full
@@ -42,6 +82,10 @@ database-integrity exit requirement until both parts of the gate below closed:
    child-lock race) to use a real background thread, a `pg_stat_activity`
    poll confirming a genuine lock wait, and an assertion on the resumed
    statement's actual outcome.
+3. **Test-infrastructure blocker:** the fifth-pass helper attempts to terminate
+   a blocked backend during cleanup, but it does not prove termination succeeded
+   or that the worker stopped, and the forced-cleanup path is untested.
+   **Open;** see the current unresolved item above.
 
 ## Fourth review baseline and scope
 
@@ -128,7 +172,7 @@ Acceptance criteria:
   at most one incompatible operation may succeed, and no invalid state may
   remain.
 
-## Fourth-review completion gate (satisfied by revision 056)
+## Fourth-review completion gate (production portion satisfied by revision 056)
 
 Phase 5 closes only once the blocker and verification obligations above are
 implemented and `PHASE5_VERIFICATION.md` records:
@@ -145,6 +189,83 @@ implemented and `PHASE5_VERIFICATION.md` records:
 
 See [PHASE5_VERIFICATION.md § Fourth exit review corrections](PHASE5_VERIFICATION.md#fourth-exit-review-corrections-2026-08-03)
 for exact commands, results, and the confirmed CI run.
+
+## Fifth review: test-hardening and final-state verification (2026-08-03)
+
+Revision 056 and its first test rewrite were pushed directly to `main`
+without a pull request. GitHub Actions nevertheless verified the integrated
+`main` head in [run 30874081442](https://github.com/NemesisGhost/dnd_ai/actions/runs/30874081442),
+including all 1,093 tests. A fifth review re-checked the five resumed-waiter tests against the
+acceptance criteria in the "Fourth-review verification obligations" section
+above line by line. Six of the seven were genuinely met (the waiter
+genuinely blocks, is not substituted with a retry, resumes after the blocker
+commits, re-reads committed state, and is asserted to succeed or fail
+accordingly, all with bounded synchronization). Two were not:
+
+1. **No independent, fresh-connection final-state assertion.** Every test
+   asserted only the *exception* the resumed statement raised (or its
+   absence). None of the five then queried the actual committed rows from a
+   third connection to prove directly that no invalid combination
+   survived — a dungeon-area location without a valid dungeon parent, a
+   subtype row incompatible with `core.entities.entity_type`, or a
+   dungeon-area row left dependent on an entity no longer registered as a
+   dungeon. Message-matching proves the rejected statement failed for the
+   expected *reason*; it does not by itself prove the *database* ended up in
+   a valid state — a defect in an unrelated code path could raise the same
+   message text without actually protecting the invariant.
+2. **No failure-safe cleanup for the blocking thread.** Each test's
+   `thread.join(timeout=10.0)` was followed by a plain
+   `assert not thread.is_alive()`. If that assertion ever failed — a real
+   regression reintroducing the deadlock the lock protocol exists to
+   prevent, for example — the background thread and its open connection/
+   transaction would be abandoned: no code path terminated it, closed its
+   connection, or released whatever lock it still held. A single failing
+   assertion could therefore leak an advisory lock into every later test in
+   the same session (each keyed by fresh per-test UUIDs, so the leaked lock
+   itself would not block *those* tests' own operations, but the leaked
+   thread and open transaction would persist until the test process exited)
+   and would not be guaranteed to unblock promptly even then.
+
+**Fifth-pass response:** no schema or migration change — revision 056 and the revision-053
+trigger functions were reviewed again (see
+[PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03))
+and found correct: both dungeon-area subtype writes and child
+`parent_location_id` mutations still acquire the same child-location
+advisory lock before any read, state is re-read after the lock is acquired,
+the existing parent-dungeon/entity-type protections from revision 053 are
+intact, lock ordering remains deterministic (child-location namespace always
+before entity-subtype namespace) with no new deadlock path, both concurrency
+orderings are still covered, and no other Phase 5 structural relationship has
+the same uncoordinated child-side gap. All changes are confined to
+`tests/database/test_entity_type_change_protection.py`:
+
+- A new `_BackgroundStatement` context-manager class replaces the previous
+  free-function-plus-tuple helper. Its `__exit__` makes a best-effort attempt
+  to terminate the background backend when the thread remains alive, then
+  performs a bounded join. This is an improvement over abandoning the thread,
+  but it is not the required teardown guarantee: missing PIDs, suppressed
+  termination failures, and an unchecked final join can still allow a worker
+  to outlive the `with` block. The current unresolved item above records the
+  remaining fix and focused regression-test requirement.
+- Each of the five tests now opens a third, independent connection after
+  asserting the resumed statement's outcome and queries the committed rows
+  directly: entity type versus subtype-table presence for the two
+  entity-type-change races, `parent_location_id` versus dungeon-area-row
+  presence for the reparent and both child-lock races. Every assertion
+  states the specific invalid combination it rules out.
+
+**Tests:** the same five tests (three revision-053, two revision-056), all
+rewritten in place — no test was added, removed, or renamed. All 14 tests in
+the file, including the nine pre-existing sequential cases, pass locally
+against AWS `dev`; see the verification commands in
+[PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03).
+The fifth-pass PR also passed runs
+[`30878624056`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30878624056)
+and
+[`30878927585`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30878927585)
+at its final reviewed head. Those happy-path runs confirm the production and
+final-state behavior, but do not exercise the still-missing forced-cleanup
+regression path.
 
 ## Previously resolved register (historical)
 
@@ -291,9 +412,10 @@ Acceptance criteria:
 
 - Add a forward-only migration that defines “blank” using the project's chosen
   complete whitespace rule. Do not mirror the CHECK in SQLAlchemy metadata:
-  `src/dnd_ai/persistence/tables.py` intentionally excludes all CHECK
-  constraints, triggers, and default privileges from the metadata model. Record
-  that project-wide exception explicitly and cover the live constraint through
+  `src/dnd_ai/persistence/tables/` (the `dnd_ai.persistence.tables` package;
+  see its `__init__.py`) intentionally excludes all CHECK constraints,
+  triggers, and default privileges from the metadata model. Record that
+  project-wide exception explicitly and cover the live constraint through
   migration/integration tests.
 - Reject space-only, tab-only, newline-only, carriage-return-only, and mixed
   whitespace descriptions on INSERT and UPDATE.

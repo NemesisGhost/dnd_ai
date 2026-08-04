@@ -67,7 +67,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 (database bootstrap), 2 (core world platform), 3 (timelines and campaigns), 4 (rules and shared characters, including its corrections pass and all three closeout passes), and 5 (locations and dungeon play, including four corrections passes — two pre-merge, two post-merge) are complete and verified. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Phase 6 feature/schema work is queued behind the context-modularization entry gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions). The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 through 4 are complete and verified. Phase 5's gameplay features and production database invariants are complete and CI-verified; its formal closeout remains open only for the concurrency-test cleanup guarantee in [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md). The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed, but Phase 6 feature/schema work remains blocked until that Phase 5 obligation is fixed and the final branch head passes CI. The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1150,7 +1150,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; close the Phase 6 context-modularization entry gate before starting Phase 6 feature/schema work
+   - Implement only the current target; Phase 6 feature/schema work must not begin until the open Phase 5 concurrency-test cleanup obligation is fixed and verified
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

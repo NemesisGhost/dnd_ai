@@ -1,9 +1,10 @@
 """Every table carries a comment (docs/DATABASE_CONVENTIONS.md §31).
 
-`alembic check` compares comments between the live database and
-src/dnd_ai/persistence/tables.py. These catalog-level assertions complement
-that comparison by requiring every project-owned schema and table to have a
-comment at all, including objects accidentally omitted from metadata.
+`alembic check` compares comments between the live database and the
+dnd_ai.persistence.tables package (src/dnd_ai/persistence/tables/). These
+catalog-level assertions complement that comparison by requiring every
+project-owned schema and table to have a comment at all, including objects
+accidentally omitted from metadata.
 
 Deliberately queries the catalog rather than a hardcoded table list, so a new
 table added in a later phase is covered the moment it exists.
