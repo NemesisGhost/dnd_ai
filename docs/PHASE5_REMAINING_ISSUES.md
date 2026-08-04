@@ -1,20 +1,20 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED, pending this pass's CI confirmation (2026-08-03).** Revision 056
-> (merged, unchanged this pass) closed the schema blocker by adding a
-> child-location advisory lock. A fifth review found that while its
-> accompanying test rewrite genuinely proved resumed-waiter behavior, two of
-> the original verification acceptance criteria were still not met: no test
-> queried the final committed database state from an independent connection,
-> and the blocking-thread helper had no failure-safe cleanup path. Both are
-> fixed in this pass — see
+> **CLOSED (2026-08-03).** Revision 056 (merged, unchanged this pass) closed
+> the schema blocker by adding a child-location advisory lock. A fifth review
+> found that while its accompanying test rewrite genuinely proved
+> resumed-waiter behavior, two of the original verification acceptance
+> criteria were still not met: no test queried the final committed database
+> state from an independent connection, and the blocking-thread helper had no
+> failure-safe cleanup path. Both are fixed in this pass — see
 > [§ Fifth review](#fifth-review-test-hardening-and-final-state-verification-2026-08-03)
 > below and
 > [PHASE5_VERIFICATION.md § Fifth exit review corrections](PHASE5_VERIFICATION.md#fifth-exit-review-corrections-2026-08-03)
 > for the full account. No schema or migration change was needed or made —
-> revision 056 was reviewed again and found correct. This register is treated
-> as closed only once this pass's push-triggered GitHub Actions run is
-> confirmed green; see that section for the run and its outcome.
+> revision 056 was reviewed again and found correct. This pass's push-triggered
+> GitHub Actions run ([`30878624056`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30878624056)
+> on [PR #10](https://github.com/NemesisGhost/dnd_ai/pull/10)) confirmed green.
+> Phase 5 is complete; this register is now a closed historical record.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge

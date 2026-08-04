@@ -211,7 +211,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 5 are done.** Phase 5's implementation and five corrections passes (two pre-merge, three post-merge) are merged; the last pass hardened the child-location concurrency tests and is being verified against live AWS and GitHub Actions. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Both entry gates for [PLAN.md](PLAN.md#phase-6-events-and-interactions)'s Phase 6 (repository context modularization, Phase 5 correctness) are closed, pending confirmation from the CI run for the pass that closed the second one; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 5 are done.** Phase 5's implementation and five corrections passes (two pre-merge, three post-merge) are merged and verified against live AWS and GitHub Actions; the last pass hardened the child-location concurrency tests. See [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md). [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) are both closed historical records. Both entry gates for [PLAN.md](PLAN.md#phase-6-events-and-interactions)'s Phase 6 (repository context modularization, Phase 5 correctness) are closed, confirmed by GitHub Actions run 30878624056 on PR #10; follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 
