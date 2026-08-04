@@ -286,7 +286,7 @@ Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-ve
 | `pytest tests/database/test_entity_type_change_protection.py -v` (x3) | `18 passed` every run (9 sequential, 4 helper regression tests including the new one, 5 hardened concurrency) — confirmed stable across repeated runs |
 | `pytest -v` (unit + database + scenario, the same invocation CI uses) | `1097 passed` (24 unit, 1072 database, 1 scenario) — a fresh ephemeral database created and migrated from `base` to `head` by `tests/conftest.py`, so this run is also independent proof the full 56-revision chain still applies cleanly from empty (unchanged this pass) |
 
-No migration, downgrade/upgrade, seed-idempotency, or `alembic check` verification was needed this pass — revision 056 remains the unchanged head, and nothing under `database/` changed.
+No migration, downgrade/upgrade, seed-idempotency, or `alembic check` verification was needed this pass — revision 056 remains the unchanged head, and nothing under `database/` changed. The push-triggered GitHub Actions workflow independently confirmed the full picture anyway (CI always runs the complete migration/test sequence regardless of what changed) in run [`30940498153`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30940498153): migration to `head`, full downgrade/upgrade round trip, seed idempotency, schema comparison, formatting, Ruff, mypy, all 1,097 tests, database removal, and ingress revocation all passed.
 
 ## Current formal-closeout status
 
