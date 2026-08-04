@@ -1,6 +1,6 @@
 # Phase 5 Remaining Issues
 
-> **REOPENED (2026-08-03).** Revisions 052–055 resolved the five findings in
+> **OPEN — PHASE 5 REQUIREMENTS ARE NOT YET FULLY MET (2026-08-03).** Revisions 052–055 resolved the five findings in
 > the original register below, and GitHub Actions run
 > [`30835071145`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30835071145)
 > passed migrations, schema checks, cleanup, and all 1,080 tests. A fourth
@@ -8,13 +8,35 @@
 > not serialize: inserting a `world.dungeon_areas` subtype row while another
 > transaction changes the same child location's `parent_location_id`. Phase 5
 > remains in closeout until the current item and its concurrency-proof
-> requirements below are complete.
+> requirements below are complete. A subsequent confirmation against the
+> pre-documentation-update `main` baseline at `d483f9e` found no migration after
+> `055_conditional_route_whitespace`; the executable schema therefore still
+> contains this defect.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
 > commit `bcc22ee`, but the post-merge review found three database-integrity
 > blockers and two smaller correctness/documentation gaps that the green
 > verification suite did not exercise.
+
+## At a glance
+
+Phase 5's documented gameplay capabilities are implemented, merged, and
+verified. It nevertheless fails its full database-integrity exit requirement
+until both parts of this gate close:
+
+1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
+   same child location's parent do not use a shared child-location lock, so two
+   incompatible writes can both commit.
+2. **Verification blocker:** the existing revision-053 concurrency tests prove
+   lock attachment by timing out the waiter, but do not prove that the original
+   waiting statement resumes, re-reads committed state, and rejects an invalid
+   result.
+
+These are not documentation-only follow-ups. Phase 6 feature/schema work must
+remain blocked even though the existing AWS workflow and all 1,080 tests are
+green, because that suite does not exercise the remaining race or resumed-waiter
+behavior.
 
 ## Current review baseline and scope
 
@@ -114,6 +136,10 @@ implemented and `PHASE5_VERIFICATION.md` records:
 - repository-wide status reconciliation that closes this register and unblocks
   Phase 6 feature/schema work, assuming its separate context-modularization gate
   is also complete.
+
+Until every item above is satisfied, this file remains an active blocker rather
+than a historical punch list. Do not mark Phase 5 complete based only on the
+functional scenario tests or the previously green workflow.
 
 ## Previously resolved register (historical)
 

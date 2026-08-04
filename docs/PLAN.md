@@ -1229,7 +1229,7 @@ Every phase ends with a review, before the next one starts. Phase 1 produced six
 
 ### Phase 5: Locations and dungeon play
 
-**Closeout reopened.** The implementation and three corrections passes are merged and CI-verified, but a fourth review found one unresolved dungeon-area creation/reparenting concurrency race. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is the active completion gate.
+**Closeout open; full requirements not yet met.** The implementation and three corrections passes are merged and CI-verified, but a fourth review found one unresolved dungeon-area creation/reparenting concurrency race. The existing concurrency tests also time out and replace the waiter instead of proving that the original waiting statement resumes and revalidates after the blocking transaction completes. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is the active schema-and-verification completion gate.
 
 ### Phase 6: Events and interactions
 

@@ -912,7 +912,7 @@ A second Phase 5 exit review — also before the branch was merged — found fou
 
 ### Third exit review corrections (2026-08-03)
 
-A post-merge review — the first to run against `main` rather than an open PR — found that each of revisions 049, 050, and 051 had closed only its sequential/single-transaction/always-fresh-database case, plus one incomplete fix and documentation drift. Three forward revisions (053–055) plus one explicitly documented migration-history exception (revision 052 spliced before 050, requiring 050's `down_revision` to change) addressed those findings. A fourth review found revision 053 still leaves dungeon-area subtype creation racy against direct changes to the child location's `parent_location_id`; [PHASE5_REMAINING_ISSUES.md](../PHASE5_REMAINING_ISSUES.md) is reopened for that final invariant.
+A post-merge review — the first to run against `main` rather than an open PR — found that each of revisions 049, 050, and 051 had closed only its sequential/single-transaction/always-fresh-database case, plus one incomplete fix and documentation drift. Three forward revisions (053–055) plus one explicitly documented migration-history exception (revision 052 spliced before 050, requiring 050's `down_revision` to change) addressed those findings. A fourth review found revision 053 still leaves dungeon-area subtype creation racy against direct changes to the child location's `parent_location_id`, and its concurrency tests do not prove that the original waiting statements resume and revalidate. Phase 5 therefore does not yet meet its full database-integrity requirements; [PHASE5_REMAINING_ISSUES.md](../PHASE5_REMAINING_ISSUES.md) is the active schema-and-verification gate.
 
 | Revision | Closes |
 |---|---|
