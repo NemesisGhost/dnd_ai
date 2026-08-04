@@ -6,7 +6,7 @@ Sessions carry both real-world time (started_at/ended_at) and fictional time
 world_time_period INT8RANGE (ADR 0010's contract) — but unlike
 party_memberships, there is still no exclusion constraint: nothing requires
 sessions not to overlap in fictional time. This module covers ordering and
-world agreement; test_phase4_corrections.py covers world_time_period itself.
+world agreement; test_session_chronology.py covers world_time_period itself.
 """
 
 import uuid

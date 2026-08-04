@@ -94,7 +94,7 @@ There is one `Dockerfile`, not one per service: the API, background worker, Disc
 
 Repository structure is also a context boundary. Do not keep adding unrelated domains or correction passes to a file merely because the file already exists.
 
-Before Phase 6 feature work, replace the monolithic `src/dnd_ai/persistence/tables.py` with a `src/dnd_ai/persistence/tables/` package organized by bounded schema/domain. The exact names may follow dependency analysis, but the target shape is:
+**Done.** The monolithic `src/dnd_ai/persistence/tables.py` was replaced with a `src/dnd_ai/persistence/tables/` package organized by bounded schema/domain, verified against AWS `dev` (`alembic check` reported no diff; the full `tests/unit`/`tests/database` suites pass). The shape, kept as the ongoing convention for where a new table goes:
 
 ```text
 src/dnd_ai/persistence/tables/
@@ -118,7 +118,7 @@ Requirements for that split:
 - Add a focused metadata-completeness test that compares expected schema-qualified table names/public exports before and after the split, then require `alembic check` to prove no schema diff.
 - Put a new table in the module that owns its PostgreSQL schema/domain. If a module becomes large enough that an unrelated task must scan past several separate concerns, split it again by a stable subdomain rather than by implementation phase.
 
-Database tests follow the invariant they protect, not the phase or review pass that discovered them. `test_phase4_corrections.py` and `test_phase4_remaining_issues.py` are historical accretion points and must be split before Phase 6 feature work. Move their tests without weakening assertions into topic files such as session chronology, ruleset provenance, ruleset-version consistency, immutable identity, world-ruleset dependency/concurrency, and character-language integrity. Shared fixtures belong in a narrowly named fixture/support module or `conftest.py`; do not copy a large fixture block into every destination.
+Database tests follow the invariant they protect, not the phase or review pass that discovered them. **Done.** `test_phase4_corrections.py` and `test_phase4_remaining_issues.py` — the historical accretion points — were split without weakening any assertion into `test_session_chronology.py`, `test_ruleset_provenance.py`, `test_ruleset_version_consistency.py`, `test_immutable_identity.py`, `test_world_ruleset_dependency_and_concurrency.py`, `test_character_language_integrity.py`, and `test_metadata_server_defaults.py` (366 tests collected before and after). Two small cross-topic helpers (`make_bare_ruleset`, `current_ruleset_version_id`) moved to `tests/factories.py` rather than being copied into every file that needed them; per-file fixtures small enough not to be worth sharing (for example each topic file's own `world_id`) were duplicated instead, consistent with the "large fixture block" threshold below.
 
 New closeout tests go directly into the stable topic file. A temporary phase-named test file is allowed while a register is open, but closing the register includes distributing those tests by invariant and removing the temporary file. Historical verification documents record why a test exists; the active test filename records what it protects.
 
