@@ -1,19 +1,23 @@
 # Phase 5 Remaining Issues
 
-> **REOPENED (2026-08-04).** A tenth review of the ninth pass's fixes found
-> the underlying thread-based architecture itself could not deliver a
-> literal no-survivor guarantee: no Python thread can be unconditionally,
+> **CLOSED (2026-08-04).** A tenth review found the ninth pass's fixes still
+> left `_BackgroundStatement`'s worker thread architecture unable to deliver
+> a literal no-survivor guarantee: no Python thread can be unconditionally,
 > forcibly stopped regardless of what it is blocked inside. The two
 > `pg_sleep` worst-case regression tests proved this directly — after
 > `__exit__()` returned or raised, the worker thread was still alive, and
-> only the tests' own manual `join()` afterward reclaimed it. See
+> only the tests' own manual `join()` afterward reclaimed it. The tenth pass
+> replaced the worker thread with an independently terminable worker
+> process, closing the gap for good. See
 > [§ Tenth review: an independently terminable worker process](#tenth-review-an-independently-terminable-worker-process-2026-08-04)
 > below and
 > [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
-> Phase 5 production correctness remains complete; no schema, migration, or
-> production-code change is needed or was made. Formal verification and the
-> Phase 6 correctness entry gate remain open until this pass's own
-> push-triggered CI run is confirmed green and recorded here.
+> Phase 5 production correctness remained complete throughout; no schema,
+> migration, or production-code change was needed or made. Formal
+> verification and the Phase 6 correctness entry gate are both closed: the
+> tenth pass's PR #13 push-triggered GitHub Actions run
+> [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630)
+> passed both jobs on `ubuntu-latest`, confirming the redesign cross-platform.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -300,12 +304,11 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production blockers resolved; formal verification open)
+## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified before this register was reopened. The production and primary
-concurrency-verification blockers are closed; the helper containment blocker
-below remains open pending this pass's own CI confirmation:
+verified. All production, concurrency-verification, and test-infrastructure
+blockers are closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -334,13 +337,14 @@ below remains open pending this pass's own CI confirmation:
    ninth pass fixed with synchronous ownership and a layered fallback; a
    tenth review then found that even that fallback could not deliver a
    literal no-survivor guarantee, because no Python thread can be
-   unconditionally, forcibly stopped. **Locally resolved, pending CI** by the
-   tenth pass: the worker now runs in an independently terminable OS process
+   unconditionally, forcibly stopped. **Resolved** by the tenth pass: the
+   worker now runs in an independently terminable OS process
    (`multiprocessing.Process`), reclaimable via `terminate()`/`kill()`
    regardless of what it is doing, with `_force_stop()`'s fallback chain
    ending in forcible process termination followed by one more, unconditional
-   `pg_terminate_backend()` call. **Open** until this pass's own
-   push-triggered CI run is confirmed green and recorded in
+   `pg_terminate_backend()` call. Confirmed by PR #13's push-triggered CI run
+   [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630),
+   which passed both jobs on `ubuntu-latest`. See
    [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
 
 ## Fourth review baseline and scope

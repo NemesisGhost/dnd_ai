@@ -67,7 +67,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 through 4 are complete and verified. Phase 5's production behavior and primary concurrency assertions are complete, but formal verification remains open in [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) until a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process is CI-confirmed. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate remains open, so Phase 6 feature/schema work must wait. The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 through 4 are complete and verified. Phase 5's production behavior, primary concurrency assertions, and formal test-infrastructure verification are all complete: a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process is CI-confirmed by [PR #13](https://github.com/NemesisGhost/dnd_ai/pull/13)'s push-triggered run [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is a closed historical record. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) and the Phase 5 formal-correctness gate are both closed, so Phase 6 feature/schema work may begin. The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1150,7 +1150,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 6 feature/schema work remains blocked until the open Phase 5 formal-correctness gate closes
+   - Implement only the current target; Phase 5 is complete and Phase 6 feature/schema work may begin
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart
