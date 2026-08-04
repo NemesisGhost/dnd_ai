@@ -276,6 +276,19 @@ uv run mypy src
 
 Run all three before committing. CI runs them without `--fix`.
 
+`scripts/verify.sh` wraps the read-only form of these checks, plus the
+pytest layers and `alembic check`, as a single command that prints one
+PASS/FAIL line per stage instead of each tool's full output — `full` output
+is only shown for a stage that actually fails:
+
+```bash
+scripts/verify.sh quality   # ruff format --check, ruff check, mypy src — no AWS
+scripts/verify.sh full      # quality + tests/unit + tests/database + tests/scenario + alembic check
+```
+
+See the script's header comment for every mode, including the opt-in,
+explicitly destructive `migration-round-trip` stage.
+
 ---
 
 ## 8. Continuous integration
@@ -294,6 +307,14 @@ Run all three before committing. CI runs them without `--fix`.
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
 A pull request that changes schema without a green migration job should not merge.
+
+`scripts/wait_for_ci.py` polls a pushed commit's GitHub Actions run to
+completion and reports only pass/fail, fetching per-job/per-step detail only
+when the run actually failed:
+
+```bash
+uv run python scripts/wait_for_ci.py   # current HEAD's most recent run
+```
 
 ---
 
