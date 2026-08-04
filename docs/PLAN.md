@@ -1229,11 +1229,13 @@ Every phase ends with a review, before the next one starts. Phase 1 produced six
 
 ### Phase 5: Locations and dungeon play
 
-**Closeout open; full requirements not yet met.** The implementation and three corrections passes are merged and CI-verified, but a fourth review found one unresolved dungeon-area creation/reparenting concurrency race. The existing concurrency tests also time out and replace the waiter instead of proving that the original waiting statement resumes and revalidates after the blocking transaction completes. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is the active schema-and-verification completion gate.
+**Complete.** The implementation and four corrections passes (two pre-merge, two post-merge) are merged and CI-verified. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is now a closed historical record.
 
 ### Phase 6: Events and interactions
 
-**Entry gates — Phase 5 correctness and repository context modularization.** Before adding any Phase 6 schema, close the active [Phase 5 remaining issue](PHASE5_REMAINING_ISSUES.md) on `main` (it is resolved and verified on a not-yet-merged branch — see that branch's own PR — but is not yet part of `main`'s history). The repository context modularization gate is **closed**: the mechanical source/test split in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain) is done and verified against AWS `dev`:
+**Entry gate — repository context modularization.** Before adding any Phase 6 schema, complete the mechanical source/test split in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain). The Phase 5 correctness gate closed with revision 056 (see [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md)); the modularization gate remains because `src/dnd_ai/persistence/tables.py` already contains every Phase 2–5 table in one 3,000+ line module, and `test_phase4_remaining_issues.py`/`test_phase4_corrections.py` retain closed review history in two phase-oriented files. Adding events/interactions before this gate closes would compound recurring context cost.
+
+The Phase 6 entry gate is complete only when:
 
 - table metadata is split into bounded domain modules behind a compatibility-preserving `dnd_ai.persistence.tables` package;
 - the two closed Phase 4 test monoliths are redistributed into invariant/topic-oriented test modules (`test_session_chronology.py`, `test_ruleset_provenance.py`, `test_ruleset_version_consistency.py`, `test_immutable_identity.py`, `test_world_ruleset_dependency_and_concurrency.py`, `test_character_language_integrity.py`, `test_metadata_server_defaults.py`);
