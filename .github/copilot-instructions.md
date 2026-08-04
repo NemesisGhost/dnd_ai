@@ -16,7 +16,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 **What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
 
-**Current implementation status**: Phases 1 through 5 are complete and CI-verified, including Phase 5's formal-verification closeout ([its remaining-issues register](../docs/PHASE5_REMAINING_ISSUES.md) is now a closed historical record). Both the [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions) repository-context modularization gate and the Phase 5 formal-correctness gate are closed. No API or UI exists yet.
+**Current implementation status**: Phases 1 through 5 are complete and CI-verified. Phase 5's gameplay features, production invariants, resumed-waiter tests, and independent final-state assertions are complete; a tenth review found the test-only cleanup helper's thread-based worker could not deliver a literal no-survivor guarantee, and a tenth pass replaced it with an independently terminable worker process, confirmed by [PR #13](https://github.com/NemesisGhost/dnd_ai/pull/13)'s push-triggered run [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630); [its remaining-issues register](../docs/PHASE5_REMAINING_ISSUES.md) is now a closed historical record. The [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions) repository-context modularization gate and the Phase 5 formal-correctness gate are both closed, so Phase 6 feature/schema work may begin. No API or UI exists yet.
 
 ---
 

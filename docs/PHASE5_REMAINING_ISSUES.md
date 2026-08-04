@@ -1,28 +1,23 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-04).** A ninth pass closed the two containment gaps a
-> ninth review found in the eighth pass's fixes, entirely within
-> `tests/database/test_entity_type_change_protection.py` — see
-> [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04)
-> for the fix and evidence: `_BackgroundStatement` now establishes connection,
-> `lock_timeout`, and backend-pid ownership synchronously before any worker
-> thread is created (no more racing a poll/join against the thread's own
-> startup), `backend_pid` is private and immutable, and `_force_stop()` gained
-> a layered fallback — driver-native `cancel_safe()`, then a PostgreSQL-
-> enforced `lock_timeout` backstop — that no longer depends on any signal
-> reaching the worker at all. Six regression tests inject failures at the
-> signaling seams themselves rather than corrupting identity, including the
-> true worst case (`pg_sleep`, not lock-bound) proving the reporting path
-> still works when nothing active can stop the worker.
-> `ruff format --check`/`ruff check`/`mypy src` clean, the target file's 22
-> tests (up from 18) stable across three repeated runs, and the full
-> 1,101-test suite (up from 1,097) green — locally, and via
-> [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
-> GitHub Actions run
-> [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442).
-> No schema, migration, or production-code change was needed or made. Phase 5
-> is complete; both the Phase 6 repository-context modularization gate and
-> the Phase 5 formal-correctness gate are closed.
+> **CLOSED (2026-08-04).** A tenth review found the ninth pass's fixes still
+> left `_BackgroundStatement`'s worker thread architecture unable to deliver
+> a literal no-survivor guarantee: no Python thread can be unconditionally,
+> forcibly stopped regardless of what it is blocked inside. The two
+> `pg_sleep` worst-case regression tests proved this directly — after
+> `__exit__()` returned or raised, the worker thread was still alive, and
+> only the tests' own manual `join()` afterward reclaimed it. The tenth pass
+> replaced the worker thread with an independently terminable worker
+> process, closing the gap for good. See
+> [§ Tenth review: an independently terminable worker process](#tenth-review-an-independently-terminable-worker-process-2026-08-04)
+> below and
+> [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
+> Phase 5 production correctness remained complete throughout; no schema,
+> migration, or production-code change was needed or made. Formal
+> verification and the Phase 6 correctness entry gate are both closed: the
+> tenth pass's PR #13 push-triggered GitHub Actions run
+> [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630)
+> passed both jobs on `ubuntu-latest`, confirming the redesign cross-platform.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -43,12 +38,122 @@
 > happy-path run did not exercise, a sixth review found the fifth pass's own
 > cleanup-helper fix was itself still only best-effort, a seventh review found
 > the sixth pass still did not contain startup-timeout and failed-cancellation
-> paths, an eighth pass fixed those two findings, and a ninth review found
-> that fix itself still not completely enough — closed for good, per this
-> closure, by establishing ownership synchronously and ending the fallback
-> chain in a guarantee PostgreSQL itself enforces.
+> paths, an eighth pass fixed those two findings, a ninth review found that
+> fix itself still not completely enough and closed it by establishing
+> ownership synchronously and layering a fallback ending in a guarantee
+> PostgreSQL itself enforces, and a tenth review found even that could not
+> make good on a literal no-survivor guarantee while the worker remained a
+> Python thread — closed for good, per this reopening, by replacing the
+> thread with an independently terminable worker process.
 
-## Ninth review: synchronous ownership and a deterministic fallback (2026-08-04)
+## Tenth review: an independently terminable worker process (2026-08-04)
+
+The ninth pass correctly established connection/backend ownership
+synchronously and gave `_force_stop()` a layered fallback, and its pushed PR
+head passed all 1,101 tests in GitHub Actions
+[`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442).
+A closer review of the two worst-case regression tests — the ones using
+`pg_sleep` specifically because it defeats the `lock_timeout` backstop —
+found they demonstrated the opposite of what they were meant to prove:
+
+1. **The tests joined the worker manually, after the context manager had
+   already returned or raised.** `blocked._thread.join(timeout=sleep_seconds)`
+   ran as ordinary code *after* the `with` block, not as part of proving
+   `__exit__()`'s own guarantee. That is the exact pattern the register
+   explicitly prohibits: "no test relies on cleanup after the context as
+   evidence of helper correctness."
+2. **This was not a test-only gap — it reflected a real architectural
+   limit.** No supported mechanism exists to forcibly stop a Python thread
+   blocked inside a C-level call (a blocking network read, here). The
+   `lock_timeout` backstop the ninth pass relied on only rescues a genuine
+   lock wait; nothing in a thread-based design can end a thread blocked
+   inside a statement that ignores it.
+
+Acceptance criteria, all test-infrastructure-only (do not change a
+production trigger or add a migration unless a separate review finds a
+concrete production defect):
+
+- Replace the worker thread with an independently terminable execution
+  unit — a subprocess, if a thread-based design cannot guarantee the
+  no-survivor contract, rather than weakening the contract.
+- Keep an explicit startup handshake so `__enter__()` knows whether the
+  worker acquired its connection, transaction, and backend pid before
+  returning; terminate and reap the worker before raising on any startup
+  failure or timeout.
+- Cover every partial-startup resource path explicitly (after connect,
+  after transaction begin, after `lock_timeout` is set, after the pid
+  lookup) rather than a blanket suppression around cleanup; collect every
+  cleanup failure instead of discarding it silently.
+- On early context exit, attempt graceful database cleanup first
+  (`pg_terminate_backend()`, `pg_cancel_backend()`, driver-native
+  cancellation where applicable), then forcibly terminate the worker if
+  that does not stop it — a step that must not itself be able to fail.
+- Verify through a fresh connection that the backend is actually gone (or
+  has no active transaction), not just that the local process object
+  reports itself dead.
+- Preserve the original test-body exception as primary, with cleanup
+  problems attached as notes; when nothing is already propagating, cleanup
+  failure must fail the test directly.
+- Replace the two worst-case regression tests so they prove containment
+  without any join or manual cleanup performed by the test after the
+  `with` block.
+- Re-run the focused helper tests, all five invariant concurrency tests,
+  the complete test suite, migration checks, and final pushed-head CI.
+
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`:**
+
+- The worker's statement now runs in a `multiprocessing.Process` (the
+  "spawn" start method on every platform), driven by a new module-level
+  `_worker_main()` function — required to be module-level, not a closure or
+  method, so `multiprocessing` can pickle a reference to it. A real OS
+  process, unlike a Python thread, can always be unconditionally reclaimed
+  by its owner via `terminate()`/`kill()`, regardless of what it is doing.
+- `__enter__()` performs the startup handshake over a queue: the worker
+  connects, begins its transaction, sets `lock_timeout`, and reports its
+  real backend pid, or reports a failure (plus every partial-startup
+  cleanup problem, collected via a small `_attempt()` helper rather than a
+  blanket `contextlib.suppress()`) — all before `__enter__()` returns.
+  `backend_pid` remains a private, read-only property, unchanged from the
+  ninth pass.
+- `_force_stop()`'s fallback chain gained a final, genuinely unconditional
+  layer: forcible process termination (which cannot itself fail), followed
+  by one more, deliberately non-mockable `pg_terminate_backend()` call.
+  That last call turned out to be necessary, not redundant — killing the
+  client process does not by itself guarantee PostgreSQL has noticed for a
+  statement (`pg_sleep`) that never touches its client socket at all,
+  found empirically when an earlier version of the fix left the backend
+  visibly present in `pg_stat_activity` for longer than a 5-second poll.
+  Driver-native `cancel_safe()` is still in the chain, now relayed through
+  a control queue to a watcher thread running *inside* the worker process,
+  since the controller no longer holds a live connection object once the
+  worker's connection lives in a separate process.
+- Six new/parametrized regression tests inject a failure at each
+  partial-startup stage (after connect, after transaction begin, after
+  `lock_timeout` is set, after the pid lookup, plus a case that makes the
+  connection genuinely unusable so cleanup itself fails too) and a
+  deterministic slow-startup case (a real, test-controlled delay against a
+  shortened handshake timeout), proving `__enter__()` fails predictably
+  with no process left alive in every case, without depending on real
+  network timing.
+- The two worst-case regression tests were rewritten to remove the manual
+  post-context join entirely: both now assert `not blocked._process.is_alive()`
+  and query a fresh connection immediately after the `with` block —
+  independent proof that containment already happened, not part of making
+  it happen.
+- The five production concurrency tests were mechanically adapted from a
+  `Callable[[Connection], None]` statement argument (which cannot cross a
+  process boundary as a picklable value) to a plain SQL string plus a
+  parameters dict — no change to what any of them prove.
+
+**Results:** 27 tests in `test_entity_type_change_protection.py` (9
+sequential, 13 helper regression tests — up from 8 — and 5 hardened
+concurrency tests) pass locally against AWS `dev`, confirmed stable across
+three repeated runs; the full suite is 1,106 tests (up from 1,101). See the
+verification commands and results in
+[PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
+
+## Ninth review: synchronous ownership and a deterministic fallback (resolved by tenth pass, 2026-08-04)
 
 The eighth pass correctly closed the two specific gaps the seventh review named — a bounded `connect_timeout` on the worker's connection, and an `is_alive()` check before `__enter__` raises — and its pushed `main` head passed all 1,097 tests in GitHub Actions
 [`30940498153`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30940498153).
@@ -202,8 +307,8 @@ verification commands and results in
 ## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified before this register was reopened. All three blockers this register
-tracked are now closed:
+verified. All production, concurrency-verification, and test-infrastructure
+blockers are closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -225,21 +330,22 @@ tracked are now closed:
    untested. The sixth pass added explicit checks and focused regression tests;
    the seventh review found startup-timeout and failed-cancellation paths could
    still leave a worker alive; the eighth pass bounded connection acquisition
-   and added an `is_alive()` check, but a ninth review found ownership was
-   still established by racing a poll/join against the worker thread rather
-   than synchronously, and that the only fallback for failed PostgreSQL
-   signals was to report the failure rather than actually stop the worker.
-   **Resolved** by the ninth pass: ownership (connection, `lock_timeout`,
-   backend pid) is now established synchronously before any worker thread is
-   created, and `_force_stop()` gained two further fallback layers —
-   driver-native `cancel_safe()`, then a `lock_timeout` backstop PostgreSQL
-   itself enforces — ending in a guarantee that does not depend on any
-   signal reaching the worker at all. Confirmed by
-   [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
-   GitHub Actions run
-   [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442)
-   — see
-   [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04).
+   and added an `is_alive()` check; a ninth review found ownership was still
+   established by racing a poll/join against the worker thread rather than
+   synchronously, and that the only fallback for failed PostgreSQL signals
+   was to report the failure rather than actually stop the worker, which the
+   ninth pass fixed with synchronous ownership and a layered fallback; a
+   tenth review then found that even that fallback could not deliver a
+   literal no-survivor guarantee, because no Python thread can be
+   unconditionally, forcibly stopped. **Resolved** by the tenth pass: the
+   worker now runs in an independently terminable OS process
+   (`multiprocessing.Process`), reclaimable via `terminate()`/`kill()`
+   regardless of what it is doing, with `_force_stop()`'s fallback chain
+   ending in forcible process termination followed by one more, unconditional
+   `pg_terminate_backend()` call. Confirmed by PR #13's push-triggered CI run
+   [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630),
+   which passed both jobs on `ubuntu-latest`. See
+   [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
 
 ## Fourth review baseline and scope
 
