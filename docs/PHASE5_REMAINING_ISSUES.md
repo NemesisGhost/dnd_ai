@@ -1,22 +1,28 @@
 # Phase 5 Remaining Issues
 
-> **REOPENED (2026-08-04).** A ninth review of the eighth pass's fixes found
-> they were still not airtight: connection ownership was established by
-> polling a background thread rather than synchronously before that thread
-> was ever created, and the only fallback when PostgreSQL's own
-> `pg_terminate_backend()`/`pg_cancel_backend()` signals failed was to report
-> the failure — nothing else the helper controlled could actually stop the
-> worker. The two termination-failure regression tests also proved that
-> reporting path only by corrupting the tracked backend pid (a caller
-> breaking its contract with the helper), not by a genuine failure of the
-> signaling mechanism itself. See
-> [§ Ninth review: synchronous ownership and a deterministic fallback](#ninth-review-synchronous-ownership-and-a-deterministic-fallback-2026-08-04)
-> below and
-> [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04).
-> Phase 5 production correctness remains complete; no schema, migration, or
-> production-code change is needed or was made. Formal verification and the
-> Phase 6 correctness entry gate remain open until this pass's own
-> push-triggered CI run is confirmed green and recorded here.
+> **CLOSED (2026-08-04).** A ninth pass closed the two containment gaps a
+> ninth review found in the eighth pass's fixes, entirely within
+> `tests/database/test_entity_type_change_protection.py` — see
+> [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04)
+> for the fix and evidence: `_BackgroundStatement` now establishes connection,
+> `lock_timeout`, and backend-pid ownership synchronously before any worker
+> thread is created (no more racing a poll/join against the thread's own
+> startup), `backend_pid` is private and immutable, and `_force_stop()` gained
+> a layered fallback — driver-native `cancel_safe()`, then a PostgreSQL-
+> enforced `lock_timeout` backstop — that no longer depends on any signal
+> reaching the worker at all. Six regression tests inject failures at the
+> signaling seams themselves rather than corrupting identity, including the
+> true worst case (`pg_sleep`, not lock-bound) proving the reporting path
+> still works when nothing active can stop the worker.
+> `ruff format --check`/`ruff check`/`mypy src` clean, the target file's 22
+> tests (up from 18) stable across three repeated runs, and the full
+> 1,101-test suite (up from 1,097) green — locally, and via
+> [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
+> GitHub Actions run
+> [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442).
+> No schema, migration, or production-code change was needed or made. Phase 5
+> is complete; both the Phase 6 repository-context modularization gate and
+> the Phase 5 formal-correctness gate are closed.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -37,8 +43,10 @@
 > happy-path run did not exercise, a sixth review found the fifth pass's own
 > cleanup-helper fix was itself still only best-effort, a seventh review found
 > the sixth pass still did not contain startup-timeout and failed-cancellation
-> paths, and an eighth pass fixed those two findings — but, per this reopening,
-> not completely enough.
+> paths, an eighth pass fixed those two findings, and a ninth review found
+> that fix itself still not completely enough — closed for good, per this
+> closure, by establishing ownership synchronously and ending the fallback
+> chain in a guarantee PostgreSQL itself enforces.
 
 ## Ninth review: synchronous ownership and a deterministic fallback (2026-08-04)
 
@@ -191,12 +199,11 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production blockers resolved; formal verification open)
+## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified before this register was reopened. The production and primary
-concurrency-verification blockers are closed; the helper containment blocker
-below remains open pending this pass's own CI confirmation:
+verified before this register was reopened. All three blockers this register
+tracked are now closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -222,13 +229,16 @@ below remains open pending this pass's own CI confirmation:
    still established by racing a poll/join against the worker thread rather
    than synchronously, and that the only fallback for failed PostgreSQL
    signals was to report the failure rather than actually stop the worker.
-   **Locally resolved, pending CI** by the ninth pass: ownership (connection,
-   `lock_timeout`, backend pid) is now established synchronously before any
-   worker thread is created, and `_force_stop()` gained two further fallback
-   layers — driver-native `cancel_safe()`, then a `lock_timeout` backstop
-   PostgreSQL itself enforces — ending in a guarantee that does not depend on
-   any signal reaching the worker at all. **Open** until this pass's own
-   push-triggered CI run is confirmed green and recorded in
+   **Resolved** by the ninth pass: ownership (connection, `lock_timeout`,
+   backend pid) is now established synchronously before any worker thread is
+   created, and `_force_stop()` gained two further fallback layers —
+   driver-native `cancel_safe()`, then a `lock_timeout` backstop PostgreSQL
+   itself enforces — ending in a guarantee that does not depend on any
+   signal reaching the worker at all. Confirmed by
+   [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
+   GitHub Actions run
+   [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442)
+   — see
    [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04).
 
 ## Fourth review baseline and scope
