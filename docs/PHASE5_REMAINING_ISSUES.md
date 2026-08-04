@@ -1,22 +1,21 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-04).** Revision 056 closed the production-schema blocker by
-> adding the child-location advisory lock, and all five resumed-waiter tests
-> query final committed state from independent connections. A sixth review
-> found the fifth pass's `_BackgroundStatement` cleanup helper was still only
-> best-effort — it could leave a worker alive if no backend PID was available,
-> backend termination failed, or the final bounded join expired, and it had no
-> focused regression test for that forced-cleanup path. The sixth pass
-> rewrote the helper to make each of those guarantees explicit and verified,
-> and added three focused regression tests exercising the forced-cleanup path
-> directly (including two genuine termination-failure fault injections). No
-> schema or migration change was needed or made — revision 056 was reviewed
-> again this pass and found correct, consistent with every prior review. See
-> [§ Sixth review: guaranteed worker teardown](#sixth-review-guaranteed-worker-teardown-2026-08-04)
+> **OPEN (2026-08-04).** Revision 056 closed the production-schema blocker,
+> all five resumed-waiter tests prove genuine resumption, and each queries
+> final committed state from an independent connection. A seventh review of
+> the sixth pass found that its test-only `_BackgroundStatement` helper still
+> does not guarantee teardown on every exit path: startup timeout can raise
+> while connection acquisition remains alive, and failed backend termination
+> plus cancellation can propagate an error while the worker remains alive.
+> The two fault-injection tests demonstrate the latter by manually terminating
+> the real backend after the context manager exits, and that safety-net cleanup
+> is not protected by `finally`. No schema, migration, or production-locking
+> change is needed. See
+> [§ Seventh review: startup and failed-cancellation containment](#seventh-review-startup-and-failed-cancellation-containment-2026-08-04)
 > and
-> [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04)
-> for the exact fix, tests, and CI evidence. Phase 5 is complete; this
-> register is now a closed historical record.
+> [PHASE5_VERIFICATION.md § Seventh exit review findings](PHASE5_VERIFICATION.md#seventh-exit-review-findings-2026-08-04).
+> Phase 5 production correctness is complete; formal verification and the
+> Phase 6 correctness entry gate remain open.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -35,9 +34,52 @@
 > [run 30874081442](https://github.com/NemesisGhost/dnd_ai/actions/runs/30874081442),
 > a fifth review found two concrete verification-design gaps that a green
 > happy-path run did not exercise, and a sixth review (below) found the fifth
-> pass's own cleanup-helper fix was itself still only best-effort.
+> pass's own cleanup-helper fix was itself still only best-effort. A seventh
+> review found the sixth pass still did not contain startup-timeout and
+> failed-cancellation paths.
 
-## Sixth review: guaranteed worker teardown (2026-08-04)
+## Seventh review: startup and failed-cancellation containment (2026-08-04)
+
+The sixth pass correctly improved successful forced cleanup, failure reporting,
+connection invalidation, and liveness checks, and its pushed `main` head passed
+all 1,096 tests in GitHub Actions
+[`30924888684`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30924888684).
+That green run does not exercise two exit paths strongly enough to establish
+the register's universal teardown requirement:
+
+1. **Startup timeout can outlive `__enter__`.** Connection acquisition runs in
+   the background thread. When the startup deadline expires, `__enter__`
+   performs another bounded join but does not verify that the thread stopped
+   before raising. A slow or stuck connection attempt can therefore remain
+   alive after context entry has failed.
+2. **Failed termination and cancellation can outlive `__exit__`.** When both
+   PostgreSQL signals fail, `_force_stop()` reports the failure but cannot stop
+   the worker. `__exit__` then raises the cleanup failure or attaches it to the
+   original exception while the worker remains alive.
+3. **The fault-injection tests confirm, rather than contain, that survivor.**
+   Both tests manually terminate the real backend and join the worker only
+   after `_BackgroundStatement.__exit__()` has finished. That safety-net work
+   is not in `finally`; an earlier assertion failure can bypass it.
+
+The remaining acceptance criteria are test-infrastructure-only:
+
+- Establish connection/backend ownership before starting a worker whose
+  lifetime can escape the context, or use a cancellation design that can
+  always contain startup failure within a bounded interval.
+- Do not leave a live worker after failed `pg_terminate_backend()` and
+  `pg_cancel_backend()` attempts. If a Python thread cannot be forcibly
+  stopped safely, redesign ownership so releasing the context's controlled
+  resource deterministically unblocks it, then verify the worker stopped.
+- Preserve the original test failure while also reporting cleanup failure.
+- Put every regression test's safety-net backend/thread cleanup in `finally`,
+  and prove no thread, transaction, connection, or advisory lock survives.
+- Re-run the focused helper tests, all five invariant concurrency tests, the
+  complete 1,096-plus-test suite, migration checks, and final pushed-head CI.
+
+Do not add a migration or alter revision 056 unless a separate review finds a
+concrete production defect.
+
+## Sixth review: attempted guaranteed worker teardown (2026-08-04)
 
 The fifth pass's `_BackgroundStatement.__exit__()` attempted to terminate a
 still-alive backend but did not guarantee the outcome: termination was skipped
@@ -115,11 +157,12 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production blockers resolved; formal verification closed)
+## At a glance (production blockers resolved; formal verification open)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified before this register was reopened. It failed its full
-database-integrity exit requirement until both parts of the gate below closed:
+verified before this register was reopened. The production and primary
+concurrency-verification blockers are closed; the helper containment blocker
+below remains open:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -138,9 +181,11 @@ database-integrity exit requirement until both parts of the gate below closed:
 3. **Test-infrastructure blocker:** the fifth-pass helper attempted to
    terminate a blocked backend during cleanup, but did not prove termination
    succeeded or that the worker stopped, and the forced-cleanup path was
-   untested. **Resolved** by the sixth pass's rewritten `_BackgroundStatement`
-   and its three focused regression tests; see
-   [§ Sixth review](#sixth-review-guaranteed-worker-teardown-2026-08-04) above.
+   untested. The sixth pass added explicit checks and focused regression tests,
+   but the seventh review proved startup-timeout and failed-cancellation paths
+   can still leave a worker alive. **Open** until the acceptance criteria in
+   [§ Seventh review](#seventh-review-startup-and-failed-cancellation-containment-2026-08-04)
+   are implemented and the final pushed head passes the complete workflow.
 
 ## Fourth review baseline and scope
 
