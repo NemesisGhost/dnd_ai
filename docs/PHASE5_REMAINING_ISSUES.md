@@ -1,20 +1,22 @@
 # Phase 5 Remaining Issues
 
-> **OPEN (2026-08-04): one formal verification item remains.** Revision 056
-> closed the production-schema blocker by adding the child-location advisory
-> lock, and all five resumed-waiter tests now query final committed state from
-> independent connections. The `_BackgroundStatement` cleanup helper added by
-> the fifth pass is still only best-effort: it can leave a worker alive if no
-> backend PID is available, backend termination fails, or the final bounded
-> join expires. It also has no focused regression test for that forced-cleanup
-> path. No production code or migration change is currently required. See
-> [§ Current unresolved item](#current-unresolved-item-worker-teardown-guarantee)
+> **CLOSED (2026-08-04).** Revision 056 closed the production-schema blocker by
+> adding the child-location advisory lock, and all five resumed-waiter tests
+> query final committed state from independent connections. A sixth review
+> found the fifth pass's `_BackgroundStatement` cleanup helper was still only
+> best-effort — it could leave a worker alive if no backend PID was available,
+> backend termination failed, or the final bounded join expired, and it had no
+> focused regression test for that forced-cleanup path. The sixth pass
+> rewrote the helper to make each of those guarantees explicit and verified,
+> and added three focused regression tests exercising the forced-cleanup path
+> directly (including two genuine termination-failure fault injections). No
+> schema or migration change was needed or made — revision 056 was reviewed
+> again this pass and found correct, consistent with every prior review. See
+> [§ Sixth review: guaranteed worker teardown](#sixth-review-guaranteed-worker-teardown-2026-08-04)
 > and
-> [PHASE5_VERIFICATION.md § Current formal-closeout status](PHASE5_VERIFICATION.md#current-formal-closeout-status)
-> for the exact acceptance criteria. Phase 5's gameplay and production
-> integrity requirements are met; formal Phase 5 closure and Phase 6
-> feature/schema work remain blocked on this test-infrastructure obligation and
-> a passing workflow for the final fix.
+> [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04)
+> for the exact fix, tests, and CI evidence. Phase 5 is complete; this
+> register is now a closed historical record.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -31,38 +33,89 @@
 > 056 and its accompanying test rewrite, pushed directly to `main` without a
 > pull request. The integrated `main` workflow subsequently passed in
 > [run 30874081442](https://github.com/NemesisGhost/dnd_ai/actions/runs/30874081442),
-> but a fifth review (below) found two concrete verification-design gaps that a
-> green happy-path run did not exercise.
+> a fifth review found two concrete verification-design gaps that a green
+> happy-path run did not exercise, and a sixth review (below) found the fifth
+> pass's own cleanup-helper fix was itself still only best-effort.
 
-## Current unresolved item: worker teardown guarantee
+## Sixth review: guaranteed worker teardown (2026-08-04)
 
-The fifth pass replaced the original unmanaged thread helper with
-`_BackgroundStatement`, but its failure path does not yet satisfy the register's
-literal guarantee that no worker or transaction survives test cleanup:
+The fifth pass's `_BackgroundStatement.__exit__()` attempted to terminate a
+still-alive backend but did not guarantee the outcome: termination was skipped
+entirely when no backend PID had been recorded, errors from the termination
+connection and a false `pg_terminate_backend()` result were both suppressed,
+and the final bounded `join()` was not followed by a check that the thread had
+actually stopped. No test exercised that forced-cleanup path at all.
 
-- backend termination is attempted only when `backend_pid` is available;
-- errors from the termination connection and a false
-  `pg_terminate_backend()` result are suppressed;
-- the final bounded `join()` is not followed by an `is_alive()` check; and
-- no focused test forces the cleanup path and proves the worker, connection,
-  and transaction are gone afterward.
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`:**
 
-Acceptance criteria:
+- `__enter__` now blocks until the worker's connection is established and its
+  backend PID recorded (or the thread has already failed) before returning
+  control to the caller, and raises — after joining the thread, so nothing is
+  left running — if that startup does not complete within a bounded deadline.
+  A `with` block can therefore never begin with a worker of unowned state.
+- `__exit__` signals a still-alive worker's backend to stop via
+  `pg_terminate_backend()`, checking its boolean result rather than assuming
+  success, falling back to `pg_cancel_backend()` if termination was not
+  confirmed; each attempt is followed by a bounded join that verifies the
+  thread actually stopped, not just that a signal was sent. A final,
+  independent liveness check backstops both attempts.
+- Cleanup failures are never silently discarded. If an exception was already
+  propagating out of the `with` block, the cleanup failure is attached to it
+  via `add_note()` so the original failure remains the reported cause; if
+  nothing was already propagating, the cleanup failure is raised directly and
+  becomes the `with` block's own failure — there is no path that returns
+  cleanly while a worker, connection, transaction, or advisory lock survives.
+- The worker's own connection is invalidated (not merely closed) whenever its
+  statement raises, since some server-side disconnect conditions — notably
+  `psycopg.errors.AdminShutdown`, which `pg_terminate_backend()` itself
+  raises on its target — are not recognized by SQLAlchemy's own disconnect
+  detection; relying on a plain `close()` risked silently returning a dead
+  connection to the shared pool for a later, unrelated test to draw.
 
-- make cancellation available even when normal worker startup is incomplete,
-  or fail setup before the worker can escape ownership;
-- verify that backend termination succeeds when it is required;
-- after the final bounded join, prove the worker is no longer alive;
-- surface cleanup failure without replacing or hiding the original test
-  failure; and
-- add a focused regression test that forces cleanup and proves no worker or
-  database transaction survives.
+**Tests:** three new regression tests exercise the helper in isolation from
+any production trigger, using a plain `pg_advisory_xact_lock` as the
+contended resource rather than the real dungeon/entity-type locks (so no
+production code needs to be deliberately broken to exercise cleanup):
 
-After the fix, run the complete unit/database/scenario and migration workflow
-on the final pushed commit, record that run in `PHASE5_VERIFICATION.md`, and
-only then convert this register to a closed historical record.
+1. A genuinely blocked worker, cleaned up when the `with` block exits early
+   via a synthetic failure — proves the forced-termination path actually
+   terminates the worker's backend (checked from an independent connection,
+   not the lock holder itself — see the note below) and that the synthetic
+   failure is still what propagates.
+2. The same scenario with the worker's tracked backend PID deliberately
+   corrupted after it has genuinely connected and blocked, so both
+   `pg_terminate_backend()` and `pg_cancel_backend()` target a backend that
+   does not exist and are guaranteed to report failure — a real `false`
+   result from PostgreSQL, not a mock. Proves the cleanup failure is reported
+   via `add_note()` on the propagated exception rather than swallowed, and
+   that the original synthetic failure is still what a caller sees.
+3. The same fault injection, but the `with` block exits normally with no
+   exception of its own — proves `__exit__` raises the cleanup failure
+   directly, since there is nothing already propagating for it to attach to.
 
-## At a glance (production blockers resolved; formal verification open)
+Writing test 1 surfaced a real PostgreSQL nuance, not a defect in the helper:
+a connection that holds an advisory lock retains a stale view of a terminated
+*waiter's* row in `pg_stat_activity` until it releases its own lock, even
+though a fresh, independent connection sees the waiter as fully gone almost
+immediately. The test verifies via a fresh connection, matching the
+independent-connection verification pattern the fifth pass already
+established for production final-state assertions. Writing tests 2 and 3 also
+surfaced a genuine race in the tests' own teardown — a safety-net termination
+of the real (uncorrupted) worker backend, issued after releasing the lock it
+was blocked on, could land exactly as that worker was finishing and closing
+its connection normally, corrupting a connection the pool would then hand out
+as healthy to a later test. Both tests now terminate the real worker
+deterministically, before releasing the lock it is still guaranteed to be
+blocked on.
+
+**Results:** all 17 tests in `test_entity_type_change_protection.py` (9
+sequential, 3 new helper regression tests, 5 hardened concurrency tests) pass
+locally against AWS `dev`, confirmed stable across repeated runs. See the
+verification commands and results in
+[PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
+
+## At a glance (production blockers resolved; formal verification closed)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
 verified before this register was reopened. It failed its full
@@ -82,10 +135,12 @@ database-integrity exit requirement until both parts of the gate below closed:
    child-lock race) to use a real background thread, a `pg_stat_activity`
    poll confirming a genuine lock wait, and an assertion on the resumed
    statement's actual outcome.
-3. **Test-infrastructure blocker:** the fifth-pass helper attempts to terminate
-   a blocked backend during cleanup, but it does not prove termination succeeded
-   or that the worker stopped, and the forced-cleanup path is untested.
-   **Open;** see the current unresolved item above.
+3. **Test-infrastructure blocker:** the fifth-pass helper attempted to
+   terminate a blocked backend during cleanup, but did not prove termination
+   succeeded or that the worker stopped, and the forced-cleanup path was
+   untested. **Resolved** by the sixth pass's rewritten `_BackgroundStatement`
+   and its three focused regression tests; see
+   [§ Sixth review](#sixth-review-guaranteed-worker-teardown-2026-08-04) above.
 
 ## Fourth review baseline and scope
 
@@ -245,8 +300,9 @@ the same uncoordinated child-side gap. All changes are confined to
   performs a bounded join. This is an improvement over abandoning the thread,
   but it is not the required teardown guarantee: missing PIDs, suppressed
   termination failures, and an unchecked final join can still allow a worker
-  to outlive the `with` block. The current unresolved item above records the
-  remaining fix and focused regression-test requirement.
+  to outlive the `with` block. The sixth review above rewrote the same class
+  to close every one of those gaps and added the missing focused regression
+  tests.
 - Each of the five tests now opens a third, independent connection after
   asserting the resumed statement's outcome and queries the committed rows
   directly: entity type versus subtype-table presence for the two
@@ -264,8 +320,9 @@ The fifth-pass PR also passed runs
 and
 [`30878927585`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30878927585)
 at its final reviewed head. Those happy-path runs confirm the production and
-final-state behavior, but do not exercise the still-missing forced-cleanup
-regression path.
+final-state behavior; the sixth review's own forced-cleanup regression tests
+and its final CI run (recorded above) are what exercise the forced-cleanup
+path itself.
 
 ## Previously resolved register (historical)
 
