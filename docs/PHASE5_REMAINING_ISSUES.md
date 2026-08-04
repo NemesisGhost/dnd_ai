@@ -1,21 +1,28 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-04).** An eighth pass closed both containment gaps the
-> seventh review found, entirely within
+> **CLOSED (2026-08-04).** A ninth pass closed the two containment gaps a
+> ninth review found in the eighth pass's fixes, entirely within
 > `tests/database/test_entity_type_change_protection.py` — see
-> [PHASE5_VERIFICATION.md § Eighth exit review corrections](PHASE5_VERIFICATION.md#eighth-exit-review-corrections-2026-08-04)
-> for the fix and evidence: `_BackgroundStatement`'s worker connection is now
-> bounded by a driver-level `connect_timeout` shorter than every join/poll
-> deadline above it (closing the startup-timeout gap at its root, not just
-> bounding how long `__enter__` waits to be told about a stall), `__enter__`
-> verifies the thread actually stopped before raising, all three regression
-> tests' safety-net cleanup now runs unconditionally in `finally`, and a new
-> regression test proves the failure path end to end against a real refused
-> connection. `ruff format --check`/`ruff check`/`mypy src` clean, the target
-> file's 18 tests (up from 17) stable across three repeated runs, and the
-> full 1,097-test suite (up from 1,096) green against a fresh ephemeral AWS
-> `dev` database. Phase 5 is complete; both the Phase 6 repository-context
-> modularization gate and the Phase 5 formal-correctness gate are closed.
+> [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04)
+> for the fix and evidence: `_BackgroundStatement` now establishes connection,
+> `lock_timeout`, and backend-pid ownership synchronously before any worker
+> thread is created (no more racing a poll/join against the thread's own
+> startup), `backend_pid` is private and immutable, and `_force_stop()` gained
+> a layered fallback — driver-native `cancel_safe()`, then a PostgreSQL-
+> enforced `lock_timeout` backstop — that no longer depends on any signal
+> reaching the worker at all. Six regression tests inject failures at the
+> signaling seams themselves rather than corrupting identity, including the
+> true worst case (`pg_sleep`, not lock-bound) proving the reporting path
+> still works when nothing active can stop the worker.
+> `ruff format --check`/`ruff check`/`mypy src` clean, the target file's 22
+> tests (up from 18) stable across three repeated runs, and the full
+> 1,101-test suite (up from 1,097) green — locally, and via
+> [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
+> GitHub Actions run
+> [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442).
+> No schema, migration, or production-code change was needed or made. Phase 5
+> is complete; both the Phase 6 repository-context modularization gate and
+> the Phase 5 formal-correctness gate are closed.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -33,10 +40,45 @@
 > pull request. The integrated `main` workflow subsequently passed in
 > [run 30874081442](https://github.com/NemesisGhost/dnd_ai/actions/runs/30874081442),
 > a fifth review found two concrete verification-design gaps that a green
-> happy-path run did not exercise, and a sixth review (below) found the fifth
-> pass's own cleanup-helper fix was itself still only best-effort. A seventh
-> review found the sixth pass still did not contain startup-timeout and
-> failed-cancellation paths.
+> happy-path run did not exercise, a sixth review found the fifth pass's own
+> cleanup-helper fix was itself still only best-effort, a seventh review found
+> the sixth pass still did not contain startup-timeout and failed-cancellation
+> paths, an eighth pass fixed those two findings, and a ninth review found
+> that fix itself still not completely enough — closed for good, per this
+> closure, by establishing ownership synchronously and ending the fallback
+> chain in a guarantee PostgreSQL itself enforces.
+
+## Ninth review: synchronous ownership and a deterministic fallback (2026-08-04)
+
+The eighth pass correctly closed the two specific gaps the seventh review named — a bounded `connect_timeout` on the worker's connection, and an `is_alive()` check before `__enter__` raises — and its pushed `main` head passed all 1,097 tests in GitHub Actions
+[`30940498153`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30940498153).
+A closer review of that fix, and of the two regression tests claiming to prove `__exit__`'s cleanup-failure path, found the underlying guarantee was still not what the register requires:
+
+1. **`__enter__()` still raced its own worker's startup rather than owning it.** The connection was opened inside the background thread; `__enter__` polled for a recorded backend pid, then joined with a timeout to find out whether startup had succeeded. A shorter `connect_timeout` makes the race narrower, but it is still a race — two independent things (the thread's own progress, and `__enter__`'s poll/join) resolving against each other, not one thing established before the other exists by construction.
+2. **`_force_stop()` had no fallback beyond reporting failure.** If both `pg_terminate_backend()` and `pg_cancel_backend()` failed, nothing else the helper controlled could reach the worker. Faithfully reporting that dead end is necessary but is not the deterministic recovery the register asks for.
+3. **The two termination-failure regression tests corrupted the tracked backend pid to force that failure**, rather than injecting a failure into the signaling mechanism itself. That proves "the helper honestly reports a failure when a caller lies about which backend it owns" — a real property, but not "PostgreSQL's own signals genuinely failed against the correct backend and the helper still stopped it," which is what the register's acceptance criteria actually ask for. `backend_pid` being a mutable, publicly writable list made this loophole possible in the first place.
+
+Acceptance criteria, all test-infrastructure-only (do not add or modify a migration or production trigger unless a separate review finds a concrete production defect):
+
+- Establish connection/backend ownership synchronously, before a worker thread is ever created — not by racing a poll/join against the thread's own progress.
+- Keep the backend pid and owned connection private and immutable from callers; inject failures into the signaling operations themselves for fault-injection tests, not into tracked identity.
+- Implement a deterministic fallback grounded in a resource the helper genuinely owns for when PostgreSQL's termination/cancellation signals fail, not just failure reporting.
+- Prove that fallback with tests that inject failure into the signaling operations (a false result, and a raised exception, for each signal) rather than corrupting identity.
+- Prove the true worst case — nothing active can stop the worker — still reports the cleanup failure correctly and preserves an already-propagating original exception, without the test using manual post-context cleanup as the thing being proven.
+- Put every regression test's safety-net cleanup in `finally`; carry forward the eighth pass's fix rather than regressing it.
+- Re-run the focused helper tests, all five invariant concurrency tests, the complete test suite, migration checks, and final pushed-head CI.
+
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`:**
+
+- `_BackgroundStatement._establish_connection()` (new, isolated method) now connects through the private, single-use, `connect_timeout`-bounded engine, begins the transaction, sets `SET LOCAL lock_timeout` on it, and reads the real backend pid — synchronously, in the calling thread, inside `__enter__()`, before the worker thread is constructed at all. A failure raises directly with no thread ever created; ownership and the worker's existence no longer race each other.
+- `backend_pid` is now private (`self._backend_pid_value`) with a read-only public property — no caller can overwrite it.
+- `_force_stop()` gained two more fallback layers beyond the existing SQL signals (now issued through an isolated, mockable `_send_signal()` seam): `_cancel_via_driver()`, using psycopg's `Connection.cancel_safe()` directly on the worker's own connection handle (confirmed empirically to interrupt a genuinely blocked worker from another thread within 0.24s); and the `lock_timeout` set during startup, a bound PostgreSQL itself enforces regardless of anything this thread does or fails to do (confirmed empirically: an unsignaled worker with `lock_timeout = '2s'` still failed with `LockNotAvailable` after 2.04s).
+- Six regression tests replace the three that corrupted `backend_pid`: the original real-signal-succeeds case; a parametrized case proving the fallback to `cancel_safe()` when both SQL signals are mocked to fail (as a false result, and by raising); a case proving the fallback to the `lock_timeout` backstop when every active mechanism is mocked to fail; and two cases — with and without an original exception propagating — using `pg_sleep` (not lock-bound, so even the backstop cannot rescue it) with every active mechanism mocked to fail, proving `_force_stop()`'s reporting path still works in the genuine worst case and the worker still terminates once its own fixed duration naturally elapses.
+- The refused-port startup test is replaced by a deterministic mocked slow-then-failing `_establish_connection()`, proving `__enter__()` raises within a bounded interval with no thread ever created, plus a second test keeping a real (unmocked) connection failure to confirm the same structural guarantee against a genuine driver error.
+
+**Results:** 22 tests in `test_entity_type_change_protection.py` (9 sequential, 8 helper regression tests, 5 hardened concurrency tests) pass locally against AWS `dev`, confirmed stable across three repeated runs; the full suite is 1,101 tests (up from 1,097). See the verification commands and results in
+[PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04).
 
 ## Seventh review: startup and failed-cancellation containment (resolved by eighth pass, 2026-08-04)
 
@@ -182,11 +224,22 @@ tracked are now closed:
    succeeded or that the worker stopped, and the forced-cleanup path was
    untested. The sixth pass added explicit checks and focused regression tests;
    the seventh review found startup-timeout and failed-cancellation paths could
-   still leave a worker alive. **Resolved** by the eighth pass: a driver-level
-   `connect_timeout` bounds the worker's own connection acquisition, `__enter__`
-   verifies the thread stopped before raising, and every regression test's
-   safety-net cleanup now runs unconditionally in `finally` — see
-   [PHASE5_VERIFICATION.md § Eighth exit review corrections](PHASE5_VERIFICATION.md#eighth-exit-review-corrections-2026-08-04).
+   still leave a worker alive; the eighth pass bounded connection acquisition
+   and added an `is_alive()` check, but a ninth review found ownership was
+   still established by racing a poll/join against the worker thread rather
+   than synchronously, and that the only fallback for failed PostgreSQL
+   signals was to report the failure rather than actually stop the worker.
+   **Resolved** by the ninth pass: ownership (connection, `lock_timeout`,
+   backend pid) is now established synchronously before any worker thread is
+   created, and `_force_stop()` gained two further fallback layers —
+   driver-native `cancel_safe()`, then a `lock_timeout` backstop PostgreSQL
+   itself enforces — ending in a guarantee that does not depend on any
+   signal reaching the worker at all. Confirmed by
+   [PR #12](https://github.com/NemesisGhost/dnd_ai/pull/12)'s push-triggered
+   GitHub Actions run
+   [`30948086442`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30948086442)
+   — see
+   [PHASE5_VERIFICATION.md § Ninth exit review](PHASE5_VERIFICATION.md#ninth-exit-review-findings-and-corrections-2026-08-04).
 
 ## Fourth review baseline and scope
 
