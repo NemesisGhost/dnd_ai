@@ -28,10 +28,25 @@
 > below and
 > [PHASE5_VERIFICATION.md § Thirteenth exit
 > review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
+> A fourteenth review of that same open PR's follow-up commit (`267ac1d`) then
+> found the thirteenth pass's own fixes were themselves still incomplete:
+> `_force_stop()` still classified containment as forced from mere
+> post-attempt absence of liveness, not positive evidence the controller's own
+> call caused it; several `join()`/`is_alive()` calls throughout the cleanup
+> paths were unguarded and could themselves replace an already-propagating
+> exception; and the redesigned independent safety net never closed the
+> `Process` object or any IPC endpoint and suppressed every failure it found
+> instead of reporting it. A fourteenth pass fixed all three. See [§
+> Fourteenth review: evidence-based containment classification, fully guarded
+> cleanup, and a complete independent safety
+> net](#fourteenth-review-evidence-based-containment-classification-fully-guarded-cleanup-and-a-complete-independent-safety-net-2026-08-05)
+> below and
+> [PHASE5_VERIFICATION.md § Fourteenth exit
+> review](PHASE5_VERIFICATION.md#fourteenth-exit-review-evidence-based-containment-classification-fully-guarded-cleanup-and-a-complete-independent-safety-net-2026-08-05).
 > Phase 5 production correctness and the five-invariant concurrency suite
 > remain complete throughout; no schema, migration, or production-code change
 > was needed or made. Formal verification is complete and locally verified
-> (57 tests in `test_entity_type_change_protection.py`, 1,153 in the full
+> (93 tests in `test_entity_type_change_protection.py`, 1,189 in the full
 > suite); the Phase 6 correctness entry gate remains blocked until [PR
 > #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run
 > — the actual final pushed head, not an earlier implementation commit —
@@ -590,6 +605,136 @@ three repeated runs; the full suite is 1,153 tests (up from 1,144). See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Thirteenth exit review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
 
+## Fourteenth review: evidence-based containment classification, fully guarded cleanup, and a complete independent safety net (2026-08-05)
+
+The thirteenth pass correctly introduced `containment_reason`, ran backend
+verification on every path, and gave `Process.start()` failures real
+ownership, and its pushed PR head (commit `267ac1d`) passed all 1,153 tests
+in GitHub Actions
+[`30977657034`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30977657034).
+Review of that same open PR found each of the three fixes was itself still
+incomplete:
+
+1. **Forced-termination classification was still not evidence-based.**
+   `_force_stop()` classified containment as `"forced"` whenever the process
+   was no longer alive after the post-`terminate()`/`kill()` join — regardless
+   of whether that specific call actually raised, or merely no-opped and the
+   process happened to end for an unrelated reason during the same join
+   window. Reproduced deterministically with a fake process (`terminate()`
+   raising, `is_alive()` then reporting `False`): `_force_stop()` still
+   returned `"forced"`. A worker that survives every graceful attempt, whose
+   `terminate()` then fails or no-ops, that happens to finish naturally during
+   the subsequent join, and whose outcome publication then fails, could still
+   have that missing outcome wrongly excused as the legitimate
+   forced-termination case.
+2. **Partial-start cleanup was not completely failure-safe.** `terminate()`,
+   `kill()`, and `close()` in `_cleanup_process_after_start_failure()` were
+   protected, but its `join()`/`is_alive()` calls were not. A deterministic
+   probe against a fake process reproduced a `join()` failure escaping the
+   method uncaught, replacing the original `Process.start()` exception
+   entirely and skipping subsequent cleanup — including the IPC-channel
+   cleanup `__enter__`'s except block runs immediately afterward. The same
+   unguarded-call pattern was present in `_force_stop()`'s graceful-phase
+   loop, `_reap()`, and two checks in `__exit__()` itself.
+3. **The regression-test safety net did not fulfill its own stated
+   contract.** `_emergency_teardown()` no longer called
+   `_BackgroundStatement.__exit__()` (an improvement), but a deterministic
+   probe showed it left the `Process` object unclosed, left all six IPC
+   endpoints untouched, and suppressed every termination/backend-cleanup
+   failure it encountered (`contextlib.suppress(Exception)` and a bare
+   `except Exception: pass`) instead of collecting and reporting them — able
+   to hide a genuine survivor or resource leak, invisibly, precisely because
+   it no longer relies on the implementation under test to surface one.
+
+Acceptance criteria, all test-infrastructure-only (do not change a
+production trigger or add a migration unless a separate review finds a
+concrete production defect):
+
+- `"missing-after-forced-termination"` is reachable only when there is
+  positive evidence a successful, controller-owned `terminate()`/`kill()`
+  actually ended the process — a raised or no-op forcible call followed by
+  the process merely no longer being alive must not produce it.
+- No cleanup-path `join()`/`is_alive()` call can itself raise and replace an
+  already-propagating startup, statement, or outcome exception.
+- Partial-start cleanup preserves the original `Process.start()` exception in
+  every case, attempts every independently valid containment step regardless
+  of an earlier one's failure, and still closes every IPC endpoint afterward.
+- The independent safety net directly and independently attempts process
+  status/terminate/kill/join/close, backend termination and confirmation,
+  and closure of every IPC endpoint — collecting every failure, never
+  suppressing one — and preserves a test-body exception as primary rather
+  than replacing or hiding it behind its own findings.
+- Re-run the focused helper tests (including new ones for the safety net
+  itself), all five invariant concurrency tests, the complete test suite,
+  migration checks, and the actual final pushed-head CI.
+
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`:**
+
+- A new `_attempt_forced_termination()` requires *positive* evidence before
+  returning `"forced"`: the `terminate()`/`kill()` call itself must complete
+  without raising, **and** `Process.exitcode` afterward must be negative
+  (confirmed empirically to hold for both calls on this platform, and true by
+  definition on POSIX) — distinct from the `0` a natural/graceful exit
+  reports. A new `"indeterminate"` containment reason covers "not alive, but
+  without evidence this controller's own call caused it," treated identically
+  to `"graceful"`/`"survived"` by `_finalize_worker_outcome` (never exempting
+  a missing outcome). Ten new deterministic, fake-process-driven tests cover
+  every combination of failed/no-op/successful `terminate()` and `kill()`
+  against every combination of subsequent liveness/exitcode evidence, plus a
+  table-driven proof that a missing outcome is a protocol failure for every
+  containment reason except `"forced"`.
+- Two new shared helpers, `_safe_read()` and `_process_liveness()`, guard
+  every `join()`/`is_alive()`/`pid`/`exitcode` read across `_force_stop()`,
+  `_reap()`, `_cleanup_process_after_start_failure()`, and `__exit__()` —
+  collecting a failure rather than letting it propagate, and treating an
+  unreadable status as "might still be alive," never as "already gone."
+  `_cleanup_process_after_start_failure()` also now collects `pid`-read and
+  initial-`is_alive()`-read failures instead of silently defaulting them to
+  "never started." Nine new fake-process-driven tests cover pid-inspection,
+  initial-status, `terminate()`, first-join, post-terminate-status, `kill()`,
+  second-join, final-status, and process-close failures individually; one new
+  integration test (a genuinely spawned, startup-delayed process whose
+  `start()` fails after spawning) proves a `terminate()` failure and an IPC
+  endpoint's close failure are both reported together without replacing the
+  original `Process.start()` exception.
+- `_emergency_teardown()` is rewritten around a new `_run_emergency_teardown()`
+  that directly and independently attempts process status/terminate/kill/join,
+  a final status check before closing the `Process` object, independent
+  backend termination *and* polled confirmation the backend disappeared,
+  closure of all six IPC endpoints, and (via a new `extra_connections`
+  parameter) release of a test-controlled lock-holding connection — replacing
+  the five call sites that previously paired a separate `first.rollback()`
+  alongside it. Every failure is collected, none suppressed. `_emergency_teardown()`
+  itself uses `sys.exc_info()` to attach found problems as notes to an
+  already-propagating test-body exception, or raise them directly when
+  nothing else is failing — including when an expected failure was already
+  fully handled by an enclosing `pytest.raises`, which leaves nothing
+  propagating by the time the `finally` block runs. Sixteen new unit tests,
+  built entirely from fake process/pipe/backend-connection objects (no real
+  process or database), cover the happy path, successful termination, kill
+  escalation, survival after both forcible operations fail, both joins
+  failing, status-inspection failure, process-close failure, all six IPC
+  endpoints failing independently, `pg_terminate_backend` itself failing,
+  verification-query failure, the backend never disappearing, a clean
+  confirmation, an extra connection's rollback failing, and the three states
+  of the exception-preservation contract.
+- Two of the newly touched fault-injection test doubles (`_FakeConnection`
+  and the `close()` seams patched via `_raise_injected_failure`) previously
+  raised on *every* call, unlike a real `Process`/`Connection`'s idempotent
+  `close()` (confirmed empirically) — which meant the redesigned safety net's
+  own redundant close attempt would observe a second, spurious failure from a
+  problem the test already fully proved once. A new `_raise_once_then_succeed()`
+  helper and `_FakeConnection`'s own idempotent-after-first-call `close()`
+  fix this without weakening any existing assertion.
+
+**Results:** 93 tests in `test_entity_type_change_protection.py` (up from 57:
+36 new — 10 forced-termination-classification tests, 10 partial-start-cleanup
+tests, and 16 safety-net unit tests) pass locally against AWS `dev`; the full
+suite is 1,189 tests (up from 1,153). See the verification commands and
+results in
+[PHASE5_VERIFICATION.md § Fourteenth exit review](PHASE5_VERIFICATION.md#fourteenth-exit-review-evidence-based-containment-classification-fully-guarded-cleanup-and-a-complete-independent-safety-net-2026-08-05).
+
 ## Ninth review: synchronous ownership and a deterministic fallback (resolved by tenth pass, 2026-08-04)
 
 The eighth pass correctly closed the two specific gaps the seventh review named — a bounded `connect_timeout` on the worker's connection, and an `is_alive()` check before `__enter__` raises — and its pushed `main` head passed all 1,097 tests in GitHub Actions
@@ -805,12 +950,22 @@ formal closure additionally awaits PR #15's own final-head CI confirmation
    outcome-protocol, backend-verification, and process-ownership fixes were
    themselves still incomplete — see [§ Thirteenth
    review](#thirteenth-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05)
-   above. **Resolved** by the thirteenth pass's accurate missing-outcome
+   above. Fixed by the thirteenth pass's accurate missing-outcome
    classification, universal (non-redundant) backend verification, and
-   `Process.start()` failure ownership, verified locally (57 tests in
-   `test_entity_type_change_protection.py`, 1,153 total), pending
-   confirmation from PR #15's own final-head CI run. See
-   [PHASE5_VERIFICATION.md § Thirteenth exit review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
+   `Process.start()` failure ownership, confirmed by PR #15's push-triggered
+   CI run
+   [`30977657034`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30977657034)
+   for that same commit (`267ac1d`). A fourteenth review of that commit then
+   found the thirteenth pass's own forced-termination classification,
+   partial-start cleanup, and regression-test safety net were themselves
+   still incomplete — see [§ Fourteenth
+   review](#fourteenth-review-evidence-based-containment-classification-fully-guarded-cleanup-and-a-complete-independent-safety-net-2026-08-05)
+   above. **Resolved** by the fourteenth pass's evidence-based containment
+   classification, fully guarded cleanup, and complete independent safety
+   net, verified locally (93 tests in `test_entity_type_change_protection.py`,
+   1,189 total), pending confirmation from PR #15's own final-head CI run.
+   See
+   [PHASE5_VERIFICATION.md § Fourteenth exit review](PHASE5_VERIFICATION.md#fourteenth-exit-review-evidence-based-containment-classification-fully-guarded-cleanup-and-a-complete-independent-safety-net-2026-08-05).
 
 ## Fourth review baseline and scope
 

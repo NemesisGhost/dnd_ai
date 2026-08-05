@@ -11,11 +11,12 @@ trigger alone cannot see.
 
 import contextlib
 import multiprocessing
+import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from sqlalchemy import Connection, Engine, create_engine, text
@@ -250,16 +251,72 @@ def _cleanup_world(engine: Engine, slug: str) -> None:
 # identically everywhere.
 
 
-def _attempt(problems: list[tuple[str, Exception]], label: str, fn: Callable[[], None]) -> None:
-    """Runs fn(), appending (label, exc) to problems on failure rather than
-    silently discarding it. Every caller attempts every required cleanup
-    step regardless of whether an earlier one failed, and every failure
-    that happens along the way is collected for reporting — never
-    suppressed."""
+def _attempt(problems: list[tuple[str, Exception]], label: str, fn: Callable[[], None]) -> bool:
+    """Runs fn(), appending (label, exc) to problems and returning False on
+    failure rather than silently discarding it or letting the exception
+    propagate and replace whatever exception a caller further up the
+    stack (startup, statement, or outcome) may already be reporting.
+    Every caller attempts every required cleanup step regardless of
+    whether an earlier one failed, and every failure that happens along
+    the way is collected for reporting — never suppressed. The boolean
+    return lets a caller that needs to know whether a specific step
+    actually *succeeded* — not merely "was attempted" — make that
+    distinction (Phase 5 fourteenth exit review: evidence-based
+    forced-termination classification needs exactly this)."""
     try:
         fn()
     except Exception as exc:  # noqa: BLE001 - collected, not swallowed
         problems.append((label, exc))
+        return False
+    return True
+
+
+def _safe_read(
+    problems: list[tuple[str, Exception]], label: str, fn: Callable[[], Any]
+) -> tuple[Any, bool]:
+    """Runs a zero-argument read-only accessor (a status/identity check
+    such as `.pid`, `.is_alive()`, or `.exitcode`), collecting any
+    failure into problems and returning `(None, False)` instead of
+    letting it propagate — the same failure-safety `_attempt` gives
+    actions, for reads. The `ok` flag lets a caller distinguish a
+    genuinely observed falsy/None value from a failed read that merely
+    looks like one: an unknown state must never be silently treated as a
+    confirmed one (Phase 5 fourteenth exit review §§1-2 — this is what
+    keeps "could not determine" from being misread as "never started" or
+    "already gone")."""
+    try:
+        return fn(), True
+    except Exception as exc:  # noqa: BLE001 - collected, not swallowed
+        problems.append((label, exc))
+        return None, False
+
+
+def _process_liveness(
+    problems: list[tuple[str, Exception]], label: str, process: Any
+) -> bool | None:
+    """Guards `process.is_alive()`, returning True/False when confirmed or
+    None when it could not be determined. None must never be treated as
+    "not alive" by a caller — every caller here either escalates
+    (attempts a stronger containment step) or reports an indeterminate
+    outcome rather than silently assuming the process is gone."""
+    alive, ok = _safe_read(problems, label, process.is_alive)
+    return alive if ok else None
+
+
+def _exitcode_confirms_forced_termination(
+    problems: list[tuple[str, Exception]], label: str, process: Any
+) -> bool:
+    """Best-effort positive evidence that a signal *this controller sent*
+    — not a coincidentally-overlapping natural exit — is what ended the
+    process. `multiprocessing.Process.exitcode` is negative (-N) when the
+    child was ended by signal N; confirmed empirically on this platform
+    that both `terminate()` and `kill()` produce a negative exitcode
+    (Phase 5 fourteenth exit review §1). A natural/graceful exit reports
+    0. Returns False (not confirmed) rather than raising if `exitcode`
+    itself cannot be read — absence of evidence is never treated as
+    evidence of forced termination."""
+    code, ok = _safe_read(problems, label, lambda: process.exitcode)
+    return ok and code is not None and code < 0
 
 
 def _poll_and_recv(conn: Any, timeout: float) -> tuple[bool, Any]:
@@ -552,14 +609,19 @@ class _BackgroundStatement:
     guarantee PostgreSQL has noticed, since a backend blocked inside a call
     that never touches its client socket (`pg_sleep`, unlike a lock wait)
     can keep running until it next tries to communicate. `_force_stop`
-    reports which of these actually ended the process — a graceful
-    PostgreSQL/driver mechanism, or this controller's own forced
-    `terminate()`/`kill()` — since only the latter legitimately excuses a
-    missing worker outcome below; treating "was alive when `__exit__`
-    began" as proof of forced termination, regardless of how containment
-    was actually achieved, previously let graceful cancellation followed by
-    a failed outcome publish report false success (Phase 5 thirteenth exit
-    review §1).
+    reports which of these actually ended the process — graceful,
+    positively-confirmed-forced, survived, or indeterminate (see its own
+    docstring) — since only the positively-confirmed-forced case
+    legitimately excuses a missing worker outcome below. Two earlier
+    versions of this class got that classification wrong in different
+    ways: treating "was alive when `__exit__` began" as proof of forced
+    termination regardless of how containment was actually achieved
+    (Phase 5 thirteenth exit review §1), and then treating "no longer
+    alive after an attempted `terminate()`/`kill()`" as proof that
+    attempt succeeded, which a failed or no-op forcible call racing a
+    coincidental natural exit could satisfy identically (Phase 5
+    fourteenth exit review §1) — both let graceful cancellation followed
+    by a failed outcome publish report false success.
 
     Every step's outcome is collected, never silently discarded. The
     worker's own statement, commit, rollback, invalidation, close, and
@@ -806,44 +868,60 @@ class _BackgroundStatement:
     ) -> None:
         """`process.start()` raised. Classifies whether that left a
         genuinely live child behind before deciding how to clean up
-        (Phase 5 thirteenth exit review §3): `pid` and `is_alive()` are
-        both safe to call regardless of whether the process ever started
-        (returning `None`/`False` rather than raising, confirmed
-        empirically), so they are what this checks — not an assumption
-        that a raised `start()` always means nothing was spawned.
+        (Phase 5 thirteenth exit review §3), and does so — and every
+        subsequent containment step — through fully guarded reads and
+        actions, never letting a cleanup exception escape and replace the
+        original `start()` failure this method exists to clean up after
+        (Phase 5 fourteenth exit review §2: an unguarded `join()`/
+        `is_alive()` here previously did exactly that, and also skipped
+        the IPC-channel cleanup `__enter__`'s except block runs
+        immediately afterward).
 
-        A genuinely live child (partial initialization can leave one even
-        though `start()` itself raised) is terminated, escalated to
-        `kill()` if needed, and reaped with bounded joins before its
-        `Process` object is closed — the same fallback shape `_force_stop`
-        uses. A genuinely never-started one has its `Process` object
-        closed directly: `terminate()`/`kill()`/`join()` are invalid
-        operations on it, so calling them would itself raise."""
-        try:
-            pid = process.pid
-        except Exception:  # noqa: BLE001 - treated as "could not determine", not fatal
-            pid = None
-        try:
-            alive = process.is_alive()
-        except Exception:  # noqa: BLE001 - treated as "could not determine", not fatal
-            alive = False
+        `pid` and `is_alive()` are both safe to call regardless of
+        whether the process ever started (returning `None`/`False`
+        rather than raising, confirmed empirically) — but a failure
+        reading either is collected into `problems`, not silently
+        reinterpreted as "never started": only a *positively confirmed*
+        `pid is None and not alive` (both reads succeeded) takes the
+        never-started shortcut. Anything else — a genuine partial start,
+        or simply an unreadable status — falls through to the same
+        terminate → join → status → kill → join → status → close fallback
+        `_force_stop` uses, on the same reasoning: an unknown state must
+        never be treated as proof no process exists. `worker_confirmed_stopped`
+        is set only once the absence of a live child has actually been
+        established, never merely assumed."""
+        pid, pid_ok = _safe_read(problems, "pid inspection (partial start)", lambda: process.pid)
+        alive = _process_liveness(problems, "initial status check (partial start)", process)
 
-        if pid is None and not alive:
-            # Never started: trivially "confirmed stopped" (there was
-            # never anything running), same as the partially-started
-            # branch below once it reaps successfully — callers should be
-            # able to rely on worker_confirmed_stopped uniformly
-            # regardless of which branch this method took.
+        if pid_ok and pid is None and alive is False:
+            # Positively confirmed never-started: terminate()/kill()/join()
+            # are invalid operations on a never-started Process (they
+            # raise), so this shortcut avoids attempting them at all.
             self._worker_confirmed_stopped = True
-            _attempt(problems, "close process object", process.close)
+            _attempt(problems, "close process object (partial start)", process.close)
             return
 
         _attempt(problems, "terminate (partial start)", process.terminate)
-        process.join(timeout=self._signal_join_seconds)
-        if process.is_alive():
+        _attempt(
+            problems,
+            "post-terminate join (partial start)",
+            lambda: process.join(timeout=self._signal_join_seconds),
+        )
+        alive = _process_liveness(problems, "post-terminate status check (partial start)", process)
+
+        if alive is not False:
             _attempt(problems, "kill (partial start)", process.kill)
-            process.join(timeout=self._signal_join_seconds)
-        if process.is_alive():
+            _attempt(
+                problems,
+                "post-kill join (partial start)",
+                lambda: process.join(timeout=self._signal_join_seconds),
+            )
+            alive = _process_liveness(problems, "final status check (partial start)", process)
+
+        if alive is False:
+            self._worker_confirmed_stopped = True
+            _attempt(problems, "close process object (partial start)", process.close)
+        elif alive is True:
             problems.append(
                 (
                     "reap (partial start)",
@@ -853,8 +931,14 @@ class _BackgroundStatement:
                 )
             )
         else:
-            self._worker_confirmed_stopped = True
-            _attempt(problems, "close process object", process.close)
+            problems.append(
+                (
+                    "reap (partial start)",
+                    RuntimeError(
+                        "process liveness could not be confirmed after a partial start failure"
+                    ),
+                )
+            )
 
     def _reap(self, problems: list[tuple[str, Exception]]) -> None:
         """Unconditionally terminates and joins a worker process that must
@@ -862,18 +946,31 @@ class _BackgroundStatement:
         object itself. Used on every __enter__ failure path: __exit__ is
         never invoked when __enter__ raises, so this method alone is
         responsible for leaving no process, IPC, or process-object
-        resource behind on that path."""
+        resource behind on that path — every step below is guarded
+        (Phase 5 fourteenth exit review §2) so a cleanup failure here can
+        never itself propagate and replace the startup/handshake error
+        `__enter__` is in the middle of raising."""
         assert self._process is not None
         _attempt(problems, "terminate", self._process.terminate)
-        self._process.join(timeout=self._signal_join_seconds)
-        if self._process.is_alive():
+        _attempt(problems, "join", lambda: self._process.join(timeout=self._signal_join_seconds))
+        alive = _process_liveness(problems, "status check", self._process)
+        if alive is not False:
             _attempt(problems, "kill", self._process.kill)
-            self._process.join(timeout=self._signal_join_seconds)
-        if self._process.is_alive():
-            problems.append(("reap", RuntimeError("process survived forcible termination")))
-        else:
+            _attempt(
+                problems,
+                "join after kill",
+                lambda: self._process.join(timeout=self._signal_join_seconds),
+            )
+            alive = _process_liveness(problems, "status check after kill", self._process)
+        if alive is False:
             self._worker_confirmed_stopped = True
             _attempt(problems, "close process object", self._process.close)
+        elif alive is True:
+            problems.append(("reap", RuntimeError("process survived forcible termination")))
+        else:
+            problems.append(
+                ("reap", RuntimeError("process liveness could not be confirmed after reaping"))
+            )
         self._close_ipc_channels(problems)
 
     def _close_ipc_channels(self, problems: list[tuple[str, Exception]]) -> None:
@@ -1108,10 +1205,14 @@ class _BackgroundStatement:
     def _force_stop(self) -> tuple[list[tuple[str, Exception]], str]:
         """Layered attempt to make the worker process stop — see the class
         docstring for the full fallback chain. Every layer is followed by a
-        bounded join verifying the process actually exited, not just that a
-        signal was sent or accepted. The final layer (forcible OS-level
-        termination) is unconditionally guaranteed to succeed, so this
-        method never returns while the process is still alive.
+        bounded, guarded join verifying the process actually exited, not
+        just that a signal was sent or accepted; every status/liveness
+        read in this method is similarly guarded (Phase 5 fourteenth exit
+        review §1-audit) so a cleanup-side failure can never itself
+        propagate and replace an exception already active higher up the
+        stack. The final layer (forcible OS-level termination) is
+        unconditionally guaranteed to succeed, so this method never
+        returns while the process is still alive.
 
         Returns `(problems, containment_reason)`. `containment_reason` is
         one of:
@@ -1119,25 +1220,45 @@ class _BackgroundStatement:
         - `"graceful"`: a PostgreSQL/driver-level mechanism (an SQL
           signal, driver-native cancellation, or the `lock_timeout`
           backstop) ended the process on its own, without this method
-          ever calling `terminate()`/`kill()`.
+          ever needing to attempt `terminate()`/`kill()`.
         - `"forced"`: this method's own `terminate()`/`kill()` call is
-          what actually ended the process.
+          what actually ended the process, confirmed by *positive
+          evidence* — the call itself completed without raising, and the
+          process's own `exitcode` afterward indicates it was ended by a
+          signal this controller sent (Phase 5 fourteenth exit review
+          §1) — not merely that the process was no longer alive after the
+          attempt.
         - `"survived"`: even forced termination did not end the process
           — an OS-level guarantee violation everywhere else in this class
           assumes cannot happen.
+        - `"indeterminate"`: the process was no longer alive after a
+          forcible attempt, but without positive evidence that *this
+          controller's own call* — as opposed to a coincidentally
+          overlapping natural/graceful exit racing the same join window,
+          or a call that itself raised — is what ended it; also used
+          when liveness itself could not be confirmed even after both
+          forcible attempts. Never a legitimate excuse for a missing
+          outcome, exactly like `"graceful"` and `"survived"`.
 
         Distinguishing these matters because only `"forced"` legitimately
         excuses a missing worker outcome (Phase 5 thirteenth exit review
-        §1): a worker stopped gracefully had every opportunity to reach
-        its own outcome-publication step (see `_worker_main`) before
-        exiting, so a missing outcome afterward is a genuine protocol
-        failure, not an artifact of forcible termination cutting the
-        worker off mid-flight. The previous version of this class
-        conflated the two — `__exit__` treated the worker merely being
-        *alive* when the `with` block exited as proof of forced
-        termination, regardless of how containment was actually
-        achieved, which let graceful cancellation followed by a failed
-        outcome publish report false success."""
+        §1): a worker stopped gracefully — or one whose apparent
+        stopping this controller cannot actually attribute to its own
+        forcible call — had every opportunity to reach its own
+        outcome-publication step (see `_worker_main`) before exiting, so
+        a missing outcome afterward is a genuine protocol failure, not an
+        artifact of forcible termination cutting the worker off
+        mid-flight. Two earlier versions of this class got this wrong in
+        different ways: the twelfth pass's version treated the worker
+        merely being *alive* when the `with` block exited as proof of
+        forced termination regardless of how containment was actually
+        achieved; the thirteenth pass's fix still treated the process
+        merely being *not alive* after an attempted `terminate()`/
+        `kill()` as proof that attempt succeeded, which a failed or
+        no-op forcible call followed by a coincidental natural exit
+        during the same join window could satisfy just as easily — both
+        let graceful cancellation followed by a failed outcome publish
+        report false success."""
         assert self._process is not None
         problems: list[tuple[str, Exception]] = []
 
@@ -1145,7 +1266,8 @@ class _BackgroundStatement:
             ("pg_terminate_backend", "SELECT pg_terminate_backend(:p)"),
             ("pg_cancel_backend", "SELECT pg_cancel_backend(:p)"),
         ):
-            if not self._process.is_alive():
+            alive = _process_liveness(problems, f"pre-{description} status check", self._process)
+            if alive is False:
                 break
             try:
                 sent = self._send_signal(description, sql)
@@ -1161,16 +1283,26 @@ class _BackgroundStatement:
                             ),
                         )
                     )
-            self._process.join(timeout=self._signal_join_seconds)
+            _attempt(
+                problems,
+                f"post-{description} join",
+                lambda: self._process.join(timeout=self._signal_join_seconds),
+            )
 
-        if self._process.is_alive():
+        alive = _process_liveness(problems, "pre-cancel_via_driver status check", self._process)
+        if alive is not False:
             try:
                 self._cancel_via_driver()
             except Exception as exc:  # noqa: BLE001 - collected, not swallowed
                 problems.append(("cancel_via_driver", exc))
-            self._process.join(timeout=self._signal_join_seconds)
+            _attempt(
+                problems,
+                "post-cancel_via_driver join",
+                lambda: self._process.join(timeout=self._signal_join_seconds),
+            )
 
-        if self._process.is_alive():
+        alive = _process_liveness(problems, "pre-lock_timeout-backstop status check", self._process)
+        if alive is not False:
             # Deterministic backstop: the worker's own transaction was
             # configured with a bounded lock_timeout during __enter__,
             # before it could block on anything, so PostgreSQL itself
@@ -1179,8 +1311,17 @@ class _BackgroundStatement:
             # rescue a statement that was never waiting on a lock at all
             # (pg_sleep, used only by the regression tests proving exactly
             # that limitation).
-            self._process.join(timeout=self._lock_timeout_seconds + self._signal_join_seconds)
-            if self._process.is_alive():
+            _attempt(
+                problems,
+                "lock_timeout backstop join",
+                lambda: self._process.join(
+                    timeout=self._lock_timeout_seconds + self._signal_join_seconds
+                ),
+            )
+            alive = _process_liveness(
+                problems, "post-lock_timeout-backstop status check", self._process
+            )
+            if alive is not False:
                 problems.append(
                     (
                         "lock_timeout backstop",
@@ -1195,44 +1336,16 @@ class _BackgroundStatement:
         # Everything above is "graceful": a PostgreSQL/driver mechanism
         # that leaves the worker's own outcome-publication step fully
         # reachable. Only forcibly ending the OS process itself, below,
-        # can legitimately cut the worker off before it publishes.
-        needed_forced_termination = self._process.is_alive()
+        # can legitimately cut the worker off before it publishes. An
+        # unknown status (alive is None) is never treated as "already
+        # gone" — it still routes into the forced-termination attempt,
+        # the same "unknown must never mean no process" rule §2 applies
+        # to `_cleanup_process_after_start_failure`.
+        needed_forced_termination = alive is not False
         containment_reason = "graceful"
 
         if needed_forced_termination:
-            # Unlike every mechanism above, this cannot fail to end the
-            # process regardless of what it is doing — a real OS process,
-            # unlike a Python thread, can always be forcibly reclaimed by
-            # its owner. A survival here would mean that OS-level guarantee
-            # itself was violated; reported like every other problem rather
-            # than raised directly, so it cannot replace an
-            # already-propagating exception at a higher level.
-            _attempt(problems, "terminate", self._process.terminate)
-            self._process.join(timeout=self._signal_join_seconds)
-            if self._process.is_alive():
-                _attempt(problems, "kill", self._process.kill)
-                self._process.join(timeout=self._signal_join_seconds)
-            if self._process.is_alive():
-                problems.append(
-                    (
-                        "forced termination",
-                        RuntimeError(
-                            "worker process survived forcible termination — an OS-level "
-                            "guarantee was violated"
-                        ),
-                    )
-                )
-                containment_reason = "survived"
-            else:
-                problems.append(
-                    (
-                        "forced termination",
-                        RuntimeError(
-                            "every graceful mechanism failed; the worker was forcibly terminated"
-                        ),
-                    )
-                )
-                containment_reason = "forced"
+            containment_reason = self._attempt_forced_termination(problems)
             # Ending our own client-side process guarantees *our* resources
             # are reclaimed, but does not by itself guarantee PostgreSQL has
             # noticed: a backend blocked inside a call that never touches
@@ -1255,6 +1368,103 @@ class _BackgroundStatement:
 
         self._verify_backend_gone(problems)
         return problems, containment_reason
+
+    def _attempt_forced_termination(self, problems: list[tuple[str, Exception]]) -> str:
+        """`terminate()`, escalating to `kill()` if the process is still
+        (or unknowably) alive afterward, classified using only positive
+        evidence that *this controller's own call* — not a merely
+        coincidentally overlapping natural/graceful exit — ended the
+        process (Phase 5 fourteenth exit review §1). A step counts as
+        confirmed-effective only when both hold: the call itself
+        completed without raising, and the process's `exitcode`
+        afterward is negative (ended by a signal this controller sent —
+        confirmed empirically to hold for both `terminate()` and
+        `kill()` on this platform, and true by definition on POSIX).
+        Every join/status read is guarded; nothing here can itself raise
+        and replace an exception already active higher up the stack."""
+        terminate_ok = _attempt(problems, "terminate", self._process.terminate)
+        _attempt(
+            problems,
+            "post-terminate join",
+            lambda: self._process.join(timeout=self._signal_join_seconds),
+        )
+        alive = _process_liveness(problems, "post-terminate status check", self._process)
+
+        if alive is False:
+            confirmed = terminate_ok and _exitcode_confirms_forced_termination(
+                problems, "post-terminate exitcode check", self._process
+            )
+            return self._report_forced_termination_result(problems, confirmed=confirmed)
+
+        kill_ok = _attempt(problems, "kill", self._process.kill)
+        _attempt(
+            problems,
+            "post-kill join",
+            lambda: self._process.join(timeout=self._signal_join_seconds),
+        )
+        alive = _process_liveness(problems, "post-kill status check", self._process)
+
+        if alive is False:
+            confirmed = (terminate_ok or kill_ok) and _exitcode_confirms_forced_termination(
+                problems, "post-kill exitcode check", self._process
+            )
+            return self._report_forced_termination_result(problems, confirmed=confirmed)
+
+        if alive is True:
+            problems.append(
+                (
+                    "forced termination",
+                    RuntimeError(
+                        "worker process survived forcible termination — an OS-level "
+                        "guarantee was violated"
+                    ),
+                )
+            )
+            return "survived"
+
+        problems.append(
+            (
+                "forced termination",
+                RuntimeError(
+                    "worker process liveness could not be confirmed after forcible "
+                    "termination attempts"
+                ),
+            )
+        )
+        return "indeterminate"
+
+    @staticmethod
+    def _report_forced_termination_result(
+        problems: list[tuple[str, Exception]], *, confirmed: bool
+    ) -> str:
+        """Shared by both the post-terminate() and post-kill() branches of
+        `_attempt_forced_termination`: the process is no longer alive: if
+        that is positively attributable to this controller's own call,
+        report and return `"forced"`; otherwise report and return
+        `"indeterminate"` — never silently treat "not alive" alone as
+        proof of which one it was."""
+        if confirmed:
+            problems.append(
+                (
+                    "forced termination",
+                    RuntimeError(
+                        "every graceful mechanism failed; the worker was forcibly terminated"
+                    ),
+                )
+            )
+            return "forced"
+        problems.append(
+            (
+                "forced termination",
+                RuntimeError(
+                    "the worker process was no longer alive after a forcible termination "
+                    "attempt, but this controller's own call raised or left no positive "
+                    "evidence (a negative exitcode) that it — rather than a coincidentally "
+                    "overlapping natural/graceful exit — actually ended it"
+                ),
+            )
+        )
+        return "indeterminate"
 
     def _terminate_backend_unconditionally(self) -> None:
         """A real, always-executed `pg_terminate_backend()` call — distinct
@@ -1357,29 +1567,43 @@ class _BackgroundStatement:
         problems: list[tuple[str, Exception]] = list(self._startup_cleanup_problems)
 
         worker_was_forcibly_stopped = False
-        if self._process is not None and self._process.is_alive():
-            force_stop_problems, containment_reason = self._force_stop()
-            problems.extend(force_stop_problems)
-            # Only a genuine terminate()/kill() by this controller excuses
-            # a missing outcome (Phase 5 thirteenth exit review §1) —
-            # "graceful" and "survived" both leave the worker's own
-            # outcome-publication step reachable (or, for "survived",
-            # already reported as its own distinct problem above), so
-            # neither is treated as the legitimate forced-termination
-            # exemption in _finalize_worker_outcome below.
-            worker_was_forcibly_stopped = containment_reason == "forced"
-        elif self._process is not None:
-            # The worker already exited on its own by the time __exit__
-            # began — natural completion, not the forced-stop path, which
-            # already verifies internally. That alone does not prove
-            # PostgreSQL has already noticed the dropped connection (see
-            # _verify_backend_gone), so verify it here instead: every
-            # successfully entered helper's backend is verified through a
-            # fresh connection on every path, exactly once, before
-            # __exit__ returns or raises (Phase 5 thirteenth exit review
-            # §2) — not inferred merely from the Python process having
-            # exited or from an outcome having arrived.
-            self._verify_backend_gone(problems)
+        if self._process is not None:
+            # Guarded (Phase 5 fourteenth exit review §1-audit): an
+            # unguarded is_alive() raising here would previously escape
+            # __exit__ entirely, replacing whatever exception was already
+            # propagating out of the `with` block and skipping every
+            # cleanup step below it. An unknown status is routed into
+            # _force_stop, never treated as "already gone" — the same
+            # "unknown must never mean no process" rule used everywhere
+            # else in this class.
+            alive = _process_liveness(problems, "pre-cleanup status check", self._process)
+            if alive is not False:
+                force_stop_problems, containment_reason = self._force_stop()
+                problems.extend(force_stop_problems)
+                # Only a genuine terminate()/kill() by this controller
+                # excuses a missing outcome (Phase 5 thirteenth exit
+                # review §1) — "graceful", "survived", and
+                # "indeterminate" all leave the worker's own
+                # outcome-publication step reachable (or, for "survived",
+                # already reported as its own distinct problem above), so
+                # none of them are treated as the legitimate
+                # forced-termination exemption in _finalize_worker_outcome
+                # below.
+                worker_was_forcibly_stopped = containment_reason == "forced"
+            else:
+                # The worker already exited on its own by the time
+                # __exit__ began — natural completion, not the
+                # forced-stop path, which already verifies internally.
+                # That alone does not prove PostgreSQL has already
+                # noticed the dropped connection (see
+                # _verify_backend_gone), so verify it here instead: every
+                # successfully entered helper's backend is verified
+                # through a fresh connection on every path, exactly once,
+                # before __exit__ returns or raises (Phase 5 thirteenth
+                # exit review §2) — not inferred merely from the Python
+                # process having exited or from an outcome having
+                # arrived.
+                self._verify_backend_gone(problems)
 
         # Whether the worker exited on its own or was just forcibly
         # stopped, account for its one required outcome: a statement,
@@ -1393,11 +1617,17 @@ class _BackgroundStatement:
         )
 
         if self._process is not None:
-            if self._process.is_alive():
+            alive = _process_liveness(problems, "pre-close status check", self._process)
+            if alive is not False:
                 problems.append(
                     (
                         "close process object",
-                        RuntimeError("process still alive; refusing to close its object"),
+                        RuntimeError(
+                            "process still alive; refusing to close its object"
+                            if alive is True
+                            else "process liveness could not be confirmed; refusing to close "
+                            "its object"
+                        ),
                     )
                 )
             else:
@@ -1469,6 +1699,34 @@ def _raise_injected_failure(*_args: object, **_kwargs: object) -> None:
     raise _InjectedFailure("simulated cleanup failure")
 
 
+def _raise_once_then_succeed(
+    message: str = "simulated cleanup failure",
+) -> Callable[..., None]:
+    """Like `_raise_injected_failure`, but raises only the *first* time
+    it's called and is a silent no-op afterward — matching the
+    idempotent-close semantics real `multiprocessing.Process`/
+    `Connection` objects actually have (confirmed empirically: a second
+    `close()` on either does not re-raise). Used specifically for
+    `close()` seams: `_raise_injected_failure` itself stays as-is for
+    seams (`_query_backend_state`, `ctx.Process`/`Process.start`
+    construction) that must keep failing on every call for their own
+    test to reach its intended state. Without this distinction, the
+    independent `_emergency_teardown` safety net's own (deliberately
+    redundant) close attempt on the same already-"closed" fake would
+    observe a second, spurious failure from a problem the test already
+    fully proved and asserted on once (Phase 5 fourteenth exit review
+    §3)."""
+    state = {"raised": False}
+
+    def _fn(*_args: object, **_kwargs: object) -> None:
+        if state["raised"]:
+            return
+        state["raised"] = True
+        raise _InjectedFailure(message)
+
+    return _fn
+
+
 class _FakeConnection:
     """A minimal stand-in for a multiprocessing.Pipe() end, used only to
     prove __enter__'s partial-IPC-construction cleanup (Phase 5 twelfth
@@ -1481,8 +1739,412 @@ class _FakeConnection:
         self.closed = False
 
     def close(self) -> None:
+        # Raises on the first call, then behaves like the idempotent
+        # no-op a real multiprocessing.Connection.close() is on every
+        # call after the first (confirmed empirically) — so an
+        # independent second close attempt (the _emergency_teardown
+        # safety net's own redundant one) does not observe a second,
+        # spurious failure from the same already-reported problem
+        # (Phase 5 fourteenth exit review §3).
+        if self.closed:
+            return
         self.closed = True
         raise _InjectedFailure(f"simulated close failure for {self.label}")
+
+
+class _FakeProcess:
+    """A minimal test double for `multiprocessing.Process`, used to drive
+    `_attempt_forced_termination` deterministically through combinations
+    of `terminate()`/`kill()` outcomes and post-call liveness/`exitcode`
+    that a real OS process makes impractical or outright racy to
+    construct on demand (Phase 5 fourteenth exit review §1) — the same
+    "reproduced deterministically with a fake process" approach the
+    review itself used. `alive_sequence` and `exitcode_sequence` are
+    consumed one value per call, in order; an `Exception` instance in
+    either sequence is raised instead of returned, simulating a status
+    read itself failing."""
+
+    def __init__(
+        self,
+        *,
+        alive_sequence: list[bool | Exception],
+        exitcode_sequence: list[int | None | Exception] = (),  # type: ignore[assignment]
+        terminate_effect: Exception | None = None,
+        kill_effect: Exception | None = None,
+        join_effect_sequence: list[Exception | None] = (),  # type: ignore[assignment]
+        pid: int | None | Exception = None,
+        close_effect: Exception | None = None,
+    ) -> None:
+        self._alive_sequence = list(alive_sequence)
+        self._exitcode_sequence = list(exitcode_sequence)
+        self._terminate_effect = terminate_effect
+        self._kill_effect = kill_effect
+        self._join_effect_sequence = list(join_effect_sequence)
+        self._pid = pid
+        self._close_effect = close_effect
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.join_calls = 0
+        self.close_calls = 0
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        if self._terminate_effect is not None:
+            raise self._terminate_effect
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        if self._kill_effect is not None:
+            raise self._kill_effect
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_calls += 1
+        if self._join_effect_sequence:
+            effect = self._join_effect_sequence.pop(0)
+            if effect is not None:
+                raise effect
+
+    def is_alive(self) -> bool:
+        assert self._alive_sequence, "_FakeProcess.is_alive() called more times than scripted"
+        value = self._alive_sequence.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    @property
+    def exitcode(self) -> int | None:
+        if not self._exitcode_sequence:
+            return None
+        value = self._exitcode_sequence.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    @property
+    def pid(self) -> int | None:
+        if isinstance(self._pid, Exception):
+            raise self._pid
+        return self._pid
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self._close_effect is not None:
+            raise self._close_effect
+
+
+@pytest.mark.parametrize(
+    ("label", "fake_process", "expected_reason", "expected_terminate_calls", "expected_kill_calls"),
+    [
+        (
+            "terminate() raises, process naturally not alive during its join",
+            lambda: _FakeProcess(
+                alive_sequence=[False],
+                terminate_effect=_InjectedFailure("simulated terminate() failure"),
+            ),
+            "indeterminate",
+            1,
+            0,
+        ),
+        (
+            "terminate() succeeds but does not stop it; naturally not alive afterward",
+            lambda: _FakeProcess(alive_sequence=[False], exitcode_sequence=[0]),
+            "indeterminate",
+            1,
+            0,
+        ),
+        (
+            "terminate() fails, kill() then succeeds with confirming exitcode",
+            lambda: _FakeProcess(
+                alive_sequence=[True, False],
+                exitcode_sequence=[-9],
+                terminate_effect=_InjectedFailure("simulated terminate() failure"),
+            ),
+            "forced",
+            1,
+            1,
+        ),
+        (
+            "both terminate() and kill() fail, process remains alive",
+            lambda: _FakeProcess(
+                alive_sequence=[True, True],
+                terminate_effect=_InjectedFailure("simulated terminate() failure"),
+                kill_effect=_InjectedFailure("simulated kill() failure"),
+            ),
+            "survived",
+            1,
+            1,
+        ),
+        (
+            "terminate() succeeds with a confirming (negative) exitcode",
+            lambda: _FakeProcess(alive_sequence=[False], exitcode_sequence=[-15]),
+            "forced",
+            1,
+            0,
+        ),
+        (
+            "post-terminate and post-kill liveness both unconfirmable",
+            lambda: _FakeProcess(
+                alive_sequence=[_InjectedFailure("simulated is_alive() failure")] * 2,
+            ),
+            "indeterminate",
+            1,
+            1,
+        ),
+    ],
+    ids=[
+        "terminate-raises-then-natural-exit",
+        "terminate-noop-then-natural-exit",
+        "failed-terminate-then-successful-kill",
+        "both-forcible-operations-fail",
+        "confirmed-forced-termination",
+        "liveness-unconfirmable-throughout",
+    ],
+)
+def test_attempt_forced_termination_classifies_containment_from_positive_evidence_only(
+    label: str,
+    fake_process: Callable[[], _FakeProcess],
+    expected_reason: str,
+    expected_terminate_calls: int,
+    expected_kill_calls: int,
+) -> None:
+    """Deterministic, fake-process-driven proof that
+    `_attempt_forced_termination` never classifies containment as
+    `"forced"` from mere post-attempt absence of liveness alone (Phase 5
+    fourteenth exit review §1): a raised or no-op forcible call that
+    happens to be followed by the process no longer being alive is
+    `"indeterminate"`, not `"forced"` — only a call that both completed
+    without raising *and* left positive exitcode evidence earns
+    `"forced"`. Uses a bare, never-`__enter__`ed `_BackgroundStatement`
+    (no real process, connection, or backend pid needed) with its
+    `_process` replaced by a fake — this method touches only
+    `self._process`, never the database or IPC."""
+    blocked = _BackgroundStatement(
+        create_engine("postgresql+psycopg://unused/unused"), "SELECT 1", {}
+    )
+    process = fake_process()
+    blocked._process = process
+    problems: list[tuple[str, Exception]] = []
+
+    reason = blocked._attempt_forced_termination(problems)
+
+    assert reason == expected_reason, f"{label}: expected {expected_reason!r}, got {reason!r}"
+    assert process.terminate_calls == expected_terminate_calls
+    assert process.kill_calls == expected_kill_calls
+    assert problems, "every containment outcome must be reported, not silently returned"
+
+
+@pytest.mark.parametrize(
+    ("containment_reason", "expected_state", "expect_protocol_failure"),
+    [
+        ("graceful", "missing-after-natural-exit", True),
+        ("indeterminate", "missing-after-natural-exit", True),
+        ("survived", "missing-after-natural-exit", True),
+        ("forced", "missing-after-forced-termination", False),
+    ],
+)
+def test_only_forced_containment_exempts_a_missing_outcome(
+    containment_reason: str, expected_state: str, expect_protocol_failure: bool
+) -> None:
+    """Directly exercises the real `_finalize_worker_outcome` (not a
+    reimplementation of its logic) with each of `_force_stop`'s four
+    possible `containment_reason` values reduced to the one boolean it
+    actually receives (`worker_was_forcibly_stopped`), proving a missing
+    outcome is a protocol failure for every value except `"forced"`
+    (Phase 5 fourteenth exit review §1). End-to-end coverage of the two
+    ends actually reachable through a real worker already exists — a
+    genuinely forced kill exempting a missing outcome
+    (`test_background_statement_records_a_forced_termination_as_the_legitimate_missing_outcome_case`)
+    and a graceful stop not exempting one
+    (`test_background_statement_reports_a_protocol_failure_when_graceful_cancellation_conceals_a_missing_outcome`)
+    — constructing a real process that ends up genuinely "survived" or
+    "indeterminate" is impractical (the former is explicitly an
+    OS-level guarantee violation this class assumes cannot happen); this
+    test covers those states as well, directly, at the point where they
+    actually matter: `_finalize_worker_outcome` only ever sees the
+    boolean, never the specific reason string. A bare, never-`__enter__`ed
+    `_BackgroundStatement` needs no real process or IPC: `_outcome_recv`
+    is `None` by construction, so `_drain_one_outcome` reports "nothing
+    arrived" immediately, exactly like a worker that never published."""
+    blocked = _BackgroundStatement(
+        create_engine("postgresql+psycopg://unused/unused"), "SELECT 1", {}
+    )
+    problems: list[tuple[str, Exception]] = []
+
+    blocked._finalize_worker_outcome(
+        problems, worker_was_forcibly_stopped=(containment_reason == "forced")
+    )
+
+    assert blocked.outcome_protocol_state == expected_state
+    if expect_protocol_failure:
+        assert any(label == "worker outcome protocol" for label, _ in problems), (
+            f"containment_reason={containment_reason!r} must report a missing outcome as a "
+            "protocol failure"
+        )
+    else:
+        assert not problems, (
+            "a positively confirmed forced termination must not report the missing outcome "
+            "as a problem at all"
+        )
+
+
+@pytest.mark.parametrize(
+    (
+        "label",
+        "fake_process",
+        "expected_label_fragment",
+        "expected_confirmed_stopped",
+        "expected_terminate_calls",
+        "expected_kill_calls",
+    ),
+    [
+        (
+            "pid inspection fails",
+            lambda: _FakeProcess(alive_sequence=[False, False], pid=_InjectedFailure("pid boom")),
+            "pid inspection (partial start)",
+            True,
+            1,
+            0,
+        ),
+        (
+            "initial is_alive() fails",
+            lambda: _FakeProcess(
+                alive_sequence=[_InjectedFailure("is_alive boom"), False], pid=None
+            ),
+            "initial status check (partial start)",
+            True,
+            1,
+            0,
+        ),
+        (
+            "terminate() fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, False],
+                pid=4242,
+                terminate_effect=_InjectedFailure("terminate boom"),
+            ),
+            "terminate (partial start)",
+            True,
+            1,
+            0,
+        ),
+        (
+            "first join() (post-terminate) fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, False],
+                pid=4242,
+                join_effect_sequence=[_InjectedFailure("join boom")],
+            ),
+            "post-terminate join (partial start)",
+            True,
+            1,
+            0,
+        ),
+        (
+            "post-terminate status check fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, _InjectedFailure("status boom"), False],
+                pid=4242,
+            ),
+            "post-terminate status check (partial start)",
+            True,
+            1,
+            1,
+        ),
+        (
+            "kill() fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, True, False],
+                pid=4242,
+                kill_effect=_InjectedFailure("kill boom"),
+            ),
+            "kill (partial start)",
+            True,
+            1,
+            1,
+        ),
+        (
+            "second join() (post-kill) fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, True, False],
+                pid=4242,
+                join_effect_sequence=[None, _InjectedFailure("join boom")],
+            ),
+            "post-kill join (partial start)",
+            True,
+            1,
+            1,
+        ),
+        (
+            "final status check fails",
+            lambda: _FakeProcess(
+                alive_sequence=[True, True, _InjectedFailure("final status boom")],
+                pid=4242,
+            ),
+            "reap (partial start)",
+            False,
+            1,
+            1,
+        ),
+        (
+            "process close fails on the confirmed never-started path",
+            lambda: _FakeProcess(
+                alive_sequence=[False], pid=None, close_effect=_InjectedFailure("close boom")
+            ),
+            "close process object (partial start)",
+            True,
+            0,
+            0,
+        ),
+    ],
+    ids=[
+        "pid-inspection-failure",
+        "initial-is-alive-failure",
+        "terminate-failure",
+        "first-join-failure",
+        "post-terminate-status-failure",
+        "kill-failure",
+        "second-join-failure",
+        "final-status-failure",
+        "process-close-failure",
+    ],
+)
+def test_cleanup_process_after_start_failure_collects_every_guarded_step_failure(
+    label: str,
+    fake_process: Callable[[], _FakeProcess],
+    expected_label_fragment: str,
+    expected_confirmed_stopped: bool,
+    expected_terminate_calls: int,
+    expected_kill_calls: int,
+) -> None:
+    """Deterministic, fake-process-driven proof that every read/action
+    step inside `_cleanup_process_after_start_failure` — pid inspection,
+    the initial and every subsequent liveness check, `terminate()`,
+    both bounded joins, `kill()`, and the final `close()` — is
+    individually guarded: a failure at any one of them is collected into
+    `problems` rather than escaping and replacing the `Process.start()`
+    exception this method exists to clean up after (which is exactly
+    what an unguarded `join()`/`is_alive()` did before this review: see
+    the class's own `_cleanup_process_after_start_failure` docstring),
+    and never stops a later, still-valid containment step from being
+    attempted (Phase 5 fourteenth exit review §2). `worker_confirmed_stopped`
+    is asserted to become true only when the absence of a live child was
+    actually established, never merely assumed from an unreadable
+    status."""
+    blocked = _BackgroundStatement(
+        create_engine("postgresql+psycopg://unused/unused"), "SELECT 1", {}
+    )
+    process = fake_process()
+    problems: list[tuple[str, Exception]] = []
+
+    blocked._cleanup_process_after_start_failure(process, problems)
+
+    labels = [lbl for lbl, _ in problems]
+    assert expected_label_fragment in labels, (
+        f"{label}: expected {expected_label_fragment!r} in {labels!r}"
+    )
+    assert blocked.worker_confirmed_stopped is expected_confirmed_stopped, label
+    assert process.terminate_calls == expected_terminate_calls, label
+    assert process.kill_calls == expected_kill_calls, label
 
 
 def _assert_backend_eventually_gone(engine: Engine, pid: int, timeout: float = 5.0) -> None:
@@ -1538,8 +2200,7 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
             # the real, primary signal path in this test — _emergency_teardown
             # is a genuinely independent backstop (not __exit__() again),
             # not the primary proof point.
-            first.rollback()
-            _emergency_teardown(blocked, engine)
+            _emergency_teardown(blocked, engine, extra_connections=(first,))
 
 
 @pytest.mark.parametrize("mode", ["returns_false", "raises"])
@@ -1571,8 +2232,7 @@ def test_background_statement_falls_back_to_driver_native_cancel_when_sql_signal
             assert worker_pid is not None
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
-            first.rollback()
-            _emergency_teardown(blocked, engine)
+            _emergency_teardown(blocked, engine, extra_connections=(first,))
 
 
 def test_background_statement_falls_back_to_lock_timeout_backstop_when_every_active_mechanism_fails(
@@ -1613,8 +2273,7 @@ def test_background_statement_falls_back_to_lock_timeout_backstop_when_every_act
             assert worker_pid is not None
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
-            first.rollback()
-            _emergency_teardown(blocked, engine)
+            _emergency_teardown(blocked, engine, extra_connections=(first,))
 
 
 def test_background_statement_forcibly_terminates_the_worker_and_preserves_the_original_exception_when_nothing_else_stops_it(
@@ -1704,51 +2363,553 @@ def test_background_statement_cleanup_failure_fails_the_test_when_no_original_ex
         _emergency_teardown(blocked, engine)
 
 
-def _emergency_teardown(blocked: "_BackgroundStatement", engine: Engine) -> None:
-    """Last-resort cleanup for `_BackgroundStatement` regression tests,
-    called from a test's own `finally` block after its assertions about
-    the helper's contract have already run (Phase 5 thirteenth exit
-    review §5). Deliberately never calls `blocked.__exit__()`,
+class _BackendConnectable(Protocol):
+    """Structural type for what `_run_emergency_teardown` and its helpers
+    actually need from an `engine` argument — just `.connect()` as a
+    context manager. Real `sqlalchemy.Engine` satisfies this
+    structurally, and so does the `_FakeDBEngine` test double used to
+    unit-test this module's backend-verification failure paths, so
+    these functions can accept either without a type mismatch at every
+    fake-engine call site."""
+
+    def connect(self) -> contextlib.AbstractContextManager[Any]: ...
+
+
+def _emergency_process_state(
+    problems: list[tuple[str, Exception]], label: str, process: Any
+) -> str:
+    """Returns `"closed"`, `"alive"`, `"not-alive"`, or `"unknown"` for a
+    `Process` object during emergency teardown. `"closed"` (an
+    already-closed `Process` object — the benign, common case when
+    `_BackgroundStatement.__exit__` already fully tore it down and this
+    net is running as a redundant backstop) is distinguished from
+    `"unknown"` so the net never re-attempts `terminate()`/`close()` on
+    an object that no longer supports either call, which would
+    otherwise report a spurious problem for a test that actually passed
+    cleanly."""
+    try:
+        alive = process.is_alive()
+    except ValueError:
+        return "closed"
+    except Exception as exc:  # noqa: BLE001 - collected, not swallowed
+        problems.append((label, exc))
+        return "unknown"
+    return "alive" if alive else "not-alive"
+
+
+def _run_emergency_teardown(
+    blocked: "_BackgroundStatement",
+    engine: _BackendConnectable,
+    extra_connections: tuple[Connection, ...],
+) -> list[tuple[str, Exception]]:
+    """Does the actual work for `_emergency_teardown` (see its docstring
+    for the contract) and returns every problem encountered instead of
+    raising or suppressing any of them — collected, never silently
+    discarded, exactly like every cleanup path in `_BackgroundStatement`
+    itself (Phase 5 fourteenth exit review §3)."""
+    problems: list[tuple[str, Exception]] = []
+
+    for connection in extra_connections:
+        _attempt(problems, "emergency rollback of test-controlled connection", connection.rollback)
+
+    process = blocked._process
+    if process is not None:
+        state = _emergency_process_state(problems, "emergency status check", process)
+        if state in ("alive", "unknown"):
+            _attempt(problems, "emergency terminate", process.terminate)
+            _attempt(problems, "emergency join", lambda: process.join(timeout=5.0))
+            state = _emergency_process_state(
+                problems, "emergency status check after terminate", process
+            )
+        if state in ("alive", "unknown"):
+            _attempt(problems, "emergency kill", process.kill)
+            _attempt(problems, "emergency join after kill", lambda: process.join(timeout=5.0))
+            state = _emergency_process_state(problems, "emergency status check after kill", process)
+        if state == "alive":
+            problems.append(
+                (
+                    "emergency containment",
+                    RuntimeError("worker process survived emergency termination"),
+                )
+            )
+        elif state == "unknown":
+            problems.append(
+                (
+                    "emergency containment",
+                    RuntimeError(
+                        "worker process liveness could not be confirmed after emergency termination"
+                    ),
+                )
+            )
+        elif state == "not-alive":
+            _attempt(problems, "emergency close process object", process.close)
+        # state == "closed": already fully torn down; nothing more to do.
+
+    pid = blocked._backend_pid_value
+    if pid is not None and _attempt(
+        problems,
+        "emergency pg_terminate_backend",
+        lambda: _emergency_terminate_backend(engine, pid),
+    ):
+        _confirm_backend_gone_or_report(problems, engine, pid)
+
+    for label, conn in (
+        ("handshake_recv", blocked._handshake_recv),
+        ("handshake_send", blocked._handshake_send),
+        ("outcome_recv", blocked._outcome_recv),
+        ("outcome_send", blocked._outcome_send),
+        ("control_recv", blocked._control_recv),
+        ("control_send", blocked._control_send),
+    ):
+        if conn is None:
+            continue
+        _attempt(problems, f"emergency close {label}", conn.close)
+
+    return problems
+
+
+def _emergency_terminate_backend(engine: _BackendConnectable, pid: int) -> None:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT pg_terminate_backend(:p)"), {"p": pid})
+        conn.commit()
+
+
+def _confirm_backend_gone_or_report(
+    problems: list[tuple[str, Exception]], engine: _BackendConnectable, pid: int
+) -> None:
+    deadline = time.monotonic() + 5.0
+    verification_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT 1 FROM pg_stat_activity WHERE pid = :p"), {"p": pid}
+                ).one_or_none()
+        except Exception as exc:  # noqa: BLE001 - collected, not swallowed
+            verification_error = exc
+            time.sleep(0.05)
+            continue
+        verification_error = None
+        if row is None:
+            return
+        time.sleep(0.05)
+
+    if verification_error is not None:
+        problems.append(
+            (
+                "emergency backend verification",
+                RuntimeError(
+                    f"could not verify backend pid {pid} disappeared: {verification_error}"
+                ),
+            )
+        )
+        return
+    problems.append(
+        (
+            "emergency backend verification",
+            RuntimeError(
+                f"backend pid {pid} still present in pg_stat_activity 5s after emergency "
+                "termination"
+            ),
+        )
+    )
+
+
+def _emergency_teardown(
+    blocked: "_BackgroundStatement",
+    engine: _BackendConnectable,
+    *,
+    extra_connections: tuple[Connection, ...] = (),
+) -> None:
+    """Last-resort, genuinely independent cleanup for `_BackgroundStatement`
+    regression tests, called from a test's own `finally` block after its
+    assertions about the helper's contract have already run (Phase 5
+    thirteenth exit review §5; redesigned in the fourteenth review §3 to
+    close every resource it touches and to never silently suppress a
+    failure). Deliberately never calls `blocked.__exit__()`,
     `blocked._force_stop()`, or any other `_BackgroundStatement` method
     that is itself part of what many of these tests exercise: relying on
     the implementation under test to clean up after itself would let a
     genuinely broken implementation silently pass — leaking a live
-    worker, backend connection, or advisory lock — instead of the test
-    failing loudly the way an independent safety net would surface.
-    Operates directly on the real `multiprocessing.Process` object and,
-    if a backend pid was ever recorded, a fresh independent PostgreSQL
-    connection — the same OS/database primitives `_BackgroundStatement`
-    itself is built from, invoked here independently of its own code.
+    worker, backend connection, IPC channel, or process object — instead
+    of the test failing loudly the way an independent safety net must.
+    Operates directly on the real `multiprocessing.Process`/`Connection`
+    objects and, if a backend pid was ever recorded, fresh independent
+    PostgreSQL connections — the same OS/database primitives
+    `_BackgroundStatement` itself is built from, invoked here
+    independently of its own code, never counted as evidence that
+    `_BackgroundStatement` met its own contract (a problem found here is
+    always reported as this net's own finding, never folded into or
+    mistaken for the class's own cleanup result).
 
-    Safe to call unconditionally and repeatedly: every operation here
-    tolerates a process that is already stopped, already closed, or was
-    never started, and a backend that is already gone. Does not release
-    any advisory lock or roll back any `first`/setup connection a test
-    holds — each such test already has its own `finally: first.rollback()`
-    (or equivalent) for that, run alongside this, not replaced by it."""
-    process = blocked._process
-    if process is not None:
-        try:
-            alive = process.is_alive()
-        except ValueError:
-            alive = False  # process object already closed - nothing more to do with it
-        if alive:
-            with contextlib.suppress(Exception):  # best-effort, this is the last resort itself
-                process.terminate()
-            process.join(timeout=5.0)
-            if process.is_alive():
-                with contextlib.suppress(Exception):  # best-effort, this is the last resort itself
-                    process.kill()
-                process.join(timeout=5.0)
+    Every step — process termination/kill/join/status, backend
+    termination and confirmation, every IPC endpoint, the process object
+    itself, and (via `extra_connections`) any test-controlled
+    transaction/advisory-lock-holding connection the caller wants
+    included — is attempted independently, with every failure collected
+    rather than suppressed, and every wait bounded (5s). Safe to call
+    unconditionally and repeatedly: every operation here tolerates a
+    process that is already stopped, already closed, or was never
+    started, and a backend that is already gone.
 
-    pid = blocked._backend_pid_value
-    if pid is not None:
+    A test-body exception already propagating through the `finally`
+    block that calls this — detected via `sys.exc_info()`, which
+    reflects exactly that during unwinding — is preserved as primary:
+    any problem this net finds is attached to it as a note, never
+    replacing it. When nothing is already propagating (including when an
+    expected failure was already fully handled by an enclosing
+    `pytest.raises`), a problem this net finds is raised directly,
+    surfacing it as the test's own failure rather than letting it
+    disappear silently."""
+    problems = _run_emergency_teardown(blocked, engine, extra_connections)
+    if not problems:
+        return
+    summary = "; ".join(f"{label}: {e}" for label, e in problems)
+    message = f"_emergency_teardown found unreleased or failed resources: {summary}"
+    active_exc = sys.exc_info()[1]
+    if active_exc is not None:
+        active_exc.add_note(message)
+        return
+    raise RuntimeError(message)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests of the independent _emergency_teardown safety net itself
+# ---------------------------------------------------------------------------
+# Phase 5 fourteenth exit review §3: the net must be tested like any other
+# piece of cleanup logic, using fake process/pipe/backend objects rather than
+# relying on it happening to behave correctly as a byproduct of the other
+# ~45 regression tests that call it. None of these touch a real process or
+# a real database.
+
+
+class _FakeDBResult:
+    def __init__(self, row_present: bool) -> None:
+        self._row_present = row_present
+
+    def one_or_none(self) -> tuple[int] | None:
+        return (1,) if self._row_present else None
+
+
+class _FakeDBConnection:
+    def __init__(self, *, execute_effect: Exception | None, row_present: bool) -> None:
+        self._execute_effect = execute_effect
+        self._row_present = row_present
+        self.execute_calls = 0
+        self.committed = False
+
+    def execute(self, _stmt: object, _params: object = None) -> _FakeDBResult:
+        self.execute_calls += 1
+        if self._execute_effect is not None:
+            raise self._execute_effect
+        return _FakeDBResult(self._row_present)
+
+    def commit(self) -> None:
+        self.committed = True
+
+
+class _FakeDBConnectionCtx:
+    def __init__(self, connection: _FakeDBConnection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> _FakeDBConnection:
+        return self._connection
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakeDBEngine:
+    """A minimal stand-in for a SQLAlchemy `Engine`, used only to drive
+    `_emergency_terminate_backend`/`_confirm_backend_gone_or_report`
+    deterministically — real backend-verification failure/timeout paths
+    are impractical to construct against a real database on demand, the
+    same reasoning behind every other fake in this file. `connect_effect`
+    simulates the connection attempt itself failing; `execute_effect`
+    simulates the query failing after a connection was made;
+    `row_present` controls whether the backend still "shows up" in the
+    fake `pg_stat_activity` row."""
+
+    def __init__(
+        self,
+        *,
+        connect_effect: Exception | None = None,
+        execute_effect: Exception | None = None,
+        row_present: bool = False,
+        fail_from_connection_number: int | None = None,
+    ) -> None:
+        self._connect_effect = connect_effect
+        self._execute_effect = execute_effect
+        self._row_present = row_present
+        self._fail_from_connection_number = fail_from_connection_number
+        self._connection_count = 0
+        self.connections: list[_FakeDBConnection] = []
+
+    def connect(self) -> _FakeDBConnectionCtx:
+        if self._connect_effect is not None:
+            raise self._connect_effect
+        self._connection_count += 1
+        effect = None
+        if self._execute_effect is not None and (
+            self._fail_from_connection_number is None
+            or self._connection_count >= self._fail_from_connection_number
+        ):
+            effect = self._execute_effect
+        connection = _FakeDBConnection(execute_effect=effect, row_present=self._row_present)
+        self.connections.append(connection)
+        return _FakeDBConnectionCtx(connection)
+
+
+def _bare_blocked() -> "_BackgroundStatement":
+    """A `_BackgroundStatement` constructed but never `__enter__`ed — no
+    real process, IPC, or database connection exists, so its attributes
+    can be freely replaced with fakes for unit-testing cleanup logic in
+    isolation."""
+    return _BackgroundStatement(create_engine("postgresql+psycopg://unused/unused"), "SELECT 1", {})
+
+
+def test_run_emergency_teardown_reports_nothing_on_the_happy_path() -> None:
+    """A process that already exited cleanly (state "closed" — the common
+    case when `_BackgroundStatement.__exit__` already ran) and no
+    recorded backend pid: the net finds nothing to do and reports no
+    problems."""
+    blocked = _bare_blocked()
+    blocked._process = _FakeProcess(alive_sequence=[ValueError("process object is closed")])
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    assert problems == []
+
+
+def test_run_emergency_teardown_closes_a_live_process_after_a_successful_terminate() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(alive_sequence=[True, False])
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    assert problems == []
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 0
+    assert process.close_calls == 1
+
+
+def test_run_emergency_teardown_escalates_to_kill_when_terminate_fails() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(
+        alive_sequence=[True, True, False],
+        terminate_effect=_InjectedFailure("terminate boom"),
+    )
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency terminate" in labels
+    assert process.kill_calls == 1
+    assert process.close_calls == 1
+
+
+def test_run_emergency_teardown_reports_survival_after_both_forcible_operations_fail() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(
+        alive_sequence=[True, True, True],
+        terminate_effect=_InjectedFailure("terminate boom"),
+        kill_effect=_InjectedFailure("kill boom"),
+    )
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency terminate" in labels
+    assert "emergency kill" in labels
+    assert "emergency containment" in labels
+    assert process.close_calls == 0, "a surviving process object must not be closed"
+
+
+def test_run_emergency_teardown_reports_a_problem_when_both_bounded_joins_fail() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(
+        alive_sequence=[True, True, False],
+        join_effect_sequence=[_InjectedFailure("join boom"), _InjectedFailure("join boom 2")],
+    )
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency join" in labels
+    assert "emergency join after kill" in labels
+    # Still reaches a final close: both joins failing does not by itself
+    # stop the net from taking whatever containment step is still valid.
+    assert process.close_calls == 1
+
+
+def test_run_emergency_teardown_reports_a_problem_when_status_inspection_fails() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(alive_sequence=[_InjectedFailure("is_alive boom")])
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency status check" in labels
+    # An unconfirmable status must still be treated as "might be alive",
+    # never as "already gone" — terminate() is still attempted.
+    assert process.terminate_calls == 1
+
+
+def test_run_emergency_teardown_reports_a_problem_when_the_process_object_fails_to_close() -> None:
+    blocked = _bare_blocked()
+    process = _FakeProcess(alive_sequence=[False], close_effect=_InjectedFailure("close boom"))
+    blocked._process = process
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency close process object" in labels
+
+
+def test_run_emergency_teardown_closes_every_ipc_endpoint_independently() -> None:
+    """All six IPC endpoints fail to close; every one must be attempted
+    and reported, not just the first."""
+    blocked = _bare_blocked()
+    blocked._handshake_recv = _FakeConnection("handshake_recv")
+    blocked._handshake_send = _FakeConnection("handshake_send")
+    blocked._outcome_recv = _FakeConnection("outcome_recv")
+    blocked._outcome_send = _FakeConnection("outcome_send")
+    blocked._control_recv = _FakeConnection("control_recv")
+    blocked._control_send = _FakeConnection("control_send")
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), ())
+
+    labels = {label for label, _ in problems}
+    for endpoint in (
+        "handshake_recv",
+        "handshake_send",
+        "outcome_recv",
+        "outcome_send",
+        "control_recv",
+        "control_send",
+    ):
+        assert f"emergency close {endpoint}" in labels, f"expected {endpoint} close reported"
+
+
+def test_run_emergency_teardown_reports_a_problem_when_pg_terminate_backend_fails() -> None:
+    blocked = _bare_blocked()
+    blocked._backend_pid_value = 999999
+    engine = _FakeDBEngine(connect_effect=_InjectedFailure("connection refused"))
+
+    problems = _run_emergency_teardown(blocked, engine, ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency pg_terminate_backend" in labels
+    assert not any(label == "emergency backend verification" for label in labels), (
+        "verification must not even be attempted once the terminate call itself failed"
+    )
+
+
+def test_run_emergency_teardown_reports_a_problem_when_backend_verification_query_fails() -> None:
+    """The `pg_terminate_backend` call itself (connection #1) succeeds;
+    every verification poll afterward (connection #2+) fails — proving
+    the verification failure is reported as its own distinct problem,
+    not conflated with a terminate-call failure."""
+    blocked = _bare_blocked()
+    blocked._backend_pid_value = 999999
+    engine = _FakeDBEngine(
+        execute_effect=_InjectedFailure("query boom"), fail_from_connection_number=2
+    )
+
+    problems = _run_emergency_teardown(blocked, engine, ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency pg_terminate_backend" not in labels
+    assert "emergency backend verification" in labels
+
+
+def test_run_emergency_teardown_reports_a_problem_when_the_backend_never_disappears() -> None:
+    blocked = _bare_blocked()
+    blocked._backend_pid_value = 999999
+    engine = _FakeDBEngine(row_present=True)
+
+    problems = _run_emergency_teardown(blocked, engine, ())
+
+    labels = [label for label, _ in problems]
+    assert "emergency backend verification" in labels
+    assert any(
+        "still present" in str(exc)
+        for label, exc in problems
+        if label == "emergency backend verification"
+    )
+
+
+def test_run_emergency_teardown_confirms_a_gone_backend_with_no_problems() -> None:
+    blocked = _bare_blocked()
+    blocked._backend_pid_value = 999999
+    engine = _FakeDBEngine(row_present=False)
+
+    problems = _run_emergency_teardown(blocked, engine, ())
+
+    assert problems == []
+
+
+def test_run_emergency_teardown_reports_a_problem_when_an_extra_connection_fails_to_rollback() -> (
+    None
+):
+    blocked = _bare_blocked()
+
+    class _FailingRollback:
+        def rollback(self) -> None:
+            raise _InjectedFailure("rollback boom")
+
+    problems = _run_emergency_teardown(blocked, _FakeDBEngine(), (_FailingRollback(),))  # type: ignore[arg-type]
+
+    labels = [label for label, _ in problems]
+    assert "emergency rollback of test-controlled connection" in labels
+
+
+def test_emergency_teardown_attaches_problems_to_an_already_propagating_exception() -> None:
+    """The `sys.exc_info()`-based preservation contract: a problem found
+    while a test-body exception is already unwinding through the
+    `finally` block is attached as a note, never replaces it, and no new
+    exception escapes from `_emergency_teardown` itself."""
+    blocked = _bare_blocked()
+
+    def _raise_original() -> None:
+        blocked._process = _FakeProcess(
+            alive_sequence=[True, True],
+            terminate_effect=_InjectedFailure("terminate boom"),
+            kill_effect=_InjectedFailure("kill boom"),
+        )
         try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT pg_terminate_backend(:p)"), {"p": pid})
-                conn.commit()
-        except Exception:  # noqa: BLE001 - best-effort, this is the last resort itself
-            pass
+            raise _SentinelFailure("original test-body failure")
+        finally:
+            _emergency_teardown(blocked, _FakeDBEngine())
+
+    with pytest.raises(_SentinelFailure) as excinfo:
+        _raise_original()
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert "unreleased or failed resources" in notes.lower()
+
+
+def test_emergency_teardown_raises_directly_when_nothing_else_is_propagating() -> None:
+    blocked = _bare_blocked()
+    blocked._process = _FakeProcess(
+        alive_sequence=[True, True],
+        terminate_effect=_InjectedFailure("terminate boom"),
+        kill_effect=_InjectedFailure("kill boom"),
+    )
+
+    with pytest.raises(RuntimeError, match="unreleased or failed resources"):
+        _emergency_teardown(blocked, _FakeDBEngine())
+
+
+def test_emergency_teardown_is_silent_when_it_finds_nothing_and_nothing_is_propagating() -> None:
+    blocked = _bare_blocked()
+    blocked._process = _FakeProcess(alive_sequence=[ValueError("process object is closed")])
+
+    _emergency_teardown(blocked, _FakeDBEngine())  # must not raise
 
 
 @pytest.mark.parametrize(
@@ -2173,8 +3334,7 @@ def test_background_statement_reports_a_protocol_failure_when_graceful_cancellat
             )
             assert blocked.worker_confirmed_stopped
         finally:
-            first.rollback()
-            _emergency_teardown(blocked, engine)
+            _emergency_teardown(blocked, engine, extra_connections=(first,))
 
 
 # ---------------------------------------------------------------------------
@@ -2348,8 +3508,7 @@ def test_background_statement_reports_a_problem_when_backend_verification_itself
             assert blocked.worker_confirmed_stopped, "the worker must still be terminated for real"
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
-            first.rollback()
-            _emergency_teardown(blocked, engine)
+            _emergency_teardown(blocked, engine, extra_connections=(first,))
 
 
 def test_background_statement_reports_a_problem_when_backend_verification_itself_fails_on_natural_completion(
@@ -2501,6 +3660,63 @@ def test_background_statement_enter_reaps_a_partially_started_process_when_start
         _emergency_teardown(blocked, engine)
 
 
+def test_background_statement_reports_combined_process_and_ipc_cleanup_failures_during_start_error_cleanup(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process.start()` genuinely spawns a real, deliberately
+    startup-delayed (so it is still alive when cleanup runs) child and
+    then raises; the resulting partial-start cleanup's own `terminate()`
+    is *also* mocked to fail (the real, unmocked `kill()` still
+    succeeds), and one IPC pipe end's `close()` is *also* mocked to
+    fail. Proves every one of these co-occurring cleanup failures —
+    spanning both the process-focused and IPC-focused halves of
+    start-error cleanup — is independently collected and reported, none
+    skipped because another failed first, and that the original
+    `process.start()` failure remains the primary, unreplaced error
+    (Phase 5 fourteenth exit review §2: 'IPC close failure combined with
+    one or more process-cleanup failures')."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    real_start = ctx.Process.start
+    real_pipe = ctx.Pipe
+
+    def _start_then_fail(self: Any) -> None:
+        real_start(self)
+        raise _InjectedFailure("simulated failure after the process was actually spawned")
+
+    def _pipe_with_recv_close_failing(duplex: bool = True) -> Any:
+        conn1, conn2 = real_pipe(duplex=duplex)
+        monkeypatch.setattr(
+            conn1, "close", _raise_once_then_succeed("simulated recv-end close failure")
+        )
+        return conn1, conn2
+
+    monkeypatch.setattr(ctx, "Pipe", _pipe_with_recv_close_failing)
+    monkeypatch.setattr(ctx.Process, "start", _start_then_fail)
+    monkeypatch.setattr(
+        ctx.Process, "terminate", _raise_once_then_succeed("simulated terminate() failure")
+    )
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {}, _startup_delay_seconds=2.0)
+    try:
+        with pytest.raises(RuntimeError, match="failed to start") as excinfo:
+            blocked.__enter__()
+        assert "simulated failure after the process was actually spawned" in str(excinfo.value), (
+            "the original process.start() failure must remain the primary error"
+        )
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "terminate (partial start)" in notes, (
+            f"expected the terminate() failure reported, got: {notes!r}"
+        )
+        assert "handshake_recv" in notes, f"expected an IPC close failure reported, got: {notes!r}"
+        assert blocked.worker_confirmed_stopped, (
+            "kill() must still have reaped the process despite terminate() failing"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
 def test_background_statement_reports_a_problem_when_the_process_object_fails_to_close_during_start_error_cleanup(
     postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2513,7 +3729,7 @@ def test_background_statement_reports_a_problem_when_the_process_object_fails_to
     engine = postgres_engine
     ctx = multiprocessing.get_context("spawn")
     monkeypatch.setattr(ctx.Process, "start", _raise_injected_failure)
-    monkeypatch.setattr(ctx.Process, "close", _raise_injected_failure)
+    monkeypatch.setattr(ctx.Process, "close", _raise_once_then_succeed())
     monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
 
     blocked = _BackgroundStatement(engine, "SELECT 1", {})
@@ -2546,7 +3762,7 @@ def test_background_statement_reports_an_ipc_cleanup_failure_during_start_error_
         calls["count"] += 1
         conn1, conn2 = real_pipe(duplex=duplex)
         if calls["count"] == 1:
-            monkeypatch.setattr(conn1, "close", _raise_injected_failure)
+            monkeypatch.setattr(conn1, "close", _raise_once_then_succeed())
         return conn1, conn2
 
     monkeypatch.setattr(ctx, "Pipe", _pipe_with_first_recv_close_failing)
@@ -2598,7 +3814,7 @@ def test_background_statement_reports_a_startup_cleanup_failure_after_a_successf
         conn1, conn2 = real_pipe(duplex=duplex)
         if calls["count"] == pipe_index:
             target = conn1 if end_index == 0 else conn2
-            monkeypatch.setattr(target, "close", _raise_injected_failure)
+            monkeypatch.setattr(target, "close", _raise_once_then_succeed())
         return conn1, conn2
 
     monkeypatch.setattr(ctx, "Pipe", _pipe)
@@ -2664,7 +3880,7 @@ def test_background_statement_reports_a_problem_when_an_ipc_channel_fails_to_clo
         with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
             captured.append(blocked)
             blocked.resume_and_get_outcome("IPC-channel-close-failure probe")
-            monkeypatch.setattr(blocked._outcome_recv, "close", _raise_injected_failure)
+            monkeypatch.setattr(blocked._outcome_recv, "close", _raise_once_then_succeed())
 
     try:
         with pytest.raises(RuntimeError, match="close outcome_recv"):
@@ -2687,7 +3903,7 @@ def test_background_statement_reports_a_problem_when_the_process_object_fails_to
         with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
             captured.append(blocked)
             blocked.resume_and_get_outcome("process-close-failure probe")
-            monkeypatch.setattr(blocked._process, "close", _raise_injected_failure)
+            monkeypatch.setattr(blocked._process, "close", _raise_once_then_succeed())
 
     try:
         with pytest.raises(RuntimeError, match="close process object"):
