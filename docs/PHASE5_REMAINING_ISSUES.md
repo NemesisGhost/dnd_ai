@@ -1,23 +1,34 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-04).** A tenth review found the ninth pass's fixes still
-> left `_BackgroundStatement`'s worker thread architecture unable to deliver
-> a literal no-survivor guarantee: no Python thread can be unconditionally,
-> forcibly stopped regardless of what it is blocked inside. The two
-> `pg_sleep` worst-case regression tests proved this directly — after
-> `__exit__()` returned or raised, the worker thread was still alive, and
-> only the tests' own manual `join()` afterward reclaimed it. The tenth pass
-> replaced the worker thread with an independently terminable worker
-> process, closing the gap for good. See
-> [§ Tenth review: an independently terminable worker process](#tenth-review-an-independently-terminable-worker-process-2026-08-04)
+> **CLOSED (2026-08-04).** An eleventh review of the tenth pass's merged
+> commit found the redesigned worker process could still report false
+> success and silently discard cleanup failures: `_worker_main` marked an
+> outcome `"committed"` before `connection.commit()` was ever attempted, a
+> commit failure only reached `problems` (which was only ever surfaced when
+> the status was already `"failed"`), and `__exit__` never drained an
+> outcome nobody explicitly consumed via `resume_and_get_outcome()`. A
+> controller-side verification error could also replace an
+> already-propagating exception outright, and process/IPC lifecycle gaps
+> (unhandled `Process()`/`start()` failure, a bare `assert` instead of a
+> collected problem, unclosed queues and `Process` object) remained. The
+> eleventh pass fixed the worker outcome protocol, made every controller-side
+> cleanup path failure-safe, and completed process/IPC cleanup — see
+> [§ Eleventh review: worker outcome protocol, controller cleanup, and
+> process/IPC hardening](#eleventh-review-worker-outcome-protocol-controller-cleanup-and-processipc-hardening-2026-08-04)
 > below and
-> [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
-> Phase 5 production correctness remained complete throughout; no schema,
-> migration, or production-code change was needed or made. Formal
+> [PHASE5_VERIFICATION.md § Eleventh exit review](PHASE5_VERIFICATION.md#eleventh-exit-review-worker-outcome-protocol-controller-cleanup-and-processipc-hardening-2026-08-04).
+> This review also found the token-reduction verification tooling
+> (`scripts/verify.sh`) was committed non-executable, breaking its own
+> documented entry point — fixed first, then used for the remainder of this
+> pass. Phase 5 production correctness remained complete throughout; no
+> schema, migration, or production-code change was needed or made. Formal
 > verification and the Phase 6 correctness entry gate are both closed: the
-> tenth pass's PR #13 push-triggered GitHub Actions run
-> [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630)
-> passed both jobs on `ubuntu-latest`, confirming the redesign cross-platform.
+> eleventh pass's PR #14 push-triggered GitHub Actions run
+> [`30964183959`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30964183959)
+> failed once on an isolated, unrelated environment flake (an SSL connection
+> drop during an unrelated test, ten minutes after this file's own 39 tests
+> had already passed) and passed completely — both jobs, every step — on a
+> same-commit rerun.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -43,8 +54,11 @@
 > ownership synchronously and layering a fallback ending in a guarantee
 > PostgreSQL itself enforces, and a tenth review found even that could not
 > make good on a literal no-survivor guarantee while the worker remained a
-> Python thread — closed for good, per this reopening, by replacing the
-> thread with an independently terminable worker process.
+> Python thread, closed by replacing the thread with an independently
+> terminable worker process; and an eleventh review found that process-based
+> redesign could still report false success and silently discard cleanup
+> failures, closed by this reopening's worker-outcome and controller-cleanup
+> hardening.
 
 ## Tenth review: an independently terminable worker process (2026-08-04)
 
@@ -152,6 +166,135 @@ concurrency tests) pass locally against AWS `dev`, confirmed stable across
 three repeated runs; the full suite is 1,106 tests (up from 1,101). See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
+
+## Eleventh review: worker outcome protocol, controller cleanup, and process/IPC hardening (2026-08-04)
+
+The tenth pass correctly replaced the worker thread with an independently
+terminable process, and its pushed PR head passed all 1,106 tests in GitHub
+Actions
+[`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630).
+Review of the merged commit
+(`4ef78375d7dbf2c57341c12d4b8c5dd92572d00b`) — after first fixing the
+token-reduction tooling's own broken executable-bit entry point, per this
+pass's explicit instruction to repair and use that tooling before touching
+the helper itself — found the redesigned worker could still report false
+success and silently discard cleanup failures:
+
+1. **A commit failure could still be reported as `"committed"`.**
+   `_worker_main` set its outcome tuple to `("committed", None)` immediately
+   after the statement succeeded, before `connection.commit()` was ever
+   attempted. A commit failure only appended to `problems`, which
+   `resume_and_get_outcome()` only turned into a note when the status was
+   *already* `"failed"` — so a commit, close, or dispose failure after an
+   otherwise-successful statement was silently absorbed into an apparently
+   successful outcome.
+2. **An outcome nobody explicitly consumed could be lost.** `__exit__` only
+   ran `_force_stop()` when the process was still alive; a worker that
+   finished before the `with` block exited, without the caller ever calling
+   `resume_and_get_outcome()`, left its outcome sitting unread forever.
+3. **A verification error could replace an already-propagating exception.**
+   `_verify_backend_gone()`'s per-poll connection let a connection or query
+   failure propagate straight out of `_force_stop()`/`__exit__` uncaught,
+   silently replacing whatever exception the `with` block's body had already
+   raised.
+4. **The regression tests never exercised the final termination call or
+   backend verification themselves failing** — every prior pass's
+   fault-injection tests left both operational.
+5. **Process/IPC lifecycle gaps:** `Process()` construction and
+   `process.start()` failures were unhandled; the final "process survived
+   forcible termination" case raised a bare `assert` (the same
+   replace-an-already-propagating-exception risk as finding 3) instead of a
+   collected problem; IPC queues and the `Process` object itself were never
+   explicitly closed.
+
+Acceptance criteria, all test-infrastructure-only (do not change a
+production trigger or add a migration unless a separate review finds a
+concrete production defect):
+
+- `"committed"` is emitted only once the statement, its commit, and every
+  other cleanup step (rollback-after-commit-failure, close, dispose) have
+  all succeeded; a cleanup-only failure after a genuine commit still fails
+  the caller.
+- `__exit__` always drains and processes any outcome nobody explicitly
+  consumed, so it can never be silently lost.
+- No controller-side verification or signaling error can replace an
+  already-propagating exception; every controller-side connection is closed
+  through a failure-safe construct regardless of what the operation itself
+  did.
+- `Process()`/`process.start()` failures are handled without ever treating
+  a never-started process as a live resource; every escalation step
+  (terminate → kill) is followed by a bounded join, and a genuine survival
+  is reported as a collected problem, never a bare `assert`.
+- Every IPC queue and the `Process` object itself are explicitly closed,
+  bounding `Queue.join_thread()` (which has no timeout of its own).
+- New regression tests inject failure into the final termination call and
+  backend verification themselves, not only the earlier graceful paths, and
+  into process construction/start/escalation and IPC/process-object close.
+- The five production concurrency-invariant tests are preserved unweakened.
+- Re-run the focused helper tests, all five invariant concurrency tests, the
+  complete test suite, migration checks, and final pushed-head CI.
+
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`, plus fixing
+`scripts/verify.sh`'s and `scripts/aws-db-allow-my-ip.sh`'s tracked file
+mode:**
+
+- `_worker_main` now tracks `statement_error` and `commit_error`
+  separately; `commit()` only runs after a successful statement, and
+  `"committed"` is reported only if the statement succeeded, the commit
+  succeeded, and no other cleanup step reported a problem. A shared
+  `_build_outcome_exception()` is used by both `resume_and_get_outcome()`
+  and a new `_drain_unread_outcome()` (called unconditionally from
+  `__exit__`), so nothing consumed by neither is ever lost.
+- A new `_with_isolated_connection()` helper guarantees every controller
+  connection closes regardless of what the operation did, without a close
+  failure replacing the operation's own error. `_verify_backend_gone()` was
+  rewritten around it to classify gone / present-idle / present-active via
+  `pg_stat_activity.state`/`xact_start`, and to never itself raise.
+- `__enter__` wraps `Process()` construction and `process.start()` in their
+  own failure-safe handling, leaving `self._process` `None` on either
+  failure. `_force_stop`'s bare `assert` became a collected problem.
+  `_reap()` and `__exit__` both close every IPC queue (bounding
+  `Queue.join_thread()` via a short-lived wrapper thread) and the `Process`
+  object once confirmed not-alive — which required a new
+  `worker_confirmed_stopped` property, since `Process.is_alive()` raises
+  once the object is closed, breaking every test's established
+  `assert not blocked._process.is_alive()` post-`__exit__` idiom.
+- Eleven new regression tests (twelve collected items, since one is
+  parametrized over two stages) cover: a bare statement failure; commit
+  failure after a successful statement (the follow-on `rollback()` turned
+  out to be a safe no-op once `commit()` already failed against a closed
+  connection — the same SQLAlchemy bookkeeping behavior the tenth pass found
+  for the pre-`begin()` case); a cleanup-only failure (`close`/`dispose`,
+  parametrized) after a successful commit; an outcome drained by `__exit__`
+  that nobody consumed; the final termination call itself failing; backend
+  verification itself failing; `Process()` construction failure;
+  `process.start()` failure; `terminate()` not stopping the process with
+  `kill()` escalating; and a queue/Process-object close failure. Writing the
+  queue-close test surfaced one more bug: `_close_queues` was unconditionally
+  attempting `Queue.join_thread()` even when `Queue.close()` had already
+  failed, violating `join_thread()`'s own precondition and leaking an
+  unhandled-thread-exception warning instead of a reported problem — fixed
+  by skipping `join_thread()` when `close()` failed and relaying an
+  exception raised inside the bounded-wait wrapper thread back to the
+  caller.
+- **Tooling defect, found and fixed first:** `scripts/verify.sh` was
+  committed as `100644`; `core.filemode=false` in this repository means a
+  local `chmod +x` never propagates into the tracked git mode, so the
+  documented `scripts/verify.sh <mode>` form failed with `Permission
+  denied` on a fresh checkout. `scripts/aws-db-allow-my-ip.sh` — invoked
+  directly by `verify.sh`'s AWS-touching modes and documented as a bare
+  command in `docs/DEVELOPMENT.md` §3 — had the identical defect. Both fixed
+  via `git update-index --chmod=+x`; both confirmed via a genuinely fresh
+  clone. `scripts/verify.sh` was then used for every quality check for the
+  remainder of this pass.
+
+**Results:** 39 tests in `test_entity_type_change_protection.py` (9
+sequential, 25 helper regression tests — up from 13 — and 5 unweakened
+concurrency tests) pass locally against AWS `dev`, confirmed stable across
+three repeated runs; the full suite is 1,118 tests (up from 1,106). See the
+verification commands and results in
+[PHASE5_VERIFICATION.md § Eleventh exit review](PHASE5_VERIFICATION.md#eleventh-exit-review-worker-outcome-protocol-controller-cleanup-and-processipc-hardening-2026-08-04).
 
 ## Ninth review: synchronous ownership and a deterministic fallback (resolved by tenth pass, 2026-08-04)
 
@@ -337,15 +480,22 @@ blockers are closed:
    ninth pass fixed with synchronous ownership and a layered fallback; a
    tenth review then found that even that fallback could not deliver a
    literal no-survivor guarantee, because no Python thread can be
-   unconditionally, forcibly stopped. **Resolved** by the tenth pass: the
-   worker now runs in an independently terminable OS process
-   (`multiprocessing.Process`), reclaimable via `terminate()`/`kill()`
-   regardless of what it is doing, with `_force_stop()`'s fallback chain
-   ending in forcible process termination followed by one more, unconditional
-   `pg_terminate_backend()` call. Confirmed by PR #13's push-triggered CI run
-   [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630),
-   which passed both jobs on `ubuntu-latest`. See
-   [PHASE5_VERIFICATION.md § Tenth exit review](PHASE5_VERIFICATION.md#tenth-exit-review-findings-and-corrections-2026-08-04).
+   unconditionally, forcibly stopped — closed by the tenth pass replacing
+   the worker thread with an independently terminable OS process
+   (`multiprocessing.Process`), confirmed by PR #13's push-triggered CI run
+   [`30955234630`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30955234630).
+   An eleventh review then found that process-based redesign could still
+   report false success (a commit failure reported as `"committed"`) and
+   silently discard cleanup failures (an outcome nobody explicitly consumed
+   could be lost, and a controller-side verification error could replace an
+   already-propagating exception). **Resolved** by the eleventh pass's
+   worker-outcome protocol fix, controller-side failure-safe cleanup, and
+   completed process/IPC lifecycle handling. Confirmed by PR #14's
+   push-triggered CI run
+   [`30964183959`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30964183959),
+   which passed both jobs completely on a same-commit rerun after an
+   isolated, unrelated environment flake on its first attempt. See
+   [PHASE5_VERIFICATION.md § Eleventh exit review](PHASE5_VERIFICATION.md#eleventh-exit-review-worker-outcome-protocol-controller-cleanup-and-processipc-hardening-2026-08-04).
 
 ## Fourth review baseline and scope
 
