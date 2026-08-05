@@ -211,7 +211,7 @@ For `dev`, use the session-scoped ingress workflow in [PLAN.md §29.9](PLAN.md#2
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 4 are done.** Phase 5's production implementation, resumed-waiter tests, and independent final-state assertions are merged and verified against live AWS and GitHub Actions. Its formal test-infrastructure/tooling closeout: a tenth review found the test-only worker helper's thread-based design could not deliver a literal no-survivor guarantee; a tenth pass replaced it with an independently terminable worker process, an eleventh review found that process could still report false success and silently discard cleanup failures, an eleventh pass fixed it, a twelfth review found the eleventh pass's own verification-tooling claim didn't hold up to its exit code and its IPC redesign still relied on an abandonable thread, a twelfth pass fixed those findings, a thirteenth review then found the twelfth pass's own missing-outcome classification, backend verification, and `Process.start()` failure handling were themselves still incomplete, a thirteenth pass fixed those findings, and a fourteenth review then found the thirteenth pass's own forced-termination classification, partial-start cleanup, and regression-test safety net were themselves still incomplete — a fourteenth pass fixed those findings and is verified locally (93 tests in `test_entity_type_change_protection.py`, 1,189 total), pending confirmation from [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run, and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) reflects the same status. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate is blocked pending that CI confirmation. Follow [§23.1](PLAN.md#231-phase-exit-review) when each phase closes.
+**Phases 1 through 5 are done.** Phase 6 is current. Phase 5's production implementation, resumed-waiter tests, independent final-state assertions, and reusable helper hardening are verified against AWS and GitHub Actions. Follow [PLAN.md §23.1](PLAN.md#231-phase-exit-review) when each phase closes and [§25.6](PLAN.md#256-proportional-test-infrastructure-policy) before expanding test-only infrastructure.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 
@@ -258,6 +258,20 @@ uv run pytest tests/database -x  # needs the dev ingress rule open, see §3
 ```
 
 **Fallback only**: set `DND_AI_USE_LOCAL_POSTGRES=1` with `DATABASE_URL` pointed at a local container to run `tests/database`/`tests/scenario` against testcontainers instead, when AWS is genuinely unreachable (§3). This is not the default path and should not be what CI or day-to-day development relies on.
+
+### 6.1 Keep test infrastructure proportional
+
+Write the smallest test that makes the production claim falsifiable. For database concurrency, that normally means arranging a genuine blocking operation, proving the original waiter resumes, and querying final committed state from an independent connection. It does not mean proving every possible failure of Python's multiprocessing or IPC implementation.
+
+A helper deserves focused regression coverage when it could realistically:
+
+- let a worker failure appear as a passing test;
+- leave a PostgreSQL backend, transaction, advisory lock, or other persistent external resource that contaminates later tests; or
+- cause repeatable CI hangs or instability in a supported environment.
+
+Cover ordinary startup, success, assertion failure, timeout/cancellation, and teardown as applicable. Beyond those paths, require an observed incident or a concrete, realistic failure chain before adding fault injection. Assume standard-library cleanup primitives honor their documented contracts unless there is contrary evidence. Do not build and exhaustively test a second teardown framework solely to test the first.
+
+When production assertions are reliable and CI isolation contains any residual test-process state, document theoretical limitations and proceed. See [PLAN.md §25.6](PLAN.md#256-proportional-test-infrastructure-policy) for the blocking threshold and stop-loss rule.
 
 Two rules that matter more here than in a typical project:
 
@@ -346,9 +360,11 @@ Before opening a pull request:
 - [ ] New tables and important columns carry comments (§31)
 - [ ] Migration runs up **and** down cleanly against a fresh ephemeral database on the AWS `dev` instance (§3, §6) — a local database only if AWS was genuinely unreachable, noted as such
 - [ ] Constraints have positive and negative tests
+- [ ] Tests target production behavior or a credible regression; any new test-harness fault injection satisfies [PLAN.md §25.6](PLAN.md#256-proportional-test-infrastructure-policy)
 - [ ] Code sits in the layer [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) prescribes
 - [ ] `ruff format --check`, `ruff check`, `mypy src`, and `pytest` all pass
 - [ ] If the change adds or alters a deployable, it runs in `dev` on ECS Fargate and was exercised there ([PLAN.md §30.8](PLAN.md#308-per-phase-deployment-expectations))
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later
 - [ ] If this change completes a phase, the phase exit review in [PLAN.md §23.1](PLAN.md#231-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended
+- [ ] Phase closure is not blocked solely by theoretical failures of test-only cleanup primitives; lower-risk limitations are documented and delivery continues
