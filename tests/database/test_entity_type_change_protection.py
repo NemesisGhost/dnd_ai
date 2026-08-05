@@ -9,8 +9,8 @@ driven by core.entity_types metadata, and a dungeon-specific one for the
 trigger alone cannot see.
 """
 
+import contextlib
 import multiprocessing
-import queue
 import threading
 import time
 import uuid
@@ -262,41 +262,37 @@ def _attempt(problems: list[tuple[str, Exception]], label: str, fn: Callable[[],
         problems.append((label, exc))
 
 
-def _bounded_join_thread(q: Any, timeout: float) -> None:
-    """multiprocessing.Queue.join_thread() has no timeout parameter of its
-    own, so a queue whose feeder thread genuinely never exits would hang
-    cleanup indefinitely. Wraps it in a short-lived daemon thread used only
-    to add a bound to that one blocking stdlib call — not a mechanism for
-    abandoning the worker process itself, which this class never marks
-    daemon — and reports a timeout as a real problem rather than silently
-    giving up. Also relays any exception the wrapped call itself raises
-    back to this thread: `Thread.join()` alone would only observe the
-    thread ending, silently discarding an exception raised inside it
-    (Python's default `threading.excepthook` just logs it, which is how an
-    earlier version of this helper leaked join_thread()'s own precondition
-    assertion as an unhandled-thread-exception warning instead of a
-    reported cleanup problem).
+def _poll_and_recv(conn: Any, timeout: float) -> tuple[bool, Any]:
+    """Bounded wait for one message on a multiprocessing.Connection (a
+    `Pipe()` end). Returns `(True, payload)` if a message arrived within
+    `timeout`, or `(False, None)` if the wait timed out or the peer closed
+    its end without ever sending one — both are "nothing arrived" from the
+    caller's point of view, and every caller here (the startup handshake,
+    and the outcome channel) already treats those two cases identically.
 
-    Callers must only invoke this after `q.close()` has already succeeded:
-    `join_thread()`'s own documented precondition is that `close()` was
-    called first, and calling it against a queue that failed to close
-    raises its own unrelated `AssertionError` that must not be mistaken
-    for the queue's feeder thread genuinely hanging."""
-    outcome: list[BaseException] = []
+    A closed peer surfaces differently by platform: POSIX reports the pipe
+    as readable and lets `recv()` raise `EOFError`, while Windows'
+    `PipeConnection.poll()` itself raises `BrokenPipeError` (a subclass of
+    `OSError`) as soon as the peer has closed — reproduced running this
+    suite locally. Both are the same "peer closed, nothing sent" case, not
+    a real failure, so both `poll()` and `recv()` are guarded here rather
+    than only `recv()`.
 
-    def _run() -> None:
-        try:
-            q.join_thread()
-        except BaseException as exc:  # noqa: BLE001 - relayed to the caller, not swallowed
-            outcome.append(exc)
-
-    joiner = threading.Thread(target=_run, daemon=True)
-    joiner.start()
-    joiner.join(timeout=timeout)
-    if joiner.is_alive():
-        raise TimeoutError(f"queue feeder thread did not finish within {timeout}s")
-    if outcome:
-        raise outcome[0]
+    Unlike the multiprocessing.Queue-based design this replaced (Phase 5
+    twelfth exit review §4), `Connection.poll()`/`.recv()`/`.close()` are
+    direct, synchronous operations on an OS-level pipe handle — none of
+    them spin up a background feeder thread, so there is nothing here that
+    can itself need a bounded join or ever survive as an orphaned thread
+    the way `Queue.join_thread()` could."""
+    try:
+        if not conn.poll(timeout=timeout):
+            return False, None
+    except (EOFError, OSError):
+        return False, None
+    try:
+        return True, conn.recv()
+    except (EOFError, OSError):
+        return False, None
 
 
 class _InjectedFailure(Exception):
@@ -314,29 +310,49 @@ def _worker_main(
     lock_timeout_seconds: float,
     connect_timeout_seconds: int,
     startup_delay_seconds: float,
+    watcher_join_timeout_seconds: float,
     fault_injection_stage: str | None,
-    handshake_queue: Any,
-    outcome_queue: Any,
-    control_queue: Any,
+    handshake_send: Any,
+    outcome_send: Any,
+    control_recv: Any,
 ) -> None:
     """Entry point for _BackgroundStatement's worker process. Defined at
     module level (not a closure or method) because multiprocessing's
     "spawn" start method must be able to pickle a reference to it.
+    `handshake_send`/`outcome_send`/`control_recv` are this worker's own
+    ends of three one-way `multiprocessing.Pipe(duplex=False)` channels —
+    see the class docstring for why these replaced `multiprocessing.Queue`.
 
     Three phases: (1) acquire a connection, begin its transaction, set the
     deterministic lock_timeout backstop, and report the real backend pid
-    back through handshake_queue — or, on any failure, attempt every
-    cleanup step for whatever was partially acquired and report the primary
-    failure plus any cleanup problems instead of it; (2) run the given
-    statement, watching control_queue on a background thread for a
-    driver-native cancel_safe() request from the controller; (3) attempt
-    commit() only if the statement succeeded, attempt rollback() only if
-    commit() then fails, always attempt close() and dispose() regardless of
-    what came before, and report through outcome_queue as
-    `(status, primary_error, problems)` — `status` is `"committed"` only
-    when the statement, its commit, and every cleanup step all succeeded
-    with nothing left to report; a cleanup-only problem after an otherwise
-    successful commit still reports `"failed"`.
+    back through handshake_send — or, on any failure, attempt every cleanup
+    step for whatever was partially acquired and report the primary failure
+    plus any cleanup problems instead of it; (2) run the given statement,
+    watching control_recv on a background thread for a driver-native
+    cancel_safe() request from the controller — that thread's own stop
+    signal is a purely local threading.Event, never IPC: only the
+    controller's cancel requests need to cross the process boundary, and
+    this worker's own main thread telling its own watcher thread to stop
+    never did; (3) attempt commit() only if the statement succeeded,
+    attempt rollback() only if commit() then fails, then attempt every
+    remaining cleanup step — signaling the watcher, joining it, closing the
+    connection, disposing the engine — independently of whether an earlier
+    one failed, so one failure never skips the rest, and report through
+    outcome_send as `(status, primary_error, problems)` — `status` is
+    `"committed"` only when the statement, its commit, and every cleanup
+    step all succeeded with nothing left to report; a cleanup-only problem
+    after an otherwise successful commit still reports `"failed"`, and a
+    watcher thread still alive after its own bounded join is itself
+    recorded as a cleanup problem.
+
+    Publishing that outcome is this worker's one mandatory duty: a worker
+    that exits — for any reason other than being forcibly stopped by the
+    controller before it got the chance — without ever publishing one is a
+    protocol failure the controller detects and reports on its own (see
+    `_BackgroundStatement._finalize_worker_outcome`); nothing here can
+    single-handedly guarantee that publish succeeds, since if the one
+    channel for reporting it is itself what failed, there is no second
+    channel left to report that failure through.
 
     None of this running to completion is what makes the controller's own
     guarantee hold: if this process does not respond, or does not stop, the
@@ -373,22 +389,31 @@ def _worker_main(
         _inject("after_set_lock_timeout")
         pid = connection.execute(text("SELECT pg_backend_pid()")).scalar()
         _inject("after_pid_lookup")
-    except Exception as exc:  # noqa: BLE001 - reported via handshake_queue, not swallowed
+    except Exception as exc:  # noqa: BLE001 - reported via handshake_send, not swallowed
         if connection is not None:
             _attempt(problems, "rollback after startup failure", connection.rollback)
             _attempt(problems, "close after startup failure", connection.close)
         if engine is not None:
             _attempt(problems, "dispose after startup failure", engine.dispose)
-        handshake_queue.put(("failed", repr(exc), problems))
+        # The handshake channel itself is what might fail here; nothing
+        # further can be attempted through it. The controller's bounded
+        # handshake wait times out instead of hanging.
+        with contextlib.suppress(Exception):
+            handshake_send.send(("failed", repr(exc), problems))
         return
 
-    handshake_queue.put(("ready", pid, []))
+    try:
+        handshake_send.send(("ready", pid, []))
+    except Exception:  # noqa: BLE001 - see above: the controller's handshake wait times out.
+        return
+
+    stop_watcher = threading.Event()
 
     def _watch_for_cancel() -> None:
-        while True:
-            message = control_queue.get()
-            if message is None:
-                return
+        while fault_injection_stage == "watcher_ignores_stop_signal" or not stop_watcher.is_set():
+            received, message = _poll_and_recv(control_recv, 0.5)
+            if not received:
+                continue
             if message == "cancel":
                 try:
                     dbapi_connection = connection.connection.dbapi_connection  # type: ignore[union-attr]
@@ -409,11 +434,16 @@ def _worker_main(
             raise _InjectedFailure("injected failure at stage: dispose_fails")
         engine.dispose()  # type: ignore[union-attr]
 
+    def _stop_watcher_with_optional_injection() -> None:
+        if fault_injection_stage == "watcher_stop_signal_fails":
+            raise _InjectedFailure("injected failure at stage: watcher_stop_signal_fails")
+        stop_watcher.set()
+
     statement_error: Exception | None = None
     commit_error: Exception | None = None
     try:
         connection.execute(text(sql), params)
-    except Exception as exc:  # noqa: BLE001 - reported via outcome_queue, not swallowed
+    except Exception as exc:  # noqa: BLE001 - reported via outcome_send, not swallowed
         statement_error = exc
         _attempt(problems, "invalidate after statement failure", connection.invalidate)
     else:
@@ -427,27 +457,55 @@ def _worker_main(
             connection.connection.dbapi_connection.close()
         try:
             connection.commit()
-        except Exception as exc:  # noqa: BLE001 - reported via outcome_queue, not swallowed
+        except Exception as exc:  # noqa: BLE001 - reported via outcome_send, not swallowed
             commit_error = exc
             _attempt(problems, "rollback after commit failure", connection.rollback)
     finally:
-        control_queue.put(None)
-        watcher.join(timeout=5.0)
+        # Every step below is attempted independently of whether an
+        # earlier one failed (Phase 5 twelfth exit review §3): a failure
+        # signaling the watcher to stop must not skip joining it, closing
+        # the connection, or disposing the engine — none of those depend
+        # on any other having succeeded.
+        _attempt(problems, "signal watcher to stop", _stop_watcher_with_optional_injection)
+        watcher.join(timeout=watcher_join_timeout_seconds)
+        if watcher.is_alive():
+            problems.append(
+                (
+                    "watcher thread",
+                    RuntimeError(
+                        "cancel-watcher thread did not stop within its "
+                        f"{watcher_join_timeout_seconds}s bounded join"
+                    ),
+                )
+            )
         _attempt(problems, "close", _close_with_optional_injection)
         _attempt(problems, "dispose", _dispose_with_optional_injection)
 
     # "committed" is reported only once the statement genuinely executed,
     # its commit genuinely succeeded, and no other cleanup step (rollback,
-    # invalidate, close, dispose) reported a problem either - a cleanup-only
-    # failure after a real commit must still surface as a failure, not be
-    # silently absorbed into an apparently-successful outcome.
+    # invalidate, close, dispose, signaling/joining the watcher) reported a
+    # problem either - a cleanup-only failure after a real commit must
+    # still surface as a failure, not be silently absorbed into an
+    # apparently-successful outcome.
     primary_error = (
         repr(statement_error)
         if statement_error is not None
         else (repr(commit_error) if commit_error is not None else None)
     )
     status = "failed" if primary_error is not None or problems else "committed"
-    outcome_queue.put((status, primary_error, problems))
+    outcome_payload = (status, primary_error, problems)
+    try:
+        if fault_injection_stage == "outcome_publish_fails":
+            raise _InjectedFailure("injected failure at stage: outcome_publish_fails")
+        outcome_send.send(outcome_payload)
+        if fault_injection_stage == "duplicate_outcome_publish":
+            outcome_send.send(outcome_payload)
+    except Exception:  # noqa: BLE001 - the one channel for reporting this outcome is exactly
+        # what just failed; nothing further can be attempted here. The
+        # controller detects the missing outcome and reports its own
+        # protocol failure instead (see
+        # _BackgroundStatement._finalize_worker_outcome).
+        return
 
 
 class _BackgroundStatement:
@@ -498,16 +556,37 @@ class _BackgroundStatement:
     (see `_worker_main`); a statement that succeeds but whose commit then
     fails is reported as a failure, never as committed, and a cleanup-only
     problem after an otherwise-successful commit still fails the caller
-    rather than being silently absorbed. Whatever the caller does not
-    explicitly consume via `resume_and_get_outcome` is still drained and
-    processed by `__exit__`, so an outcome nobody read is never lost. If an
-    exception was already propagating out of the `with` block, every
-    cleanup problem is attached to it via `add_note`; if nothing was
-    already propagating, cleanup problems are raised directly and become
-    the `with` block's own failure. A `with` block backed by this class
-    therefore never returns or raises with an owned worker, IPC queue, or
-    process object still alive/open — the guarantee no earlier thread-based
-    design in this file's history could make.
+    rather than being silently absorbed. Publishing that outcome is the
+    worker's one mandatory duty, and this class treats it as total, not
+    best-effort (Phase 5 twelfth exit review §2): a worker that exits on
+    its own without ever publishing one is reported as a protocol failure,
+    not silently treated as success, and a worker that somehow publishes
+    more than one is reported the same way; the one legitimate "no
+    outcome" case is a worker the controller itself terminated before it
+    could publish anything, which is recorded as such rather than
+    conflated with either failure mode (see `_finalize_worker_outcome`).
+    Whatever the caller does not explicitly consume via
+    `resume_and_get_outcome` is still drained and processed by `__exit__`,
+    so an outcome nobody read is never lost. If an exception was already
+    propagating out of the `with` block, every cleanup problem is attached
+    to it via `add_note`; if nothing was already propagating, cleanup
+    problems are raised directly and become the `with` block's own
+    failure. A `with` block backed by this class therefore never returns
+    or raises with an owned worker, IPC channel, or process object still
+    alive/open — the guarantee no earlier thread-based design in this
+    file's history could make.
+
+    IPC between controller and worker is three one-way
+    `multiprocessing.Pipe(duplex=False)` channels (handshake, outcome, and
+    a controller-to-worker control channel for cancel requests), not
+    `multiprocessing.Queue`. A prior version of this class used Queue and
+    bounded its background feeder-thread cleanup with a wrapping daemon
+    thread of its own; a review reproduced that wrapping thread itself
+    surviving past its bound, an abandonable resource created specifically
+    to solve an abandonable-resource problem. `Connection.close()` is a
+    direct, synchronous close of an OS-level pipe handle with no feeder
+    thread at all, which removes that whole class of bug by construction
+    rather than bounding it (Phase 5 twelfth exit review §4).
     """
 
     _CONNECT_TIMEOUT_SECONDS = 3
@@ -523,6 +602,7 @@ class _BackgroundStatement:
         handshake_timeout_seconds: float = 10.0,
         _startup_delay_seconds: float = 0.0,
         _fault_injection_stage: str | None = None,
+        _watcher_join_timeout_seconds: float = 5.0,
     ) -> None:
         self._engine = engine
         self._sql = sql
@@ -532,13 +612,19 @@ class _BackgroundStatement:
         self._handshake_timeout_seconds = handshake_timeout_seconds
         self._startup_delay_seconds = _startup_delay_seconds
         self._fault_injection_stage = _fault_injection_stage
+        self._watcher_join_timeout_seconds = _watcher_join_timeout_seconds
         self.outcome: list[tuple[str, Exception | None]] = []
         self._backend_pid_value: int | None = None
         self._process: Any = None
-        self._handshake_queue: Any = None
-        self._outcome_queue: Any = None
-        self._control_queue: Any = None
+        self._handshake_recv: Any = None
+        self._handshake_send: Any = None
+        self._outcome_recv: Any = None
+        self._outcome_send: Any = None
+        self._control_recv: Any = None
+        self._control_send: Any = None
         self._worker_confirmed_stopped = False
+        self._outcome_consumed = False
+        self.outcome_protocol_state = "pending"
 
     @property
     def backend_pid(self) -> int:
@@ -557,23 +643,37 @@ class _BackgroundStatement:
         confirm containment after `__exit__`/`_reap` must use this rather
         than `._process.is_alive()` directly: once the Process object is
         closed (per this class's own IPC/process cleanup — see
-        `_close_queues` and the `close process object` step), calling
-        `is_alive()` on it raises `ValueError: process object is closed`
-        instead of meaningfully answering the question."""
+        `_close_ipc_channels` and the `close process object` step),
+        calling `is_alive()` on it raises `ValueError: process object is
+        closed` instead of meaningfully answering the question."""
         return self._worker_confirmed_stopped
 
     def __enter__(self) -> "_BackgroundStatement":
         ctx = multiprocessing.get_context("spawn")
-        handshake_queue: Any = ctx.Queue()
-        outcome_queue: Any = ctx.Queue()
-        control_queue: Any = ctx.Queue()
-        # Stored immediately, not only on success: __exit__ is never called
-        # if __enter__ raises, so every failure branch below is responsible
-        # for its own cleanup, and needs these to be able to find the queues
-        # it must close.
-        self._handshake_queue = handshake_queue
-        self._outcome_queue = outcome_queue
-        self._control_queue = control_queue
+
+        try:
+            # Stored immediately, one Pipe() call at a time, not only on
+            # full success: __exit__ is never called if __enter__ raises,
+            # so the except block below is responsible for closing
+            # whichever of these three pipes actually got created before
+            # a later one failed — a Pipe() call itself either returns
+            # both of its own ends or raises, so there is never a "half a
+            # pipe" to worry about, only "some earlier pipes already exist
+            # and this one does not."
+            self._handshake_recv, self._handshake_send = ctx.Pipe(duplex=False)
+            self._outcome_recv, self._outcome_send = ctx.Pipe(duplex=False)
+            self._control_recv, self._control_send = ctx.Pipe(duplex=False)
+        except Exception as exc:  # noqa: BLE001 - reported directly, not swallowed
+            construction_problems: list[tuple[str, Exception]] = []
+            self._close_ipc_channels(construction_problems)
+            construction_error = RuntimeError(
+                f"failed to construct the background worker's IPC channels: {exc}"
+            )
+            for label, cleanup_exc in construction_problems:
+                construction_error.add_note(
+                    f"cleanup also reported a problem ({label}): {cleanup_exc}"
+                )
+            raise construction_error from exc
 
         try:
             process = ctx.Process(
@@ -585,15 +685,16 @@ class _BackgroundStatement:
                     self._lock_timeout_seconds,
                     self._CONNECT_TIMEOUT_SECONDS,
                     self._startup_delay_seconds,
+                    self._watcher_join_timeout_seconds,
                     self._fault_injection_stage,
-                    handshake_queue,
-                    outcome_queue,
-                    control_queue,
+                    self._handshake_send,
+                    self._outcome_send,
+                    self._control_recv,
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - reported directly, not swallowed
-            construction_problems: list[tuple[str, Exception]] = []
-            self._close_queues(construction_problems)
+            construction_problems = []
+            self._close_ipc_channels(construction_problems)
             construction_error = RuntimeError(
                 f"failed to construct the background worker process: {exc}"
             )
@@ -611,7 +712,7 @@ class _BackgroundStatement:
             # close() are all invalid on it, so it must never be stored or
             # treated as a live resource needing reaping.
             start_problems: list[tuple[str, Exception]] = []
-            self._close_queues(start_problems)
+            self._close_ipc_channels(start_problems)
             start_error = RuntimeError(f"background worker process failed to start: {exc}")
             for label, cleanup_exc in start_problems:
                 start_error.add_note(f"cleanup also reported a problem ({label}): {cleanup_exc}")
@@ -619,20 +720,36 @@ class _BackgroundStatement:
 
         self._process = process
 
+        # The worker process now has its own duplicated copies of
+        # handshake_send/outcome_send/control_recv; this side no longer
+        # needs its own. Closing them here (rather than waiting for final
+        # cleanup) also means a worker that crashes without ever sending
+        # anything produces a genuine EOF on the read ends below instead
+        # of poll() only ever timing out. Connection.close() is idempotent
+        # (a no-op the second time), so closing these same three again in
+        # final cleanup later is always safe.
         startup_problems: list[tuple[str, Exception]] = []
-        try:
-            status, payload, handshake_problems = handshake_queue.get(
-                timeout=self._handshake_timeout_seconds
-            )
-        except queue.Empty:
+        _attempt(
+            startup_problems, "close handshake_send (controller copy)", self._handshake_send.close
+        )
+        _attempt(startup_problems, "close outcome_send (controller copy)", self._outcome_send.close)
+        _attempt(startup_problems, "close control_recv (controller copy)", self._control_recv.close)
+
+        received, handshake_message = _poll_and_recv(
+            self._handshake_recv, self._handshake_timeout_seconds
+        )
+        if not received:
             self._reap(startup_problems)
             error = TimeoutError(
                 f"background worker did not complete its startup handshake within "
-                f"{self._handshake_timeout_seconds}s"
+                f"{self._handshake_timeout_seconds}s (timed out, or its handshake "
+                "channel closed without sending one)"
             )
             for label, exc in startup_problems:
                 error.add_note(f"startup cleanup also reported a problem ({label}): {exc}")
             raise error from None
+
+        status, payload, handshake_problems = handshake_message
 
         if status == "failed":
             self._reap(startup_problems)
@@ -646,10 +763,10 @@ class _BackgroundStatement:
 
     def _reap(self, problems: list[tuple[str, Exception]]) -> None:
         """Unconditionally terminates and joins a worker process that must
-        not be left running, then closes every IPC queue and the process
+        not be left running, then closes every IPC channel and the process
         object itself. Used on every __enter__ failure path: __exit__ is
         never invoked when __enter__ raises, so this method alone is
-        responsible for leaving no process, queue, or process-object
+        responsible for leaving no process, IPC, or process-object
         resource behind on that path."""
         assert self._process is not None
         _attempt(problems, "terminate", self._process.terminate)
@@ -662,37 +779,30 @@ class _BackgroundStatement:
         else:
             self._worker_confirmed_stopped = True
             _attempt(problems, "close process object", self._process.close)
-        self._close_queues(problems)
+        self._close_ipc_channels(problems)
 
-    def _close_queues(self, problems: list[tuple[str, Exception]]) -> None:
-        """Closes every IPC queue this instance created and bounds the wait
-        for each queue's background feeder thread to flush, attempted
-        independently and failure-safely per queue regardless of whether an
-        earlier queue's cleanup failed - so no queue-related file
-        descriptor or thread survives the helper, and a queue that
-        genuinely cannot be closed is reported rather than silently
-        ignored. join_thread() is skipped for a queue whose own close()
-        failed: join_thread()'s documented precondition is that close()
-        already succeeded, and calling it anyway raises its own unrelated
-        precondition error that would misreport a close failure as a
-        feeder-thread hang."""
-        for label, q in (
-            ("handshake_queue", self._handshake_queue),
-            ("outcome_queue", self._outcome_queue),
-            ("control_queue", self._control_queue),
+    def _close_ipc_channels(self, problems: list[tuple[str, Exception]]) -> None:
+        """Closes every IPC connection this instance holds — both the ends
+        it reads/writes through itself and its own (post-start(), already
+        redundant but harmless — see __enter__) copies of the ends handed
+        to the worker process — attempted independently and failure-safely
+        per connection regardless of whether an earlier one's close
+        failed. Unlike the multiprocessing.Queue-based design this
+        replaced, Connection.close() is a direct, synchronous close of an
+        OS-level pipe handle: no background feeder thread is ever
+        created, so there is nothing here that can itself need a bounded
+        join or survive as an orphaned thread."""
+        for label, conn in (
+            ("handshake_recv", self._handshake_recv),
+            ("handshake_send", self._handshake_send),
+            ("outcome_recv", self._outcome_recv),
+            ("outcome_send", self._outcome_send),
+            ("control_recv", self._control_recv),
+            ("control_send", self._control_send),
         ):
-            if q is None:
+            if conn is None:
                 continue
-            close_problems: list[tuple[str, Exception]] = []
-            _attempt(close_problems, f"close {label}", q.close)
-            problems.extend(close_problems)
-            if close_problems:
-                continue
-
-            def _join_this_queue_thread(queue_to_join: Any = q) -> None:
-                _bounded_join_thread(queue_to_join, 5.0)
-
-            _attempt(problems, f"join feeder thread ({label})", _join_this_queue_thread)
+            _attempt(problems, f"close {label}", conn.close)
 
     def wait_until_blocked(self, poll_connection: Connection, label: str) -> None:
         """Blocks the caller until pg_stat_activity reports this statement's
@@ -742,11 +852,12 @@ class _BackgroundStatement:
         """Waits (bounded) for the blocker to commit and the original
         waiting statement to actually resume — not a substitute retry —
         then returns its real outcome."""
-        assert self._process is not None and self._outcome_queue is not None
-        try:
-            status, primary_error, problems = self._outcome_queue.get(timeout=10.0)
-        except queue.Empty:
-            raise AssertionError(f"{label} thread reported no outcome within 10s") from None
+        assert self._process is not None and self._outcome_recv is not None
+        outcome = self._drain_one_outcome(timeout=10.0)
+        if outcome is None:
+            raise AssertionError(f"{label} thread reported no outcome within 10s")
+        self._outcome_consumed = True
+        status, primary_error, problems = outcome
         self._process.join(timeout=5.0)
         assert not self._process.is_alive(), (
             f"{label} did not resume within the bounded window after the blocking "
@@ -756,26 +867,96 @@ class _BackgroundStatement:
         self.outcome.append((status, exc))
         return status, exc
 
-    def _drain_unread_outcome(self) -> tuple[str, Exception] | None:
-        """Reads any outcome the worker already produced but that nobody
-        consumed via resume_and_get_outcome — called from __exit__ so a
-        statement, commit, or cleanup failure inside a worker that finished
-        (or was forcibly stopped after producing one) before anyone
-        consumed it cannot be silently discarded. Returns None whenever
-        there is nothing unread, which is the ordinary case whenever
-        resume_and_get_outcome already consumed it (the queue is then
-        already empty) or the worker never got far enough to produce one
-        (e.g. it was forcibly terminated mid-statement)."""
-        if self._outcome_queue is None:
+    def _drain_one_outcome(
+        self, timeout: float
+    ) -> tuple[str, str | None, list[tuple[str, Exception]]] | None:
+        """One bounded read of the outcome channel. Returns the raw
+        `(status, primary_error, problems)` payload, or None if nothing
+        arrived within `timeout` — used both to consume the worker's one
+        expected outcome and, in `_finalize_worker_outcome`, to check for
+        an unconsumed or an unexpected extra one."""
+        if self._outcome_recv is None:
             return None
-        try:
-            status, primary_error, problems = self._outcome_queue.get(timeout=2.0)
-        except queue.Empty:
-            return None
-        exc = self._build_outcome_exception(status, primary_error, problems)
-        if exc is None:
-            return None
-        return ("unread worker outcome", exc)
+        received, payload = _poll_and_recv(self._outcome_recv, timeout)
+        return payload if received else None
+
+    def _finalize_worker_outcome(
+        self, problems: list[tuple[str, Exception]], *, worker_was_forcibly_stopped: bool
+    ) -> None:
+        """Ensures the worker's one required outcome is accounted for
+        exactly once (Phase 5 twelfth exit review §2), regardless of
+        whether `resume_and_get_outcome` already consumed it. Three
+        outcomes are distinguished, recorded on `self.outcome_protocol_state`,
+        and none are silently treated as success:
+
+        - Nothing arrives and the worker was never forcibly stopped: the
+          worker exited on its own without publishing a required outcome
+          — a protocol failure, appended to `problems` like any other.
+        - More than one outcome arrives — whether the second is found here
+          because nobody consumed the first, or because a second turns up
+          after `resume_and_get_outcome` already consumed one — also a
+          protocol failure: this worker's own cleanup contract guarantees
+          at most one.
+        - Nothing arrives and the worker *was* forcibly stopped: the one
+          legitimate "no outcome" case (the controller ended it before it
+          could publish anything), recorded as such rather than treated as
+          either a protocol failure or silently ignored.
+
+        A first outcome found here that nobody consumed is reported
+        exactly as resume_and_get_outcome would have reported it (via
+        `_build_outcome_exception`), so a statement/commit/cleanup failure
+        nobody explicitly asked for is never silently discarded."""
+        if self._outcome_consumed:
+            # Already handed to the caller via resume_and_get_outcome; the
+            # process is confirmed not alive by that point, so anything
+            # still waiting here would already be fully flushed — only
+            # checking for an unexpected extra, not waiting for a normal
+            # one that will never come.
+            extra = self._drain_one_outcome(timeout=0.3)
+            if extra is not None:
+                problems.append(
+                    (
+                        "worker outcome protocol",
+                        RuntimeError(
+                            f"worker published more than one outcome; unexpected extra: {extra}"
+                        ),
+                    )
+                )
+            self.outcome_protocol_state = "consumed"
+            return
+
+        first = self._drain_one_outcome(timeout=2.0)
+        if first is None:
+            if worker_was_forcibly_stopped:
+                self.outcome_protocol_state = "missing-after-forced-termination"
+                return
+            self.outcome_protocol_state = "missing-after-natural-exit"
+            problems.append(
+                (
+                    "worker outcome protocol",
+                    RuntimeError(
+                        "worker process exited on its own without publishing a required outcome"
+                    ),
+                )
+            )
+            return
+
+        status, primary_error, cleanup_problems = first
+        exc = self._build_outcome_exception(status, primary_error, cleanup_problems)
+        if exc is not None:
+            problems.append(("unread worker outcome", exc))
+        self.outcome_protocol_state = "unread"
+
+        second = self._drain_one_outcome(timeout=0.3)
+        if second is not None:
+            problems.append(
+                (
+                    "worker outcome protocol",
+                    RuntimeError(
+                        f"worker published more than one outcome; unexpected extra: {second}"
+                    ),
+                )
+            )
 
     def _with_isolated_connection(self, fn: Callable[[Connection], Any]) -> Any:
         """Runs fn against a fresh, isolated connection and guarantees the
@@ -822,12 +1003,12 @@ class _BackgroundStatement:
     def _cancel_via_driver(self) -> None:
         """Asks the worker process to cancel its own blocked statement via
         psycopg's driver-native cancel_safe(), relayed through the control
-        queue to a watcher thread running inside that process — the
+        channel to a watcher thread running inside that process — the
         controller never holds a live connection object to the worker's
         database session, since that connection exists entirely inside the
         worker process."""
-        assert self._control_queue is not None
-        self._control_queue.put("cancel")
+        assert self._control_send is not None
+        self._control_send.send("cancel")
 
     def _force_stop(self) -> list[tuple[str, Exception]]:
         """Layered attempt to make the worker process stop — see the class
@@ -1040,17 +1221,21 @@ class _BackgroundStatement:
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
         problems: list[tuple[str, Exception]] = []
+        worker_was_forcibly_stopped = False
         if self._process is not None and self._process.is_alive():
+            worker_was_forcibly_stopped = True
             problems.extend(self._force_stop())
 
         # Whether the worker exited on its own or was just forcibly
-        # stopped, drain any outcome it left behind: a statement, commit,
-        # or cleanup failure the caller never consumed via
+        # stopped, account for its one required outcome: a statement,
+        # commit, or cleanup failure the caller never consumed via
         # resume_and_get_outcome must not be silently discarded just
-        # because nobody explicitly asked for it.
-        unread_outcome = self._drain_unread_outcome()
-        if unread_outcome is not None:
-            problems.append(unread_outcome)
+        # because nobody explicitly asked for it, and a worker that never
+        # produced one at all must not be silently treated as success
+        # either (see _finalize_worker_outcome).
+        self._finalize_worker_outcome(
+            problems, worker_was_forcibly_stopped=worker_was_forcibly_stopped
+        )
 
         if self._process is not None:
             if self._process.is_alive():
@@ -1064,7 +1249,7 @@ class _BackgroundStatement:
                 self._worker_confirmed_stopped = True
                 _attempt(problems, "close process object", self._process.close)
 
-        self._close_queues(problems)
+        self._close_ipc_channels(problems)
 
         if not problems:
             return False
@@ -1127,6 +1312,22 @@ def _raise_injected_failure(*_args: object, **_kwargs: object) -> None:
     method that should simulate failure without performing its real
     action — used for IPC/process-object cleanup seams."""
     raise _InjectedFailure("simulated cleanup failure")
+
+
+class _FakeConnection:
+    """A minimal stand-in for a multiprocessing.Pipe() end, used only to
+    prove __enter__'s partial-IPC-construction cleanup (Phase 5 twelfth
+    exit review §4) without needing a real Pipe() call to fail — real ones
+    are impractical to construct deterministically, like every other
+    OS-level construction failure this file fault-injects instead."""
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+        raise _InjectedFailure(f"simulated close failure for {self.label}")
 
 
 def _assert_backend_eventually_gone(engine: Engine, pid: int, timeout: float = 5.0) -> None:
@@ -1341,6 +1542,19 @@ def test_background_statement_cleanup_failure_fails_the_test_when_no_original_ex
     _assert_backend_eventually_gone(engine, blocked.backend_pid)
 
 
+def _ensure_background_statement_torn_down(blocked: "_BackgroundStatement") -> None:
+    """Safety net for tests that call `__enter__()` directly, bypassing the
+    `with` statement that would otherwise guarantee `__exit__` runs. If
+    `__enter__` unexpectedly does not raise — the primary assertions in
+    the test that already ran will have failed it by this point — this
+    still reaps whatever worker process and IPC channels it left behind,
+    rather than leaking a live worker and its held PostgreSQL connection
+    into later tests. Never invoked, and never needed, when `__enter__`
+    behaves the way every assertion in these tests expects."""
+    if blocked._process is not None and not blocked.worker_confirmed_stopped:
+        blocked.__exit__(None, None, None)
+
+
 @pytest.mark.parametrize(
     "stage",
     ["after_connect", "after_begin", "after_set_lock_timeout", "after_pid_lookup"],
@@ -1359,11 +1573,14 @@ def test_background_statement_enter_reports_startup_failure_at_each_partial_stag
     process."""
     engine = postgres_engine
     blocked = _BackgroundStatement(engine, "SELECT 1", {}, _fault_injection_stage=stage)
-    with pytest.raises(RuntimeError, match="failed to start") as excinfo:
-        blocked.__enter__()
-    assert stage in str(excinfo.value), f"expected the injected stage {stage!r} to be reported"
-    assert blocked._process is not None
-    assert blocked.worker_confirmed_stopped
+    try:
+        with pytest.raises(RuntimeError, match="failed to start") as excinfo:
+            blocked.__enter__()
+        assert stage in str(excinfo.value), f"expected the injected stage {stage!r} to be reported"
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 def test_background_statement_enter_reports_both_startup_and_cleanup_failures_together(
@@ -1379,14 +1596,17 @@ def test_background_statement_enter_reports_both_startup_and_cleanup_failures_to
     blocked = _BackgroundStatement(
         engine, "SELECT 1", {}, _fault_injection_stage="after_begin_kill_then_fail"
     )
-    with pytest.raises(RuntimeError, match="failed to start") as excinfo:
-        blocked.__enter__()
-    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
-    assert "cleanup" in notes.lower(), (
-        f"expected startup cleanup problems to be reported as notes, got: {notes!r}"
-    )
-    assert blocked._process is not None
-    assert blocked.worker_confirmed_stopped
+    try:
+        with pytest.raises(RuntimeError, match="failed to start") as excinfo:
+            blocked.__enter__()
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "cleanup" in notes.lower(), (
+            f"expected startup cleanup problems to be reported as notes, got: {notes!r}"
+        )
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
@@ -1406,16 +1626,19 @@ def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
         handshake_timeout_seconds=1.0,
         _startup_delay_seconds=5.0,
     )
-    start = time.monotonic()
-    with pytest.raises(TimeoutError, match="startup handshake"):
-        blocked.__enter__()
-    elapsed = time.monotonic() - start
-    assert elapsed < 4.0, (
-        f"expected __enter__ to raise well before the worker's own 5s startup delay, "
-        f"took {elapsed:.1f}s"
-    )
-    assert blocked._process is not None
-    assert blocked.worker_confirmed_stopped
+    try:
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="startup handshake"):
+            blocked.__enter__()
+        elapsed = time.monotonic() - start
+        assert elapsed < 4.0, (
+            f"expected __enter__ to raise well before the worker's own 5s startup delay, "
+            f"took {elapsed:.1f}s"
+        )
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 def test_background_statement_enter_fails_with_no_process_alive_when_a_real_connection_is_refused(
@@ -1428,10 +1651,13 @@ def test_background_statement_enter_fails_with_no_process_alive_when_a_real_conn
     test."""
     unreachable_engine = create_engine(postgres_engine.url.set(host="127.0.0.1", port=1))
     blocked = _BackgroundStatement(unreachable_engine, "SELECT 1", {})
-    with pytest.raises(RuntimeError, match="failed to start"):
-        blocked.__enter__()
-    assert blocked._process is not None
-    assert blocked.worker_confirmed_stopped
+    try:
+        with pytest.raises(RuntimeError, match="failed to start"):
+            blocked.__enter__()
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 # ---------------------------------------------------------------------------
@@ -1547,6 +1773,200 @@ def test_background_statement_exit_drains_and_reports_an_outcome_nobody_consumed
 
 
 # ---------------------------------------------------------------------------
+# Worker outcome protocol totality (Phase 5 twelfth exit review §2)
+# ---------------------------------------------------------------------------
+# The tests above prove a *present* outcome is reported correctly. These
+# prove the protocol is total, not best-effort: a worker that exits on its
+# own without ever publishing one is a failure, not silent success; a
+# worker that publishes more than one is also a failure; and the one
+# legitimate "no outcome" case — the controller itself terminated the
+# worker before it could publish anything — is recorded as such rather than
+# conflated with either failure mode.
+
+
+def test_background_statement_reports_a_protocol_failure_when_the_worker_exits_without_publishing_an_outcome(
+    postgres_engine: Engine,
+) -> None:
+    """The worker's own outcome-publish step is made to fail
+    (deterministically, via fault injection) after an otherwise fully
+    successful statement and commit, so the worker exits on its own having
+    never published anything — the one channel for reporting that failure
+    is exactly what failed. Proves the controller detects this as its own
+    distinct protocol failure rather than silently treating a naturally
+    exited worker with an empty outcome channel as success."""
+    engine = postgres_engine
+    captured: list[_BackgroundStatement] = []
+
+    def _run_and_wait_for_natural_exit() -> None:
+        with _BackgroundStatement(
+            engine, "SELECT 1", {}, _fault_injection_stage="outcome_publish_fails"
+        ) as blocked:
+            captured.append(blocked)
+            # Wait for the worker to genuinely finish on its own (proven by
+            # polling before __exit__ ever runs, not after), so this proves
+            # a *natural* exit without an outcome — not a race against
+            # __exit__'s own forced-termination path treating it as the
+            # legitimate "deliberately terminated" case instead.
+            deadline = time.monotonic() + 5.0
+            while blocked._process.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert not blocked._process.is_alive(), (
+                "worker did not finish the fast statement in time"
+            )
+
+    with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo:
+        _run_and_wait_for_natural_exit()
+
+    assert "without publishing a required outcome" in str(excinfo.value)
+    assert captured[0].outcome_protocol_state == "missing-after-natural-exit"
+    assert captured[0].worker_confirmed_stopped
+
+
+def test_background_statement_reports_a_protocol_failure_for_a_duplicate_outcome(
+    postgres_engine: Engine,
+) -> None:
+    """The worker is made to publish its outcome twice (deterministically,
+    via fault injection) after an otherwise fully successful statement and
+    commit. resume_and_get_outcome consumes the first — a normal-looking
+    "committed" result — but the unexpected second must still be detected
+    and reported as its own protocol failure, not silently discarded just
+    because a first one was already consumed."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(
+        engine, "SELECT 1", {}, _fault_injection_stage="duplicate_outcome_publish"
+    )
+
+    with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo, blocked:
+        status, exc = blocked.resume_and_get_outcome("duplicate-outcome probe")
+        assert status == "committed" and exc is None, (
+            "the first, normal outcome must still be reported correctly"
+        )
+
+    assert "more than one outcome" in str(excinfo.value)
+
+
+def test_background_statement_marks_outcome_protocol_state_consumed_on_the_happy_path(
+    postgres_engine: Engine,
+) -> None:
+    """The ordinary case: resume_and_get_outcome consumes the worker's one
+    outcome and nothing else is ever published. Proves
+    outcome_protocol_state ends up "consumed" — an already-consumed
+    outcome is not itself a failure — rather than being left at its
+    initial "pending" value or confused with either failure mode."""
+    engine = postgres_engine
+    with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+        status, exc = blocked.resume_and_get_outcome("happy-path probe")
+        assert status == "committed"
+        assert exc is None
+
+    assert blocked.outcome_protocol_state == "consumed"
+
+
+def test_background_statement_records_a_forced_termination_as_the_legitimate_missing_outcome_case(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker is pg_sleep-blocked (never reaches its outcome-publishing
+    step at all) and every active stopping mechanism is mocked to fail, so
+    __exit__ must fall back to forced termination — the one case where a
+    missing outcome is legitimate, not a protocol failure. Proves
+    outcome_protocol_state records that reason explicitly, and that no
+    spurious "worker outcome protocol" problem is added alongside the
+    (already covered by other tests) forced-termination problem itself."""
+    engine = postgres_engine
+    sleep_seconds = 30.0
+    blocked = _BackgroundStatement(
+        engine,
+        "SELECT pg_sleep(:s)",
+        {"s": sleep_seconds},
+        lock_timeout_seconds=1.0,
+        signal_join_seconds=1.0,
+    )
+    monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
+    monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
+
+    with pytest.raises(RuntimeError, match="forcibly terminated") as excinfo, blocked:
+        pass
+
+    assert blocked.outcome_protocol_state == "missing-after-forced-termination"
+    assert blocked.worker_confirmed_stopped
+    assert "worker outcome protocol" not in str(excinfo.value), (
+        "a deliberately terminated worker's missing outcome must not also be reported as a "
+        "protocol failure"
+    )
+    _assert_backend_eventually_gone(engine, blocked.backend_pid)
+
+
+# ---------------------------------------------------------------------------
+# Worker cleanup independence (Phase 5 twelfth exit review §3)
+# ---------------------------------------------------------------------------
+# _worker_main's finally block attempts signaling the watcher, joining it,
+# closing the connection, and disposing the engine independently of one
+# another. These prove the first two of those specifically: a failure
+# signaling the watcher to stop must not skip anything after it, and a
+# watcher that does not honor that signal within its bounded join is
+# itself reported rather than silently ignored.
+
+
+def test_background_statement_reports_a_problem_when_signaling_the_watcher_to_stop_fails(
+    postgres_engine: Engine,
+) -> None:
+    """The worker's own signal to its cancel-watcher thread ("please stop
+    now") is made to fail (deterministically, via fault injection) after
+    an otherwise fully successful statement and commit. Proves that
+    failure is collected as a cleanup problem and reported through the
+    outcome — never skipping the watcher join, close(), dispose(), or
+    outcome publication that follow it in the worker's own finally
+    block."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(
+        engine, "SELECT 1", {}, _fault_injection_stage="watcher_stop_signal_fails"
+    )
+    with blocked:
+        status, exc = blocked.resume_and_get_outcome("watcher-stop-signal-failure probe")
+
+    assert status == "failed", (
+        f"a failed watcher-stop signal must still fail the caller, got: {status}"
+    )
+    assert exc is not None
+    notes = "\n".join(getattr(exc, "__notes__", []))
+    assert "signal watcher to stop" in notes.lower(), (
+        f"expected the watcher-stop-signal failure to be reported, got notes: {notes!r}"
+    )
+
+
+def test_background_statement_reports_a_problem_when_the_watcher_does_not_stop_within_its_bounded_join(
+    postgres_engine: Engine,
+) -> None:
+    """The worker's cancel-watcher thread is made to ignore its own stop
+    signal (deterministically, via fault injection) after an otherwise
+    fully successful statement and commit — proving a watcher still alive
+    after its bounded join is itself recorded as a cleanup problem, not
+    silently ignored. A short _watcher_join_timeout_seconds keeps this
+    test fast rather than waiting out the 5s production default; the
+    watcher thread is daemon, so the worker process still exits normally
+    around it regardless."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(
+        engine,
+        "SELECT 1",
+        {},
+        _fault_injection_stage="watcher_ignores_stop_signal",
+        _watcher_join_timeout_seconds=0.5,
+    )
+    with blocked:
+        status, exc = blocked.resume_and_get_outcome("watcher-join-timeout probe")
+
+    assert status == "failed", (
+        f"a watcher that never stops must still fail the caller, got: {status}"
+    )
+    assert exc is not None
+    notes = "\n".join(getattr(exc, "__notes__", []))
+    assert "watcher thread" in notes.lower(), (
+        f"expected the watcher-still-alive problem to be reported, got notes: {notes!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Controller-side database cleanup failure-safety
 # ---------------------------------------------------------------------------
 
@@ -1651,17 +2071,20 @@ def test_background_statement_enter_reports_process_construction_failure(
     """multiprocessing.Process(...) construction itself is mocked to fail —
     a real OS-level trigger for this is impractical to construct
     deterministically. Proves __enter__ reports it clearly, with no process
-    ever stored (there is nothing valid to reap), and its queues still
-    closed."""
+    ever stored (there is nothing valid to reap), and its IPC channels
+    still closed."""
     engine = postgres_engine
     ctx = multiprocessing.get_context("spawn")
     monkeypatch.setattr(ctx, "Process", _raise_injected_failure)
     monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
 
     blocked = _BackgroundStatement(engine, "SELECT 1", {})
-    with pytest.raises(RuntimeError, match="failed to construct"):
-        blocked.__enter__()
-    assert blocked._process is None
+    try:
+        with pytest.raises(RuntimeError, match="failed to construct"):
+            blocked.__enter__()
+        assert blocked._process is None
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 def test_background_statement_enter_reports_process_start_failure(
@@ -1680,9 +2103,12 @@ def test_background_statement_enter_reports_process_start_failure(
     monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
 
     blocked = _BackgroundStatement(engine, "SELECT 1", {})
-    with pytest.raises(RuntimeError, match="failed to start"):
-        blocked.__enter__()
-    assert blocked._process is None
+    try:
+        with pytest.raises(RuntimeError, match="failed to start"):
+            blocked.__enter__()
+        assert blocked._process is None
+    finally:
+        _ensure_background_statement_torn_down(blocked)
 
 
 def test_background_statement_escalates_to_kill_when_terminate_does_not_stop_the_process(
@@ -1711,21 +2137,21 @@ def test_background_statement_escalates_to_kill_when_terminate_does_not_stop_the
     assert blocked.worker_confirmed_stopped, "kill() must still have stopped the process"
 
 
-def test_background_statement_reports_a_problem_when_a_queue_fails_to_close(
+def test_background_statement_reports_a_problem_when_an_ipc_channel_fails_to_close(
     postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One IPC queue's close() is mocked to fail after a fast, successful
+    """One IPC channel's close() is mocked to fail after a fast, successful
     statement. Proves the failure is collected as a problem — reported by
     __exit__ — rather than propagating uncaught, and that cleanup for the
-    other queues and the process object still proceeds regardless."""
+    other channels and the process object still proceeds regardless."""
     engine = postgres_engine
 
     def _run() -> None:
         with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
-            blocked.resume_and_get_outcome("queue-close-failure probe")
-            monkeypatch.setattr(blocked._outcome_queue, "close", _raise_injected_failure)
+            blocked.resume_and_get_outcome("IPC-channel-close-failure probe")
+            monkeypatch.setattr(blocked._outcome_recv, "close", _raise_injected_failure)
 
-    with pytest.raises(RuntimeError, match="close outcome_queue"):
+    with pytest.raises(RuntimeError, match="close outcome_recv"):
         _run()
 
 
@@ -1744,6 +2170,74 @@ def test_background_statement_reports_a_problem_when_the_process_object_fails_to
 
     with pytest.raises(RuntimeError, match="close process object"):
         _run()
+
+
+@pytest.mark.parametrize("failing_call_number", [2, 3])
+def test_background_statement_enter_reports_partial_ipc_construction_failure(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch, failing_call_number: int
+) -> None:
+    """__enter__ makes three Pipe() calls (handshake, outcome, control).
+    The second or third is made to fail after the earlier one(s) genuinely
+    succeed — a real OS-level trigger for a Pipe() call failing is
+    impractical to construct deterministically, so this substitutes fake
+    connections instead. Proves every already-created pipe's ends are
+    actually closed (not leaked) — visible here as their own reported
+    close failures, since these fakes fail to close too — and that no
+    process is ever constructed (Phase 5 twelfth exit review §4)."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    calls = {"count": 0}
+    created: list[_FakeConnection] = []
+
+    def _flaky_pipe(duplex: bool = True) -> Any:
+        calls["count"] += 1
+        if calls["count"] == failing_call_number:
+            raise _InjectedFailure(
+                f"simulated Pipe() failure on IPC resource #{failing_call_number}"
+            )
+        conn1 = _FakeConnection(f"pipe{calls['count']}-recv")
+        conn2 = _FakeConnection(f"pipe{calls['count']}-send")
+        created.extend([conn1, conn2])
+        return conn1, conn2
+
+    monkeypatch.setattr(ctx, "Pipe", _flaky_pipe)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    with pytest.raises(
+        RuntimeError, match="failed to construct the background worker's IPC"
+    ) as excinfo:
+        blocked.__enter__()
+
+    assert blocked._process is None
+    assert created, "expected at least the first pipe to have been created before the failure"
+    assert all(conn.closed for conn in created), (
+        "every already-created pipe's ends must be closed on cleanup, not leaked"
+    )
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert "handshake_recv" in notes and "handshake_send" in notes, (
+        f"expected the first pipe's close failures to be reported, got: {notes!r}"
+    )
+    if failing_call_number == 3:
+        assert "outcome_recv" in notes and "outcome_send" in notes, (
+            f"expected the second pipe's close failures to also be reported, got: {notes!r}"
+        )
+
+
+def test_background_statement_leaves_no_queue_feeder_thread_behind(postgres_engine: Engine) -> None:
+    """The Pipe-based IPC redesign (Phase 5 twelfth exit review §4) has no
+    background feeder thread at all — unlike multiprocessing.Queue, whose
+    feeder thread was the abandonable resource the earlier
+    _bounded_join_thread design could only bound, never guarantee gone.
+    Proves no QueueFeederThread exists after a normal run, positively
+    confirming the mechanism that made that whole class of bug possible is
+    no longer present."""
+    engine = postgres_engine
+    with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+        blocked.resume_and_get_outcome("feeder-thread probe")
+
+    feeder_threads = [t for t in threading.enumerate() if "QueueFeederThread" in t.name]
+    assert feeder_threads == [], f"unexpected queue feeder threads survived: {feeder_threads}"
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(

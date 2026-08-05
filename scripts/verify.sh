@@ -7,6 +7,7 @@
 # of running ruff/mypy/pytest/alembic separately.
 #
 # Usage:
+#   scripts/verify.sh --help | -h           # print usage and exit 0
 #   scripts/verify.sh quality               # ruff format --check, ruff check, mypy src (no AWS)
 #   scripts/verify.sh unit                  # pytest tests/unit (no AWS)
 #   scripts/verify.sh database              # pytest tests/database (opens/closes dev ingress)
@@ -17,22 +18,35 @@
 # `database`/`scenario`/`full`/`migration-round-trip` need DATABASE_URL
 # already set per docs/DEVELOPMENT.md §3 (or DND_AI_USE_LOCAL_POSTGRES=1 as
 # the documented fallback); they open a short-lived dev security-group
-# ingress rule via scripts/aws-db-allow-my-ip.sh and always close it on exit,
-# even on failure — the same guaranteed-teardown discipline
-# docs/PHASE5_VERIFICATION.md's exit reviews spent ten passes establishing
-# for the test-only concurrency helper.
+# ingress rule via scripts/aws-db-allow-my-ip.sh and always attempt to close
+# it on exit, even on failure. Ingress-revocation failure is never swallowed:
+# it fails an otherwise-successful run, and — if a stage already failed — is
+# reported alongside that failure without overriding it as the primary cause.
+# This is the same guaranteed-teardown discipline docs/PHASE5_VERIFICATION.md's
+# exit reviews established for the test-only concurrency helper.
 #
 # `migration-round-trip` runs `alembic downgrade base` then `upgrade head`
 # against whatever DATABASE_URL currently points at. That is safe against a
 # disposable ephemeral database (what CI always uses, via
 # scripts/ci_ephemeral_database.py) and destructive against anything else.
 # It refuses to run without --confirm-destructive.
+#
+# The ingress open/close script invoked can be overridden via
+# VERIFY_SH_INGRESS_SCRIPT (defaults to scripts/aws-db-allow-my-ip.sh) so
+# tests/unit/test_verify_sh.py can substitute a stub instead of contacting
+# AWS.
 
 set -euo pipefail
 
 usage() {
   echo "Usage: $0 <quality|unit|database|scenario|full|migration-round-trip> [--confirm-destructive]" >&2
+  echo "       $0 --help|-h" >&2
 }
+
+if [[ $# -ge 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+  usage
+  exit 0
+fi
 
 if [[ $# -lt 1 ]]; then
   usage
@@ -69,24 +83,64 @@ case "$MODE" in
     ;;
 esac
 
+INGRESS_SCRIPT="${VERIFY_SH_INGRESS_SCRIPT:-scripts/aws-db-allow-my-ip.sh}"
+
 WORKDIR="$(mktemp -d)"
 INGRESS_OPENED=0
 
+# Attempts to close an opened ingress rule. Returns 0 if there was nothing to
+# close or closing it succeeded; returns 1 if closing a rule we opened
+# failed. Never suppresses that failure (no `|| true`): the caller decides
+# how to weigh it against any stage failure, per cleanup() below.
 close_ingress() {
   if [[ "$INGRESS_OPENED" -eq 1 ]]; then
-    scripts/aws-db-allow-my-ip.sh close >/dev/null 2>&1 || true
+    local out="$WORKDIR/close_ingress.log"
+    if "$INGRESS_SCRIPT" close >"$out" 2>&1; then
+      INGRESS_OPENED=0
+      return 0
+    fi
+    echo "FAIL: close dev-database ingress rule" >&2
+    cat "$out" >&2
     INGRESS_OPENED=0
+    return 1
   fi
+  return 0
 }
+
+# Runs once, on any exit path (normal completion, a stage's explicit `exit
+# 1`, or an unexpected failure under `set -e`). Always attempts ingress
+# revocation. A stage failure that triggered the exit remains the primary
+# exit code even if revocation also fails; revocation failure alone (after
+# an otherwise-successful run) becomes the failure.
 cleanup() {
-  close_ingress
+  local trigger_code="$1"
+  trap - EXIT
+
+  local ingress_status=0
+  close_ingress || ingress_status=1
+
   rm -rf "$WORKDIR"
+
+  if [[ "$trigger_code" -ne 0 ]]; then
+    if [[ "$ingress_status" -ne 0 ]]; then
+      echo "Note: ingress revocation also failed above; the stage failure remains primary." >&2
+    fi
+    exit "$trigger_code"
+  fi
+
+  if [[ "$ingress_status" -ne 0 ]]; then
+    echo "FAIL: ingress revocation failed after an otherwise-successful run." >&2
+    exit 1
+  fi
+
+  echo "All requested stages passed."
+  exit 0
 }
-trap cleanup EXIT
+trap 'cleanup "$?"' EXIT
 
 open_ingress() {
   if [[ "$INGRESS_OPENED" -eq 0 ]]; then
-    scripts/aws-db-allow-my-ip.sh open >/dev/null
+    "$INGRESS_SCRIPT" open >/dev/null
     INGRESS_OPENED=1
   fi
 }
@@ -168,5 +222,3 @@ case "$MODE" in
     run_stage "alembic upgrade head" uv run alembic -c database/alembic.ini upgrade head
     ;;
 esac
-
-echo "All requested stages passed."
