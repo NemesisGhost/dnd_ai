@@ -262,6 +262,43 @@ def _attempt(problems: list[tuple[str, Exception]], label: str, fn: Callable[[],
         problems.append((label, exc))
 
 
+def _bounded_join_thread(q: Any, timeout: float) -> None:
+    """multiprocessing.Queue.join_thread() has no timeout parameter of its
+    own, so a queue whose feeder thread genuinely never exits would hang
+    cleanup indefinitely. Wraps it in a short-lived daemon thread used only
+    to add a bound to that one blocking stdlib call — not a mechanism for
+    abandoning the worker process itself, which this class never marks
+    daemon — and reports a timeout as a real problem rather than silently
+    giving up. Also relays any exception the wrapped call itself raises
+    back to this thread: `Thread.join()` alone would only observe the
+    thread ending, silently discarding an exception raised inside it
+    (Python's default `threading.excepthook` just logs it, which is how an
+    earlier version of this helper leaked join_thread()'s own precondition
+    assertion as an unhandled-thread-exception warning instead of a
+    reported cleanup problem).
+
+    Callers must only invoke this after `q.close()` has already succeeded:
+    `join_thread()`'s own documented precondition is that `close()` was
+    called first, and calling it against a queue that failed to close
+    raises its own unrelated `AssertionError` that must not be mistaken
+    for the queue's feeder thread genuinely hanging."""
+    outcome: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            q.join_thread()
+        except BaseException as exc:  # noqa: BLE001 - relayed to the caller, not swallowed
+            outcome.append(exc)
+
+    joiner = threading.Thread(target=_run, daemon=True)
+    joiner.start()
+    joiner.join(timeout=timeout)
+    if joiner.is_alive():
+        raise TimeoutError(f"queue feeder thread did not finish within {timeout}s")
+    if outcome:
+        raise outcome[0]
+
+
 class _InjectedFailure(Exception):
     """Marks a deliberately injected failure — either in one of
     _BackgroundStatement's controller-side fallback seams (_send_signal,
@@ -292,9 +329,14 @@ def _worker_main(
     cleanup step for whatever was partially acquired and report the primary
     failure plus any cleanup problems instead of it; (2) run the given
     statement, watching control_queue on a background thread for a
-    driver-native cancel_safe() request from the controller; (3) report the
-    statement's outcome, plus any cleanup problems from closing the
-    connection and disposing the engine, through outcome_queue.
+    driver-native cancel_safe() request from the controller; (3) attempt
+    commit() only if the statement succeeded, attempt rollback() only if
+    commit() then fails, always attempt close() and dispose() regardless of
+    what came before, and report through outcome_queue as
+    `(status, primary_error, problems)` — `status` is `"committed"` only
+    when the statement, its commit, and every cleanup step all succeeded
+    with nothing left to report; a cleanup-only problem after an otherwise
+    successful commit still reports `"failed"`.
 
     None of this running to completion is what makes the controller's own
     guarantee hold: if this process does not respond, or does not stop, the
@@ -357,21 +399,55 @@ def _worker_main(
     watcher = threading.Thread(target=_watch_for_cancel, daemon=True)
     watcher.start()
 
+    def _close_with_optional_injection() -> None:
+        if fault_injection_stage == "close_fails":
+            raise _InjectedFailure("injected failure at stage: close_fails")
+        connection.close()  # type: ignore[union-attr]
+
+    def _dispose_with_optional_injection() -> None:
+        if fault_injection_stage == "dispose_fails":
+            raise _InjectedFailure("injected failure at stage: dispose_fails")
+        engine.dispose()  # type: ignore[union-attr]
+
+    statement_error: Exception | None = None
+    commit_error: Exception | None = None
     try:
         connection.execute(text(sql), params)
     except Exception as exc:  # noqa: BLE001 - reported via outcome_queue, not swallowed
-        outcome: tuple[str, str | None] = ("failed", repr(exc))
+        statement_error = exc
         _attempt(problems, "invalidate after statement failure", connection.invalidate)
     else:
-        outcome = ("committed", None)
-        _attempt(problems, "commit", connection.commit)
+        if fault_injection_stage == "after_statement_kill_then_fail":
+            # Mirrors after_begin_kill_then_fail, one phase later: the
+            # connection becomes genuinely unusable right after the
+            # statement succeeds but before commit() is attempted, so both
+            # commit() and the subsequent rollback-after-commit-failure
+            # attempt fail for real - a genuine secondary failure, not a
+            # synthetic one layered on top of a mocked primary.
+            connection.connection.dbapi_connection.close()
+        try:
+            connection.commit()
+        except Exception as exc:  # noqa: BLE001 - reported via outcome_queue, not swallowed
+            commit_error = exc
+            _attempt(problems, "rollback after commit failure", connection.rollback)
     finally:
         control_queue.put(None)
         watcher.join(timeout=5.0)
-        _attempt(problems, "close", connection.close)
-        _attempt(problems, "dispose", engine.dispose)
+        _attempt(problems, "close", _close_with_optional_injection)
+        _attempt(problems, "dispose", _dispose_with_optional_injection)
 
-    outcome_queue.put((*outcome, problems))
+    # "committed" is reported only once the statement genuinely executed,
+    # its commit genuinely succeeded, and no other cleanup step (rollback,
+    # invalidate, close, dispose) reported a problem either - a cleanup-only
+    # failure after a real commit must still surface as a failure, not be
+    # silently absorbed into an apparently-successful outcome.
+    primary_error = (
+        repr(statement_error)
+        if statement_error is not None
+        else (repr(commit_error) if commit_error is not None else None)
+    )
+    status = "failed" if primary_error is not None or problems else "committed"
+    outcome_queue.put((status, primary_error, problems))
 
 
 class _BackgroundStatement:
@@ -416,14 +492,22 @@ class _BackgroundStatement:
     that never touches its client socket (`pg_sleep`, unlike a lock wait)
     can keep running until it next tries to communicate.
 
-    Every step's outcome is collected, never silently discarded. If an
+    Every step's outcome is collected, never silently discarded. The
+    worker's own statement, commit, rollback, invalidation, close, and
+    engine-disposal failures are all represented in a structured outcome
+    (see `_worker_main`); a statement that succeeds but whose commit then
+    fails is reported as a failure, never as committed, and a cleanup-only
+    problem after an otherwise-successful commit still fails the caller
+    rather than being silently absorbed. Whatever the caller does not
+    explicitly consume via `resume_and_get_outcome` is still drained and
+    processed by `__exit__`, so an outcome nobody read is never lost. If an
     exception was already propagating out of the `with` block, every
     cleanup problem is attached to it via `add_note`; if nothing was
     already propagating, cleanup problems are raised directly and become
     the `with` block's own failure. A `with` block backed by this class
-    therefore never returns or raises with an owned worker still alive —
-    the guarantee no earlier thread-based design in this file's history
-    could make.
+    therefore never returns or raises with an owned worker, IPC queue, or
+    process object still alive/open — the guarantee no earlier thread-based
+    design in this file's history could make.
     """
 
     _CONNECT_TIMEOUT_SECONDS = 3
@@ -451,8 +535,10 @@ class _BackgroundStatement:
         self.outcome: list[tuple[str, Exception | None]] = []
         self._backend_pid_value: int | None = None
         self._process: Any = None
+        self._handshake_queue: Any = None
         self._outcome_queue: Any = None
         self._control_queue: Any = None
+        self._worker_confirmed_stopped = False
 
     @property
     def backend_pid(self) -> int:
@@ -464,27 +550,73 @@ class _BackgroundStatement:
         assert self._backend_pid_value is not None, "backend_pid read before __enter__ completed"
         return self._backend_pid_value
 
+    @property
+    def worker_confirmed_stopped(self) -> bool:
+        """True once the worker process has been confirmed not-alive and
+        its Process object closed. Callers (including tests) that need to
+        confirm containment after `__exit__`/`_reap` must use this rather
+        than `._process.is_alive()` directly: once the Process object is
+        closed (per this class's own IPC/process cleanup — see
+        `_close_queues` and the `close process object` step), calling
+        `is_alive()` on it raises `ValueError: process object is closed`
+        instead of meaningfully answering the question."""
+        return self._worker_confirmed_stopped
+
     def __enter__(self) -> "_BackgroundStatement":
         ctx = multiprocessing.get_context("spawn")
         handshake_queue: Any = ctx.Queue()
         outcome_queue: Any = ctx.Queue()
         control_queue: Any = ctx.Queue()
-        process = ctx.Process(
-            target=_worker_main,
-            args=(
-                self._engine.url.render_as_string(hide_password=False),
-                self._sql,
-                self._params,
-                self._lock_timeout_seconds,
-                self._CONNECT_TIMEOUT_SECONDS,
-                self._startup_delay_seconds,
-                self._fault_injection_stage,
-                handshake_queue,
-                outcome_queue,
-                control_queue,
-            ),
-        )
-        process.start()
+        # Stored immediately, not only on success: __exit__ is never called
+        # if __enter__ raises, so every failure branch below is responsible
+        # for its own cleanup, and needs these to be able to find the queues
+        # it must close.
+        self._handshake_queue = handshake_queue
+        self._outcome_queue = outcome_queue
+        self._control_queue = control_queue
+
+        try:
+            process = ctx.Process(
+                target=_worker_main,
+                args=(
+                    self._engine.url.render_as_string(hide_password=False),
+                    self._sql,
+                    self._params,
+                    self._lock_timeout_seconds,
+                    self._CONNECT_TIMEOUT_SECONDS,
+                    self._startup_delay_seconds,
+                    self._fault_injection_stage,
+                    handshake_queue,
+                    outcome_queue,
+                    control_queue,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - reported directly, not swallowed
+            construction_problems: list[tuple[str, Exception]] = []
+            self._close_queues(construction_problems)
+            construction_error = RuntimeError(
+                f"failed to construct the background worker process: {exc}"
+            )
+            for label, cleanup_exc in construction_problems:
+                construction_error.add_note(
+                    f"cleanup also reported a problem ({label}): {cleanup_exc}"
+                )
+            raise construction_error from exc
+
+        try:
+            process.start()
+        except Exception as exc:  # noqa: BLE001 - reported directly, not swallowed
+            # A Process object whose start() raised was never actually
+            # spawned as an OS process - is_alive()/terminate()/join()/
+            # close() are all invalid on it, so it must never be stored or
+            # treated as a live resource needing reaping.
+            start_problems: list[tuple[str, Exception]] = []
+            self._close_queues(start_problems)
+            start_error = RuntimeError(f"background worker process failed to start: {exc}")
+            for label, cleanup_exc in start_problems:
+                start_error.add_note(f"cleanup also reported a problem ({label}): {cleanup_exc}")
+            raise start_error from exc
+
         self._process = process
 
         startup_problems: list[tuple[str, Exception]] = []
@@ -509,15 +641,16 @@ class _BackgroundStatement:
                 error.add_note(f"startup cleanup also reported a problem ({label}): {exc}")
             raise error
 
-        self._outcome_queue = outcome_queue
-        self._control_queue = control_queue
         self._backend_pid_value = payload
         return self
 
     def _reap(self, problems: list[tuple[str, Exception]]) -> None:
         """Unconditionally terminates and joins a worker process that must
-        not be left running — used on every __enter__ failure path so
-        __enter__ never raises while an owned worker is still alive."""
+        not be left running, then closes every IPC queue and the process
+        object itself. Used on every __enter__ failure path: __exit__ is
+        never invoked when __enter__ raises, so this method alone is
+        responsible for leaving no process, queue, or process-object
+        resource behind on that path."""
         assert self._process is not None
         _attempt(problems, "terminate", self._process.terminate)
         self._process.join(timeout=self._signal_join_seconds)
@@ -526,6 +659,40 @@ class _BackgroundStatement:
             self._process.join(timeout=self._signal_join_seconds)
         if self._process.is_alive():
             problems.append(("reap", RuntimeError("process survived forcible termination")))
+        else:
+            self._worker_confirmed_stopped = True
+            _attempt(problems, "close process object", self._process.close)
+        self._close_queues(problems)
+
+    def _close_queues(self, problems: list[tuple[str, Exception]]) -> None:
+        """Closes every IPC queue this instance created and bounds the wait
+        for each queue's background feeder thread to flush, attempted
+        independently and failure-safely per queue regardless of whether an
+        earlier queue's cleanup failed - so no queue-related file
+        descriptor or thread survives the helper, and a queue that
+        genuinely cannot be closed is reported rather than silently
+        ignored. join_thread() is skipped for a queue whose own close()
+        failed: join_thread()'s documented precondition is that close()
+        already succeeded, and calling it anyway raises its own unrelated
+        precondition error that would misreport a close failure as a
+        feeder-thread hang."""
+        for label, q in (
+            ("handshake_queue", self._handshake_queue),
+            ("outcome_queue", self._outcome_queue),
+            ("control_queue", self._control_queue),
+        ):
+            if q is None:
+                continue
+            close_problems: list[tuple[str, Exception]] = []
+            _attempt(close_problems, f"close {label}", q.close)
+            problems.extend(close_problems)
+            if close_problems:
+                continue
+
+            def _join_this_queue_thread(queue_to_join: Any = q) -> None:
+                _bounded_join_thread(queue_to_join, 5.0)
+
+            _attempt(problems, f"join feeder thread ({label})", _join_this_queue_thread)
 
     def wait_until_blocked(self, poll_connection: Connection, label: str) -> None:
         """Blocks the caller until pg_stat_activity reports this statement's
@@ -546,13 +713,38 @@ class _BackgroundStatement:
             time.sleep(0.05)
         assert waiting, f"expected {label} to be genuinely waiting on a lock"
 
+    @staticmethod
+    def _build_outcome_exception(
+        status: str,
+        primary_error: str | None,
+        problems: list[tuple[str, Exception]],
+    ) -> Exception | None:
+        """Shared by resume_and_get_outcome and __exit__'s own unread-outcome
+        drain, so both paths report a worker's failure identically. `status`
+        is trusted as computed by the worker (`_worker_main`): "failed"
+        whenever the statement itself failed, the commit failed, or any
+        other cleanup step reported a problem - so a cleanup-only failure
+        after an otherwise-successful commit still produces a real
+        exception here, not a silent None."""
+        if status != "failed":
+            return None
+        exc = (
+            RuntimeError(primary_error)
+            if primary_error is not None
+            else RuntimeError("worker statement committed but its own cleanup reported problems")
+        )
+        if problems:
+            summary = "; ".join(f"{lbl}: {e}" for lbl, e in problems)
+            exc.add_note(f"worker's own cleanup also reported problems: {summary}")
+        return exc
+
     def resume_and_get_outcome(self, label: str) -> tuple[str, Exception | None]:
         """Waits (bounded) for the blocker to commit and the original
         waiting statement to actually resume — not a substitute retry —
         then returns its real outcome."""
         assert self._process is not None and self._outcome_queue is not None
         try:
-            status, payload, problems = self._outcome_queue.get(timeout=10.0)
+            status, primary_error, problems = self._outcome_queue.get(timeout=10.0)
         except queue.Empty:
             raise AssertionError(f"{label} thread reported no outcome within 10s") from None
         self._process.join(timeout=5.0)
@@ -560,24 +752,72 @@ class _BackgroundStatement:
             f"{label} did not resume within the bounded window after the blocking "
             "transaction's commit"
         )
-        exc = RuntimeError(payload) if status == "failed" else None
-        if problems and exc is not None:
-            summary = "; ".join(f"{lbl}: {e}" for lbl, e in problems)
-            exc.add_note(f"worker's own cleanup also reported problems: {summary}")
+        exc = self._build_outcome_exception(status, primary_error, problems)
         self.outcome.append((status, exc))
         return status, exc
 
+    def _drain_unread_outcome(self) -> tuple[str, Exception] | None:
+        """Reads any outcome the worker already produced but that nobody
+        consumed via resume_and_get_outcome — called from __exit__ so a
+        statement, commit, or cleanup failure inside a worker that finished
+        (or was forcibly stopped after producing one) before anyone
+        consumed it cannot be silently discarded. Returns None whenever
+        there is nothing unread, which is the ordinary case whenever
+        resume_and_get_outcome already consumed it (the queue is then
+        already empty) or the worker never got far enough to produce one
+        (e.g. it was forcibly terminated mid-statement)."""
+        if self._outcome_queue is None:
+            return None
+        try:
+            status, primary_error, problems = self._outcome_queue.get(timeout=2.0)
+        except queue.Empty:
+            return None
+        exc = self._build_outcome_exception(status, primary_error, problems)
+        if exc is None:
+            return None
+        return ("unread worker outcome", exc)
+
+    def _with_isolated_connection(self, fn: Callable[[Connection], Any]) -> Any:
+        """Runs fn against a fresh, isolated connection and guarantees the
+        connection is closed no matter what fn does. A close failure is
+        attached as a note rather than replacing whatever fn itself raised
+        — the point of this helper is exactly that a controller-side
+        verification/signaling connection can never silently leak, and can
+        never let a close failure mask a real, already-happening error. If
+        fn succeeds but close then fails, that close failure becomes the
+        reported error, there being no more-important error already in
+        flight to preserve."""
+        connection = self._engine.connect()
+        try:
+            result = fn(connection)
+        except Exception as exc:  # noqa: BLE001 - reported to the caller, not swallowed
+            try:
+                connection.close()
+            except Exception as close_exc:  # noqa: BLE001 - attached, not swallowed
+                exc.add_note(f"connection close also failed: {close_exc}")
+            raise
+        else:
+            try:
+                connection.close()
+            except Exception as close_exc:  # noqa: BLE001 - reported, not swallowed
+                raise RuntimeError(
+                    "operation succeeded but closing its connection failed"
+                ) from close_exc
+            return result
+
     def _send_signal(self, description: str, sql: str) -> bool:
         """Issues one termination/cancellation SQL signal against the
-        tracked (real, immutable) backend pid, via a separate connection.
-        Isolated as its own method so regression tests can monkeypatch this
-        exact seam to inject a false result or a raised exception without
-        ever corrupting backend_pid itself."""
-        canceller = self._engine.connect()
-        sent = canceller.execute(text(sql), {"p": self.backend_pid}).scalar()
-        canceller.commit()
-        canceller.close()
-        return bool(sent)
+        tracked (real, immutable) backend pid, via a separate, isolated
+        connection. Isolated as its own method so regression tests can
+        monkeypatch this exact seam to inject a false result or a raised
+        exception without ever corrupting backend_pid itself."""
+
+        def _do(connection: Connection) -> bool:
+            sent = connection.execute(text(sql), {"p": self.backend_pid}).scalar()
+            connection.commit()
+            return bool(sent)
+
+        return bool(self._with_isolated_connection(_do))
 
     def _cancel_via_driver(self) -> None:
         """Asks the worker process to cancel its own blocked statement via
@@ -654,23 +894,34 @@ class _BackgroundStatement:
             # Unlike every mechanism above, this cannot fail to end the
             # process regardless of what it is doing — a real OS process,
             # unlike a Python thread, can always be forcibly reclaimed by
-            # its owner.
+            # its owner. A survival here would mean that OS-level guarantee
+            # itself was violated; reported like every other problem rather
+            # than raised directly, so it cannot replace an
+            # already-propagating exception at a higher level.
             _attempt(problems, "terminate", self._process.terminate)
             self._process.join(timeout=self._signal_join_seconds)
             if self._process.is_alive():
                 _attempt(problems, "kill", self._process.kill)
                 self._process.join(timeout=self._signal_join_seconds)
-            assert not self._process.is_alive(), (
-                "worker process survived forcible termination — an OS-level guarantee was violated"
-            )
-            problems.append(
-                (
-                    "forced termination",
-                    RuntimeError(
-                        "every graceful mechanism failed; the worker was forcibly terminated"
-                    ),
+            if self._process.is_alive():
+                problems.append(
+                    (
+                        "forced termination",
+                        RuntimeError(
+                            "worker process survived forcible termination — an OS-level "
+                            "guarantee was violated"
+                        ),
+                    )
                 )
-            )
+            else:
+                problems.append(
+                    (
+                        "forced termination",
+                        RuntimeError(
+                            "every graceful mechanism failed; the worker was forcibly terminated"
+                        ),
+                    )
+                )
             # Ending our own client-side process guarantees *our* resources
             # are reclaimed, but does not by itself guarantee PostgreSQL has
             # noticed: a backend blocked inside a call that never touches
@@ -681,8 +932,10 @@ class _BackgroundStatement:
             # ask PostgreSQL itself to end that backend too, through a real
             # (not the mockable _send_signal seam) pg_terminate_backend()
             # call, independent of whatever fault injection did to the
-            # graceful attempt earlier in this method — this is the "by
-            # whatever means necessary" guarantee, not a best-effort repeat.
+            # graceful attempt earlier in this method, and regardless of
+            # whether the process itself was confirmed dead above — this is
+            # the "by whatever means necessary" guarantee, not a best-effort
+            # repeat.
             _attempt(
                 problems,
                 "authoritative pg_terminate_backend",
@@ -701,34 +954,86 @@ class _BackgroundStatement:
         of what regression tests mock: it exists specifically so the
         "everything mocked to fail" tests still prove the backend is
         genuinely gone, not just that this process no longer exists."""
-        canceller = self._engine.connect()
-        canceller.execute(text("SELECT pg_terminate_backend(:p)"), {"p": self.backend_pid})
-        canceller.commit()
-        canceller.close()
+
+        def _do(connection: Connection) -> None:
+            connection.execute(text("SELECT pg_terminate_backend(:p)"), {"p": self.backend_pid})
+            connection.commit()
+
+        self._with_isolated_connection(_do)
+
+    def _query_backend_state(self) -> tuple[str, bool] | None:
+        """One failure-safe pg_stat_activity lookup for backend_pid. Returns
+        None if no row exists (the backend is gone), or (state,
+        in_transaction) if one does — in_transaction is true whenever the
+        backend's own transaction is still open, which for this test
+        suite's exclusive use of pg_advisory_xact_lock (transaction-scoped,
+        released at COMMIT/ROLLBACK) is also a complete proxy for "does this
+        backend still hold any advisory lock it took": the lock cannot
+        outlive the transaction. A query failure here (connection refused,
+        etc.) propagates to the caller rather than being interpreted as the
+        backend being gone."""
+
+        def _do(connection: Connection) -> tuple[str, bool] | None:
+            row = connection.execute(
+                text("SELECT state, (xact_start IS NOT NULL) FROM pg_stat_activity WHERE pid = :p"),
+                {"p": self.backend_pid},
+            ).one_or_none()
+            return None if row is None else (row[0], bool(row[1]))
+
+        result: tuple[str, bool] | None = self._with_isolated_connection(_do)
+        return result
 
     def _verify_backend_gone(self, problems: list[tuple[str, Exception]]) -> None:
-        """Confirms, through a fresh connection, that the worker's backend
+        """Confirms, through fresh connections, that the worker's backend
         has actually disappeared from pg_stat_activity — the OS process
         exiting (gracefully or by force) does not by itself guarantee
         PostgreSQL has already noticed the dropped connection at the exact
         instant this method runs, so this polls briefly rather than
-        assuming it."""
+        assuming it. Distinguishes three outcomes, never conflating any of
+        them with "gone": the backend is present but idle with no open
+        transaction; the backend is present and still active or holding a
+        transaction; or verification itself could not be completed (a
+        fresh connection could not be established, or the query failed) —
+        which must never be treated as proof the backend disappeared. This
+        method never raises: every failure it encounters, including its own
+        query failing, is appended to problems instead, so a verification
+        error can never replace an exception already propagating from a
+        caller further up the stack."""
         deadline = time.monotonic() + 5.0
+        verification_error: Exception | None = None
+        last_state: str | None = None
         while time.monotonic() < deadline:
-            with self._engine.connect() as checker:
-                still_present = checker.execute(
-                    text("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = :p)"),
-                    {"p": self.backend_pid},
-                ).scalar()
-            if not still_present:
+            try:
+                row = self._query_backend_state()
+            except Exception as exc:  # noqa: BLE001 - collected, not swallowed or re-raised
+                verification_error = exc
+                time.sleep(0.05)
+                continue
+            verification_error = None
+            if row is None:
                 return
+            state, in_transaction = row
+            last_state = f"state={state!r} in_transaction={in_transaction}"
             time.sleep(0.05)
+
+        if verification_error is not None:
+            problems.append(
+                (
+                    "backend liveness verification",
+                    RuntimeError(
+                        f"could not verify backend pid {self.backend_pid} disappeared: "
+                        f"{verification_error}"
+                    ),
+                )
+            )
+            return
+
         problems.append(
             (
                 "backend liveness verification",
                 RuntimeError(
                     f"backend pid {self.backend_pid} was still present in pg_stat_activity "
-                    "5s after its owning process exited"
+                    f"5s after its owning process exited ({last_state})"
                 ),
             )
         )
@@ -736,13 +1041,35 @@ class _BackgroundStatement:
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
         problems: list[tuple[str, Exception]] = []
         if self._process is not None and self._process.is_alive():
-            problems = self._force_stop()
+            problems.extend(self._force_stop())
+
+        # Whether the worker exited on its own or was just forcibly
+        # stopped, drain any outcome it left behind: a statement, commit,
+        # or cleanup failure the caller never consumed via
+        # resume_and_get_outcome must not be silently discarded just
+        # because nobody explicitly asked for it.
+        unread_outcome = self._drain_unread_outcome()
+        if unread_outcome is not None:
+            problems.append(unread_outcome)
+
+        if self._process is not None:
+            if self._process.is_alive():
+                problems.append(
+                    (
+                        "close process object",
+                        RuntimeError("process still alive; refusing to close its object"),
+                    )
+                )
+            else:
+                self._worker_confirmed_stopped = True
+                _attempt(problems, "close process object", self._process.close)
+
+        self._close_queues(problems)
+
         if not problems:
             return False
         summary = "; ".join(f"{label}: {e}" for label, e in problems)
-        message = (
-            f"_BackgroundStatement cleanup encountered problems (worker was terminated): {summary}"
-        )
+        message = f"_BackgroundStatement cleanup encountered problems: {summary}"
         if exc is not None:
             exc.add_note(message)
             return False
@@ -785,6 +1112,21 @@ def _failing_cancel_via_driver() -> None:
     (the `lock_timeout` backstop, or — for the pg_sleep-based tests —
     forced termination) is what has to take over."""
     raise _InjectedFailure("simulated cancel_via_driver failure")
+
+
+def _failing_terminate_unconditionally() -> None:
+    """A `_terminate_backend_unconditionally` replacement for
+    monkeypatching: simulates the final, otherwise-unconditional
+    `pg_terminate_backend()` call itself failing, distinct from every
+    earlier (already independently tested) fallback in the chain."""
+    raise _InjectedFailure("simulated authoritative pg_terminate_backend failure")
+
+
+def _raise_injected_failure(*_args: object, **_kwargs: object) -> None:
+    """A generic monkeypatch replacement for any zero-meaningful-args
+    method that should simulate failure without performing its real
+    action — used for IPC/process-object cleanup seams."""
+    raise _InjectedFailure("simulated cleanup failure")
 
 
 def _assert_backend_eventually_gone(engine: Engine, pid: int, timeout: float = 5.0) -> None:
@@ -966,7 +1308,7 @@ def test_background_statement_forcibly_terminates_the_worker_and_preserves_the_o
         f"expected the forced-termination problem to be reported on the propagated "
         f"exception via add_note, got notes: {notes!r}"
     )
-    assert not blocked._process.is_alive(), "the worker process must not survive __exit__"
+    assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
     _assert_backend_eventually_gone(engine, blocked.backend_pid)
 
 
@@ -995,7 +1337,7 @@ def test_background_statement_cleanup_failure_fails_the_test_when_no_original_ex
     with pytest.raises(RuntimeError, match="forcibly terminated"), blocked:
         pass  # No exception here: __exit__ not raising is the only way this test can fail.
 
-    assert not blocked._process.is_alive(), "the worker process must not survive __exit__"
+    assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
     _assert_backend_eventually_gone(engine, blocked.backend_pid)
 
 
@@ -1021,7 +1363,7 @@ def test_background_statement_enter_reports_startup_failure_at_each_partial_stag
         blocked.__enter__()
     assert stage in str(excinfo.value), f"expected the injected stage {stage!r} to be reported"
     assert blocked._process is not None
-    assert not blocked._process.is_alive()
+    assert blocked.worker_confirmed_stopped
 
 
 def test_background_statement_enter_reports_both_startup_and_cleanup_failures_together(
@@ -1044,7 +1386,7 @@ def test_background_statement_enter_reports_both_startup_and_cleanup_failures_to
         f"expected startup cleanup problems to be reported as notes, got: {notes!r}"
     )
     assert blocked._process is not None
-    assert not blocked._process.is_alive()
+    assert blocked.worker_confirmed_stopped
 
 
 def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
@@ -1073,7 +1415,7 @@ def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
         f"took {elapsed:.1f}s"
     )
     assert blocked._process is not None
-    assert not blocked._process.is_alive()
+    assert blocked.worker_confirmed_stopped
 
 
 def test_background_statement_enter_fails_with_no_process_alive_when_a_real_connection_is_refused(
@@ -1089,7 +1431,319 @@ def test_background_statement_enter_fails_with_no_process_alive_when_a_real_conn
     with pytest.raises(RuntimeError, match="failed to start"):
         blocked.__enter__()
     assert blocked._process is not None
-    assert not blocked._process.is_alive()
+    assert blocked.worker_confirmed_stopped
+
+
+# ---------------------------------------------------------------------------
+# Worker outcome and cleanup reporting protocol
+# ---------------------------------------------------------------------------
+# The tests above cover startup (before the worker's statement ever runs);
+# these cover the statement/commit/cleanup path afterward — proving a
+# successful statement followed by a commit failure is never reported as
+# committed, a cleanup-only failure after a genuine commit still fails the
+# caller, and an outcome nobody explicitly consumed is still drained and
+# reported by __exit__ rather than silently discarded.
+
+
+def test_background_statement_reports_the_statement_error_when_the_statement_itself_fails(
+    postgres_engine: Engine,
+) -> None:
+    """A baseline case distinct from the five concurrency tests below: a
+    statement that fails for an ordinary reason (not a business-rule
+    trigger), with nothing else going wrong during cleanup. Proves the
+    statement's own error is what gets reported."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(engine, "SELECT 1/0", {})
+    with blocked:
+        status, exc = blocked.resume_and_get_outcome("statement-failure probe")
+
+    assert status == "failed"
+    assert exc is not None
+    assert "division by zero" in str(exc).lower()
+
+
+def test_background_statement_reports_failure_when_commit_fails_after_a_successful_statement(
+    postgres_engine: Engine,
+) -> None:
+    """The statement itself succeeds, but the connection becomes genuinely
+    unusable before commit() is attempted (mirroring the startup section's
+    after_begin_kill_then_fail one phase later), so commit() fails for
+    real — not mocked. The rollback-after-commit-failure attempt is also
+    exercised (this is the "where applicable" case), but SQLAlchemy's own
+    rollback() turns out to be a safe no-op here too: once commit() has
+    already failed, SQLAlchemy's bookkeeping no longer considers the
+    transaction active, mirroring the same no-op behavior the tenth pass
+    found for rollback()/close() before begin() ever ran — so it does not
+    itself report a second problem. What this test proves is the primary
+    contract: the outcome is reported as "failed", never "committed" — the
+    register's explicit requirement that a successful statement followed by
+    a commit failure must never be reported as committed."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(
+        engine, "SELECT 1", {}, _fault_injection_stage="after_statement_kill_then_fail"
+    )
+    with blocked:
+        status, exc = blocked.resume_and_get_outcome("commit-failure probe")
+
+    assert status == "failed", f"a failed commit must never be reported as committed, got: {status}"
+    assert exc is not None
+    assert "closed" in str(exc).lower(), (
+        f"expected the commit failure's own connection-closed message to be the reported "
+        f"cause, got: {exc}"
+    )
+
+
+@pytest.mark.parametrize("stage", ["close_fails", "dispose_fails"])
+def test_background_statement_reports_failure_for_a_cleanup_only_problem_after_a_successful_commit(
+    postgres_engine: Engine, stage: str
+) -> None:
+    """The statement and its commit both genuinely succeed, but a
+    deterministically injected failure in close() or dispose() afterward
+    must still fail the caller — the register's explicit requirement that a
+    cleanup-only failure fails the test even though the transaction itself
+    was fine."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(engine, "SELECT 1", {}, _fault_injection_stage=stage)
+    with blocked:
+        status, exc = blocked.resume_and_get_outcome(f"cleanup-only probe ({stage})")
+
+    assert status == "failed", (
+        f"a cleanup-only failure ({stage}) after a successful commit must still be "
+        f"reported as failed, got: {status}"
+    )
+    assert exc is not None
+    expected_label = "close" if stage == "close_fails" else "dispose"
+    notes = "\n".join(getattr(exc, "__notes__", []))
+    assert expected_label in notes.lower(), (
+        f"expected {expected_label!r} to be reported, got notes: {notes!r}"
+    )
+
+
+def test_background_statement_exit_drains_and_reports_an_outcome_nobody_consumed(
+    postgres_engine: Engine,
+) -> None:
+    """The with block never calls resume_and_get_outcome — the worker
+    finishes a failing statement on its own before the block exits (proven
+    by polling before __exit__ ever runs, not after). Proves __exit__
+    itself drains the outcome queue and fails the test, rather than
+    silently discarding a failure nobody explicitly asked for."""
+    engine = postgres_engine
+
+    def _run_and_wait_for_natural_exit() -> None:
+        with _BackgroundStatement(engine, "SELECT 1/0", {}) as blocked:
+            # Still inside the with block, so __exit__ (and its
+            # worker_confirmed_stopped bookkeeping) has not run yet — the
+            # process object itself is still open here, so is_alive() is
+            # the right check for this specific pre-__exit__ wait.
+            deadline = time.monotonic() + 5.0
+            while blocked._process.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert not blocked._process.is_alive(), (
+                "worker did not finish the fast failing statement in time"
+            )
+
+    with pytest.raises(RuntimeError, match="division by zero"):
+        _run_and_wait_for_natural_exit()
+
+
+# ---------------------------------------------------------------------------
+# Controller-side database cleanup failure-safety
+# ---------------------------------------------------------------------------
+
+
+def test_background_statement_reports_a_problem_when_the_final_termination_call_itself_fails(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every earlier fallback (both SQL signals, driver-native cancel) is
+    also mocked to fail, and the worker is not lock-bound (pg_sleep), so
+    _force_stop reaches its final, otherwise-unconditional
+    pg_terminate_backend call — which is itself mocked to fail here, unlike
+    every previous review's regression tests, which left it operational.
+    Proves that failure is reported as a note on the original exception
+    rather than propagating uncaught and replacing it, and that the worker
+    process is still forcibly terminated regardless."""
+    engine = postgres_engine
+    sleep_seconds = 30.0
+    blocked = _BackgroundStatement(
+        engine,
+        "SELECT pg_sleep(:s)",
+        {"s": sleep_seconds},
+        lock_timeout_seconds=1.0,
+        signal_join_seconds=1.0,
+    )
+    monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
+    monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
+    monkeypatch.setattr(
+        blocked, "_terminate_backend_unconditionally", _failing_terminate_unconditionally
+    )
+
+    worker_pid: int | None = None
+    try:
+        with pytest.raises(_SentinelFailure) as excinfo, blocked:
+            worker_pid = blocked.backend_pid
+            raise _SentinelFailure("deliberate failure while the final termination call also fails")
+
+        assert isinstance(excinfo.value, _SentinelFailure)
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "authoritative pg_terminate_backend" in notes, (
+            f"expected the final termination failure to be reported as a note, got: {notes!r}"
+        )
+        assert blocked.worker_confirmed_stopped, (
+            "the worker process must still be forcibly terminated"
+        )
+    finally:
+        # Safety net, not proof: with the authoritative termination call
+        # itself mocked away, nothing in the mechanism under test ever
+        # actually told PostgreSQL to stop this pg_sleep-blocked backend —
+        # a real, unmocked terminate keeps it from lingering in the shared
+        # dev database for the statement's full 30s duration.
+        if worker_pid is not None:
+            with engine.connect() as cleanup_conn:
+                cleanup_conn.execute(text("SELECT pg_terminate_backend(:p)"), {"p": worker_pid})
+                cleanup_conn.commit()
+
+
+def test_background_statement_reports_a_problem_when_backend_verification_itself_fails(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backend-state verification itself is mocked to fail (simulating a
+    verification connection being unreachable), while the real termination
+    signal is left operational. Proves the verification failure is reported
+    as a distinct problem — never silently treated as proof the backend
+    disappeared — and never replaces the original test-body exception."""
+    engine = postgres_engine
+    lock_key = uuid.uuid4().int % (2**63 - 1)
+
+    with engine.connect() as first:
+        first.begin()
+        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+
+        blocked = _BackgroundStatement(engine, "SELECT pg_advisory_xact_lock(:k)", {"k": lock_key})
+        monkeypatch.setattr(blocked, "_query_backend_state", _raise_injected_failure)
+
+        worker_pid: int | None = None
+        try:
+            with pytest.raises(_SentinelFailure) as excinfo, blocked:
+                blocked.wait_until_blocked(first, "the worker (verification mocked to fail)")
+                worker_pid = blocked.backend_pid
+                raise _SentinelFailure("deliberate failure with verification mocked to fail")
+
+            assert isinstance(excinfo.value, _SentinelFailure)
+            notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+            assert "could not verify" in notes.lower(), (
+                f"expected the verification failure to be reported distinctly, got: {notes!r}"
+            )
+            assert worker_pid is not None
+            assert blocked.worker_confirmed_stopped, "the worker must still be terminated for real"
+            _assert_backend_eventually_gone(engine, worker_pid)
+        finally:
+            first.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Process startup, reaping, and IPC cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_background_statement_enter_reports_process_construction_failure(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """multiprocessing.Process(...) construction itself is mocked to fail —
+    a real OS-level trigger for this is impractical to construct
+    deterministically. Proves __enter__ reports it clearly, with no process
+    ever stored (there is nothing valid to reap), and its queues still
+    closed."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    monkeypatch.setattr(ctx, "Process", _raise_injected_failure)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    with pytest.raises(RuntimeError, match="failed to construct"):
+        blocked.__enter__()
+    assert blocked._process is None
+
+
+def test_background_statement_enter_reports_process_start_failure(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """multiprocessing.Process.start() itself is mocked to fail — again, a
+    real OS-level trigger (resource exhaustion) is impractical to construct
+    deterministically. Proves __enter__ reports it clearly, and that
+    self._process is left None: a Process object whose start() raised was
+    never actually spawned, so it must never be treated as a live resource
+    needing reaping (is_alive()/terminate()/close() are all invalid on
+    it)."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    monkeypatch.setattr(ctx.Process, "start", _raise_injected_failure)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    with pytest.raises(RuntimeError, match="failed to start"):
+        blocked.__enter__()
+    assert blocked._process is None
+
+
+def test_background_statement_escalates_to_kill_when_terminate_does_not_stop_the_process(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """terminate() is mocked to a no-op — simulating an edge case where it
+    does not actually stop the process — while kill() is left real. Proves
+    _force_stop detects the process is still alive after terminate() and
+    escalates to kill(), which genuinely stops it."""
+    engine = postgres_engine
+    sleep_seconds = 30.0
+    blocked = _BackgroundStatement(
+        engine,
+        "SELECT pg_sleep(:s)",
+        {"s": sleep_seconds},
+        lock_timeout_seconds=1.0,
+        signal_join_seconds=1.0,
+    )
+    monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
+    monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
+
+    with pytest.raises(_SentinelFailure), blocked:
+        monkeypatch.setattr(blocked._process, "terminate", lambda: None)
+        raise _SentinelFailure("deliberate failure with terminate() mocked to a no-op")
+
+    assert blocked.worker_confirmed_stopped, "kill() must still have stopped the process"
+
+
+def test_background_statement_reports_a_problem_when_a_queue_fails_to_close(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One IPC queue's close() is mocked to fail after a fast, successful
+    statement. Proves the failure is collected as a problem — reported by
+    __exit__ — rather than propagating uncaught, and that cleanup for the
+    other queues and the process object still proceeds regardless."""
+    engine = postgres_engine
+
+    def _run() -> None:
+        with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+            blocked.resume_and_get_outcome("queue-close-failure probe")
+            monkeypatch.setattr(blocked._outcome_queue, "close", _raise_injected_failure)
+
+    with pytest.raises(RuntimeError, match="close outcome_queue"):
+        _run()
+
+
+def test_background_statement_reports_a_problem_when_the_process_object_fails_to_close(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Process object's own close() is mocked to fail after a fast,
+    successful statement. Proves the failure is collected and reported by
+    __exit__ rather than propagating uncaught."""
+    engine = postgres_engine
+
+    def _run() -> None:
+        with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+            blocked.resume_and_get_outcome("process-close-failure probe")
+            monkeypatch.setattr(blocked._process, "close", _raise_injected_failure)
+
+    with pytest.raises(RuntimeError, match="close process object"):
+        _run()
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(

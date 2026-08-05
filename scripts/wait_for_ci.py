@@ -2,7 +2,7 @@
 
 Ad hoc CI polling during the Phase 5 exit reviews printed one status line
 per poll (mostly repeated "in_progress None") and, on completion, always
-fetched every job/step's name and conclusion even when the run was green —
+fetched every job/step's name and conclusion even when the run was green -
 detail that only matters when something failed. This script fixes both: it
 prints a status line only when the status actually changes, and it fetches
 per-job/per-step detail only when the run's conclusion is not "success", and
@@ -155,7 +155,9 @@ def wait_for_run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--sha", default=None, help="Commit SHA to look up a run for (default: current HEAD)"
     )
