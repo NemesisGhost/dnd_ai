@@ -67,7 +67,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 through 4 are complete and verified. Phase 5's production behavior, primary concurrency assertions, and formal test-infrastructure verification are all complete: a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process was itself found, by an eleventh review, to still be able to report false success and silently discard cleanup failures, and an eleventh pass's fix is CI-confirmed by [PR #14](https://github.com/NemesisGhost/dnd_ai/pull/14)'s push-triggered run [`30964183959`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30964183959); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is a closed historical record. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) and the Phase 5 formal-correctness gate are both closed, so Phase 6 feature/schema work may begin. The repository is still database-first: no API, UI, or external integration exists yet.
+Phases 1 through 4 are complete and verified. Phase 5's production behavior and primary concurrency assertions are complete; its formal test-infrastructure/tooling closeout: a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process was itself found, by an eleventh review, to still be able to report false success and silently discard cleanup failures, an eleventh pass fixed it, a twelfth review found the eleventh pass's own verification-tooling claim didn't hold up to its exit code and its IPC redesign still relied on an abandonable thread, a twelfth pass fixed those findings, a thirteenth review then found the twelfth pass's own missing-outcome classification, backend verification, and `Process.start()` failure handling were themselves still incomplete, a thirteenth pass fixed those findings, and a fourteenth review then found the thirteenth pass's own forced-termination classification, partial-start cleanup, and regression-test safety net were themselves still incomplete — a fourteenth pass fixed those findings and is verified locally (93 tests in `test_entity_type_change_protection.py`, 1,189 total), pending confirmation from [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run; [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) reflects the same status. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate is blocked pending that CI confirmation, so Phase 6 feature/schema work should not begin yet. The repository is still database-first: no API, UI, or external integration exists yet.
 
 ### What's Being Built
 
@@ -1150,7 +1150,7 @@ As an AI assistant working on this project:
 
 3. ✅ **Check current phase before implementing**
    - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 5 is complete and Phase 6 feature/schema work may begin
+   - Implement only the current target; Phase 5's formal-correctness gate is blocked pending PR #15's final-head CI confirmation, so Phase 6 feature/schema work should not begin yet
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart
