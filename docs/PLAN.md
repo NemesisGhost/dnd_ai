@@ -1245,7 +1245,12 @@ Do not recursively require a separately proven safety net for every layer of tes
 
 ### Phase 6: Events and interactions
 
-**Current phase; entry gates complete.** The repository-context modularization gate in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain) is closed: the former `src/dnd_ai/persistence/tables.py` is now a domain-bounded package, and the two closed Phase 4 test monoliths are redistributed into invariant-oriented modules. Phase 5 production correctness and its five concurrency invariants are complete and CI-verified. No test-harness limitation currently meets §23.1's threshold for blocking Phase 6.
+**Complete.** Delivered as five independently reviewed increments: `narrative.events` and branch-aware effective history (revision 057–060), the `interaction.*` domain (061–062), real knowledge-provenance references closing Phase 5's placeholders (063), conditional-route evaluation (064), and `src/dnd_ai/commands` — the first application-layer command handlers (`RecordEvent`, `PerformInteraction`, `ResolveCheck`), proving a player action resolves into an event and an atomic state change through real production code. Verified against AWS `dev`, 1,339 tests passing (up from 1,153 at Phase 5's close). `alembic check` clean throughout; this working branch has not yet been pushed or opened as a pull request, so GitHub Actions confirmation is still outstanding. Encounters/combat (§17's table shape) belongs to Phase 9, not this phase — see that phase's deliverable list. Verification evidence: [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
+
+<details>
+<summary>Original entry-gate and planning detail (historical)</summary>
+
+**Entry gates complete.** The repository-context modularization gate in [DEVELOPMENT.md §2.1](DEVELOPMENT.md#21-keep-source-and-tests-bounded-by-domain) is closed: the former `src/dnd_ai/persistence/tables.py` is now a domain-bounded package, and the two closed Phase 4 test monoliths are redistributed into invariant-oriented modules. Phase 5 production correctness and its five concurrency invariants are complete and CI-verified. No test-harness limitation currently meets §23.1's threshold for blocking Phase 6.
 
 The Phase 6 entry gates are complete only once:
 
@@ -1279,9 +1284,13 @@ First-time obligations (per [§23.1](#231-phase-exit-review)):
 - **Close Phase 3's branch-history deferral.** Add `campaign.timelines.branch_event_id` with its foreign key and cross-row validation, then prove rule 7 with the effective-history scenario described in the exit criteria. Phase 3 verified branch structure only; do not treat that as evidence of isolation.
 - **Close Phase 5's interaction/event placeholders.** `knowledge.entity_knowledge.learned_source` and `knowledge.party_discoveries.discovery_method` are free-text placeholders (revision 041) for "how this was learned/discovered" — replace with real references to `interaction.interactions`/`narrative.events` once both exist, per [DATABASE_MODEL.md §26](architecture/DATABASE_MODEL.md#26-reconciliation-notes-phase-5). Also extend `campaign.location_state`/`.area_connection_state`/`.area_feature_state`/`.hazard_state`/`.interactable_state` with a `last_event_id` provenance column, the same pattern Phase 4's character-state tables are already expected to receive here — see [DATABASE_MODEL.md §17](architecture/DATABASE_MODEL.md#17-typed-timeline-state).
 - **Wire up conditional-route evaluation.** `world.area_connections.is_conditional`/`condition_description` (revision 047) record that a route is conditional and what the condition is, but nothing evaluates it — a party attempting to traverse a conditional route needs a check resolution against the interaction model this phase builds. Quest-gated conditions additionally need Phase 7's quest state; a route conditioned purely on interaction/check outcome (not quest progress) can be fully wired here.
-- **Likely the first deployable**, if outbox processing lands here — which brings [§30.8](#308-per-phase-deployment-expectations) into force for the first time (a service actually running on Fargate in `dev`, not just migrations).
+- **Likely the first deployable**, if outbox processing lands here — which brings [§30.8](#308-per-phase-deployment-expectations) into force for the first time (a service actually running on Fargate in `dev`, not just migrations). Not built: PLAN.md's own wording was conditional, no exit criterion named it, and no Phase 6 deliverable required post-commit async work. Deferred to whichever phase actually needs it.
+
+</details>
 
 ### Phase 7: Quests and knowledge
+
+**Current phase.**
 
 Deliver:
 
