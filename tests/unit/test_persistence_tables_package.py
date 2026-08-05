@@ -9,7 +9,8 @@ name, still reachable both from its owning domain module and from the
 package's top-level re-export — so `from dnd_ai.persistence.tables
 import worlds` (or `metadata`) keeps working exactly as it did against the
 monolithic module. 85 tables at the split (Phase 6 entry gates); revision
-057 added the narrative.* domain (9 tables) on top of that baseline.
+057 added the narrative.* domain (9 tables), and revision 061 added the
+interaction.* domain (8 tables), on top of that baseline.
 """
 
 import importlib
@@ -80,6 +81,16 @@ EXPECTED_TABLES = {
         "core.world_time_precisions",
         "core.world_times",
         "core.worlds",
+    ],
+    "interaction": [
+        "interaction.actions",
+        "interaction.check_requests",
+        "interaction.check_results",
+        "interaction.consequences",
+        "interaction.external_messages",
+        "interaction.interaction_types",
+        "interaction.interactions",
+        "interaction.targets",
     ],
     "knowledge": [
         "knowledge.entity_knowledge",

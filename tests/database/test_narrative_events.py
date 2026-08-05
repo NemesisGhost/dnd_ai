@@ -1,11 +1,13 @@
 """narrative.events, event_participants, event_locations, event_causes,
-event_effects, event_observations (revision 057).
+event_effects, event_observations (revisions 057, 062).
 
 Covers: the CTI subtype registration for events, each table's world-agreement
 guard, and the CHECK constraints that don't depend on cross-row lookups
-(event_causes' either-cause/no-self-cause rules, event_effects' at-most-
-one-target rule, event_locations' role vocabulary, event_observations' text
-length). Branch-aware effective history is a separate concern — see
+(event_causes' exactly-one-cause/no-self-cause rules, event_effects'
+at-most-one-target rule, event_locations' role vocabulary,
+event_observations' text length). event_causes.cause_interaction_id
+(revision 062) is covered here too, since it lives on this table. Branch-aware
+effective history is a separate concern — see
 tests/scenario/test_branch_effective_history.py.
 """
 
@@ -21,6 +23,7 @@ from tests.factories import (
     make_dungeon_area,
     make_entity,
     make_event,
+    make_interaction,
     make_location,
     make_session,
     make_timeline,
@@ -314,6 +317,49 @@ def test_an_event_cause_can_be_a_free_text_description(
         ),
         {"e": f.event_id},
     )
+
+
+def test_an_event_cause_can_reference_an_interaction(db_connection: Connection, f: Fixture) -> None:
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+    db_connection.execute(
+        text("INSERT INTO narrative.event_causes (event_id, cause_interaction_id) VALUES (:e, :i)"),
+        {"e": f.event_id, "i": interaction_id},
+    )
+
+
+def test_an_event_cause_cannot_set_both_event_and_interaction(
+    db_connection: Connection, f: Fixture
+) -> None:
+    later_time = make_world_time(db_connection, f.world_id, 200)
+    later_event = make_event(db_connection, f.world_id, f.timeline_id, later_time)
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO narrative.event_causes "
+                "(event_id, cause_event_id, cause_interaction_id) VALUES (:e, :c, :i)"
+            ),
+            {"e": later_event, "c": f.event_id, "i": interaction_id},
+        )
+    assert "ck_event_causes_has_cause" in str(exc.value)
+
+
+def test_an_event_causes_interaction_must_belong_to_the_events_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other Timeline")
+    other_interaction = make_interaction(db_connection, other_timeline, f.world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO narrative.event_causes (event_id, cause_interaction_id) "
+                "VALUES (:e, :i)"
+            ),
+            {"e": f.event_id, "i": other_interaction},
+        )
+    assert "belongs to timeline" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

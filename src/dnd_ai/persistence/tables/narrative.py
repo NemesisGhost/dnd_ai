@@ -249,20 +249,31 @@ event_causes = Table(
         ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
     ),
     Column(
+        "cause_interaction_id",
+        UUID(),
+        ForeignKey("interaction.interactions.interaction_id", ondelete="SET NULL"),
+        comment=(
+            "The interaction that caused this event, when it was a recorded "
+            "interaction rather than a prior event or an undocumented decision/"
+            "condition. Closes the placeholder revision 057's docstring recorded."
+        ),
+    ),
+    Column(
         "cause_description",
         Text(),
         comment=(
-            "Free-text placeholder for interaction/decision/condition causes "
-            "until interaction.interactions exists (Phase 6 increment 2) to "
-            "reference instead — same pattern as "
-            "knowledge.entity_knowledge.learned_source (revision 041)."
+            "Free-text placeholder for undocumented decisions or conditions — "
+            "causes that are neither a prior event (cause_event_id) nor a "
+            "recorded interaction (cause_interaction_id), e.g. a GM ruling or "
+            "an ambient world condition."
         ),
     ),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
     schema="narrative",
     comment=(
-        "Links an event to a prior event, or a free-text decision/condition, "
-        "that caused it (docs/DOMAIN_MODEL.md §13.4). Append-only."
+        "Links an event to a prior event, a recorded interaction, or a "
+        "free-text decision/condition, that caused it (docs/DOMAIN_MODEL.md "
+        "§13.4). Exactly one of the three is set. Append-only."
     ),
 )
 
@@ -271,6 +282,11 @@ Index(
     "ix_event_causes_cause_event_id",
     event_causes.c.cause_event_id,
     postgresql_where=event_causes.c.cause_event_id.isnot(None),
+)
+Index(
+    "ix_event_causes_cause_interaction_id",
+    event_causes.c.cause_interaction_id,
+    postgresql_where=event_causes.c.cause_interaction_id.isnot(None),
 )
 
 event_effects = Table(
