@@ -16,6 +16,7 @@ phase's exit criteria needs more than one — a multi-action command can be
 added if a caller needs it rather than built ahead of that need.
 """
 
+import json
 import uuid
 from dataclasses import dataclass, field
 
@@ -228,7 +229,23 @@ def _open_area_connection(
     timeline_id: uuid.UUID,
     area_connection_id: uuid.UUID,
     event_id: uuid.UUID,
+    world_time_id: uuid.UUID,
 ) -> None:
+    """Update the typed current state and record the narrative.event_effects
+    row for it, together — event_effects' own comment (revision 057)
+    requires "common effects should also update the corresponding typed
+    state table in the same transaction"; this is that pairing for the one
+    reaction resolve_check knows how to produce today.
+    """
+    previous_status_code = connection.execute(
+        text("""
+            SELECT cs.code FROM campaign.area_connection_state acs
+            JOIN campaign.connection_statuses cs ON cs.connection_status_id = acs.connection_status_id
+            WHERE acs.timeline_id = :timeline AND acs.area_connection_id = :connection
+        """),
+        {"timeline": timeline_id, "connection": area_connection_id},
+    ).scalar()
+
     open_status_id = lookup_id(
         connection, "campaign", "connection_statuses", "connection_status_id", "open"
     )
@@ -247,6 +264,22 @@ def _open_area_connection(
             "connection": area_connection_id,
             "status": open_status_id,
             "event": event_id,
+        },
+    )
+
+    connection.execute(
+        text("""
+            INSERT INTO narrative.event_effects
+                (event_id, target_area_connection_id, target_component, previous_value,
+                 new_value, effective_world_time_id)
+            VALUES (:event, :connection, 'connection_status_id', :previous, :new, :world_time)
+        """),
+        {
+            "event": event_id,
+            "connection": area_connection_id,
+            "previous": json.dumps(previous_status_code),
+            "new": json.dumps("open"),
+            "world_time": world_time_id,
         },
     )
 
@@ -322,6 +355,7 @@ def resolve_check(
             timeline_id=context.timeline_id,
             area_connection_id=target_area_connection_id,
             event_id=event_id,
+            world_time_id=context.world_time_id,
         )
 
     return ResolveCheckResult(

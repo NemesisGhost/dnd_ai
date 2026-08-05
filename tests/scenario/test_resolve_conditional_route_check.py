@@ -196,6 +196,17 @@ def test_a_successful_lockpick_check_opens_the_route_and_records_an_event(
         ).scalar()
         assert participant == f.actor_id
 
+        effect = verify.execute(
+            text("""
+                SELECT target_component, previous_value, new_value
+                FROM narrative.event_effects WHERE event_id = :e
+            """),
+            {"e": resolve_result.event_id},
+        ).one()
+        assert effect.target_component == "connection_status_id"
+        assert effect.previous_value is None
+        assert effect.new_value == "open"
+
     state = _connection_state(postgres_engine, f)
     assert state is not None
     status_code, last_event_id = state
