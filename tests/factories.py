@@ -872,13 +872,15 @@ def make_check_request(
     difficulty: int = 10,
     advantage_state: str = "normal",
     stakes: str | None = None,
+    target_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO interaction.check_requests
                 (action_id, actor_entity_id, check_kind, ability_id, skill_id, difficulty,
-                 advantage_state, stakes)
-            VALUES (:action, :actor, :kind, :ability, :skill, :difficulty, :advantage, :stakes)
+                 advantage_state, stakes, target_id)
+            VALUES (:action, :actor, :kind, :ability, :skill, :difficulty, :advantage, :stakes,
+                    :target)
             RETURNING check_request_id
         """),
         {
@@ -890,6 +892,7 @@ def make_check_request(
             "difficulty": difficulty,
             "advantage": advantage_state,
             "stakes": stakes,
+            "target": target_id,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

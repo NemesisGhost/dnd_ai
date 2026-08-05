@@ -200,8 +200,9 @@ area_connections = Table(
     Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
     Column("description", Text()),
     # Added by revision 047: the descriptive half of "conditional routes"
-    # (docs/PLAN.md §9.2). Evaluating the condition is deferred — see the
-    # column comments and PLAN.md Phase 6's first-time obligations.
+    # (docs/PLAN.md §9.2). Structured, machine-checkable evaluation for the
+    # check-gated case arrived in revision 064 — see required_check_kind
+    # below and world.conditional_route_requirement_satisfied().
     Column(
         "is_conditional",
         Boolean(),
@@ -209,9 +210,9 @@ area_connections = Table(
         server_default=text("false"),
         comment=(
             "True for a conditional route (docs/PLAN.md §9.2) — traversable only when "
-            "some condition holds. Descriptive only: evaluating the condition requires "
-            "interaction/check resolution (Phase 6) or quest state (Phase 7), neither "
-            "of which exists yet. See PLAN.md Phase 6's first-time obligations."
+            "some condition holds. required_check_kind (revision 064), when set, makes "
+            "a check-gated condition machine-evaluable; quest-gated or state-gated "
+            "conditions still rely on condition_description alone (Phase 7)."
         ),
     ),
     Column(
@@ -228,6 +229,41 @@ area_connections = Table(
         ),
     ),
     *_timestamps(),
+    # Added by revision 064, once interaction.check_requests existed to
+    # reference. Structured, machine-checkable alternative to
+    # condition_description for a route gated purely by an interaction
+    # check — see world.conditional_route_requirement_satisfied().
+    Column(
+        "required_check_kind",
+        Text(),
+        comment=(
+            "When set, the machine-checkable form of this route's condition: "
+            "ability_check, skill_check, or saving_throw. NULL for a conditional "
+            'route whose condition is not simply "pass a check" (quest-gated, '
+            "state-gated, ...) — condition_description remains the source of truth "
+            "for those. See world.conditional_route_requirement_satisfied()."
+        ),
+    ),
+    Column(
+        "required_ability_id",
+        UUID(),
+        ForeignKey("rules.abilities.ability_id", ondelete="RESTRICT"),
+        comment=(
+            "Set for required_check_kind IN (ability_check, saving_throw). NULL for "
+            "skill_check, where the governing ability is reached through "
+            "required_skill_id -> rules.skills.ability_id instead."
+        ),
+    ),
+    Column(
+        "required_skill_id",
+        UUID(),
+        ForeignKey("rules.skills.skill_id", ondelete="RESTRICT"),
+        comment=(
+            "Set only for required_check_kind = skill_check — see "
+            "ck_area_connections_check_requirement_reference."
+        ),
+    ),
+    Column("required_difficulty", NONNEGATIVE_INTEGER),
     schema="world",
     comment=(
         "A link between two dungeon areas (docs/DOMAIN_MODEL.md §9.6). Not an entity — "
@@ -241,6 +277,16 @@ area_connections = Table(
 Index("ix_area_connections_from_dungeon_area_id", area_connections.c.from_dungeon_area_id)
 Index("ix_area_connections_to_dungeon_area_id", area_connections.c.to_dungeon_area_id)
 Index("ix_area_connections_connection_type_id", area_connections.c.connection_type_id)
+Index(
+    "ix_area_connections_required_ability_id",
+    area_connections.c.required_ability_id,
+    postgresql_where=area_connections.c.required_ability_id.isnot(None),
+)
+Index(
+    "ix_area_connections_required_skill_id",
+    area_connections.c.required_skill_id,
+    postgresql_where=area_connections.c.required_skill_id.isnot(None),
+)
 
 area_features = Table(
     "area_features",

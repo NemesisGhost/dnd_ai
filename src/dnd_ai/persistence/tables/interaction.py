@@ -263,6 +263,20 @@ check_requests = Table(
     Column("modifiers", JSONB()),
     Column("stakes", Text()),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 064, closing a modeling gap: nothing previously said
+    # which of an action's (possibly several) targets a given check resolves.
+    Column(
+        "target_id",
+        UUID(),
+        ForeignKey("interaction.targets.target_id", ondelete="SET NULL"),
+        comment=(
+            "The specific target (of the same action) this check resolves, when the "
+            "check is about a specific target rather than the action in the "
+            "abstract. NULL when there is no single relevant target. Must belong to "
+            "the same action_id as this check request — enforced by "
+            "interaction.enforce_check_request_target_action()."
+        ),
+    ),
     schema="interaction",
     comment=(
         "A required rules resolution for an action: actor, ability or skill, "
@@ -282,6 +296,11 @@ Index(
     "ix_check_requests_skill_id",
     check_requests.c.skill_id,
     postgresql_where=check_requests.c.skill_id.isnot(None),
+)
+Index(
+    "ix_check_requests_target_id",
+    check_requests.c.target_id,
+    postgresql_where=check_requests.c.target_id.isnot(None),
 )
 
 check_results = Table(
