@@ -1,6 +1,6 @@
 # Phase 5 Remaining Issues
 
-> **REOPENED (2026-08-04).** A twelfth review of merged PR #14 found the
+> **CLOSED (2026-08-05).** A twelfth review of merged PR #14 found the
 > eleventh pass's own `scripts/verify.sh --help` claim did not hold up to its
 > actual exit code, the worker outcome protocol still let a naturally exited
 > worker with an empty outcome channel pass as success, `_worker_main`'s
@@ -21,8 +21,11 @@
 > Phase 5 production correctness and the five-invariant concurrency suite
 > remain complete throughout; no schema, migration, or production-code change
 > was needed or made. Formal verification and the Phase 6 correctness entry
-> gate are both reopened pending this pass's own final-head CI confirmation —
-> see [PHASE5_VERIFICATION.md § Current formal-closeout
+> gate are both closed: the twelfth pass's [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)
+> push-triggered GitHub Actions run
+> [`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981)
+> passed both jobs on its first attempt for implementation commit `f3ed98a`
+> — see [PHASE5_VERIFICATION.md § Current formal-closeout
 > status](PHASE5_VERIFICATION.md#current-formal-closeout-status).
 >
 > **Previously closed (2026-08-04), reopened above.** An eleventh review of
@@ -613,12 +616,11 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production/concurrency resolved; formal test-infrastructure closeout reopened, pending final-head CI)
+## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified. Production and concurrency-verification blockers are closed. The
-test-infrastructure blocker is reopened by the twelfth review below, pending
-its own final-head CI confirmation:
+verified. All production, concurrency-verification, and test-infrastructure
+blockers are closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -666,10 +668,12 @@ its own final-head CI confirmation:
    pass as success, `_worker_main`'s cleanup was not itself independently
    failure-safe, and the IPC redesign still relied on an abandonable wrapper
    thread to bound `multiprocessing.Queue`'s own unbounded `join_thread()`.
-   **Reopened, pending the twelfth pass's own final-head CI confirmation** —
-   the twelfth pass fixed the verification tooling, made the worker outcome
-   protocol total, made worker cleanup independently failure-safe, and
-   replaced the queue-based IPC with `multiprocessing.Pipe`. See
+   **Resolved** by the twelfth pass's verification-tooling fix, total worker
+   outcome protocol, independently failure-safe worker cleanup, and
+   `multiprocessing.Pipe`-based IPC. Confirmed by PR #15's push-triggered CI
+   run
+   [`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981),
+   which passed both jobs on its first attempt. See
    [PHASE5_VERIFICATION.md § Twelfth exit review](PHASE5_VERIFICATION.md#twelfth-exit-review-verification-tooling-correctness-worker-outcome-protocol-totality-and-pipe-based-ipc-2026-08-04).
 
 ## Fourth review baseline and scope
