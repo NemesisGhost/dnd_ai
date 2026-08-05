@@ -1,6 +1,6 @@
 # Phase 5 Remaining Issues
 
-> **REOPENED (2026-08-04).** An eleventh review of the tenth pass's merged
+> **CLOSED (2026-08-04).** An eleventh review of the tenth pass's merged
 > commit found the redesigned worker process could still report false
 > success and silently discard cleanup failures: `_worker_main` marked an
 > outcome `"committed"` before `connection.commit()` was ever attempted, a
@@ -22,8 +22,13 @@
 > documented entry point — fixed first, then used for the remainder of this
 > pass. Phase 5 production correctness remained complete throughout; no
 > schema, migration, or production-code change was needed or made. Formal
-> verification and the Phase 6 correctness entry gate remain open until this
-> pass's own push-triggered CI run is confirmed green and recorded here.
+> verification and the Phase 6 correctness entry gate are both closed: the
+> eleventh pass's PR #14 push-triggered GitHub Actions run
+> [`30964183959`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30964183959)
+> failed once on an isolated, unrelated environment flake (an SSL connection
+> drop during an unrelated test, ten minutes after this file's own 39 tests
+> had already passed) and passed completely — both jobs, every step — on a
+> same-commit rerun.
 >
 > Original framing, preserved below as the review record: Phase 5 was merged
 > to `main` by [PR #5](https://github.com/NemesisGhost/dnd_ai/pull/5) at merge
@@ -442,12 +447,11 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (production blockers resolved; formal verification open)
+## At a glance (all blockers resolved)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
-verified. The production and primary concurrency-verification blockers are
-closed; the helper containment blocker below remains open pending this
-pass's own CI confirmation:
+verified. All production, concurrency-verification, and test-infrastructure
+blockers are closed:
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -484,9 +488,13 @@ pass's own CI confirmation:
    report false success (a commit failure reported as `"committed"`) and
    silently discard cleanup failures (an outcome nobody explicitly consumed
    could be lost, and a controller-side verification error could replace an
-   already-propagating exception). **Locally resolved, pending CI** by the
-   eleventh pass's worker-outcome protocol fix, controller-side
-   failure-safe cleanup, and completed process/IPC lifecycle handling. See
+   already-propagating exception). **Resolved** by the eleventh pass's
+   worker-outcome protocol fix, controller-side failure-safe cleanup, and
+   completed process/IPC lifecycle handling. Confirmed by PR #14's
+   push-triggered CI run
+   [`30964183959`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30964183959),
+   which passed both jobs completely on a same-commit rerun after an
+   isolated, unrelated environment flake on its first attempt. See
    [PHASE5_VERIFICATION.md § Eleventh exit review](PHASE5_VERIFICATION.md#eleventh-exit-review-worker-outcome-protocol-controller-cleanup-and-processipc-hardening-2026-08-04).
 
 ## Fourth review baseline and scope
