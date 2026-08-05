@@ -345,14 +345,12 @@ def _worker_main(
     watcher thread still alive after its own bounded join is itself
     recorded as a cleanup problem.
 
-    Publishing that outcome is this worker's one mandatory duty: a worker
-    that exits — for any reason other than being forcibly stopped by the
-    controller before it got the chance — without ever publishing one is a
-    protocol failure the controller detects and reports on its own (see
-    `_BackgroundStatement._finalize_worker_outcome`); nothing here can
-    single-handedly guarantee that publish succeeds, since if the one
-    channel for reporting it is itself what failed, there is no second
-    channel left to report that failure through.
+    Publishing that outcome is this worker's one mandatory duty — see the
+    class docstring and `_BackgroundStatement._finalize_worker_outcome`
+    for how the controller enforces that. Nothing here can single-handedly
+    guarantee the publish itself succeeds, since if the one channel for
+    reporting a failure is what failed, there is no second channel left to
+    report that failure through.
 
     None of this running to completion is what makes the controller's own
     guarantee hold: if this process does not respond, or does not stop, the
@@ -530,9 +528,14 @@ class _BackgroundStatement:
 
     `__exit__` guarantees that by the time it returns or raises, the worker
     process is provably no longer running, and that PostgreSQL has actually
-    noticed — checked through a fresh connection, not assumed from the
-    process alone. If the process is still alive when the `with` block
-    exits, `__exit__` attempts, in order: `pg_terminate_backend()`, then
+    noticed — checked through a fresh connection on every path, not assumed
+    from the process alone and not only when the process happened to still
+    be alive when the `with` block exited (Phase 5 thirteenth exit review
+    §2): a worker that already exited on its own is verified in `__exit__`
+    directly; a worker still alive is verified as the last step of
+    `_force_stop` below. Exactly one of those two runs per `__exit__` call,
+    never both. If the process is still alive when the `with` block exits,
+    `__exit__` attempts, in order: `pg_terminate_backend()`, then
     `pg_cancel_backend()` (both through an isolated, mockable
     `_send_signal` seam); driver-native cancellation via psycopg's
     `cancel_safe()`, relayed to a watcher thread inside the worker process
@@ -548,7 +551,15 @@ class _BackgroundStatement:
     that process's own resources are reclaimed, but does not by itself
     guarantee PostgreSQL has noticed, since a backend blocked inside a call
     that never touches its client socket (`pg_sleep`, unlike a lock wait)
-    can keep running until it next tries to communicate.
+    can keep running until it next tries to communicate. `_force_stop`
+    reports which of these actually ended the process — a graceful
+    PostgreSQL/driver mechanism, or this controller's own forced
+    `terminate()`/`kill()` — since only the latter legitimately excuses a
+    missing worker outcome below; treating "was alive when `__exit__`
+    began" as proof of forced termination, regardless of how containment
+    was actually achieved, previously let graceful cancellation followed by
+    a failed outcome publish report false success (Phase 5 thirteenth exit
+    review §1).
 
     Every step's outcome is collected, never silently discarded. The
     worker's own statement, commit, rollback, invalidation, close, and
@@ -558,19 +569,19 @@ class _BackgroundStatement:
     problem after an otherwise-successful commit still fails the caller
     rather than being silently absorbed. Publishing that outcome is the
     worker's one mandatory duty, and this class treats it as total, not
-    best-effort (Phase 5 twelfth exit review §2): a worker that exits on
-    its own without ever publishing one is reported as a protocol failure,
-    not silently treated as success, and a worker that somehow publishes
-    more than one is reported the same way; the one legitimate "no
-    outcome" case is a worker the controller itself terminated before it
-    could publish anything, which is recorded as such rather than
-    conflated with either failure mode (see `_finalize_worker_outcome`).
-    Whatever the caller does not explicitly consume via
-    `resume_and_get_outcome` is still drained and processed by `__exit__`,
-    so an outcome nobody read is never lost. If an exception was already
-    propagating out of the `with` block, every cleanup problem is attached
-    to it via `add_note`; if nothing was already propagating, cleanup
-    problems are raised directly and become the `with` block's own
+    best-effort: a worker that exits on its own without ever publishing one
+    is reported as a protocol failure, not silently treated as success, and
+    a worker that somehow publishes more than one is reported the same way;
+    the one legitimate "no outcome" case is a worker this controller itself
+    *forcibly terminated* before it could publish anything — not merely a
+    worker that happened to still be alive at some point — which is
+    recorded as such rather than conflated with either failure mode (see
+    `_finalize_worker_outcome`). Whatever the caller does not explicitly
+    consume via `resume_and_get_outcome` is still drained and processed by
+    `__exit__`, so an outcome nobody read is never lost. If an exception was
+    already propagating out of the `with` block, every cleanup problem is
+    attached to it via `add_note`; if nothing was already propagating,
+    cleanup problems are raised directly and become the `with` block's own
     failure. A `with` block backed by this class therefore never returns
     or raises with an owned worker, IPC channel, or process object still
     alive/open — the guarantee no earlier thread-based design in this
@@ -625,6 +636,15 @@ class _BackgroundStatement:
         self._worker_confirmed_stopped = False
         self._outcome_consumed = False
         self.outcome_protocol_state = "pending"
+        # Failures closing the controller's own redundant copies of the
+        # ends handed off to the worker (see __enter__) are owned by this
+        # instance rather than __enter__ itself: a redundant-copy close
+        # failure does not mean the worker is broken, so __enter__ does
+        # not fail over it when the handshake otherwise succeeds — but it
+        # must still be reported somewhere, not silently dropped (Phase 5
+        # thirteenth exit review §4). __exit__ folds these into its own
+        # problems unconditionally.
+        self._startup_cleanup_problems: list[tuple[str, Exception]] = []
 
     @property
     def backend_pid(self) -> int:
@@ -704,21 +724,25 @@ class _BackgroundStatement:
                 )
             raise construction_error from exc
 
+        # Ownership begins at construction, not only once start() has
+        # confirmed success (Phase 5 thirteenth exit review §3): a
+        # Process object whose start() raises is not always a no-op that
+        # never touched the OS — start() can fail after partially (or
+        # fully) launching the child, and this instance must own whatever
+        # __enter__'s except block below discovers, rather than treating
+        # every start() failure as automatically nothing-to-clean-up.
+        self._process = process
+
         try:
             process.start()
         except Exception as exc:  # noqa: BLE001 - reported directly, not swallowed
-            # A Process object whose start() raised was never actually
-            # spawned as an OS process - is_alive()/terminate()/join()/
-            # close() are all invalid on it, so it must never be stored or
-            # treated as a live resource needing reaping.
             start_problems: list[tuple[str, Exception]] = []
+            self._cleanup_process_after_start_failure(process, start_problems)
             self._close_ipc_channels(start_problems)
             start_error = RuntimeError(f"background worker process failed to start: {exc}")
             for label, cleanup_exc in start_problems:
                 start_error.add_note(f"cleanup also reported a problem ({label}): {cleanup_exc}")
             raise start_error from exc
-
-        self._process = process
 
         # The worker process now has its own duplicated copies of
         # handshake_send/outcome_send/control_recv; this side no longer
@@ -727,39 +751,110 @@ class _BackgroundStatement:
         # anything produces a genuine EOF on the read ends below instead
         # of poll() only ever timing out. Connection.close() is idempotent
         # (a no-op the second time), so closing these same three again in
-        # final cleanup later is always safe.
-        startup_problems: list[tuple[str, Exception]] = []
+        # final cleanup later is always safe. A close failure here does
+        # not by itself mean the worker is broken (these are redundant
+        # copies the worker never uses), so it does not fail __enter__
+        # over it — but it must not be silently dropped either (Phase 5
+        # thirteenth exit review §4): it is owned by this instance and
+        # __exit__ reports it, chosen over failing/reaping the worker
+        # solely because a copy the worker itself never touches failed to
+        # close on this side.
         _attempt(
-            startup_problems, "close handshake_send (controller copy)", self._handshake_send.close
+            self._startup_cleanup_problems,
+            "close handshake_send (controller copy)",
+            self._handshake_send.close,
         )
-        _attempt(startup_problems, "close outcome_send (controller copy)", self._outcome_send.close)
-        _attempt(startup_problems, "close control_recv (controller copy)", self._control_recv.close)
+        _attempt(
+            self._startup_cleanup_problems,
+            "close outcome_send (controller copy)",
+            self._outcome_send.close,
+        )
+        _attempt(
+            self._startup_cleanup_problems,
+            "close control_recv (controller copy)",
+            self._control_recv.close,
+        )
 
         received, handshake_message = _poll_and_recv(
             self._handshake_recv, self._handshake_timeout_seconds
         )
         if not received:
-            self._reap(startup_problems)
+            self._reap(self._startup_cleanup_problems)
             error = TimeoutError(
                 f"background worker did not complete its startup handshake within "
                 f"{self._handshake_timeout_seconds}s (timed out, or its handshake "
                 "channel closed without sending one)"
             )
-            for label, exc in startup_problems:
+            for label, exc in self._startup_cleanup_problems:
                 error.add_note(f"startup cleanup also reported a problem ({label}): {exc}")
             raise error from None
 
         status, payload, handshake_problems = handshake_message
 
         if status == "failed":
-            self._reap(startup_problems)
+            self._reap(self._startup_cleanup_problems)
             error = RuntimeError(f"background worker failed to start: {payload}")
-            for label, exc in [*handshake_problems, *startup_problems]:
+            for label, exc in [*handshake_problems, *self._startup_cleanup_problems]:
                 error.add_note(f"startup cleanup also reported a problem ({label}): {exc}")
             raise error
 
         self._backend_pid_value = payload
         return self
+
+    def _cleanup_process_after_start_failure(
+        self, process: Any, problems: list[tuple[str, Exception]]
+    ) -> None:
+        """`process.start()` raised. Classifies whether that left a
+        genuinely live child behind before deciding how to clean up
+        (Phase 5 thirteenth exit review §3): `pid` and `is_alive()` are
+        both safe to call regardless of whether the process ever started
+        (returning `None`/`False` rather than raising, confirmed
+        empirically), so they are what this checks — not an assumption
+        that a raised `start()` always means nothing was spawned.
+
+        A genuinely live child (partial initialization can leave one even
+        though `start()` itself raised) is terminated, escalated to
+        `kill()` if needed, and reaped with bounded joins before its
+        `Process` object is closed — the same fallback shape `_force_stop`
+        uses. A genuinely never-started one has its `Process` object
+        closed directly: `terminate()`/`kill()`/`join()` are invalid
+        operations on it, so calling them would itself raise."""
+        try:
+            pid = process.pid
+        except Exception:  # noqa: BLE001 - treated as "could not determine", not fatal
+            pid = None
+        try:
+            alive = process.is_alive()
+        except Exception:  # noqa: BLE001 - treated as "could not determine", not fatal
+            alive = False
+
+        if pid is None and not alive:
+            # Never started: trivially "confirmed stopped" (there was
+            # never anything running), same as the partially-started
+            # branch below once it reaps successfully — callers should be
+            # able to rely on worker_confirmed_stopped uniformly
+            # regardless of which branch this method took.
+            self._worker_confirmed_stopped = True
+            _attempt(problems, "close process object", process.close)
+            return
+
+        _attempt(problems, "terminate (partial start)", process.terminate)
+        process.join(timeout=self._signal_join_seconds)
+        if process.is_alive():
+            _attempt(problems, "kill (partial start)", process.kill)
+            process.join(timeout=self._signal_join_seconds)
+        if process.is_alive():
+            problems.append(
+                (
+                    "reap (partial start)",
+                    RuntimeError(
+                        "process survived forcible termination after a partial start failure"
+                    ),
+                )
+            )
+        else:
+            self._worker_confirmed_stopped = True
+            _attempt(problems, "close process object", process.close)
 
     def _reap(self, problems: list[tuple[str, Exception]]) -> None:
         """Unconditionally terminates and joins a worker process that must
@@ -1010,13 +1105,39 @@ class _BackgroundStatement:
         assert self._control_send is not None
         self._control_send.send("cancel")
 
-    def _force_stop(self) -> list[tuple[str, Exception]]:
+    def _force_stop(self) -> tuple[list[tuple[str, Exception]], str]:
         """Layered attempt to make the worker process stop — see the class
         docstring for the full fallback chain. Every layer is followed by a
         bounded join verifying the process actually exited, not just that a
         signal was sent or accepted. The final layer (forcible OS-level
         termination) is unconditionally guaranteed to succeed, so this
-        method never returns while the process is still alive."""
+        method never returns while the process is still alive.
+
+        Returns `(problems, containment_reason)`. `containment_reason` is
+        one of:
+
+        - `"graceful"`: a PostgreSQL/driver-level mechanism (an SQL
+          signal, driver-native cancellation, or the `lock_timeout`
+          backstop) ended the process on its own, without this method
+          ever calling `terminate()`/`kill()`.
+        - `"forced"`: this method's own `terminate()`/`kill()` call is
+          what actually ended the process.
+        - `"survived"`: even forced termination did not end the process
+          — an OS-level guarantee violation everywhere else in this class
+          assumes cannot happen.
+
+        Distinguishing these matters because only `"forced"` legitimately
+        excuses a missing worker outcome (Phase 5 thirteenth exit review
+        §1): a worker stopped gracefully had every opportunity to reach
+        its own outcome-publication step (see `_worker_main`) before
+        exiting, so a missing outcome afterward is a genuine protocol
+        failure, not an artifact of forcible termination cutting the
+        worker off mid-flight. The previous version of this class
+        conflated the two — `__exit__` treated the worker merely being
+        *alive* when the `with` block exited as proof of forced
+        termination, regardless of how containment was actually
+        achieved, which let graceful cancellation followed by a failed
+        outcome publish report false success."""
         assert self._process is not None
         problems: list[tuple[str, Exception]] = []
 
@@ -1071,7 +1192,14 @@ class _BackgroundStatement:
                     )
                 )
 
-        if self._process.is_alive():
+        # Everything above is "graceful": a PostgreSQL/driver mechanism
+        # that leaves the worker's own outcome-publication step fully
+        # reachable. Only forcibly ending the OS process itself, below,
+        # can legitimately cut the worker off before it publishes.
+        needed_forced_termination = self._process.is_alive()
+        containment_reason = "graceful"
+
+        if needed_forced_termination:
             # Unlike every mechanism above, this cannot fail to end the
             # process regardless of what it is doing — a real OS process,
             # unlike a Python thread, can always be forcibly reclaimed by
@@ -1094,6 +1222,7 @@ class _BackgroundStatement:
                         ),
                     )
                 )
+                containment_reason = "survived"
             else:
                 problems.append(
                     (
@@ -1103,6 +1232,7 @@ class _BackgroundStatement:
                         ),
                     )
                 )
+                containment_reason = "forced"
             # Ending our own client-side process guarantees *our* resources
             # are reclaimed, but does not by itself guarantee PostgreSQL has
             # noticed: a backend blocked inside a call that never touches
@@ -1124,7 +1254,7 @@ class _BackgroundStatement:
             )
 
         self._verify_backend_gone(problems)
-        return problems
+        return problems, containment_reason
 
     def _terminate_backend_unconditionally(self) -> None:
         """A real, always-executed `pg_terminate_backend()` call — distinct
@@ -1220,11 +1350,36 @@ class _BackgroundStatement:
         )
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
-        problems: list[tuple[str, Exception]] = []
+        # Startup-cleanup problems __enter__ chose not to fail/reap over
+        # (Phase 5 thirteenth exit review §4) are owned by this instance
+        # and reported here, exactly once, on every path — this is the
+        # only place they are folded in.
+        problems: list[tuple[str, Exception]] = list(self._startup_cleanup_problems)
+
         worker_was_forcibly_stopped = False
         if self._process is not None and self._process.is_alive():
-            worker_was_forcibly_stopped = True
-            problems.extend(self._force_stop())
+            force_stop_problems, containment_reason = self._force_stop()
+            problems.extend(force_stop_problems)
+            # Only a genuine terminate()/kill() by this controller excuses
+            # a missing outcome (Phase 5 thirteenth exit review §1) —
+            # "graceful" and "survived" both leave the worker's own
+            # outcome-publication step reachable (or, for "survived",
+            # already reported as its own distinct problem above), so
+            # neither is treated as the legitimate forced-termination
+            # exemption in _finalize_worker_outcome below.
+            worker_was_forcibly_stopped = containment_reason == "forced"
+        elif self._process is not None:
+            # The worker already exited on its own by the time __exit__
+            # began — natural completion, not the forced-stop path, which
+            # already verifies internally. That alone does not prove
+            # PostgreSQL has already noticed the dropped connection (see
+            # _verify_backend_gone), so verify it here instead: every
+            # successfully entered helper's backend is verified through a
+            # fresh connection on every path, exactly once, before
+            # __exit__ returns or raises (Phase 5 thirteenth exit review
+            # §2) — not inferred merely from the Python process having
+            # exited or from an outcome having arrived.
+            self._verify_backend_gone(problems)
 
         # Whether the worker exited on its own or was just forcibly
         # stopped, account for its one required outcome: a statement,
@@ -1365,14 +1520,10 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
         first.begin()
         first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
 
+        blocked = _BackgroundStatement(engine, "SELECT pg_advisory_xact_lock(:k)", {"k": lock_key})
         worker_pid: int | None = None
         try:
-            with (
-                pytest.raises(_SentinelFailure),
-                _BackgroundStatement(
-                    engine, "SELECT pg_advisory_xact_lock(:k)", {"k": lock_key}
-                ) as blocked,
-            ):
+            with pytest.raises(_SentinelFailure), blocked:
                 blocked.wait_until_blocked(first, "the sentinel-blocked worker")
                 worker_pid = blocked.backend_pid
                 raise _SentinelFailure("deliberate failure while the worker is still blocked")
@@ -1384,9 +1535,11 @@ def test_background_statement_forced_cleanup_terminates_a_genuinely_blocked_work
             # assertion above ever fails, `first` (and the advisory lock it
             # holds) must still be released rather than leaking into later
             # tests. __exit__ should already have terminated the worker via
-            # the real, primary signal path in this test — this is a
-            # backstop, not the primary proof point.
+            # the real, primary signal path in this test — _emergency_teardown
+            # is a genuinely independent backstop (not __exit__() again),
+            # not the primary proof point.
             first.rollback()
+            _emergency_teardown(blocked, engine)
 
 
 @pytest.mark.parametrize("mode", ["returns_false", "raises"])
@@ -1419,6 +1572,7 @@ def test_background_statement_falls_back_to_driver_native_cancel_when_sql_signal
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
             first.rollback()
+            _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_falls_back_to_lock_timeout_backstop_when_every_active_mechanism_fails(
@@ -1460,6 +1614,7 @@ def test_background_statement_falls_back_to_lock_timeout_backstop_when_every_act
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
             first.rollback()
+            _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_forcibly_terminates_the_worker_and_preserves_the_original_exception_when_nothing_else_stops_it(
@@ -1490,27 +1645,31 @@ def test_background_statement_forcibly_terminates_the_worker_and_preserves_the_o
     monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
     monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with pytest.raises(_SentinelFailure) as excinfo, blocked:
-        # No wait_until_blocked here: pg_sleep never reports wait_event_type
-        # 'Lock', so there is nothing to poll for — the worker starts
-        # sleeping essentially immediately after __enter__ returns (which
-        # itself only returns once the connection, its lock_timeout, and
-        # its backend pid are all established).
-        raise _SentinelFailure("deliberate failure while nothing can stop the worker early")
+    try:
+        with pytest.raises(_SentinelFailure) as excinfo, blocked:
+            # No wait_until_blocked here: pg_sleep never reports
+            # wait_event_type 'Lock', so there is nothing to poll for —
+            # the worker starts sleeping essentially immediately after
+            # __enter__ returns (which itself only returns once the
+            # connection, its lock_timeout, and its backend pid are all
+            # established).
+            raise _SentinelFailure("deliberate failure while nothing can stop the worker early")
 
-    # __exit__ has already returned by this point. Everything below is
-    # independent proof that containment is complete, not part of making
-    # cleanup happen — there is no join() or process manipulation here.
-    assert isinstance(excinfo.value, _SentinelFailure), (
-        "the original sentinel failure must still be what propagates"
-    )
-    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
-    assert "forcibly terminated" in notes.lower(), (
-        f"expected the forced-termination problem to be reported on the propagated "
-        f"exception via add_note, got notes: {notes!r}"
-    )
-    assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
-    _assert_backend_eventually_gone(engine, blocked.backend_pid)
+        # __exit__ has already returned by this point. Everything below is
+        # independent proof that containment is complete, not part of making
+        # cleanup happen — there is no join() or process manipulation here.
+        assert isinstance(excinfo.value, _SentinelFailure), (
+            "the original sentinel failure must still be what propagates"
+        )
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "forcibly terminated" in notes.lower(), (
+            f"expected the forced-termination problem to be reported on the propagated "
+            f"exception via add_note, got notes: {notes!r}"
+        )
+        assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
+        _assert_backend_eventually_gone(engine, blocked.backend_pid)
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_cleanup_failure_fails_the_test_when_no_original_exception(
@@ -1535,24 +1694,61 @@ def test_background_statement_cleanup_failure_fails_the_test_when_no_original_ex
     monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("returns_false"))
     monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with pytest.raises(RuntimeError, match="forcibly terminated"), blocked:
-        pass  # No exception here: __exit__ not raising is the only way this test can fail.
+    try:
+        with pytest.raises(RuntimeError, match="forcibly terminated"), blocked:
+            pass  # No exception here: __exit__ not raising is the only way this test can fail.
 
-    assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
-    _assert_backend_eventually_gone(engine, blocked.backend_pid)
+        assert blocked.worker_confirmed_stopped, "the worker process must not survive __exit__"
+        _assert_backend_eventually_gone(engine, blocked.backend_pid)
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
-def _ensure_background_statement_torn_down(blocked: "_BackgroundStatement") -> None:
-    """Safety net for tests that call `__enter__()` directly, bypassing the
-    `with` statement that would otherwise guarantee `__exit__` runs. If
-    `__enter__` unexpectedly does not raise — the primary assertions in
-    the test that already ran will have failed it by this point — this
-    still reaps whatever worker process and IPC channels it left behind,
-    rather than leaking a live worker and its held PostgreSQL connection
-    into later tests. Never invoked, and never needed, when `__enter__`
-    behaves the way every assertion in these tests expects."""
-    if blocked._process is not None and not blocked.worker_confirmed_stopped:
-        blocked.__exit__(None, None, None)
+def _emergency_teardown(blocked: "_BackgroundStatement", engine: Engine) -> None:
+    """Last-resort cleanup for `_BackgroundStatement` regression tests,
+    called from a test's own `finally` block after its assertions about
+    the helper's contract have already run (Phase 5 thirteenth exit
+    review §5). Deliberately never calls `blocked.__exit__()`,
+    `blocked._force_stop()`, or any other `_BackgroundStatement` method
+    that is itself part of what many of these tests exercise: relying on
+    the implementation under test to clean up after itself would let a
+    genuinely broken implementation silently pass — leaking a live
+    worker, backend connection, or advisory lock — instead of the test
+    failing loudly the way an independent safety net would surface.
+    Operates directly on the real `multiprocessing.Process` object and,
+    if a backend pid was ever recorded, a fresh independent PostgreSQL
+    connection — the same OS/database primitives `_BackgroundStatement`
+    itself is built from, invoked here independently of its own code.
+
+    Safe to call unconditionally and repeatedly: every operation here
+    tolerates a process that is already stopped, already closed, or was
+    never started, and a backend that is already gone. Does not release
+    any advisory lock or roll back any `first`/setup connection a test
+    holds — each such test already has its own `finally: first.rollback()`
+    (or equivalent) for that, run alongside this, not replaced by it."""
+    process = blocked._process
+    if process is not None:
+        try:
+            alive = process.is_alive()
+        except ValueError:
+            alive = False  # process object already closed - nothing more to do with it
+        if alive:
+            with contextlib.suppress(Exception):  # best-effort, this is the last resort itself
+                process.terminate()
+            process.join(timeout=5.0)
+            if process.is_alive():
+                with contextlib.suppress(Exception):  # best-effort, this is the last resort itself
+                    process.kill()
+                process.join(timeout=5.0)
+
+    pid = blocked._backend_pid_value
+    if pid is not None:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT pg_terminate_backend(:p)"), {"p": pid})
+                conn.commit()
+        except Exception:  # noqa: BLE001 - best-effort, this is the last resort itself
+            pass
 
 
 @pytest.mark.parametrize(
@@ -1580,7 +1776,7 @@ def test_background_statement_enter_reports_startup_failure_at_each_partial_stag
         assert blocked._process is not None
         assert blocked.worker_confirmed_stopped
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_enter_reports_both_startup_and_cleanup_failures_together(
@@ -1606,7 +1802,7 @@ def test_background_statement_enter_reports_both_startup_and_cleanup_failures_to
         assert blocked._process is not None
         assert blocked.worker_confirmed_stopped
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
@@ -1638,7 +1834,7 @@ def test_background_statement_enter_times_out_and_reaps_a_slow_starting_worker(
         assert blocked._process is not None
         assert blocked.worker_confirmed_stopped
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_enter_fails_with_no_process_alive_when_a_real_connection_is_refused(
@@ -1657,7 +1853,11 @@ def test_background_statement_enter_fails_with_no_process_alive_when_a_real_conn
         assert blocked._process is not None
         assert blocked.worker_confirmed_stopped
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        # The real, reachable engine — not unreachable_engine, which
+        # could never connect in the first place and is only for proving
+        # __enter__'s own failure path — since backend_pid was never
+        # even established here regardless.
+        _emergency_teardown(blocked, postgres_engine)
 
 
 # ---------------------------------------------------------------------------
@@ -1680,12 +1880,15 @@ def test_background_statement_reports_the_statement_error_when_the_statement_its
     statement's own error is what gets reported."""
     engine = postgres_engine
     blocked = _BackgroundStatement(engine, "SELECT 1/0", {})
-    with blocked:
-        status, exc = blocked.resume_and_get_outcome("statement-failure probe")
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome("statement-failure probe")
 
-    assert status == "failed"
-    assert exc is not None
-    assert "division by zero" in str(exc).lower()
+        assert status == "failed"
+        assert exc is not None
+        assert "division by zero" in str(exc).lower()
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_reports_failure_when_commit_fails_after_a_successful_statement(
@@ -1708,15 +1911,20 @@ def test_background_statement_reports_failure_when_commit_fails_after_a_successf
     blocked = _BackgroundStatement(
         engine, "SELECT 1", {}, _fault_injection_stage="after_statement_kill_then_fail"
     )
-    with blocked:
-        status, exc = blocked.resume_and_get_outcome("commit-failure probe")
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome("commit-failure probe")
 
-    assert status == "failed", f"a failed commit must never be reported as committed, got: {status}"
-    assert exc is not None
-    assert "closed" in str(exc).lower(), (
-        f"expected the commit failure's own connection-closed message to be the reported "
-        f"cause, got: {exc}"
-    )
+        assert status == "failed", (
+            f"a failed commit must never be reported as committed, got: {status}"
+        )
+        assert exc is not None
+        assert "closed" in str(exc).lower(), (
+            f"expected the commit failure's own connection-closed message to be the reported "
+            f"cause, got: {exc}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 @pytest.mark.parametrize("stage", ["close_fails", "dispose_fails"])
@@ -1730,19 +1938,22 @@ def test_background_statement_reports_failure_for_a_cleanup_only_problem_after_a
     was fine."""
     engine = postgres_engine
     blocked = _BackgroundStatement(engine, "SELECT 1", {}, _fault_injection_stage=stage)
-    with blocked:
-        status, exc = blocked.resume_and_get_outcome(f"cleanup-only probe ({stage})")
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome(f"cleanup-only probe ({stage})")
 
-    assert status == "failed", (
-        f"a cleanup-only failure ({stage}) after a successful commit must still be "
-        f"reported as failed, got: {status}"
-    )
-    assert exc is not None
-    expected_label = "close" if stage == "close_fails" else "dispose"
-    notes = "\n".join(getattr(exc, "__notes__", []))
-    assert expected_label in notes.lower(), (
-        f"expected {expected_label!r} to be reported, got notes: {notes!r}"
-    )
+        assert status == "failed", (
+            f"a cleanup-only failure ({stage}) after a successful commit must still be "
+            f"reported as failed, got: {status}"
+        )
+        assert exc is not None
+        expected_label = "close" if stage == "close_fails" else "dispose"
+        notes = "\n".join(getattr(exc, "__notes__", []))
+        assert expected_label in notes.lower(), (
+            f"expected {expected_label!r} to be reported, got notes: {notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_exit_drains_and_reports_an_outcome_nobody_consumed(
@@ -1754,9 +1965,11 @@ def test_background_statement_exit_drains_and_reports_an_outcome_nobody_consumed
     itself drains the outcome queue and fails the test, rather than
     silently discarding a failure nobody explicitly asked for."""
     engine = postgres_engine
+    captured: list[_BackgroundStatement] = []
 
     def _run_and_wait_for_natural_exit() -> None:
         with _BackgroundStatement(engine, "SELECT 1/0", {}) as blocked:
+            captured.append(blocked)
             # Still inside the with block, so __exit__ (and its
             # worker_confirmed_stopped bookkeeping) has not run yet — the
             # process object itself is still open here, so is_alive() is
@@ -1768,8 +1981,12 @@ def test_background_statement_exit_drains_and_reports_an_outcome_nobody_consumed
                 "worker did not finish the fast failing statement in time"
             )
 
-    with pytest.raises(RuntimeError, match="division by zero"):
-        _run_and_wait_for_natural_exit()
+    try:
+        with pytest.raises(RuntimeError, match="division by zero"):
+            _run_and_wait_for_natural_exit()
+    finally:
+        if captured:
+            _emergency_teardown(captured[0], engine)
 
 
 # ---------------------------------------------------------------------------
@@ -1814,12 +2031,16 @@ def test_background_statement_reports_a_protocol_failure_when_the_worker_exits_w
                 "worker did not finish the fast statement in time"
             )
 
-    with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo:
-        _run_and_wait_for_natural_exit()
+    try:
+        with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo:
+            _run_and_wait_for_natural_exit()
 
-    assert "without publishing a required outcome" in str(excinfo.value)
-    assert captured[0].outcome_protocol_state == "missing-after-natural-exit"
-    assert captured[0].worker_confirmed_stopped
+        assert "without publishing a required outcome" in str(excinfo.value)
+        assert captured[0].outcome_protocol_state == "missing-after-natural-exit"
+        assert captured[0].worker_confirmed_stopped
+    finally:
+        if captured:
+            _emergency_teardown(captured[0], engine)
 
 
 def test_background_statement_reports_a_protocol_failure_for_a_duplicate_outcome(
@@ -1836,13 +2057,16 @@ def test_background_statement_reports_a_protocol_failure_for_a_duplicate_outcome
         engine, "SELECT 1", {}, _fault_injection_stage="duplicate_outcome_publish"
     )
 
-    with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo, blocked:
-        status, exc = blocked.resume_and_get_outcome("duplicate-outcome probe")
-        assert status == "committed" and exc is None, (
-            "the first, normal outcome must still be reported correctly"
-        )
+    try:
+        with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo, blocked:
+            status, exc = blocked.resume_and_get_outcome("duplicate-outcome probe")
+            assert status == "committed" and exc is None, (
+                "the first, normal outcome must still be reported correctly"
+            )
 
-    assert "more than one outcome" in str(excinfo.value)
+        assert "more than one outcome" in str(excinfo.value)
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_marks_outcome_protocol_state_consumed_on_the_happy_path(
@@ -1854,12 +2078,16 @@ def test_background_statement_marks_outcome_protocol_state_consumed_on_the_happy
     outcome is not itself a failure — rather than being left at its
     initial "pending" value or confused with either failure mode."""
     engine = postgres_engine
-    with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
-        status, exc = blocked.resume_and_get_outcome("happy-path probe")
-        assert status == "committed"
-        assert exc is None
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome("happy-path probe")
+            assert status == "committed"
+            assert exc is None
 
-    assert blocked.outcome_protocol_state == "consumed"
+        assert blocked.outcome_protocol_state == "consumed"
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_records_a_forced_termination_as_the_legitimate_missing_outcome_case(
@@ -1884,16 +2112,69 @@ def test_background_statement_records_a_forced_termination_as_the_legitimate_mis
     monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
     monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with pytest.raises(RuntimeError, match="forcibly terminated") as excinfo, blocked:
-        pass
+    try:
+        with pytest.raises(RuntimeError, match="forcibly terminated") as excinfo, blocked:
+            pass
 
-    assert blocked.outcome_protocol_state == "missing-after-forced-termination"
-    assert blocked.worker_confirmed_stopped
-    assert "worker outcome protocol" not in str(excinfo.value), (
-        "a deliberately terminated worker's missing outcome must not also be reported as a "
-        "protocol failure"
-    )
-    _assert_backend_eventually_gone(engine, blocked.backend_pid)
+        assert blocked.outcome_protocol_state == "missing-after-forced-termination"
+        assert blocked.worker_confirmed_stopped
+        assert "worker outcome protocol" not in str(excinfo.value), (
+            "a deliberately terminated worker's missing outcome must not also be reported as a "
+            "protocol failure"
+        )
+        _assert_backend_eventually_gone(engine, blocked.backend_pid)
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_reports_a_protocol_failure_when_graceful_cancellation_conceals_a_missing_outcome(
+    postgres_engine: Engine,
+) -> None:
+    """A worker blocked on a genuine advisory-lock wait is stopped by the
+    real, unmocked `pg_terminate_backend()` signal — a graceful mechanism,
+    not this controller calling `terminate()`/`kill()` on the OS process
+    itself — and its outcome-publish step is then made to fail
+    (deterministically, via fault injection). Proves the resulting missing
+    outcome is still reported as a protocol failure: graceful cancellation
+    leaves the worker's own outcome-publication step fully reachable, so
+    nothing here legitimately excuses a missing outcome the way a genuine
+    forced OS-level termination would (Phase 5 thirteenth exit review §1)
+    — the bug this review found: `__exit__` previously treated the worker
+    merely being *alive* when the `with` block exited as proof of forced
+    termination, regardless of how containment was actually achieved."""
+    engine = postgres_engine
+    lock_key = uuid.uuid4().int % (2**63 - 1)
+
+    with engine.connect() as first:
+        first.begin()
+        first.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
+
+        blocked = _BackgroundStatement(
+            engine,
+            "SELECT pg_advisory_xact_lock(:k)",
+            {"k": lock_key},
+            _fault_injection_stage="outcome_publish_fails",
+        )
+        try:
+            with pytest.raises(RuntimeError, match="worker outcome protocol") as excinfo, blocked:
+                blocked.wait_until_blocked(first, "the worker (graceful-cancellation probe)")
+                # Deliberately exit while still genuinely blocked and
+                # `first` still holds the lock: __exit__ must reach
+                # _force_stop() itself, and the real (unmocked)
+                # pg_terminate_backend() signal is what actually ends
+                # the worker — a graceful mechanism, not this
+                # controller calling terminate()/kill() on the OS
+                # process.
+
+            assert "without publishing a required outcome" in str(excinfo.value)
+            assert blocked.outcome_protocol_state == "missing-after-natural-exit", (
+                "graceful cancellation must not be misclassified as the legitimate forced-"
+                f"termination exemption, got: {blocked.outcome_protocol_state!r}"
+            )
+            assert blocked.worker_confirmed_stopped
+        finally:
+            first.rollback()
+            _emergency_teardown(blocked, engine)
 
 
 # ---------------------------------------------------------------------------
@@ -1921,17 +2202,20 @@ def test_background_statement_reports_a_problem_when_signaling_the_watcher_to_st
     blocked = _BackgroundStatement(
         engine, "SELECT 1", {}, _fault_injection_stage="watcher_stop_signal_fails"
     )
-    with blocked:
-        status, exc = blocked.resume_and_get_outcome("watcher-stop-signal-failure probe")
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome("watcher-stop-signal-failure probe")
 
-    assert status == "failed", (
-        f"a failed watcher-stop signal must still fail the caller, got: {status}"
-    )
-    assert exc is not None
-    notes = "\n".join(getattr(exc, "__notes__", []))
-    assert "signal watcher to stop" in notes.lower(), (
-        f"expected the watcher-stop-signal failure to be reported, got notes: {notes!r}"
-    )
+        assert status == "failed", (
+            f"a failed watcher-stop signal must still fail the caller, got: {status}"
+        )
+        assert exc is not None
+        notes = "\n".join(getattr(exc, "__notes__", []))
+        assert "signal watcher to stop" in notes.lower(), (
+            f"expected the watcher-stop-signal failure to be reported, got notes: {notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_reports_a_problem_when_the_watcher_does_not_stop_within_its_bounded_join(
@@ -1953,17 +2237,20 @@ def test_background_statement_reports_a_problem_when_the_watcher_does_not_stop_w
         _fault_injection_stage="watcher_ignores_stop_signal",
         _watcher_join_timeout_seconds=0.5,
     )
-    with blocked:
-        status, exc = blocked.resume_and_get_outcome("watcher-join-timeout probe")
+    try:
+        with blocked:
+            status, exc = blocked.resume_and_get_outcome("watcher-join-timeout probe")
 
-    assert status == "failed", (
-        f"a watcher that never stops must still fail the caller, got: {status}"
-    )
-    assert exc is not None
-    notes = "\n".join(getattr(exc, "__notes__", []))
-    assert "watcher thread" in notes.lower(), (
-        f"expected the watcher-still-alive problem to be reported, got notes: {notes!r}"
-    )
+        assert status == "failed", (
+            f"a watcher that never stops must still fail the caller, got: {status}"
+        )
+        assert exc is not None
+        notes = "\n".join(getattr(exc, "__notes__", []))
+        assert "watcher thread" in notes.lower(), (
+            f"expected the watcher-still-alive problem to be reported, got notes: {notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 # ---------------------------------------------------------------------------
@@ -2021,6 +2308,10 @@ def test_background_statement_reports_a_problem_when_the_final_termination_call_
             with engine.connect() as cleanup_conn:
                 cleanup_conn.execute(text("SELECT pg_terminate_backend(:p)"), {"p": worker_pid})
                 cleanup_conn.commit()
+        # Independently covers the OS process itself too, not just the
+        # PostgreSQL backend above — relying on blocked.__exit__() alone
+        # would not catch a bug in the very cleanup path this test targets.
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_reports_a_problem_when_backend_verification_itself_fails(
@@ -2058,6 +2349,56 @@ def test_background_statement_reports_a_problem_when_backend_verification_itself
             _assert_backend_eventually_gone(engine, worker_pid)
         finally:
             first.rollback()
+            _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_reports_a_problem_when_backend_verification_itself_fails_on_natural_completion(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backend verification is mocked to fail for a worker that completes
+    entirely on its own — no forced-stop path involved at all. Proves
+    verification actually runs on the natural-completion path (Phase 5
+    thirteenth exit review §2), not only when `_force_stop()` happens to
+    run it, and that a verification failure there is reported rather than
+    silently skipped."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    monkeypatch.setattr(blocked, "_query_backend_state", _raise_injected_failure)
+
+    try:
+        with pytest.raises(RuntimeError, match="could not verify"), blocked:
+            status, exc = blocked.resume_and_get_outcome("natural-completion verification probe")
+            assert status == "committed" and exc is None
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_attaches_a_natural_completion_verification_failure_to_an_existing_exception(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as above, but the with block's own body raises first. Proves
+    the natural-completion verification failure is attached as a note to
+    that already-propagating exception rather than replacing it."""
+    engine = postgres_engine
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    monkeypatch.setattr(blocked, "_query_backend_state", _raise_injected_failure)
+
+    try:
+        with pytest.raises(_SentinelFailure) as excinfo, blocked:
+            blocked.resume_and_get_outcome(
+                "natural-completion verification probe (with body exception)"
+            )
+            raise _SentinelFailure(
+                "deliberate failure with natural-completion verification mocked to fail"
+            )
+
+        assert isinstance(excinfo.value, _SentinelFailure)
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "could not verify" in notes.lower(), (
+            f"expected the natural-completion verification failure to be reported, got: {notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 # ---------------------------------------------------------------------------
@@ -2084,7 +2425,7 @@ def test_background_statement_enter_reports_process_construction_failure(
             blocked.__enter__()
         assert blocked._process is None
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_enter_reports_process_start_failure(
@@ -2093,10 +2434,13 @@ def test_background_statement_enter_reports_process_start_failure(
     """multiprocessing.Process.start() itself is mocked to fail — again, a
     real OS-level trigger (resource exhaustion) is impractical to construct
     deterministically. Proves __enter__ reports it clearly, and that
-    self._process is left None: a Process object whose start() raised was
-    never actually spawned, so it must never be treated as a live resource
-    needing reaping (is_alive()/terminate()/close() are all invalid on
-    it)."""
+    __enter__'s own cleanup closes the Process object directly rather than
+    calling terminate()/kill()/join() on it, which are invalid operations
+    on a process that genuinely never started (Phase 5 thirteenth exit
+    review §3: ownership of the constructed Process object begins before
+    start() is even called, not only once start() has confirmed success —
+    self._process is retained, not reset to None, so worker_confirmed_stopped
+    is the correct post-failure check here, not `_process is None`)."""
     engine = postgres_engine
     ctx = multiprocessing.get_context("spawn")
     monkeypatch.setattr(ctx.Process, "start", _raise_injected_failure)
@@ -2106,9 +2450,175 @@ def test_background_statement_enter_reports_process_start_failure(
     try:
         with pytest.raises(RuntimeError, match="failed to start"):
             blocked.__enter__()
-        assert blocked._process is None
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped, (
+            "a process that never actually started must still be reported as confirmed "
+            "stopped, via Process.close() rather than terminate()/kill()"
+        )
+        # Direct proof close() was actually attempted (Phase 5 thirteenth
+        # exit review §3, bullet 1), not merely inferred: once close()
+        # has run, is_alive() itself raises rather than answering, per
+        # multiprocessing.Process's own documented contract.
+        with pytest.raises(ValueError, match="process object is closed"):
+            blocked._process.is_alive()
     finally:
-        _ensure_background_statement_torn_down(blocked)
+        _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_enter_reaps_a_partially_started_process_when_start_raises_after_spawning(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process.start()` is wrapped so it genuinely spawns the real child
+    (via the real, unmocked `start()` implementation) and only then
+    raises — simulating a start failure that happens *after* partial (in
+    this case, full) initialization, which a real OS-level trigger for
+    this is impractical to construct deterministically. Proves __enter__
+    detects the live child left behind (via `pid`/`is_alive()`, not by
+    assuming a raised `start()` always means nothing was spawned) and
+    terminates and reaps it, rather than leaking it (Phase 5 thirteenth
+    exit review §3, bullet 2)."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    real_start = ctx.Process.start
+
+    def _start_then_fail(self: Any) -> None:
+        real_start(self)
+        raise _InjectedFailure("simulated failure after the process was actually spawned")
+
+    monkeypatch.setattr(ctx.Process, "start", _start_then_fail)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with pytest.raises(RuntimeError, match="failed to start"):
+            blocked.__enter__()
+        assert blocked._process is not None
+        assert blocked.worker_confirmed_stopped, (
+            "the genuinely spawned child must be terminated, reaped, and its Process object "
+            "closed, not left alive"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_reports_a_problem_when_the_process_object_fails_to_close_during_start_error_cleanup(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process.start()` and the constructed `Process` object's own
+    `close()` are both mocked to fail — the process never actually
+    started, so cleanup takes the direct-close branch, and that close
+    itself fails too. Proves the failure is collected and reported rather
+    than propagating uncaught or being silently dropped (Phase 5
+    thirteenth exit review §3, bullet 3)."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    monkeypatch.setattr(ctx.Process, "start", _raise_injected_failure)
+    monkeypatch.setattr(ctx.Process, "close", _raise_injected_failure)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with pytest.raises(RuntimeError, match="failed to start") as excinfo:
+            blocked.__enter__()
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "close process object" in notes.lower(), (
+            f"expected the process-object close failure to be reported, got: {notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
+def test_background_statement_reports_an_ipc_cleanup_failure_during_start_error_cleanup(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process.start()` fails (mocked) after all three IPC pipes were
+    genuinely constructed; one of their ends is made to fail closing
+    during the resulting start-error cleanup. Proves that failure is
+    collected and reported too, not dropped just because it happened
+    during the Process-focused half of start-error cleanup (Phase 5
+    thirteenth exit review §3, bullet 4)."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    real_pipe = ctx.Pipe
+    calls = {"count": 0}
+
+    def _pipe_with_first_recv_close_failing(duplex: bool = True) -> Any:
+        calls["count"] += 1
+        conn1, conn2 = real_pipe(duplex=duplex)
+        if calls["count"] == 1:
+            monkeypatch.setattr(conn1, "close", _raise_injected_failure)
+        return conn1, conn2
+
+    monkeypatch.setattr(ctx, "Pipe", _pipe_with_first_recv_close_failing)
+    monkeypatch.setattr(ctx.Process, "start", _raise_injected_failure)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with pytest.raises(RuntimeError, match="failed to start") as excinfo:
+            blocked.__enter__()
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "handshake_recv" in notes, (
+            f"expected the IPC close failure during start-error cleanup to be reported, got: "
+            f"{notes!r}"
+        )
+    finally:
+        _emergency_teardown(blocked, engine)
+
+
+@pytest.mark.parametrize(
+    ("expected_label_fragment", "pipe_index", "end_index"),
+    [
+        ("close handshake_send", 1, 1),
+        ("close outcome_send", 2, 1),
+        ("close control_recv", 3, 0),
+    ],
+)
+def test_background_statement_reports_a_startup_cleanup_failure_after_a_successful_handshake(
+    postgres_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    expected_label_fragment: str,
+    pipe_index: int,
+    end_index: int,
+) -> None:
+    """One of the three redundant controller-side pipe-end copies (of the
+    ends handed off to the worker, closed immediately after a successful
+    `process.start()` since the controller no longer needs them) fails to
+    close, even though the handshake and the statement both genuinely
+    succeed afterward. Proves that failure is retained rather than
+    silently discarded once `__enter__` succeeds (Phase 5 thirteenth exit
+    review §4): `__exit__` still reports it."""
+    engine = postgres_engine
+    ctx = multiprocessing.get_context("spawn")
+    real_pipe = ctx.Pipe
+    calls = {"count": 0}
+
+    def _pipe(duplex: bool = True) -> Any:
+        calls["count"] += 1
+        conn1, conn2 = real_pipe(duplex=duplex)
+        if calls["count"] == pipe_index:
+            target = conn1 if end_index == 0 else conn2
+            monkeypatch.setattr(target, "close", _raise_injected_failure)
+        return conn1, conn2
+
+    monkeypatch.setattr(ctx, "Pipe", _pipe)
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
+
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with (
+            pytest.raises(RuntimeError, match="cleanup encountered problems") as excinfo,
+            blocked,
+        ):
+            status, exc = blocked.resume_and_get_outcome("startup-cleanup-failure probe")
+            assert status == "committed" and exc is None, (
+                "the handshake and statement must genuinely succeed despite the injected "
+                "close failure"
+            )
+
+        assert expected_label_fragment in str(excinfo.value)
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_escalates_to_kill_when_terminate_does_not_stop_the_process(
@@ -2130,11 +2640,14 @@ def test_background_statement_escalates_to_kill_when_terminate_does_not_stop_the
     monkeypatch.setattr(blocked, "_send_signal", _failing_send_signal("raises"))
     monkeypatch.setattr(blocked, "_cancel_via_driver", _failing_cancel_via_driver)
 
-    with pytest.raises(_SentinelFailure), blocked:
-        monkeypatch.setattr(blocked._process, "terminate", lambda: None)
-        raise _SentinelFailure("deliberate failure with terminate() mocked to a no-op")
+    try:
+        with pytest.raises(_SentinelFailure), blocked:
+            monkeypatch.setattr(blocked._process, "terminate", lambda: None)
+            raise _SentinelFailure("deliberate failure with terminate() mocked to a no-op")
 
-    assert blocked.worker_confirmed_stopped, "kill() must still have stopped the process"
+        assert blocked.worker_confirmed_stopped, "kill() must still have stopped the process"
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_reports_a_problem_when_an_ipc_channel_fails_to_close(
@@ -2145,14 +2658,20 @@ def test_background_statement_reports_a_problem_when_an_ipc_channel_fails_to_clo
     __exit__ — rather than propagating uncaught, and that cleanup for the
     other channels and the process object still proceeds regardless."""
     engine = postgres_engine
+    captured: list[_BackgroundStatement] = []
 
     def _run() -> None:
         with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+            captured.append(blocked)
             blocked.resume_and_get_outcome("IPC-channel-close-failure probe")
             monkeypatch.setattr(blocked._outcome_recv, "close", _raise_injected_failure)
 
-    with pytest.raises(RuntimeError, match="close outcome_recv"):
-        _run()
+    try:
+        with pytest.raises(RuntimeError, match="close outcome_recv"):
+            _run()
+    finally:
+        if captured:
+            _emergency_teardown(captured[0], engine)
 
 
 def test_background_statement_reports_a_problem_when_the_process_object_fails_to_close(
@@ -2162,14 +2681,20 @@ def test_background_statement_reports_a_problem_when_the_process_object_fails_to
     successful statement. Proves the failure is collected and reported by
     __exit__ rather than propagating uncaught."""
     engine = postgres_engine
+    captured: list[_BackgroundStatement] = []
 
     def _run() -> None:
         with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
+            captured.append(blocked)
             blocked.resume_and_get_outcome("process-close-failure probe")
             monkeypatch.setattr(blocked._process, "close", _raise_injected_failure)
 
-    with pytest.raises(RuntimeError, match="close process object"):
-        _run()
+    try:
+        with pytest.raises(RuntimeError, match="close process object"):
+            _run()
+    finally:
+        if captured:
+            _emergency_teardown(captured[0], engine)
 
 
 @pytest.mark.parametrize("failing_call_number", [2, 3])
@@ -2204,24 +2729,27 @@ def test_background_statement_enter_reports_partial_ipc_construction_failure(
     monkeypatch.setattr(multiprocessing, "get_context", lambda method: ctx)
 
     blocked = _BackgroundStatement(engine, "SELECT 1", {})
-    with pytest.raises(
-        RuntimeError, match="failed to construct the background worker's IPC"
-    ) as excinfo:
-        blocked.__enter__()
+    try:
+        with pytest.raises(
+            RuntimeError, match="failed to construct the background worker's IPC"
+        ) as excinfo:
+            blocked.__enter__()
 
-    assert blocked._process is None
-    assert created, "expected at least the first pipe to have been created before the failure"
-    assert all(conn.closed for conn in created), (
-        "every already-created pipe's ends must be closed on cleanup, not leaked"
-    )
-    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
-    assert "handshake_recv" in notes and "handshake_send" in notes, (
-        f"expected the first pipe's close failures to be reported, got: {notes!r}"
-    )
-    if failing_call_number == 3:
-        assert "outcome_recv" in notes and "outcome_send" in notes, (
-            f"expected the second pipe's close failures to also be reported, got: {notes!r}"
+        assert blocked._process is None
+        assert created, "expected at least the first pipe to have been created before the failure"
+        assert all(conn.closed for conn in created), (
+            "every already-created pipe's ends must be closed on cleanup, not leaked"
         )
+        notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+        assert "handshake_recv" in notes and "handshake_send" in notes, (
+            f"expected the first pipe's close failures to be reported, got: {notes!r}"
+        )
+        if failing_call_number == 3:
+            assert "outcome_recv" in notes and "outcome_send" in notes, (
+                f"expected the second pipe's close failures to also be reported, got: {notes!r}"
+            )
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_background_statement_leaves_no_queue_feeder_thread_behind(postgres_engine: Engine) -> None:
@@ -2233,11 +2761,15 @@ def test_background_statement_leaves_no_queue_feeder_thread_behind(postgres_engi
     confirming the mechanism that made that whole class of bug possible is
     no longer present."""
     engine = postgres_engine
-    with _BackgroundStatement(engine, "SELECT 1", {}) as blocked:
-        blocked.resume_and_get_outcome("feeder-thread probe")
+    blocked = _BackgroundStatement(engine, "SELECT 1", {})
+    try:
+        with blocked:
+            blocked.resume_and_get_outcome("feeder-thread probe")
 
-    feeder_threads = [t for t in threading.enumerate() if "QueueFeederThread" in t.name]
-    assert feeder_threads == [], f"unexpected queue feeder threads survived: {feeder_threads}"
+        feeder_threads = [t for t in threading.enumerate() if "QueueFeederThread" in t.name]
+        assert feeder_threads == [], f"unexpected queue feeder threads survived: {feeder_threads}"
+    finally:
+        _emergency_teardown(blocked, engine)
 
 
 def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
@@ -2254,6 +2786,7 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
     agreement."""
     engine = postgres_engine
     slug = f"subtype-lock-generic-{uuid.uuid4().hex[:8]}"
+    blocked: _BackgroundStatement | None = None
     try:
         with engine.begin() as setup:
             world = make_world(setup, slug=slug)
@@ -2268,11 +2801,12 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
                 text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon}
             )
 
-            with _BackgroundStatement(
+            blocked = _BackgroundStatement(
                 engine,
                 "UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e",
                 {"t": region_type, "e": dungeon},
-            ) as blocked:
+            )
+            with blocked:
                 blocked.wait_until_blocked(first, "the concurrent retype away from 'dungeon'")
                 first.commit()
                 result, exc = blocked.resume_and_get_outcome("the concurrent retype")
@@ -2301,6 +2835,12 @@ def test_a_concurrent_subtype_insert_and_type_change_is_serialized(
             "incompatible with core.entities.entity_type"
         )
     finally:
+        # _emergency_teardown is a genuinely independent backstop, not
+        # proof of __exit__'s own correctness (that is what this test's
+        # assertions above already establish) — see Phase 5 thirteenth
+        # exit review §5.
+        if blocked is not None:
+            _emergency_teardown(blocked, engine)
         _cleanup_world(engine, slug)
 
 
@@ -2319,6 +2859,7 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
     no longer registered as a dungeon."""
     engine = postgres_engine
     slug = f"subtype-lock-area-insert-{uuid.uuid4().hex[:8]}"
+    blocked: _BackgroundStatement | None = None
     try:
         with engine.begin() as setup:
             world = make_world(setup, slug=slug)
@@ -2342,11 +2883,12 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
                 {"t": region_type, "e": dungeon},
             )
 
-            with _BackgroundStatement(
+            blocked = _BackgroundStatement(
                 engine,
                 "INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)",
                 {"a": area},
-            ) as blocked:
+            )
+            with blocked:
                 blocked.wait_until_blocked(first, "the concurrent dungeon_area insert")
                 first.commit()
                 result, exc = blocked.resume_and_get_outcome("the concurrent dungeon_area insert")
@@ -2380,6 +2922,8 @@ def test_a_concurrent_dungeon_area_insert_and_marker_removal_plus_retype_is_seri
             "may remain dependent on an entity no longer registered as a dungeon"
         )
     finally:
+        if blocked is not None:
+            _emergency_teardown(blocked, engine)
         _cleanup_world(engine, slug)
 
 
@@ -2395,6 +2939,7 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
     parented under a location that is still genuinely dungeon-typed."""
     engine = postgres_engine
     slug = f"subtype-lock-reparent-{uuid.uuid4().hex[:8]}"
+    blocked: _BackgroundStatement | None = None
     try:
         with engine.begin() as setup:
             world = make_world(setup, slug=slug)
@@ -2413,11 +2958,12 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
                 {"d": new_dungeon, "a": area},
             )
 
-            with _BackgroundStatement(
+            blocked = _BackgroundStatement(
                 engine,
                 "UPDATE core.entities SET entity_type_id = :t WHERE entity_id = :e",
                 {"t": region_type, "e": new_dungeon},
-            ) as blocked:
+            )
+            with blocked:
                 blocked.wait_until_blocked(first, "the concurrent retype away from 'dungeon'")
                 first.commit()
                 result, exc = blocked.resume_and_get_outcome("the concurrent retype")
@@ -2444,6 +2990,8 @@ def test_a_concurrent_dungeon_area_reparent_and_retype_is_serialized(
             "genuinely dungeon-typed"
         )
     finally:
+        if blocked is not None:
+            _emergency_teardown(blocked, engine)
         _cleanup_world(engine, slug)
 
 
@@ -2469,6 +3017,7 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
     never end up without a valid dungeon parent."""
     engine = postgres_engine
     slug = f"child-lock-insert-first-{uuid.uuid4().hex[:8]}"
+    blocked: _BackgroundStatement | None = None
     try:
         with engine.begin() as setup:
             world = make_world(setup, slug=slug)
@@ -2486,11 +3035,12 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
                 text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)"), {"a": area}
             )
 
-            with _BackgroundStatement(
+            blocked = _BackgroundStatement(
                 engine,
                 "UPDATE world.locations SET parent_location_id = NULL WHERE location_id = :a",
                 {"a": area},
-            ) as blocked:
+            )
+            with blocked:
                 blocked.wait_until_blocked(first, "the concurrent parent-clearing update")
                 first.commit()
                 result, exc = blocked.resume_and_get_outcome(
@@ -2517,6 +3067,8 @@ def test_a_concurrent_dungeon_area_insert_and_child_parent_clear_is_serialized(
             "must never end up without a valid dungeon parent"
         )
     finally:
+        if blocked is not None:
+            _emergency_teardown(blocked, engine)
         _cleanup_world(engine, slug)
 
 
@@ -2530,6 +3082,7 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
     may end up depending on it."""
     engine = postgres_engine
     slug = f"child-lock-update-first-{uuid.uuid4().hex[:8]}"
+    blocked: _BackgroundStatement | None = None
     try:
         with engine.begin() as setup:
             world = make_world(setup, slug=slug)
@@ -2551,11 +3104,12 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
                 {"a": area},
             )
 
-            with _BackgroundStatement(
+            blocked = _BackgroundStatement(
                 engine,
                 "INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:a)",
                 {"a": area},
-            ) as blocked:
+            )
+            with blocked:
                 blocked.wait_until_blocked(first, "the concurrent dungeon_area insert")
                 first.commit()
                 result, exc = blocked.resume_and_get_outcome("the concurrent dungeon_area insert")
@@ -2580,4 +3134,6 @@ def test_a_concurrent_child_parent_clear_and_dungeon_area_insert_is_serialized(
             "may exist without a valid dungeon parent"
         )
     finally:
+        if blocked is not None:
+            _emergency_teardown(blocked, engine)
         _cleanup_world(engine, slug)

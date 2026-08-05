@@ -1,6 +1,7 @@
 # Phase 5 Remaining Issues
 
-> **CLOSED (2026-08-05).** A twelfth review of merged PR #14 found the
+> **Formal closeout complete, pending this PR's own final-head CI
+> confirmation (2026-08-05).** A twelfth review of merged PR #14 found the
 > eleventh pass's own `scripts/verify.sh --help` claim did not hold up to its
 > actual exit code, the worker outcome protocol still let a naturally exited
 > worker with an empty outcome channel pass as success, `_worker_main`'s
@@ -11,21 +12,30 @@
 > twelfth pass fixed the verification tooling first, made the worker outcome
 > protocol total, made `_worker_main`'s cleanup independently failure-safe,
 > and replaced the queue-based IPC with `multiprocessing.Pipe`, removing the
-> abandonable-thread class of bug by construction. See [§ Twelfth review:
-> verification-tooling correctness, worker outcome protocol totality, and
-> Pipe-based
-> IPC](#twelfth-review-verification-tooling-correctness-worker-outcome-protocol-totality-and-pipe-based-ipc-2026-08-04)
+> abandonable-thread class of bug by construction — but a thirteenth review of
+> that same open PR (commit `d0032dc`) then found the twelfth pass's own
+> outcome-protocol, backend-verification, and process-ownership fixes were
+> themselves still incomplete: a worker merely being *alive* when `__exit__`
+> began was still treated as proof of forced termination regardless of how
+> containment was actually achieved, backend verification ran only on the
+> forced-stop path, a `Process.start()` failure was assumed to always mean
+> nothing was spawned, and startup-cleanup failures on the redundant
+> controller-side pipe copies were silently discarded once the handshake
+> succeeded. A thirteenth pass fixed all four. See [§ Thirteenth review:
+> accurate missing-outcome classification, universal backend verification, and
+> Process.start() failure
+> ownership](#thirteenth-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05)
 > below and
-> [PHASE5_VERIFICATION.md § Twelfth exit
-> review](PHASE5_VERIFICATION.md#twelfth-exit-review-verification-tooling-correctness-worker-outcome-protocol-totality-and-pipe-based-ipc-2026-08-04).
+> [PHASE5_VERIFICATION.md § Thirteenth exit
+> review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
 > Phase 5 production correctness and the five-invariant concurrency suite
 > remain complete throughout; no schema, migration, or production-code change
-> was needed or made. Formal verification and the Phase 6 correctness entry
-> gate are both closed: the twelfth pass's [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)
-> push-triggered GitHub Actions run
-> [`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981)
-> passed both jobs on its first attempt for implementation commit `f3ed98a`
-> — see [PHASE5_VERIFICATION.md § Current formal-closeout
+> was needed or made. Formal verification is complete and locally verified
+> (57 tests in `test_entity_type_change_protection.py`, 1,153 in the full
+> suite); the Phase 6 correctness entry gate remains blocked until [PR
+> #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run
+> — the actual final pushed head, not an earlier implementation commit —
+> confirms. See [PHASE5_VERIFICATION.md § Current formal-closeout
 > status](PHASE5_VERIFICATION.md#current-formal-closeout-status).
 >
 > **Previously closed (2026-08-04), reopened above.** An eleventh review of
@@ -465,6 +475,121 @@ suite is 1,144 tests (up from 1,118). See the verification commands and
 results in
 [PHASE5_VERIFICATION.md § Twelfth exit review](PHASE5_VERIFICATION.md#twelfth-exit-review-verification-tooling-correctness-worker-outcome-protocol-totality-and-pipe-based-ipc-2026-08-04).
 
+## Thirteenth review: accurate missing-outcome classification, universal backend verification, and Process.start() failure ownership (2026-08-05)
+
+The twelfth pass correctly fixed the verification tooling, made the worker
+outcome protocol total, made `_worker_main`'s cleanup independently
+failure-safe, and replaced the queue-based IPC with `multiprocessing.Pipe`,
+and its pushed PR head (commit `f3ed98a`) passed all 1,144 tests in GitHub
+Actions
+[`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981).
+Review of the same open PR's follow-up commit (`d0032dc`, which closed the
+register on top of `f3ed98a` without its own CI run being checked first)
+found the twelfth pass's own outcome-protocol, backend-verification, and
+process-ownership fixes were themselves still incomplete:
+
+1. **The missing-outcome classification was not accurate.** `__exit__()` set
+   `worker_was_forcibly_stopped = True` whenever the process was merely
+   *alive* when cleanup began — not whenever this controller's own
+   `terminate()`/`kill()` was what actually ended it. A gracefully stopped
+   worker (via `pg_terminate_backend()`, `pg_cancel_backend()`, driver
+   cancellation, or the `lock_timeout` backstop) still reaches its own
+   outcome-publication step before exiting; if that publish then failed, the
+   missing outcome was wrongly accepted as the legitimate forced-termination
+   exemption instead of reported as a protocol failure.
+2. **Backend verification ran only on the forced-stop path.** A worker that
+   exited naturally skipped fresh-connection backend verification entirely,
+   relying on the Python process having exited as an unverified proxy for
+   PostgreSQL itself having noticed.
+3. **A `Process.start()` failure was not always "nothing was spawned."**
+   `__enter__` never stored the constructed `Process` object until after
+   `start()` had already succeeded, on the assumption a raised `start()`
+   always meant no OS process existed — not a general guarantee: `start()`
+   can fail after partial (or full) initialization, and the code never
+   stored or closed the `Process` object in that case regardless.
+4. **Startup-cleanup failures on the redundant controller-side pipe copies
+   were silently discarded** once the handshake succeeded, since the local
+   list collecting them was used only by the handshake-failure/timeout raise
+   paths.
+
+Acceptance criteria, all test-infrastructure-only (do not change a
+production trigger or add a migration unless a separate review finds a
+concrete production defect):
+
+- `worker_was_forcibly_stopped` is derived from which mechanism actually
+  ended the process (`_force_stop`'s own classification), never from whether
+  the process merely happened to be alive when `__exit__` began.
+- Backend verification runs exactly once on every `__exit__()` path — the
+  forced-stop path's own internal verification, or an explicit call on the
+  natural-completion path — never zero times and never twice.
+- Ownership of the constructed `Process` object begins at construction;
+  every `start()` failure is classified (never-started vs. partially
+  started) via `pid`/`is_alive()` rather than assumed, and cleaned up
+  accordingly.
+- No startup-cleanup problem is silently discarded once `__enter__` returns
+  successfully; it is retained and reported by `__exit__`.
+- Every regression test's safety net operates independently of
+  `_BackgroundStatement.__exit__()`/`_force_stop()` — the implementation
+  many of these tests exercise — rather than relying on it.
+- Re-run the focused helper tests, all five invariant concurrency tests, the
+  complete test suite, migration checks, and the actual final pushed-head CI.
+
+**Fix — no schema or migration change; all changes confined to
+`tests/database/test_entity_type_change_protection.py`:**
+
+- `_force_stop()` now returns `(problems, containment_reason)`, one of
+  `"graceful"`, `"forced"`, or `"survived"`; `__exit__()` derives
+  `worker_was_forcibly_stopped` from that reason. A new regression test
+  blocks a worker on a genuine advisory lock, lets the real, unmocked
+  `pg_terminate_backend()` gracefully end it, and proves a subsequent
+  missing outcome (via `outcome_publish_fails`) is still reported as
+  `"missing-after-natural-exit"`, not misclassified as forced termination.
+- `__exit__()` now calls `_verify_backend_gone()` directly on the
+  natural-completion path (previously skipped entirely), while the
+  forced-stop path's own internal call is unchanged — exactly one
+  verification per `__exit__()` call. Two new regression tests mock
+  verification to fail for a worker that completes entirely on its own, one
+  with no original exception and one with the body raising first, proving
+  both the raise-directly and attach-as-note branches now also cover natural
+  completion.
+- `self._process` is assigned immediately after `Process()` construction
+  succeeds, before `start()` is called. A new
+  `_cleanup_process_after_start_failure()` classifies what a raised
+  `start()` left behind via `pid`/`is_alive()` (both safe to call
+  regardless of whether the process ever started, confirmed empirically)
+  and either closes the `Process` object directly or terminates, escalates
+  to `kill()`, reaps, and then closes it. Four new regression tests cover
+  the never-started case (with direct proof `close()` was attempted), a
+  genuinely partially-started case (a wrapped `start()` calls the real
+  implementation before injecting a failure), the `Process` object's own
+  `close()` failing during that cleanup, and an IPC channel's `close()`
+  failing during that same cleanup.
+- `self._startup_cleanup_problems` is now instance-owned, populated in
+  `__enter__`, and unconditionally folded into `__exit__`'s own problems at
+  the start of every call. Three new parametrized regression tests (one per
+  redundant copy) prove a successful handshake and statement still surface
+  an earlier close failure.
+- `_ensure_background_statement_torn_down()` (which called
+  `blocked.__exit__()` — the implementation many of these tests exercise) is
+  replaced by `_emergency_teardown()`, which operates directly on the real
+  `Process` and, when a backend pid was recorded, an independent
+  `pg_terminate_backend()` call. Applied to every regression test that
+  creates a process, backend, transaction, advisory lock, watcher, or IPC
+  resource, including the five production-invariant concurrency tests
+  (restructured to construct `_BackgroundStatement` as its own statement
+  before the `with` block so it stays reachable from the existing
+  `finally: _cleanup_world(...)`) — none of their assertions or evidence
+  changed.
+- Trimmed a duplicated docstring passage in `_worker_main` that repeated the
+  class docstring's own outcome-publication explanation almost verbatim.
+
+**Results:** 57 tests in `test_entity_type_change_protection.py` (9
+sequential, 43 helper regression tests — up from 34 — and 5 unweakened
+concurrency tests) pass locally against AWS `dev`, confirmed stable across
+three repeated runs; the full suite is 1,153 tests (up from 1,144). See the
+verification commands and results in
+[PHASE5_VERIFICATION.md § Thirteenth exit review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
+
 ## Ninth review: synchronous ownership and a deterministic fallback (resolved by tenth pass, 2026-08-04)
 
 The eighth pass correctly closed the two specific gaps the seventh review named — a bounded `connect_timeout` on the worker's connection, and an `is_alive()` check before `__enter__` raises — and its pushed `main` head passed all 1,097 tests in GitHub Actions
@@ -616,11 +741,13 @@ locally against AWS `dev`, confirmed stable across repeated runs. See the
 verification commands and results in
 [PHASE5_VERIFICATION.md § Sixth exit review corrections](PHASE5_VERIFICATION.md#sixth-exit-review-corrections-2026-08-04).
 
-## At a glance (all blockers resolved)
+## At a glance (all blockers resolved, pending final-head CI confirmation)
 
 Phase 5's documented gameplay capabilities were implemented, merged, and
 verified. All production, concurrency-verification, and test-infrastructure
-blockers are closed:
+blockers are resolved and locally verified; the test-infrastructure blocker's
+formal closure additionally awaits PR #15's own final-head CI confirmation
+(see item 3):
 
 1. **Schema blocker:** dungeon-area subtype creation and direct mutation of the
    same child location's parent did not use a shared child-location lock, so
@@ -668,13 +795,22 @@ blockers are closed:
    pass as success, `_worker_main`'s cleanup was not itself independently
    failure-safe, and the IPC redesign still relied on an abandonable wrapper
    thread to bound `multiprocessing.Queue`'s own unbounded `join_thread()`.
-   **Resolved** by the twelfth pass's verification-tooling fix, total worker
+   Fixed by the twelfth pass's verification-tooling fix, total worker
    outcome protocol, independently failure-safe worker cleanup, and
-   `multiprocessing.Pipe`-based IPC. Confirmed by PR #15's push-triggered CI
+   `multiprocessing.Pipe`-based IPC, confirmed by PR #15's push-triggered CI
    run
-   [`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981),
-   which passed both jobs on its first attempt. See
-   [PHASE5_VERIFICATION.md § Twelfth exit review](PHASE5_VERIFICATION.md#twelfth-exit-review-verification-tooling-correctness-worker-outcome-protocol-totality-and-pipe-based-ipc-2026-08-04).
+   [`30972855981`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30972855981)
+   for implementation commit `f3ed98a`. A thirteenth review of that same
+   open PR's follow-up commit (`d0032dc`) then found the twelfth pass's own
+   outcome-protocol, backend-verification, and process-ownership fixes were
+   themselves still incomplete — see [§ Thirteenth
+   review](#thirteenth-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05)
+   above. **Resolved** by the thirteenth pass's accurate missing-outcome
+   classification, universal (non-redundant) backend verification, and
+   `Process.start()` failure ownership, verified locally (57 tests in
+   `test_entity_type_change_protection.py`, 1,153 total), pending
+   confirmation from PR #15's own final-head CI run. See
+   [PHASE5_VERIFICATION.md § Thirteenth exit review](PHASE5_VERIFICATION.md#thirteenth-exit-review-accurate-missing-outcome-classification-universal-backend-verification-and-processstart-failure-ownership-2026-08-05).
 
 ## Fourth review baseline and scope
 
