@@ -109,6 +109,17 @@ from .locations import (
     locations,
     settlements,
 )
+from .narrative import (
+    event_causes,
+    event_effects,
+    event_locations,
+    event_observations,
+    event_participant_roles,
+    event_participants,
+    event_statuses,
+    event_types,
+    events,
+)
 from .rules import (
     abilities,
     classes,
@@ -184,6 +195,15 @@ __all__ = [
     "entity_names",
     "entity_tags",
     "entity_types",
+    "event_causes",
+    "event_effects",
+    "event_locations",
+    "event_observations",
+    "event_participant_roles",
+    "event_participants",
+    "event_statuses",
+    "event_types",
+    "events",
     "feats",
     "features",
     "hazard_state",

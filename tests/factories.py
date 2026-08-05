@@ -150,26 +150,54 @@ def make_timeline(
     is_primary: bool = False,
     parent_timeline_id: uuid.UUID | None = None,
     branch_world_time_id: uuid.UUID | None = None,
+    branch_event_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    value = connection.execute(
-        text("""
+    """branch_event_id is omitted from the INSERT column list entirely when
+    not given, rather than always sent as NULL — tests/database/
+    test_phase5_populated_upgrade.py deliberately calls this against a
+    database pinned at revision 042, before campaign.timelines.
+    branch_event_id existed (revision 058); every other caller passing no
+    branch_event_id must keep working unchanged there."""
+    params = {
+        "world": world_id,
+        "name": name,
+        "primary": is_primary,
+        "parent": parent_timeline_id,
+        "branch": branch_world_time_id,
+        "status": status_id(connection, "lifecycle_statuses", "active"),
+    }
+    if branch_event_id is not None:
+        query = """
+            INSERT INTO campaign.timelines
+                (world_id, name, is_primary, parent_timeline_id, branch_world_time_id,
+                 branch_event_id, lifecycle_status_id)
+            VALUES (:world, :name, :primary, :parent, :branch, :branch_event, :status)
+            RETURNING timeline_id
+        """
+        params["branch_event"] = branch_event_id
+    else:
+        query = """
             INSERT INTO campaign.timelines
                 (world_id, name, is_primary, parent_timeline_id, branch_world_time_id,
                  lifecycle_status_id)
             VALUES (:world, :name, :primary, :parent, :branch, :status)
             RETURNING timeline_id
-        """),
-        {
-            "world": world_id,
-            "name": name,
-            "primary": is_primary,
-            "parent": parent_timeline_id,
-            "branch": branch_world_time_id,
-            "status": status_id(connection, "lifecycle_statuses", "active"),
-        },
-    ).scalar()
+        """
+    value = connection.execute(text(query), params).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def set_timeline_branch_event(
+    connection: Connection, timeline_id: uuid.UUID, branch_event_id: uuid.UUID | None
+) -> None:
+    """Set/clear branch_event_id on an already-created timeline — for tests
+    that need to exercise campaign.enforce_timeline_branch()'s UPDATE path,
+    not just the INSERT path make_timeline covers."""
+    connection.execute(
+        text("UPDATE campaign.timelines SET branch_event_id = :e WHERE timeline_id = :t"),
+        {"e": branch_event_id, "t": timeline_id},
+    )
 
 
 def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Company") -> uuid.UUID:
@@ -650,6 +678,54 @@ def make_knowledge_item(
         },
     )
     return knowledge_item_id
+
+
+def make_event(
+    connection: Connection,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    *,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    event_type_code: str = "other",
+    event_status_code: str = "recorded",
+    details: str | None = None,
+    name: str = "Test Event",
+) -> uuid.UUID:
+    """A core.entities row plus its narrative.events row. Returns the shared
+    UUID (the event_id, same as the entity_id).
+
+    world_time_id has no default — callers exercising branch/effective-history
+    behavior need explicit control over ordering (sort_key), so guessing one
+    here would hide bugs rather than catch them.
+    """
+    event_entity_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "event")
+    event_id = make_entity(connection, world_id, event_entity_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO narrative.events
+                (event_id, timeline_id, campaign_id, session_id, event_type_id,
+                 event_status_id, world_time_id, details)
+            VALUES (
+                :id, :timeline, :campaign, :session,
+                (SELECT event_type_id FROM narrative.event_types WHERE code = :etc),
+                (SELECT event_status_id FROM narrative.event_statuses WHERE code = :esc),
+                :world_time, :details
+            )
+        """),
+        {
+            "id": event_id,
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "etc": event_type_code,
+            "esc": event_status_code,
+            "world_time": world_time_id,
+            "details": details,
+        },
+    )
+    return event_id
 
 
 def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:
