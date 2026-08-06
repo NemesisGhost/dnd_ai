@@ -223,21 +223,24 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
     )
 
 
-def _open_area_connection(
-    connection: Connection,
-    *,
-    timeline_id: uuid.UUID,
-    area_connection_id: uuid.UUID,
-    event_id: uuid.UUID,
-    world_time_id: uuid.UUID,
-) -> None:
-    """Update the typed current state and record the narrative.event_effects
-    row for it, together — event_effects' own comment (revision 057)
-    requires "common effects should also update the corresponding typed
-    state table in the same transaction"; this is that pairing for the one
-    reaction resolve_check knows how to produce today.
-    """
-    previous_status_code = connection.execute(
+def _lock_area_connection(connection: Connection, area_connection_id: uuid.UUID) -> None:
+    """Acquire an exclusive row lock on the connection itself (a structural
+    row that always exists, unlike its possibly-absent campaign.
+    area_connection_state row) so concurrent resolve_check() calls
+    targeting the same connection serialize instead of racing to both
+    decide "not yet open" and both write a conflicting opening effect."""
+    connection.execute(
+        text(
+            "SELECT area_connection_id FROM world.area_connections WHERE area_connection_id = :ac FOR UPDATE"
+        ),
+        {"ac": area_connection_id},
+    )
+
+
+def _area_connection_status(
+    connection: Connection, timeline_id: uuid.UUID, area_connection_id: uuid.UUID
+) -> str | None:
+    value = connection.execute(
         text("""
             SELECT cs.code FROM campaign.area_connection_state acs
             JOIN campaign.connection_statuses cs ON cs.connection_status_id = acs.connection_status_id
@@ -245,7 +248,29 @@ def _open_area_connection(
         """),
         {"timeline": timeline_id, "connection": area_connection_id},
     ).scalar()
+    assert value is None or isinstance(value, str)
+    return value
 
+
+def _open_area_connection(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    area_connection_id: uuid.UUID,
+    event_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    previous_status_code: str | None,
+) -> None:
+    """Update the typed current state and record the narrative.event_effects
+    row for it, together — event_effects' own comment (revision 057)
+    requires "common effects should also update the corresponding typed
+    state table in the same transaction"; this is that pairing for the one
+    reaction resolve_check knows how to produce today. previous_status_code
+    is read by the caller under _lock_area_connection's row lock, not
+    re-read here, so the recorded previous_value reflects the actual state
+    at the moment of the transition rather than a second, potentially
+    stale read.
+    """
     open_status_id = lookup_id(
         connection, "campaign", "connection_statuses", "connection_status_id", "open"
     )
@@ -284,6 +309,42 @@ def _open_area_connection(
     )
 
 
+def _resolve_interaction(
+    connection: Connection,
+    *,
+    interaction_id: uuid.UUID,
+    event_id: uuid.UUID | None,
+    description: str | None,
+) -> None:
+    """Transition the parent interaction out of 'initiated' and, when this
+    check produced an event, link it and record the resolved consequence.
+    Always called, win or lose: a failed or non-matching check still leaves
+    the interaction in a coherent resolved state (SYSTEM_ARCHITECTURE.md
+    §6), it just has no event to link and no consequence to record.
+    COALESCE preserves any resulting_event_id a prior resolve_check() call
+    against a different check_request on the same interaction already set,
+    rather than nulling it out when this call didn't itself produce one.
+    """
+    connection.execute(
+        text("""
+            UPDATE interaction.interactions
+            SET status = 'resolved', resulting_event_id = COALESCE(:event, resulting_event_id)
+            WHERE interaction_id = :interaction
+        """),
+        {"event": event_id, "interaction": interaction_id},
+    )
+
+    if event_id is not None:
+        connection.execute(
+            text("""
+                INSERT INTO interaction.consequences
+                    (interaction_id, consequence_type, status, resulting_event_id, description)
+                VALUES (:interaction, 'state_change', 'resolved', :event, :description)
+            """),
+            {"interaction": interaction_id, "event": event_id, "description": description},
+        )
+
+
 def resolve_check(
     engine: Engine,
     *,
@@ -302,7 +363,16 @@ def resolve_check(
     conditional-route target, or one that doesn't satisfy the requirement,
     still records its result — it simply has no further reaction, per
     docs/architecture/SYSTEM_ARCHITECTURE.md §6 step 5 ("create events when
-    the mutation is narratively significant").
+    the mutation is narratively significant"). Either way, the parent
+    interaction is always transitioned to a terminal resolved state before
+    returning (_resolve_interaction).
+
+    Concurrent resolve_check() calls targeting the same conditional route
+    are serialized by _lock_area_connection: the second caller blocks until
+    the first commits, then re-reads campaign.area_connection_state under
+    that lock before deciding whether the route still needs opening — so a
+    route two competing successful checks both satisfy is opened, and its
+    event/effect recorded, exactly once.
     """
     with engine.begin() as connection:
         check_result_id = connection.execute(
@@ -327,37 +397,62 @@ def resolve_check(
 
         context = _check_context(connection, check_request_id)
         target_area_connection_id = context.target_area_connection_id
-        if target_area_connection_id is None:
-            return ResolveCheckResult(check_result_id=check_result_id)
 
-        satisfied = connection.execute(
-            text("SELECT world.conditional_route_requirement_satisfied(:ac, :cr)"),
-            {"ac": target_area_connection_id, "cr": check_result_id},
-        ).scalar()
-        if not satisfied:
-            return ResolveCheckResult(check_result_id=check_result_id)
+        event_id: uuid.UUID | None = None
+        area_connection_opened = False
 
-        event_id = _insert_event_row(
+        if target_area_connection_id is not None:
+            _lock_area_connection(connection, target_area_connection_id)
+
+            satisfied = connection.execute(
+                text("SELECT world.conditional_route_requirement_satisfied(:ac, :cr)"),
+                {"ac": target_area_connection_id, "cr": check_result_id},
+            ).scalar()
+
+            if satisfied:
+                previous_status_code = _area_connection_status(
+                    connection, context.timeline_id, target_area_connection_id
+                )
+                if previous_status_code != "open":
+                    event_id = _insert_event_row(
+                        connection,
+                        world_id=context.world_id,
+                        timeline_id=context.timeline_id,
+                        world_time_id=context.world_time_id,
+                        event_type_code="mechanism_activated",
+                        name="Conditional route requirement satisfied",
+                        details=event_details,
+                        campaign_id=context.campaign_id,
+                        session_id=context.session_id,
+                        participants=(
+                            EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),
+                        ),
+                        cause_interaction_id=context.interaction_id,
+                    )
+                    _open_area_connection(
+                        connection,
+                        timeline_id=context.timeline_id,
+                        area_connection_id=target_area_connection_id,
+                        event_id=event_id,
+                        world_time_id=context.world_time_id,
+                        previous_status_code=previous_status_code,
+                    )
+                    area_connection_opened = True
+
+        _resolve_interaction(
             connection,
-            world_id=context.world_id,
-            timeline_id=context.timeline_id,
-            world_time_id=context.world_time_id,
-            event_type_code="mechanism_activated",
-            name="Conditional route requirement satisfied",
-            details=event_details,
-            campaign_id=context.campaign_id,
-            session_id=context.session_id,
-            participants=(EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),),
-            cause_interaction_id=context.interaction_id,
-        )
-        _open_area_connection(
-            connection,
-            timeline_id=context.timeline_id,
-            area_connection_id=target_area_connection_id,
+            interaction_id=context.interaction_id,
             event_id=event_id,
-            world_time_id=context.world_time_id,
+            description=(
+                f"Check satisfied area connection {target_area_connection_id}'s requirement; "
+                "route opened."
+                if area_connection_opened
+                else None
+            ),
         )
 
     return ResolveCheckResult(
-        check_result_id=check_result_id, event_id=event_id, area_connection_opened=True
+        check_result_id=check_result_id,
+        event_id=event_id,
+        area_connection_opened=area_connection_opened,
     )

@@ -24,6 +24,7 @@ schema doesn't yet enforce, a future validation step) while exercising the
 real engine.begin() rollback path around real, unmodified production code.
 """
 
+import threading
 import uuid
 from collections.abc import Iterator
 
@@ -33,6 +34,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.commands.interactions import (
     CheckRequestSpec,
     PerformInteractionResult,
+    ResolveCheckResult,
     TargetSpec,
     perform_interaction,
     resolve_check,
@@ -82,6 +84,12 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         fixture = Fixture(connection, f"resolve-check-scenario-{uuid.uuid4().hex[:8]}")
     yield fixture
     with postgres_engine.begin() as cleanup:
+        # These tests record real events at status = recorded, which
+        # revision 065's triggers now correctly make append-only (including
+        # under cascade) — exactly the behavior under test. Test-only
+        # teardown is the one place that legitimately needs to remove that
+        # data anyway, so it bypasses triggers for this transaction only.
+        cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         # campaign.area_connection_state.last_event_id (ON DELETE SET NULL
         # from narrative.events) and .area_connection_id (ON DELETE CASCADE
         # from world.area_connections, itself cascaded from the entities
@@ -213,6 +221,66 @@ def test_a_successful_lockpick_check_opens_the_route_and_records_an_event(
     assert status_code == "open"
     assert last_event_id == resolve_result.event_id
 
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM interaction.interactions "
+                "WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
+        ).one()
+        assert interaction_row.status == "resolved"
+        assert interaction_row.resulting_event_id == resolve_result.event_id
+
+        consequence = verify.execute(
+            text(
+                "SELECT consequence_type, status, resulting_event_id "
+                "FROM interaction.consequences WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
+        ).one()
+        assert consequence.consequence_type == "state_change"
+        assert consequence.status == "resolved"
+        assert consequence.resulting_event_id == resolve_result.event_id
+
+
+def test_structural_records_are_immutable_after_resolution(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """docs/architecture/DATABASE_MODEL.md §16's actions/targets/check_requests/
+    check_results are append-only once resolution begins (revision 067) —
+    proven here against a real resolved interaction, not just a synthetic
+    status flip."""
+    interaction_result = _perform_pick_lock(postgres_engine, f)
+    resolve_check(
+        postgres_engine,
+        check_request_id=interaction_result.check_request_ids[0],
+        roll=18,
+        total_modifier=2,
+        total=20,
+        degree_of_success="success",
+    )
+
+    with (
+        postgres_engine.connect() as verify,
+        pytest.raises(Exception, match="append-only"),
+        verify.begin(),
+    ):
+        verify.execute(
+            text("UPDATE interaction.actions SET description = 'rewritten' WHERE action_id = :a"),
+            {"a": interaction_result.action_id},
+        )
+
+    with (
+        postgres_engine.connect() as verify,
+        pytest.raises(Exception, match="append-only"),
+        verify.begin(),
+    ):
+        verify.execute(
+            text("DELETE FROM interaction.check_requests WHERE check_request_id = :c"),
+            {"c": interaction_result.check_request_ids[0]},
+        )
+
 
 def test_a_failed_lockpick_check_does_not_open_the_route_or_record_an_event(
     postgres_engine: Engine, f: Fixture
@@ -231,6 +299,23 @@ def test_a_failed_lockpick_check_does_not_open_the_route_or_record_an_event(
     assert resolve_result.event_id is None
     assert resolve_result.area_connection_opened is False
     assert _connection_state(postgres_engine, f) is None
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM interaction.interactions "
+                "WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
+        ).one()
+        assert interaction_row.status == "resolved"
+        assert interaction_row.resulting_event_id is None
+
+        consequence_count = verify.execute(
+            text("SELECT count(*) FROM interaction.consequences WHERE interaction_id = :i"),
+            {"i": interaction_result.interaction_id},
+        ).scalar()
+        assert consequence_count == 0
 
 
 def test_a_failure_partway_through_resolve_check_leaves_no_partial_write(
@@ -270,3 +355,88 @@ def test_a_failure_partway_through_resolve_check_leaves_no_partial_write(
     assert _connection_state(postgres_engine, f) is None, (
         "area_connection_state survived a rolled-back resolve_check"
     )
+
+
+def test_two_concurrent_successful_checks_open_the_route_exactly_once(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Item 3 concurrency regression: without _lock_area_connection's row
+    lock, two concurrent resolve_check() calls against the same conditional
+    route could each read "not yet open," each produce their own event/
+    effect, and race to overwrite campaign.area_connection_state.
+    last_event_id. Two real threads, released together via a Barrier so
+    they race for real rather than by accident, prove the lock actually
+    serializes them: exactly one call opens the route and records the event.
+    """
+    interaction_result = perform_interaction(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        actor_entity_id=f.actor_id,
+        interaction_type_code="pick_lock",
+        action_description="Two adventurers both try the same lock.",
+        targets=(TargetSpec(target_area_connection_id=f.connection_id),),
+        check_requests=(
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=15, skill_id=f.skill_id, target_index=0
+            ),
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=15, skill_id=f.skill_id, target_index=0
+            ),
+        ),
+    )
+    check_request_a, check_request_b = interaction_result.check_request_ids
+
+    barrier = threading.Barrier(2)
+    results: dict[uuid.UUID, ResolveCheckResult] = {}
+
+    def _resolve(check_request_id: uuid.UUID) -> None:
+        barrier.wait(timeout=30)
+        results[check_request_id] = resolve_check(
+            postgres_engine,
+            check_request_id=check_request_id,
+            roll=18,
+            total_modifier=2,
+            total=20,
+            degree_of_success="success",
+        )
+
+    thread_a = threading.Thread(target=_resolve, args=(check_request_a,))
+    thread_b = threading.Thread(target=_resolve, args=(check_request_b,))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=30)
+    thread_b.join(timeout=30)
+    assert not thread_a.is_alive(), "resolve_check for check_request_a did not finish"
+    assert not thread_b.is_alive(), "resolve_check for check_request_b did not finish"
+    assert len(results) == 2, "both threads must have recorded a result"
+
+    opened = [r for r in results.values() if r.area_connection_opened]
+    assert len(opened) == 1, f"expected exactly one call to open the route, got {len(opened)}"
+
+    with postgres_engine.connect() as verify:
+        event_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.events ev
+                JOIN narrative.event_causes ec ON ec.event_id = ev.event_id
+                WHERE ec.cause_interaction_id = :i
+            """),
+            {"i": interaction_result.interaction_id},
+        ).scalar()
+        assert event_count == 1, "exactly one event should exist, not one per competing caller"
+
+        effect_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.event_effects ee
+                JOIN narrative.event_causes ec ON ec.event_id = ee.event_id
+                WHERE ec.cause_interaction_id = :i
+            """),
+            {"i": interaction_result.interaction_id},
+        ).scalar()
+        assert effect_count == 1
+
+    state = _connection_state(postgres_engine, f)
+    assert state is not None
+    status_code, last_event_id = state
+    assert status_code == "open"
+    assert last_event_id == opened[0].event_id

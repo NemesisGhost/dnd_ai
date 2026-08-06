@@ -33,6 +33,12 @@ def world(postgres_engine: Engine) -> uuid.UUID:
         world_id = make_world(connection, slug=f"record-event-command-{uuid.uuid4().hex[:8]}")
     yield world_id
     with postgres_engine.begin() as cleanup:
+        # These tests record real events at status = recorded, which
+        # revision 065's triggers now correctly make append-only (including
+        # under cascade) — exactly the behavior under test. Test-only
+        # teardown is the one place that legitimately needs to remove that
+        # data anyway, so it bypasses triggers for this transaction only.
+        cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         # Entities first: cascades away narrative.events (and event_causes,
         # which must be gone before interactions are deleted below, since
         # event_causes.cause_interaction_id is ON DELETE SET NULL and would
