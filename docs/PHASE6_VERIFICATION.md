@@ -102,5 +102,5 @@ Correction-pass result: **1,542 passed**, one Alembic head (`068_ruleset_check_r
 As of this writing:
 
 - All local verification above has run and passed against AWS `dev`.
-- This branch (`agent/phase6-events-branch-history`) **has not yet been merged**.
-- Its final implementation head **has not yet had a GitHub Actions run recorded**. A pull request is being opened from this exact head and CI's result will be recorded here — with the actual run ID and outcome — once it completes. Until then, this document intentionally does not claim CI-green, and Phase 6 is not marked complete in `CLAUDE.md`, `README.md`, or `PLAN.md`.
+- This branch (`agent/phase6-events-branch-history`) has been pushed to `origin` at commit `02680c1`, but **has not yet been merged**.
+- No pull request has been opened yet (the `gh` CLI is not available in this environment and no GitHub API token was accessible to open one programmatically) — opening it and recording CI's actual result (run ID and outcome) against this exact head is the next step. Until that CI run is confirmed green, this document intentionally does not claim CI-green, and Phase 6 is not marked complete in `CLAUDE.md`, `README.md`, or `PLAN.md`.
