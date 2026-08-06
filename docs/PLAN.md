@@ -1245,7 +1245,7 @@ Do not recursively require a separately proven safety net for every layer of tes
 
 ### Phase 6: Events and interactions
 
-**Complete.** Delivered as five independently reviewed increments: `narrative.events` and branch-aware effective history (revision 057–060), the `interaction.*` domain (061–062), real knowledge-provenance references closing Phase 5's placeholders (063), conditional-route evaluation (064), and `src/dnd_ai/commands` — the first application-layer command handlers (`RecordEvent`, `PerformInteraction`, `ResolveCheck`), proving a player action resolves into an event and an atomic state change through real production code. Verified against AWS `dev`, 1,339 tests passing (up from 1,153 at Phase 5's close). `alembic check` clean throughout; this working branch has not yet been pushed or opened as a pull request, so GitHub Actions confirmation is still outstanding. Encounters/combat (§17's table shape) belongs to Phase 9, not this phase — see that phase's deliverable list. Verification evidence: [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
+**Current phase; not yet complete.** Delivered as five independently reviewed increments: `narrative.events` and branch-aware effective history (revision 057–060), the `interaction.*` domain (061–062), real knowledge-provenance references closing Phase 5's placeholders (063), conditional-route evaluation (064), and `src/dnd_ai/commands` — the first application-layer command handlers (`RecordEvent`, `PerformInteraction`, `ResolveCheck`). A second, more critical exit review of that work then found production defects the first review's own verification loop missed: recorded events were not actually immutable (docs/ENTITY_LIFECYCLE.md §22's acceptance test was never written), `resolve_check()` had no concurrency control, interaction resolution was left incomplete (status/`resulting_event_id`/consequence never recorded), state provenance (`last_event_id`) had no timeline-safety check and was missing on three character-state tables `DATABASE_MODEL.md` §17 had already named, and the ruleset allow-list reverse guard and `test_role_grants.py`'s table coverage both had known gaps. A correction pass (revisions 065–068) closed all six. Verified against AWS `dev`, 1,542 tests passing (up from a 1,189-test branch baseline). `alembic check` clean throughout, one Alembic head. This working branch has not yet been merged, and its final-head CI run has not yet been confirmed — **do not mark this phase complete until [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md)'s "Verification status" section says so.** Encounters/combat (§17's table shape) belongs to Phase 9, not this phase — see that phase's deliverable list. Verification evidence: [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
 
 <details>
 <summary>Original entry-gate and planning detail (historical)</summary>
@@ -1290,7 +1290,7 @@ First-time obligations (per [§23.1](#231-phase-exit-review)):
 
 ### Phase 7: Quests and knowledge
 
-**Current phase.**
+Not started. Phase 6 remains current until its correction pass is merged and its final-head CI run is confirmed — see [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
 
 Deliver:
 
