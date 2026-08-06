@@ -1,5 +1,5 @@
 """narrative.events, event_participants, event_locations, event_causes,
-event_effects, event_observations (revisions 057, 062, 065).
+event_effects, event_observations (revisions 057, 062, 065, 069).
 
 Covers: the CTI subtype registration for events, each table's world-agreement
 guard, and the CHECK constraints that don't depend on cross-row lookups
@@ -9,8 +9,10 @@ event_observations' text length). event_causes.cause_interaction_id
 (revision 062) is covered here too, since it lives on this table. Revision
 065 (a Phase 6 exit-review correction) added recorded-event immutability —
 docs/ENTITY_LIFECYCLE.md §22's acceptance test "a recorded event cannot be
-edited directly" is proven here. Branch-aware effective history is a
-separate concern — see tests/scenario/test_branch_effective_history.py.
+edited directly" is proven here. Revision 069 (a follow-up correction)
+closed the matching deletion gap: a recorded event cannot be deleted,
+directly or by deleting its core.entities row. Branch-aware effective
+history is a separate concern — see tests/scenario/test_branch_effective_history.py.
 """
 
 import pytest
@@ -761,3 +763,100 @@ def test_a_recorded_events_child_row_cannot_be_updated_or_deleted(
             {"id": row_id},
         )
     assert "append-only" in str(delete_exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Recorded-event deletion protection (revision 069) — docs/ENTITY_LIFECYCLE.md
+# §14 (physical deletion), §15, §20 invariant 10.
+# ---------------------------------------------------------------------------
+
+
+def test_a_childless_recorded_event_cannot_be_deleted_directly(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """f.event_id has no participant/location/cause/observation rows —
+    the trigger must not depend on any of them existing to fire."""
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("DELETE FROM narrative.events WHERE event_id = :e"), {"e": f.event_id}
+        )
+    assert "cannot be deleted" in str(exc.value)
+
+    still_there = db_connection.execute(
+        text("SELECT count(*) FROM narrative.events WHERE event_id = :e"), {"e": f.event_id}
+    ).scalar()
+    assert still_there == 1
+
+
+def test_a_recorded_event_cannot_be_deleted_through_core_entities(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """narrative.events.event_id is ON DELETE CASCADE from core.entities —
+    deleting the entity row must not silently take the event with it."""
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("DELETE FROM core.entities WHERE entity_id = :e"), {"e": f.event_id}
+        )
+    assert "cannot be deleted" in str(exc.value)
+
+    still_there = db_connection.execute(
+        text("SELECT count(*) FROM core.entities WHERE entity_id = :e"), {"e": f.event_id}
+    ).scalar()
+    assert still_there == 1
+    event_still_there = db_connection.execute(
+        text("SELECT count(*) FROM narrative.events WHERE event_id = :e"), {"e": f.event_id}
+    ).scalar()
+    assert event_still_there == 1
+
+
+def test_a_recorded_event_with_children_cannot_be_deleted_directly(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Same as the childless case, but with append-only child rows attached
+    — the deletion guard is independent of revision 065's child-row guard."""
+    observer = make_entity(
+        db_connection,
+        f.world_id,
+        lookup_id(db_connection, "core", "entity_types", "entity_type_id", "location"),
+    )
+    db_connection.execute(
+        text(
+            "INSERT INTO narrative.event_observations "
+            "(event_id, observer_entity_id, observation_text) VALUES (:e, :o, 'Saw it.')"
+        ),
+        {"e": f.event_id, "o": observer},
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("DELETE FROM narrative.events WHERE event_id = :e"), {"e": f.event_id}
+        )
+    assert "cannot be deleted" in str(exc.value)
+
+
+def test_a_draft_event_can_be_deleted_directly(db_connection: Connection, f: Fixture) -> None:
+    draft_event_id = make_event(
+        db_connection, f.world_id, f.timeline_id, f.world_time_id, event_status_code="draft"
+    )
+    db_connection.execute(
+        text("DELETE FROM narrative.events WHERE event_id = :e"), {"e": draft_event_id}
+    )
+    gone = db_connection.execute(
+        text("SELECT count(*) FROM narrative.events WHERE event_id = :e"), {"e": draft_event_id}
+    ).scalar()
+    assert gone == 0
+
+
+def test_a_draft_event_can_be_deleted_through_core_entities(
+    db_connection: Connection, f: Fixture
+) -> None:
+    draft_event_id = make_event(
+        db_connection, f.world_id, f.timeline_id, f.world_time_id, event_status_code="draft"
+    )
+    db_connection.execute(
+        text("DELETE FROM core.entities WHERE entity_id = :e"), {"e": draft_event_id}
+    )
+    gone = db_connection.execute(
+        text("SELECT count(*) FROM narrative.events WHERE event_id = :e"), {"e": draft_event_id}
+    ).scalar()
+    assert gone == 0
