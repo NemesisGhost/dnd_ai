@@ -1,6 +1,6 @@
 # Phase 6 Verification Checklist
 
-Records the verification performed for Phase 6 (Events and interactions) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as five independently reviewed increments (revisions 057–064 plus `src/dnd_ai/commands`), then a correction pass (revisions 065–068) after a second, more critical exit review found production defects the first review missed — see "Correction Pass" below. **This document does not claim Phase 6 complete.** The corrected branch has not yet been merged, and its final-head CI run has not yet been confirmed; both are outstanding until that run succeeds (see "Verification status" at the end).
+Records the verification performed for Phase 6 (Events and interactions) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as five independently reviewed increments (revisions 057–064 plus `src/dnd_ai/commands`), then a correction pass (revisions 065–068) after a second, more critical exit review found production defects the first review missed — see "Correction Pass" below. **This document does not claim Phase 6 complete.** [PR #16](https://github.com/NemesisGhost/dnd_ai/pull/16)'s final head has a confirmed green CI run, but the PR has not yet been merged; see "Verification status" at the end.
 
 ## Exit Criteria
 
@@ -102,5 +102,6 @@ Correction-pass result: **1,542 passed**, one Alembic head (`068_ruleset_check_r
 As of this writing:
 
 - All local verification above has run and passed against AWS `dev`.
-- This branch (`agent/phase6-events-branch-history`) has been pushed to `origin` at commit `02680c1`, but **has not yet been merged**.
-- No pull request has been opened yet (the `gh` CLI is not available in this environment and no GitHub API token was accessible to open one programmatically) — opening it and recording CI's actual result (run ID and outcome) against this exact head is the next step. Until that CI run is confirmed green, this document intentionally does not claim CI-green, and Phase 6 is not marked complete in `CLAUDE.md`, `README.md`, or `PLAN.md`.
+- [PR #16](https://github.com/NemesisGhost/dnd_ai/pull/16) is open from `agent/phase6-events-branch-history` against `main`.
+- Its final head, commit `a51c2fe`, has a **confirmed green CI run**: [`31095870811`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31095870811) — `PASS`, polled via `scripts/wait_for_ci.py`.
+- The PR **has not yet been merged**. Phase 6 is not marked complete in `CLAUDE.md`, `README.md`, or `PLAN.md` until it is — CI-green on the final head is confirmed, but "complete" in those documents has meant "merged to `main`" for every prior phase, and this one is held to the same bar.
