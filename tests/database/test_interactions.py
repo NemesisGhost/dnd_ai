@@ -665,9 +665,10 @@ def test_a_resolved_interactions_structural_history_cannot_be_edited_or_deleted(
 def test_a_check_result_cannot_be_recorded_against_an_already_resolved_interaction(
     db_connection: Connection, f: Fixture
 ) -> None:
-    """Revision 070's other guard: a check_results row requires its
-    interaction still be 'initiated' at INSERT time, not just at UPDATE/
-    DELETE time (revision 067)."""
+    """Revision 070's other guard (narrowed by revision 071): a check_results
+    row requires its interaction still be 'initiated' or 'resolving' at
+    INSERT time, not just at UPDATE/DELETE time (revision 067) — but a
+    terminal interaction still rejects it outright."""
     check_request_id = make_check_request(
         db_connection,
         f.action_id,
@@ -682,4 +683,24 @@ def test_a_check_result_cannot_be_recorded_against_an_already_resolved_interacti
 
     with pytest.raises(CONSTRAINT_ERRORS) as exc:
         make_check_result(db_connection, check_request_id, degree_of_success="success")
-    assert "append-only once resolution begins" in str(exc.value)
+    assert "cannot accept another check result" in str(exc.value)
+
+
+def test_a_check_result_can_be_recorded_while_the_interaction_is_resolving(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The other half of revision 071's narrowing: 'resolving' must still
+    accept a new check result, unlike 'resolved'/'failed'/'cancelled'."""
+    check_request_id = make_check_request(
+        db_connection,
+        f.action_id,
+        f.actor_id,
+        check_kind="ability_check",
+        ability_id=f.ability_id,
+    )
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = 'resolving' WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    )
+
+    make_check_result(db_connection, check_request_id, degree_of_success="success")

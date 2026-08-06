@@ -456,7 +456,12 @@ def test_an_interaction_with_multiple_checks_stays_open_until_all_are_resolved(
     """Item 3's multi-check contract: an interaction may have more than one
     check_request (DOMAIN_MODEL.md §16.2/§16.4 — perform_interaction() itself
     accepts a tuple of them), so it must not reach a terminal status until
-    every one has a result, and must reach it exactly once."""
+    every one has a result, and must reach it exactly once. Between the
+    first and last result it must be 'resolving', not 'initiated' — the
+    first check may already have produced an immutable event, effect,
+    consequence, and state change, so the check_request/check_result that
+    caused it must become append-only immediately (revision 071), not only
+    once the whole interaction finishes."""
     interaction_result = perform_interaction(
         postgres_engine,
         timeline_id=f.timeline_id,
@@ -493,10 +498,33 @@ def test_an_interaction_with_multiple_checks_stays_open_until_all_are_resolved(
             ),
             {"i": interaction_result.interaction_id},
         ).one()
-    assert mid_row.status == "initiated", (
-        "a second check_request is still unanswered; the interaction must not resolve yet"
+    assert mid_row.status == "resolving", (
+        "a second check_request is still unanswered; the interaction must have moved past "
+        "initiated without yet resolving"
     )
     assert mid_row.resulting_event_id == first.event_id
+
+    with (
+        postgres_engine.connect() as verify,
+        pytest.raises(Exception, match="append-only"),
+        verify.begin(),
+    ):
+        verify.execute(
+            text(
+                "UPDATE interaction.check_results SET degree_of_success = 'failure' "
+                "WHERE check_request_id = :r"
+            ),
+            {"r": lockpick_check},
+        )
+    with (
+        postgres_engine.connect() as verify,
+        pytest.raises(Exception, match="append-only"),
+        verify.begin(),
+    ):
+        verify.execute(
+            text("DELETE FROM interaction.check_requests WHERE check_request_id = :r"),
+            {"r": lockpick_check},
+        )
 
     second = resolve_check(
         postgres_engine,
