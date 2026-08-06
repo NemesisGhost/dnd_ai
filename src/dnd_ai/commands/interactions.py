@@ -223,6 +223,74 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
     )
 
 
+_TERMINAL_INTERACTION_STATUSES = frozenset({"resolved", "failed", "cancelled"})
+
+
+def _interaction_id_for_check_request(
+    connection: Connection, check_request_id: uuid.UUID
+) -> uuid.UUID:
+    interaction_id = connection.execute(
+        text("""
+            SELECT i.interaction_id
+            FROM interaction.check_requests cr
+            JOIN interaction.actions a ON a.action_id = cr.action_id
+            JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
+            WHERE cr.check_request_id = :check_request_id
+        """),
+        {"check_request_id": check_request_id},
+    ).scalar()
+    if interaction_id is None:
+        raise ValueError(f"check request {check_request_id} does not exist")
+    assert isinstance(interaction_id, uuid.UUID)
+    return interaction_id
+
+
+def _lock_interaction_for_resolution(connection: Connection, interaction_id: uuid.UUID) -> None:
+    """Acquire an exclusive row lock on the parent interaction before any
+    check result is recorded against it, so two resolve_check() calls
+    against the same interaction (e.g. two of its check_requests resolving
+    concurrently) serialize rather than both reading the same "not yet
+    finished" state. Raises if the interaction has already reached a
+    terminal status — a check cannot be resolved against an interaction
+    that has already finished (interaction.enforce_check_result_interaction_
+    open(), revision 070, enforces the same rule at the database level as a
+    second, independent guard).
+    """
+    status = connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i FOR UPDATE"),
+        {"i": interaction_id},
+    ).scalar()
+    if status in _TERMINAL_INTERACTION_STATUSES:
+        raise ValueError(
+            f"interaction {interaction_id} has status {status!r} and cannot accept another "
+            "check resolution — resolved, failed, and cancelled interactions are terminal"
+        )
+
+
+def _interaction_check_completion(
+    connection: Connection, interaction_id: uuid.UUID
+) -> tuple[int, int]:
+    """(total check requests, requests with a result) across every action the
+    interaction has — not just the one check_request this resolve_check()
+    call is resolving. perform_interaction() creates a single action today,
+    but check_requests is action-scoped and DOMAIN_MODEL.md §16.2 allows a
+    complex interaction several actions, so completion is interaction-wide.
+    """
+    total, resolved = connection.execute(
+        text("""
+            SELECT count(cr.check_request_id), count(res.check_result_id)
+            FROM interaction.check_requests cr
+            JOIN interaction.actions a ON a.action_id = cr.action_id
+            LEFT JOIN interaction.check_results res ON res.check_request_id = cr.check_request_id
+            WHERE a.interaction_id = :interaction
+        """),
+        {"interaction": interaction_id},
+    ).one()
+    assert isinstance(total, int)
+    assert isinstance(resolved, int)
+    return total, resolved
+
+
 def _lock_area_connection(connection: Connection, area_connection_id: uuid.UUID) -> None:
     """Acquire an exclusive row lock on the connection itself (a structural
     row that always exists, unlike its possibly-absent campaign.
@@ -315,26 +383,30 @@ def _resolve_interaction(
     interaction_id: uuid.UUID,
     event_id: uuid.UUID | None,
     description: str | None,
+    is_final: bool,
 ) -> None:
-    """Transition the parent interaction out of 'initiated' and, when this
-    check produced an event, link it and record the resolved consequence.
-    Always called, win or lose: a failed or non-matching check still leaves
-    the interaction in a coherent resolved state (SYSTEM_ARCHITECTURE.md
-    §6), it just has no event to link and no consequence to record.
-    COALESCE preserves any resulting_event_id a prior resolve_check() call
-    against a different check_request on the same interaction already set,
-    rather than nulling it out when this call didn't itself produce one.
-    """
-    connection.execute(
-        text("""
-            UPDATE interaction.interactions
-            SET status = 'resolved', resulting_event_id = COALESCE(:event, resulting_event_id)
-            WHERE interaction_id = :interaction
-        """),
-        {"event": event_id, "interaction": interaction_id},
-    )
+    """Link this call's event (if any) to the interaction and, only once
+    every check_request the interaction has has a result (is_final), move
+    it to the terminal 'resolved' status. A complex interaction may have
+    several check_requests (perform_interaction creates one today, but
+    DOMAIN_MODEL.md §16.2 allows more per action, and resolve_check() may be
+    called once per request) — the interaction must stay open until all of
+    them have answered, and must only ever make the resolved transition
+    once (interaction.enforce_interaction_status_irreversible(), revision
+    070, additionally guarantees it can never be undone).
 
+    A failed or non-matching check still contributes no event — it simply
+    has nothing to link and no consequence to record (SYSTEM_ARCHITECTURE.md
+    §6) — but still counts toward completion.
+    """
     if event_id is not None:
+        connection.execute(
+            text("""
+                UPDATE interaction.interactions SET resulting_event_id = :event
+                WHERE interaction_id = :interaction
+            """),
+            {"event": event_id, "interaction": interaction_id},
+        )
         connection.execute(
             text("""
                 INSERT INTO interaction.consequences
@@ -342,6 +414,15 @@ def _resolve_interaction(
                 VALUES (:interaction, 'state_change', 'resolved', :event, :description)
             """),
             {"interaction": interaction_id, "event": event_id, "description": description},
+        )
+
+    if is_final:
+        connection.execute(
+            text(
+                "UPDATE interaction.interactions SET status = 'resolved' "
+                "WHERE interaction_id = :interaction"
+            ),
+            {"interaction": interaction_id},
         )
 
 
@@ -363,18 +444,31 @@ def resolve_check(
     conditional-route target, or one that doesn't satisfy the requirement,
     still records its result — it simply has no further reaction, per
     docs/architecture/SYSTEM_ARCHITECTURE.md §6 step 5 ("create events when
-    the mutation is narratively significant"). Either way, the parent
-    interaction is always transitioned to a terminal resolved state before
-    returning (_resolve_interaction).
+    the mutation is narratively significant"). The parent interaction moves
+    to a terminal resolved state once every check_request it has has a
+    result — never before, and never more than once (_resolve_interaction).
+
+    The parent interaction is locked (_lock_interaction_for_resolution)
+    before anything else happens: this both rejects resolving a check whose
+    interaction has already reached a terminal status, and — since the lock
+    is held until commit — serializes concurrent resolve_check() calls
+    against the same interaction, so two of its check_requests resolving at
+    once can't both miscount how many are still outstanding.
 
     Concurrent resolve_check() calls targeting the same conditional route
-    are serialized by _lock_area_connection: the second caller blocks until
-    the first commits, then re-reads campaign.area_connection_state under
-    that lock before deciding whether the route still needs opening — so a
-    route two competing successful checks both satisfy is opened, and its
-    event/effect recorded, exactly once.
+    are additionally serialized by _lock_area_connection: the second caller
+    blocks until the first commits, then re-reads campaign.
+    area_connection_state under that lock before deciding whether the route
+    still needs opening — so a route two competing successful checks both
+    satisfy is opened, and its event/effect recorded, exactly once. This
+    matters even when both checks belong to the same interaction (locked
+    above) and, unchanged, when they belong to two different interactions
+    entirely (not covered by the interaction-level lock at all).
     """
     with engine.begin() as connection:
+        interaction_id = _interaction_id_for_check_request(connection, check_request_id)
+        _lock_interaction_for_resolution(connection, interaction_id)
+
         check_result_id = connection.execute(
             text("""
                 INSERT INTO interaction.check_results
@@ -439,10 +533,12 @@ def resolve_check(
                     )
                     area_connection_opened = True
 
+        total_checks, resolved_checks = _interaction_check_completion(connection, interaction_id)
         _resolve_interaction(
             connection,
-            interaction_id=context.interaction_id,
+            interaction_id=interaction_id,
             event_id=event_id,
+            is_final=resolved_checks >= total_checks,
             description=(
                 f"Check satisfied area connection {target_area_connection_id}'s requirement; "
                 "route opened."

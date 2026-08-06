@@ -1,11 +1,15 @@
 """interaction.interactions, .actions, .targets, .check_requests,
-.check_results, .consequences, .external_messages (revision 061).
+.check_results, .consequences, .external_messages (revisions 061, 067, 070).
 
 Covers: the world-agreement guard on each table, the timeline/campaign/session
 consistency chain on interactions, the check_requests kind/ability/skill
 exclusivity rule and ruleset-allow-list enforcement, and the CHECK constraints
 on targets/check_results/consequences/external_messages that don't depend on
-cross-row lookups.
+cross-row lookups. Revision 067's structural append-only guard and revision
+070's status-irreversibility and check_results-requires-an-open-interaction
+guards are covered here too, directly against the database rather than only
+through the application-layer scenario in
+tests/scenario/test_resolve_conditional_route_check.py.
 """
 
 import pytest
@@ -20,6 +24,7 @@ from tests.factories import (
     make_campaign,
     make_character,
     make_check_request,
+    make_check_result,
     make_consequence,
     make_dungeon,
     make_dungeon_area,
@@ -533,3 +538,148 @@ def test_the_same_external_message_cannot_be_ingested_twice(
             {"i": f.interaction_id},
         )
     assert "ux_external_messages_source_external_id" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Interaction status irreversibility (revision 070) — a terminal status
+# (resolved/failed/cancelled) can never change, which is what keeps revision
+# 067's structural append-only guard from being bypassed by first reverting
+# the status.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("terminal_status", ["resolved", "failed", "cancelled"])
+@pytest.mark.parametrize("target_status", ["initiated", "resolving"])
+def test_a_terminal_interaction_cannot_revert_to_a_nonterminal_status(
+    db_connection: Connection, f: Fixture, terminal_status: str, target_status: str
+) -> None:
+    interaction_id = make_interaction(
+        db_connection, f.timeline_id, f.world_time_id, status=terminal_status
+    )
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE interaction.interactions SET status = :s WHERE interaction_id = :i"),
+            {"s": target_status, "i": interaction_id},
+        )
+    assert "terminal status" in str(exc.value)
+
+
+@pytest.mark.parametrize("terminal_status", ["resolved", "failed", "cancelled"])
+def test_a_terminal_interaction_cannot_move_to_a_different_terminal_status(
+    db_connection: Connection, f: Fixture, terminal_status: str
+) -> None:
+    interaction_id = make_interaction(
+        db_connection, f.timeline_id, f.world_time_id, status=terminal_status
+    )
+    other_terminal = next(s for s in ("resolved", "failed", "cancelled") if s != terminal_status)
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE interaction.interactions SET status = :s WHERE interaction_id = :i"),
+            {"s": other_terminal, "i": interaction_id},
+        )
+    assert "terminal status" in str(exc.value)
+
+
+@pytest.mark.parametrize("terminal_status", ["resolved", "failed", "cancelled"])
+def test_a_terminal_interactions_status_can_be_rewritten_to_itself(
+    db_connection: Connection, f: Fixture, terminal_status: str
+) -> None:
+    """A no-op write (e.g. an idempotent retry) is not a transition and must
+    not be rejected."""
+    interaction_id = make_interaction(
+        db_connection, f.timeline_id, f.world_time_id, status=terminal_status
+    )
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = :s WHERE interaction_id = :i"),
+        {"s": terminal_status, "i": interaction_id},
+    )
+
+
+def test_an_interaction_can_move_from_initiated_through_resolving_to_resolved(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Normal creation and resolution: every transition before a terminal
+    status is reached remains unrestricted."""
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = 'resolving' WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    )
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = 'resolved' WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    )
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("attempt", "table"),
+    [
+        ("update", "actions"),
+        ("delete", "actions"),
+        ("update", "check_requests"),
+        ("delete", "check_requests"),
+    ],
+)
+def test_a_resolved_interactions_structural_history_cannot_be_edited_or_deleted(
+    db_connection: Connection, f: Fixture, attempt: str, table: str
+) -> None:
+    """DB-level companion to tests/scenario/test_resolve_conditional_route_
+    check.py's test_structural_records_are_immutable_after_resolution —
+    revision 067's guard, exercised directly here rather than only through
+    the application layer."""
+    check_request_id = make_check_request(
+        db_connection,
+        f.action_id,
+        f.actor_id,
+        check_kind="ability_check",
+        ability_id=f.ability_id,
+    )
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = 'resolved' WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    )
+
+    row_id = f.action_id if table == "actions" else check_request_id
+    pk_column = "action_id" if table == "actions" else "check_request_id"
+    update_column = "description" if table == "actions" else "stakes"
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        if attempt == "update":
+            db_connection.execute(
+                text(
+                    f"UPDATE interaction.{table} SET {update_column} = 'x' WHERE {pk_column} = :id"
+                ),
+                {"id": row_id},
+            )
+        else:
+            db_connection.execute(
+                text(f"DELETE FROM interaction.{table} WHERE {pk_column} = :id"), {"id": row_id}
+            )
+    assert "append-only once resolution begins" in str(exc.value)
+
+
+def test_a_check_result_cannot_be_recorded_against_an_already_resolved_interaction(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Revision 070's other guard: a check_results row requires its
+    interaction still be 'initiated' at INSERT time, not just at UPDATE/
+    DELETE time (revision 067)."""
+    check_request_id = make_check_request(
+        db_connection,
+        f.action_id,
+        f.actor_id,
+        check_kind="ability_check",
+        ability_id=f.ability_id,
+    )
+    db_connection.execute(
+        text("UPDATE interaction.interactions SET status = 'resolved' WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_check_result(db_connection, check_request_id, degree_of_success="success")
+    assert "append-only once resolution begins" in str(exc.value)

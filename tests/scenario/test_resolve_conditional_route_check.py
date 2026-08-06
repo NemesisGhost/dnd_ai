@@ -22,6 +22,13 @@ event/state work happens, proving nothing about a later-step rollback. The
 injected fault stands in for any real downstream failure (a constraint this
 schema doesn't yet enforce, a future validation step) while exercising the
 real engine.begin() rollback path around real, unmodified production code.
+
+A later correction pass (after PR #16) added the multi-check completion
+contract and the terminal-interaction rejection covered near the bottom of
+this file: an interaction may have more than one check_request (DOMAIN_MODEL
+.md §16.2/§16.4), so resolve_check() must not finalize the interaction until
+every one of them has a result, and must reject a resolution attempted
+against an interaction that already has.
 """
 
 import threading
@@ -43,6 +50,7 @@ from tests.factories import (
     make_ability,
     make_area_connection,
     make_character,
+    make_check_request,
     make_dungeon,
     make_dungeon_area,
     make_ruleset_version_for_world,
@@ -440,3 +448,124 @@ def test_two_concurrent_successful_checks_open_the_route_exactly_once(
     status_code, last_event_id = state
     assert status_code == "open"
     assert last_event_id == opened[0].event_id
+
+
+def test_an_interaction_with_multiple_checks_stays_open_until_all_are_resolved(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Item 3's multi-check contract: an interaction may have more than one
+    check_request (DOMAIN_MODEL.md §16.2/§16.4 — perform_interaction() itself
+    accepts a tuple of them), so it must not reach a terminal status until
+    every one has a result, and must reach it exactly once."""
+    interaction_result = perform_interaction(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        actor_entity_id=f.actor_id,
+        interaction_type_code="pick_lock",
+        action_description="Rin picks the lock while Vex keeps watch.",
+        targets=(TargetSpec(target_area_connection_id=f.connection_id),),
+        check_requests=(
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=15, skill_id=f.skill_id, target_index=0
+            ),
+            CheckRequestSpec(check_kind="skill_check", difficulty=10, skill_id=f.skill_id),
+        ),
+    )
+    lockpick_check, watch_check = interaction_result.check_request_ids
+
+    first = resolve_check(
+        postgres_engine,
+        check_request_id=lockpick_check,
+        roll=18,
+        total_modifier=2,
+        total=20,
+        degree_of_success="success",
+    )
+    assert first.event_id is not None
+    assert first.area_connection_opened is True
+
+    with postgres_engine.connect() as verify:
+        mid_row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM interaction.interactions "
+                "WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
+        ).one()
+    assert mid_row.status == "initiated", (
+        "a second check_request is still unanswered; the interaction must not resolve yet"
+    )
+    assert mid_row.resulting_event_id == first.event_id
+
+    second = resolve_check(
+        postgres_engine,
+        check_request_id=watch_check,
+        roll=12,
+        total_modifier=1,
+        total=13,
+        degree_of_success="success",
+    )
+    assert second.event_id is None
+    assert second.area_connection_opened is False
+
+    with postgres_engine.connect() as verify:
+        final_row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM interaction.interactions "
+                "WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
+        ).one()
+    assert final_row.status == "resolved"
+    assert final_row.resulting_event_id == first.event_id, (
+        "the second, event-less check must not clobber the first check's resulting_event_id"
+    )
+
+
+def test_resolving_a_check_against_an_already_terminal_interaction_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Item 3: once an interaction has reached a terminal status, resolving
+    another check against it is rejected before any write happens — even
+    one added directly rather than through perform_interaction (revision 070
+    additionally rejects the same case at the database level, see
+    tests/database/test_interactions.py::
+    test_a_check_result_cannot_be_recorded_against_an_already_resolved_interaction).
+    """
+    interaction_result = _perform_pick_lock(postgres_engine, f)
+    resolve_check(
+        postgres_engine,
+        check_request_id=interaction_result.check_request_ids[0],
+        roll=18,
+        total_modifier=2,
+        total=20,
+        degree_of_success="success",
+    )
+
+    with postgres_engine.begin() as connection:
+        extra_check_request_id = make_check_request(
+            connection,
+            interaction_result.action_id,
+            f.actor_id,
+            check_kind="skill_check",
+            skill_id=f.skill_id,
+            difficulty=15,
+        )
+
+    with pytest.raises(ValueError, match="terminal"):
+        resolve_check(
+            postgres_engine,
+            check_request_id=extra_check_request_id,
+            roll=18,
+            total_modifier=2,
+            total=20,
+            degree_of_success="success",
+        )
+
+    with postgres_engine.connect() as verify:
+        result_count = verify.execute(
+            text("SELECT count(*) FROM interaction.check_results WHERE check_request_id = :r"),
+            {"r": extra_check_request_id},
+        ).scalar()
+    assert result_count == 0, "the rejected resolution must not have left a partial write"
