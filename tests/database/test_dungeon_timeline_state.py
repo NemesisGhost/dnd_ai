@@ -2,8 +2,11 @@
 .hazard_state, .interactable_state (revision 040).
 
 Covers: one current row per (timeline, target), the world-agreement guard on
-each of the five tables, and that state can change (satisfying Phase 5's
-"actions can alter dungeon state" exit criterion).
+each of the five tables, that state can change (satisfying Phase 5's "actions
+can alter dungeon state" exit criterion), and — revision 066, a Phase 6
+exit-review correction — that last_event_id (revision 060) must belong to
+the same timeline as the state row citing it
+(campaign.enforce_state_event_timeline()).
 """
 
 import pytest
@@ -18,8 +21,10 @@ from tests.factories import (
     make_area_interactable,
     make_dungeon,
     make_dungeon_area,
+    make_event,
     make_timeline,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -269,3 +274,120 @@ def test_two_timelines_can_hold_independent_state_for_the_same_location(
     }
     assert rows[f.timeline_id] is True
     assert rows[branch_timeline] is False
+
+
+# ---------------------------------------------------------------------------
+# last_event_id timeline safety (revision 066)
+# ---------------------------------------------------------------------------
+
+STATE_TABLES = [
+    ("location_state", "location_id"),
+    ("area_connection_state", "area_connection_id"),
+    ("area_feature_state", "area_feature_id"),
+    ("hazard_state", "area_hazard_id"),
+    ("interactable_state", "area_interactable_id"),
+]
+
+
+def _target_id_for(connection: Connection, f: Fixture, table: str) -> object:
+    if table == "location_state":
+        return f.area_id
+    if table == "area_connection_state":
+        other_area = make_dungeon_area(connection, f.dungeon_id)
+        return make_area_connection(connection, f.area_id, other_area)
+    if table == "area_feature_state":
+        return make_area_feature(connection, f.area_id)
+    if table == "hazard_state":
+        return make_area_hazard(connection, f.area_id)
+    if table == "interactable_state":
+        return make_area_interactable(connection, f.area_id)
+    raise ValueError(table)
+
+
+def _insert_state_row(
+    connection: Connection, table: str, timeline_id: object, target_id: object, event_id: object
+) -> None:
+    """INSERTs the minimal valid row for `table`, including whichever
+    NOT NULL status column that table requires beyond timeline_id/target_id/
+    last_event_id (area_connection_state/hazard_state/interactable_state all
+    have one; location_state/area_feature_state do not)."""
+    if table == "area_connection_state":
+        status_id = lookup_id(
+            connection, "campaign", "connection_statuses", "connection_status_id", "open"
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign.area_connection_state "
+                "(timeline_id, area_connection_id, connection_status_id, last_event_id) "
+                "VALUES (:tl, :id, :s, :e)"
+            ),
+            {"tl": timeline_id, "id": target_id, "s": status_id, "e": event_id},
+        )
+    elif table == "hazard_state":
+        status_id = lookup_id(
+            connection, "campaign", "hazard_statuses", "hazard_status_id", "armed"
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign.hazard_state "
+                "(timeline_id, area_hazard_id, hazard_status_id, last_event_id) "
+                "VALUES (:tl, :id, :s, :e)"
+            ),
+            {"tl": timeline_id, "id": target_id, "s": status_id, "e": event_id},
+        )
+    elif table == "interactable_state":
+        status_id = lookup_id(
+            connection, "campaign", "interactable_statuses", "interactable_status_id", "active"
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign.interactable_state "
+                "(timeline_id, area_interactable_id, interactable_status_id, last_event_id) "
+                "VALUES (:tl, :id, :s, :e)"
+            ),
+            {"tl": timeline_id, "id": target_id, "s": status_id, "e": event_id},
+        )
+    else:
+        id_column = dict(STATE_TABLES)[table]
+        connection.execute(
+            text(
+                f"INSERT INTO campaign.{table} (timeline_id, {id_column}, last_event_id) "
+                "VALUES (:tl, :id, :e)"
+            ),
+            {"tl": timeline_id, "id": target_id, "e": event_id},
+        )
+
+
+@pytest.mark.parametrize(("table", "id_column"), STATE_TABLES)
+def test_state_last_event_id_on_the_same_timeline_is_accepted(
+    db_connection: Connection, f: Fixture, table: str, id_column: str
+) -> None:
+    target_id = _target_id_for(db_connection, f, table)
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, world_time_id)
+
+    _insert_state_row(db_connection, table, f.timeline_id, target_id, event_id)
+
+    stored = db_connection.execute(
+        text(
+            f"SELECT last_event_id FROM campaign.{table} "
+            f"WHERE timeline_id = :tl AND {id_column} = :id"
+        ),
+        {"tl": f.timeline_id, "id": target_id},
+    ).scalar()
+    assert stored == event_id
+
+
+@pytest.mark.parametrize(("table", "id_column"), STATE_TABLES)
+def test_state_last_event_id_from_a_different_timeline_is_rejected(
+    db_connection: Connection, f: Fixture, table: str, id_column: str
+) -> None:
+    del id_column
+    target_id = _target_id_for(db_connection, f, table)
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other timeline")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    other_event_id = make_event(db_connection, f.world_id, other_timeline, world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        _insert_state_row(db_connection, table, f.timeline_id, target_id, other_event_id)
+    assert "belongs to timeline" in str(exc.value)

@@ -18,10 +18,12 @@ from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
     make_character,
+    make_event,
     make_ruleset_version,
     make_ruleset_version_for_world,
     make_timeline,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -420,3 +422,131 @@ def test_one_character_can_have_different_active_builds_on_different_timelines(
     }
     assert selected[f.timeline_id] == build_a
     assert selected[other_timeline] == build_b
+
+
+# ---------------------------------------------------------------------------
+# last_event_id timeline safety (revision 066) — character_state,
+# character_conditions, character_resources all gained the column and the
+# shared campaign.enforce_state_event_timeline() guard in this revision.
+# ---------------------------------------------------------------------------
+
+
+def test_character_state_last_event_id_on_the_same_timeline_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, world_time_id)
+
+    db_connection.execute(
+        text(
+            "INSERT INTO campaign.character_state "
+            "(timeline_id, character_id, current_hit_points, maximum_hit_points, last_event_id) "
+            "VALUES (:tl, :c, 10, 10, :e)"
+        ),
+        {"tl": f.timeline_id, "c": f.character_id, "e": event_id},
+    )
+
+    stored = db_connection.execute(
+        text(
+            "SELECT last_event_id FROM campaign.character_state "
+            "WHERE timeline_id = :tl AND character_id = :c"
+        ),
+        {"tl": f.timeline_id, "c": f.character_id},
+    ).scalar()
+    assert stored == event_id
+
+
+def test_character_state_last_event_id_from_a_different_timeline_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other timeline")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    other_event_id = make_event(db_connection, f.world_id, other_timeline, world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO campaign.character_state "
+                "(timeline_id, character_id, current_hit_points, maximum_hit_points, "
+                " last_event_id) VALUES (:tl, :c, 10, 10, :e)"
+            ),
+            {"tl": f.timeline_id, "c": f.character_id, "e": other_event_id},
+        )
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_character_conditions_last_event_id_on_the_same_timeline_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    version = make_ruleset_version_for_world(db_connection, f.world_id)
+    condition = _make_condition(db_connection, version, "restrained")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, world_time_id)
+
+    db_connection.execute(
+        text(
+            "INSERT INTO campaign.character_conditions "
+            "(timeline_id, character_id, condition_id, last_event_id) VALUES (:tl, :c, :cond, :e)"
+        ),
+        {"tl": f.timeline_id, "c": f.character_id, "cond": condition, "e": event_id},
+    )
+
+
+def test_character_conditions_last_event_id_from_a_different_timeline_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    version = make_ruleset_version_for_world(db_connection, f.world_id)
+    condition = _make_condition(db_connection, version, "frightened")
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other timeline")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    other_event_id = make_event(db_connection, f.world_id, other_timeline, world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO campaign.character_conditions "
+                "(timeline_id, character_id, condition_id, last_event_id) "
+                "VALUES (:tl, :c, :cond, :e)"
+            ),
+            {"tl": f.timeline_id, "c": f.character_id, "cond": condition, "e": other_event_id},
+        )
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_character_resources_last_event_id_on_the_same_timeline_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    version = make_ruleset_version_for_world(db_connection, f.world_id)
+    resource = _make_resource_definition(db_connection, version, "sorcery_point")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, world_time_id)
+
+    db_connection.execute(
+        text(
+            "INSERT INTO campaign.character_resources "
+            "(timeline_id, character_id, resource_definition_id, current_amount, maximum_amount, "
+            " last_event_id) VALUES (:tl, :c, :r, 2, 3, :e)"
+        ),
+        {"tl": f.timeline_id, "c": f.character_id, "r": resource, "e": event_id},
+    )
+
+
+def test_character_resources_last_event_id_from_a_different_timeline_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    version = make_ruleset_version_for_world(db_connection, f.world_id)
+    resource = _make_resource_definition(db_connection, version, "bardic_inspiration")
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other timeline")
+    world_time_id = make_world_time(db_connection, f.world_id, 100)
+    other_event_id = make_event(db_connection, f.world_id, other_timeline, world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO campaign.character_resources "
+                "(timeline_id, character_id, resource_definition_id, current_amount, "
+                " maximum_amount, last_event_id) VALUES (:tl, :c, :r, 2, 3, :e)"
+            ),
+            {"tl": f.timeline_id, "c": f.character_id, "r": resource, "e": other_event_id},
+        )
+    assert "belongs to timeline" in str(exc.value)

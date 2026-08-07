@@ -4,11 +4,13 @@ reflection, no database.
 src/dnd_ai/persistence/tables.py was split into a per-domain package
 (DEVELOPMENT.md §2.1) to keep the file each schema change touches bounded
 instead of one file every phase adds to. These tests guard that the split
-stayed mechanical: the same 85 schema-qualified tables exist, under the
-same names, still reachable both from their owning domain module and from
-the package's top-level re-export — so `from dnd_ai.persistence.tables
+stayed mechanical: every schema-qualified table exists, under the same
+name, still reachable both from its owning domain module and from the
+package's top-level re-export — so `from dnd_ai.persistence.tables
 import worlds` (or `metadata`) keeps working exactly as it did against the
-monolithic module.
+monolithic module. 85 tables at the split (Phase 6 entry gates); revision
+057 added the narrative.* domain (9 tables), and revision 061 added the
+interaction.* domain (8 tables), on top of that baseline.
 """
 
 import importlib
@@ -80,6 +82,16 @@ EXPECTED_TABLES = {
         "core.world_times",
         "core.worlds",
     ],
+    "interaction": [
+        "interaction.actions",
+        "interaction.check_requests",
+        "interaction.check_results",
+        "interaction.consequences",
+        "interaction.external_messages",
+        "interaction.interaction_types",
+        "interaction.interactions",
+        "interaction.targets",
+    ],
     "knowledge": [
         "knowledge.entity_knowledge",
         "knowledge.knowledge_items",
@@ -98,6 +110,17 @@ EXPECTED_TABLES = {
         "world.dungeons",
         "world.locations",
         "world.settlements",
+    ],
+    "narrative": [
+        "narrative.event_causes",
+        "narrative.event_effects",
+        "narrative.event_locations",
+        "narrative.event_observations",
+        "narrative.event_participant_roles",
+        "narrative.event_participants",
+        "narrative.event_statuses",
+        "narrative.event_types",
+        "narrative.events",
     ],
     "rules": [
         "rules.abilities",

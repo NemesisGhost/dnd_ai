@@ -5,11 +5,13 @@ its branch point, both belong to the right world, a world has at most one
 primary timeline, and the parent chain cannot cycle.
 
 It deliberately does NOT prove branch *isolation* — that a timeline inherits
-parent history only up to its branch point (CLAUDE.md rule 7). There is no
-history to inherit until narrative.events lands in Phase 6, so there is nothing
-here that could leak. docs/PLAN.md records that as a Phase 6 exit criterion and
-this phase as explicitly not covering it; see test_party_memberships.py for the
-membership-row scoping that Phase 3 *can* prove.
+parent history only up to its branch point (CLAUDE.md rule 7). Phase 6
+(revisions 057-059) adds narrative.events, campaign.timelines.branch_event_id,
+and campaign.effective_events() to prove that; see
+tests/database/test_timeline_branch_event.py for branch_event_id validation
+and tests/scenario/test_branch_effective_history.py for the effective-history
+exclusion scenario itself. See test_party_memberships.py for the
+membership-row scoping that Phase 3 proves independently.
 """
 
 import uuid
@@ -228,29 +230,3 @@ def test_a_longer_parent_cycle_is_rejected(db_connection: Connection, world_id: 
             {"p": second, "bt": branch_time, "t": first},
         )
     assert "cycle" in str(exc.value)
-
-
-# ---------------------------------------------------------------------------
-# Deferred to Phase 6
-# ---------------------------------------------------------------------------
-
-
-def test_branch_event_id_is_not_present_yet(db_connection: Connection) -> None:
-    """Phase 3 omits the column rather than storing an unconstrained UUID
-    (docs/PLAN.md Phase 3 first-time obligations). Phase 6 adds it together
-    with its foreign key to narrative.events.
-
-    This test is expected to fail when Phase 6 lands — that is the point. It
-    marks the deferral so closing it is deliberate rather than forgotten.
-    """
-    exists = db_connection.execute(
-        text("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'campaign' AND table_name = 'timelines'
-              AND column_name = 'branch_event_id'
-        """)
-    ).scalar()
-    assert exists is None, (
-        "branch_event_id exists — if Phase 6 added it, delete this test and "
-        "add the inherited-history isolation tests it was holding a place for"
-    )

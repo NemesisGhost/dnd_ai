@@ -179,20 +179,36 @@ entity_knowledge = Table(
     Column("confidence", PERCENTAGE_0_100),
     Column("interpretation", Text()),
     Column(
-        "learned_source",
-        Text(),
-        comment=(
-            "Free-text placeholder for how this was learned until interaction/event "
-            "records exist (Phase 6) to reference instead."
-        ),
-    ),
-    Column(
         "learned_at_world_time_id",
         UUID(),
         ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
     ),
     Column("willing_to_share", Boolean(), nullable=False, server_default=text("true")),
     *_timestamps(),
+    # Added by revision 063, once interaction.interactions/narrative.events
+    # existed to point at — replaces the revision-041 learned_source TEXT
+    # placeholder.
+    Column(
+        "learned_via_interaction_id",
+        UUID(),
+        ForeignKey("interaction.interactions.interaction_id", ondelete="SET NULL"),
+        comment=(
+            "The interaction through which this knower learned this, when recorded. "
+            "At most one of learned_via_interaction_id/learned_via_event_id is set; "
+            "both NULL means an unrecorded or administrative source (e.g. seeded "
+            "starting knowledge). Closes the free-text learned_source placeholder "
+            "(revision 041)."
+        ),
+    ),
+    Column(
+        "learned_via_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event through which this knower learned this (e.g. witnessing it "
+            "directly), when recorded. See learned_via_interaction_id."
+        ),
+    ),
     UniqueConstraint(
         "timeline_id", "knowledge_item_id", "knower_entity_id", name="ux_entity_knowledge_current"
     ),
@@ -213,6 +229,16 @@ Index(
     "ix_entity_knowledge_learned_at_world_time_id",
     entity_knowledge.c.learned_at_world_time_id,
     postgresql_where=entity_knowledge.c.learned_at_world_time_id.isnot(None),
+)
+Index(
+    "ix_entity_knowledge_learned_via_interaction_id",
+    entity_knowledge.c.learned_via_interaction_id,
+    postgresql_where=entity_knowledge.c.learned_via_interaction_id.isnot(None),
+)
+Index(
+    "ix_entity_knowledge_learned_via_event_id",
+    entity_knowledge.c.learned_via_event_id,
+    postgresql_where=entity_knowledge.c.learned_via_event_id.isnot(None),
 )
 
 party_discoveries = Table(
@@ -238,15 +264,31 @@ party_discoveries = Table(
         UUID(),
         ForeignKey("core.world_times.world_time_id", ondelete="SET NULL"),
     ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 063, once interaction.interactions/narrative.events
+    # existed to point at — replaces the revision-041 discovery_method TEXT
+    # placeholder.
     Column(
-        "discovery_method",
-        Text(),
+        "discovered_via_interaction_id",
+        UUID(),
+        ForeignKey("interaction.interactions.interaction_id", ondelete="SET NULL"),
         comment=(
-            "Free-text placeholder for how this was discovered until interaction/event "
-            "records exist (Phase 6) to reference instead."
+            "The interaction through which this was discovered (a search check, a "
+            "conversation), when recorded. At most one of "
+            "discovered_via_interaction_id/discovered_via_event_id is set; both NULL "
+            "means an unrecorded or administrative source. Closes the free-text "
+            "discovery_method placeholder (revision 041)."
         ),
     ),
-    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column(
+        "discovered_via_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event through which this was discovered, when recorded. See "
+            "discovered_via_interaction_id."
+        ),
+    ),
     schema="knowledge",
     comment=(
         "The discovery record: when and how a party or individual knower learned a "
@@ -272,6 +314,16 @@ Index(
     "ix_party_discoveries_discovered_at_world_time_id",
     party_discoveries.c.discovered_at_world_time_id,
     postgresql_where=party_discoveries.c.discovered_at_world_time_id.isnot(None),
+)
+Index(
+    "ix_party_discoveries_discovered_via_interaction_id",
+    party_discoveries.c.discovered_via_interaction_id,
+    postgresql_where=party_discoveries.c.discovered_via_interaction_id.isnot(None),
+)
+Index(
+    "ix_party_discoveries_discovered_via_event_id",
+    party_discoveries.c.discovered_via_event_id,
+    postgresql_where=party_discoveries.c.discovered_via_event_id.isnot(None),
 )
 Index(
     "ux_party_discoveries_party",

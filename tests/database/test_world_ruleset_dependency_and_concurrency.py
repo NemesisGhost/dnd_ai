@@ -1,10 +1,12 @@
 """World-ruleset allow-list dependency protection and its concurrency
-safety (revisions 031, 035).
+safety (revisions 031, 035, 068).
 
 Split from test_phase4_remaining_issues.py (DEVELOPMENT.md §2.1): removing
 or repointing a world's allowed ruleset must be rejected while any
 species/build/condition/resource/language depends on it, including under
-concurrent creation racing the removal.
+concurrent creation racing the removal. Revision 068 (a Phase 6 exit-review
+correction) closed the last two gaps in this list: an interaction check
+request's ability/skill, and a conditional route's required ability/skill.
 """
 
 import threading
@@ -17,12 +19,20 @@ from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
     current_ruleset_version_id,
+    make_ability,
+    make_action,
+    make_area_connection,
     make_bare_ruleset,
     make_campaign,
     make_character,
+    make_dungeon,
+    make_dungeon_area,
+    make_interaction,
     make_ruleset_for_world,
+    make_skill,
     make_timeline,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -236,6 +246,114 @@ def test_repointing_a_ruleset_a_characters_language_depends_on_is_rejected(
             {"new": other_ruleset, "w": alf.world_id, "old": alf.ruleset_id},
         )
     assert "language from it" in str(exc.value)
+
+
+def test_removing_a_ruleset_a_check_requests_skill_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    ability = make_ability(db_connection, alf.version_id)
+    skill = make_skill(db_connection, alf.version_id, ability)
+    actor = make_character(db_connection, alf.world_id)
+    timeline_id = make_timeline(db_connection, alf.world_id, is_primary=True)
+    world_time_id = make_world_time(db_connection, alf.world_id, 100)
+    interaction_id = make_interaction(db_connection, timeline_id, world_time_id)
+    action_id = make_action(db_connection, interaction_id, actor)
+    db_connection.execute(
+        text(
+            "INSERT INTO interaction.check_requests "
+            "(action_id, actor_entity_id, check_kind, skill_id, difficulty) "
+            "VALUES (:a, :actor, 'skill_check', :s, 10)"
+        ),
+        {"a": action_id, "actor": actor, "s": skill},
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        alf.delete(db_connection)
+    assert "check request" in str(exc.value)
+
+
+def test_repointing_a_ruleset_a_check_requests_skill_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    ability = make_ability(db_connection, alf.version_id)
+    skill = make_skill(db_connection, alf.version_id, ability)
+    actor = make_character(db_connection, alf.world_id)
+    timeline_id = make_timeline(db_connection, alf.world_id, is_primary=True)
+    world_time_id = make_world_time(db_connection, alf.world_id, 100)
+    interaction_id = make_interaction(db_connection, timeline_id, world_time_id)
+    action_id = make_action(db_connection, interaction_id, actor)
+    db_connection.execute(
+        text(
+            "INSERT INTO interaction.check_requests "
+            "(action_id, actor_entity_id, check_kind, skill_id, difficulty) "
+            "VALUES (:a, :actor, 'skill_check', :s, 10)"
+        ),
+        {"a": action_id, "actor": actor, "s": skill},
+    )
+    other_ruleset = make_bare_ruleset(db_connection, f"other_check_used_{uuid.uuid4().hex[:8]}")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                "WHERE world_id = :w AND ruleset_id = :old"
+            ),
+            {"new": other_ruleset, "w": alf.world_id, "old": alf.ruleset_id},
+        )
+    assert "check request" in str(exc.value)
+
+
+def test_removing_a_ruleset_a_conditional_routes_skill_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    ability = make_ability(db_connection, alf.version_id)
+    skill = make_skill(db_connection, alf.version_id, ability)
+    dungeon_id = make_dungeon(db_connection, alf.world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+    connection_id = make_area_connection(db_connection, area_a, area_b)
+    db_connection.execute(
+        text(
+            "UPDATE world.area_connections SET is_conditional = true, "
+            "condition_description = 'requires a check', required_check_kind = 'skill_check', "
+            "required_skill_id = :s, required_difficulty = 10 WHERE area_connection_id = :c"
+        ),
+        {"s": skill, "c": connection_id},
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        alf.delete(db_connection)
+    assert "conditional route" in str(exc.value)
+
+
+def test_repointing_a_ruleset_a_conditional_routes_skill_depends_on_is_rejected(
+    db_connection: Connection, alf: AllowListFixture
+) -> None:
+    ability = make_ability(db_connection, alf.version_id)
+    skill = make_skill(db_connection, alf.version_id, ability)
+    dungeon_id = make_dungeon(db_connection, alf.world_id)
+    area_a = make_dungeon_area(db_connection, dungeon_id)
+    area_b = make_dungeon_area(db_connection, dungeon_id)
+    connection_id = make_area_connection(db_connection, area_a, area_b)
+    db_connection.execute(
+        text(
+            "UPDATE world.area_connections SET is_conditional = true, "
+            "condition_description = 'requires a check', required_check_kind = 'skill_check', "
+            "required_skill_id = :s, required_difficulty = 10 WHERE area_connection_id = :c"
+        ),
+        {"s": skill, "c": connection_id},
+    )
+    other_ruleset = make_bare_ruleset(db_connection, f"other_route_used_{uuid.uuid4().hex[:8]}")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE rules.world_rulesets SET ruleset_id = :new "
+                "WHERE world_id = :w AND ruleset_id = :old"
+            ),
+            {"new": other_ruleset, "w": alf.world_id, "old": alf.ruleset_id},
+        )
+    assert "conditional route" in str(exc.value)
 
 
 class ConcurrencyWorld:

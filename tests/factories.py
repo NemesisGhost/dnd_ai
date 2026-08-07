@@ -150,26 +150,54 @@ def make_timeline(
     is_primary: bool = False,
     parent_timeline_id: uuid.UUID | None = None,
     branch_world_time_id: uuid.UUID | None = None,
+    branch_event_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    value = connection.execute(
-        text("""
+    """branch_event_id is omitted from the INSERT column list entirely when
+    not given, rather than always sent as NULL — tests/database/
+    test_phase5_populated_upgrade.py deliberately calls this against a
+    database pinned at revision 042, before campaign.timelines.
+    branch_event_id existed (revision 058); every other caller passing no
+    branch_event_id must keep working unchanged there."""
+    params = {
+        "world": world_id,
+        "name": name,
+        "primary": is_primary,
+        "parent": parent_timeline_id,
+        "branch": branch_world_time_id,
+        "status": status_id(connection, "lifecycle_statuses", "active"),
+    }
+    if branch_event_id is not None:
+        query = """
+            INSERT INTO campaign.timelines
+                (world_id, name, is_primary, parent_timeline_id, branch_world_time_id,
+                 branch_event_id, lifecycle_status_id)
+            VALUES (:world, :name, :primary, :parent, :branch, :branch_event, :status)
+            RETURNING timeline_id
+        """
+        params["branch_event"] = branch_event_id
+    else:
+        query = """
             INSERT INTO campaign.timelines
                 (world_id, name, is_primary, parent_timeline_id, branch_world_time_id,
                  lifecycle_status_id)
             VALUES (:world, :name, :primary, :parent, :branch, :status)
             RETURNING timeline_id
-        """),
-        {
-            "world": world_id,
-            "name": name,
-            "primary": is_primary,
-            "parent": parent_timeline_id,
-            "branch": branch_world_time_id,
-            "status": status_id(connection, "lifecycle_statuses", "active"),
-        },
-    ).scalar()
+        """
+    value = connection.execute(text(query), params).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def set_timeline_branch_event(
+    connection: Connection, timeline_id: uuid.UUID, branch_event_id: uuid.UUID | None
+) -> None:
+    """Set/clear branch_event_id on an already-created timeline — for tests
+    that need to exercise campaign.enforce_timeline_branch()'s UPDATE path,
+    not just the INSERT path make_timeline covers."""
+    connection.execute(
+        text("UPDATE campaign.timelines SET branch_event_id = :e WHERE timeline_id = :t"),
+        {"e": branch_event_id, "t": timeline_id},
+    )
 
 
 def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Company") -> uuid.UUID:
@@ -245,6 +273,39 @@ def make_species(
             RETURNING species_id
         """),
         {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_ability(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "strength"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.abilities (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING ability_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_skill(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    ability_id: uuid.UUID,
+    code: str = "stealth",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.skills (ruleset_version_id, ability_id, code, display_name)
+            VALUES (:v, :a, :c, :c)
+            RETURNING skill_id
+        """),
+        {"v": ruleset_version_id, "a": ability_id, "c": code},
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
@@ -650,6 +711,254 @@ def make_knowledge_item(
         },
     )
     return knowledge_item_id
+
+
+def make_event(
+    connection: Connection,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    *,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    event_type_code: str = "other",
+    event_status_code: str = "recorded",
+    details: str | None = None,
+    name: str = "Test Event",
+) -> uuid.UUID:
+    """A core.entities row plus its narrative.events row. Returns the shared
+    UUID (the event_id, same as the entity_id).
+
+    world_time_id has no default — callers exercising branch/effective-history
+    behavior need explicit control over ordering (sort_key), so guessing one
+    here would hide bugs rather than catch them.
+    """
+    event_entity_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "event")
+    event_id = make_entity(connection, world_id, event_entity_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO narrative.events
+                (event_id, timeline_id, campaign_id, session_id, event_type_id,
+                 event_status_id, world_time_id, details)
+            VALUES (
+                :id, :timeline, :campaign, :session,
+                (SELECT event_type_id FROM narrative.event_types WHERE code = :etc),
+                (SELECT event_status_id FROM narrative.event_statuses WHERE code = :esc),
+                :world_time, :details
+            )
+        """),
+        {
+            "id": event_id,
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "etc": event_type_code,
+            "esc": event_status_code,
+            "world_time": world_time_id,
+            "details": details,
+        },
+    )
+    return event_id
+
+
+def make_interaction(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    *,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    interaction_type_code: str = "other",
+    status: str = "initiated",
+    resulting_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.interactions
+                (timeline_id, campaign_id, session_id, interaction_type_id, world_time_id,
+                 status, resulting_event_id)
+            VALUES (
+                :timeline, :campaign, :session,
+                (SELECT interaction_type_id FROM interaction.interaction_types WHERE code = :itc),
+                :world_time, :status, :resulting_event
+            )
+            RETURNING interaction_id
+        """),
+        {
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "itc": interaction_type_code,
+            "world_time": world_time_id,
+            "status": status,
+            "resulting_event": resulting_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_action(
+    connection: Connection,
+    interaction_id: uuid.UUID,
+    actor_entity_id: uuid.UUID,
+    *,
+    sequence_number: int = 0,
+    description: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.actions
+                (interaction_id, actor_entity_id, sequence_number, description)
+            VALUES (:interaction, :actor, :seq, :description)
+            RETURNING action_id
+        """),
+        {
+            "interaction": interaction_id,
+            "actor": actor_entity_id,
+            "seq": sequence_number,
+            "description": description,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_target(
+    connection: Connection,
+    action_id: uuid.UUID,
+    *,
+    target_entity_id: uuid.UUID | None = None,
+    target_area_connection_id: uuid.UUID | None = None,
+    target_area_feature_id: uuid.UUID | None = None,
+    target_area_hazard_id: uuid.UUID | None = None,
+    target_area_interactable_id: uuid.UUID | None = None,
+    target_component: str | None = None,
+    target_description: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.targets
+                (action_id, target_entity_id, target_area_connection_id, target_area_feature_id,
+                 target_area_hazard_id, target_area_interactable_id, target_component,
+                 target_description)
+            VALUES (:action, :entity, :connection, :feature, :hazard, :interactable, :component,
+                    :description)
+            RETURNING target_id
+        """),
+        {
+            "action": action_id,
+            "entity": target_entity_id,
+            "connection": target_area_connection_id,
+            "feature": target_area_feature_id,
+            "hazard": target_area_hazard_id,
+            "interactable": target_area_interactable_id,
+            "component": target_component,
+            "description": target_description,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_check_request(
+    connection: Connection,
+    action_id: uuid.UUID,
+    actor_entity_id: uuid.UUID,
+    *,
+    check_kind: str = "ability_check",
+    ability_id: uuid.UUID | None = None,
+    skill_id: uuid.UUID | None = None,
+    difficulty: int = 10,
+    advantage_state: str = "normal",
+    stakes: str | None = None,
+    target_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.check_requests
+                (action_id, actor_entity_id, check_kind, ability_id, skill_id, difficulty,
+                 advantage_state, stakes, target_id)
+            VALUES (:action, :actor, :kind, :ability, :skill, :difficulty, :advantage, :stakes,
+                    :target)
+            RETURNING check_request_id
+        """),
+        {
+            "action": action_id,
+            "actor": actor_entity_id,
+            "kind": check_kind,
+            "ability": ability_id,
+            "skill": skill_id,
+            "difficulty": difficulty,
+            "advantage": advantage_state,
+            "stakes": stakes,
+            "target": target_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_check_result(
+    connection: Connection,
+    check_request_id: uuid.UUID,
+    *,
+    roll: int | None = None,
+    total_modifier: int | None = None,
+    total: int | None = None,
+    degree_of_success: str = "success",
+    is_visible_to_players: bool = True,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.check_results
+                (check_request_id, roll, total_modifier, total, degree_of_success,
+                 is_visible_to_players)
+            VALUES (:request, :roll, :total_modifier, :total, :degree, :visible)
+            RETURNING check_result_id
+        """),
+        {
+            "request": check_request_id,
+            "roll": roll,
+            "total_modifier": total_modifier,
+            "total": total,
+            "degree": degree_of_success,
+            "visible": is_visible_to_players,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_consequence(
+    connection: Connection,
+    interaction_id: uuid.UUID,
+    *,
+    consequence_type: str = "observation",
+    status: str = "proposed",
+    resulting_event_id: uuid.UUID | None = None,
+    resulting_party_discovery_id: uuid.UUID | None = None,
+    description: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.consequences
+                (interaction_id, consequence_type, status, resulting_event_id,
+                 resulting_party_discovery_id, description)
+            VALUES (:interaction, :type, :status, :event, :discovery, :description)
+            RETURNING consequence_id
+        """),
+        {
+            "interaction": interaction_id,
+            "type": consequence_type,
+            "status": status,
+            "event": resulting_event_id,
+            "discovery": resulting_party_discovery_id,
+            "description": description,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
 
 
 def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:

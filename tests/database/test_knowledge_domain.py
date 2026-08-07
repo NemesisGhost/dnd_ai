@@ -1,11 +1,15 @@
 """knowledge.knowledge_items, .entity_knowledge, .party_discoveries
 (revision 041, pulled forward from Phase 7 — see that revision's docstring).
+Real source provenance (revision 063) is covered here too, since it lives on
+these same two tables.
 
 Covers: at-most-one-subject on a knowledge item, same-world enforcement
-across all three tables, exactly-one-recipient on party_discoveries, and the
-scenario at the heart of Phase 5's "hidden connections remain distinct from
-party knowledge" exit criterion: a hidden connection's own row never reveals
-whether any party has found it.
+across all three tables, exactly-one-recipient on party_discoveries, the
+at-most-one-source rule and timeline consistency for
+learned_via_interaction_id/_event_id and discovered_via_interaction_id/
+_event_id, and the scenario at the heart of Phase 5's "hidden connections
+remain distinct from party knowledge" exit criterion: a hidden connection's
+own row never reveals whether any party has found it.
 """
 
 import pytest
@@ -17,10 +21,13 @@ from tests.factories import (
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_event,
+    make_interaction,
     make_knowledge_item,
     make_party,
     make_timeline,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -32,6 +39,7 @@ class Fixture:
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
+        self.world_time_id = make_world_time(connection, self.world_id, 100)
         self.dungeon_id = make_dungeon(connection, self.world_id)
         self.area_a = make_dungeon_area(connection, self.dungeon_id, name="Entry Hall")
         self.area_b = make_dungeon_area(connection, self.dungeon_id, name="Vault")
@@ -172,13 +180,14 @@ def test_a_party_can_discover_a_hidden_connection(db_connection: Connection, f: 
     item_id = make_knowledge_item(
         db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
     )
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
     db_connection.execute(
         text(
             "INSERT INTO knowledge.party_discoveries "
-            "(timeline_id, knowledge_item_id, party_id, discovery_method) "
-            "VALUES (:tl, :k, :p, 'search_check')"
+            "(timeline_id, knowledge_item_id, party_id, discovered_via_interaction_id) "
+            "VALUES (:tl, :k, :p, :i)"
         ),
-        {"tl": f.timeline_id, "k": item_id, "p": f.party_id},
+        {"tl": f.timeline_id, "k": item_id, "p": f.party_id, "i": interaction_id},
     )
 
 
@@ -255,6 +264,141 @@ def test_party_discoveries_requires_world_agreement(db_connection: Connection, f
             {"tl": f.timeline_id, "k": item_id, "p": foreign_party},
         )
     assert "mixes worlds" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Real source provenance (revision 063): entity_knowledge and
+# party_discoveries "learned/discovered via" columns
+# ---------------------------------------------------------------------------
+
+
+def test_a_belief_can_record_the_event_it_was_learned_from(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    npc_id = make_character(db_connection, f.world_id, entity_type_code="npc")
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.world_time_id)
+
+    db_connection.execute(
+        text(
+            "INSERT INTO knowledge.entity_knowledge "
+            "(timeline_id, knowledge_item_id, knower_entity_id, learned_via_event_id) "
+            "VALUES (:tl, :k, :n, :e)"
+        ),
+        {"tl": f.timeline_id, "k": item_id, "n": npc_id, "e": event_id},
+    )
+
+
+def test_a_belief_cannot_name_both_an_interaction_and_an_event_source(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    npc_id = make_character(db_connection, f.world_id, entity_type_code="npc")
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.world_time_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO knowledge.entity_knowledge "
+                "(timeline_id, knowledge_item_id, knower_entity_id, "
+                "learned_via_interaction_id, learned_via_event_id) VALUES (:tl, :k, :n, :i, :e)"
+            ),
+            {"tl": f.timeline_id, "k": item_id, "n": npc_id, "i": interaction_id, "e": event_id},
+        )
+    assert "ck_entity_knowledge_at_most_one_source" in str(exc.value)
+
+
+def test_a_beliefs_source_interaction_must_belong_to_the_same_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    npc_id = make_character(db_connection, f.world_id, entity_type_code="npc")
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other Timeline")
+    other_interaction = make_interaction(db_connection, other_timeline, f.world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO knowledge.entity_knowledge "
+                "(timeline_id, knowledge_item_id, knower_entity_id, learned_via_interaction_id) "
+                "VALUES (:tl, :k, :n, :i)"
+            ),
+            {"tl": f.timeline_id, "k": item_id, "n": npc_id, "i": other_interaction},
+        )
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_a_discovery_can_record_the_interaction_it_came_from(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+
+    db_connection.execute(
+        text(
+            "INSERT INTO knowledge.party_discoveries "
+            "(timeline_id, knowledge_item_id, party_id, discovered_via_interaction_id) "
+            "VALUES (:tl, :k, :p, :i)"
+        ),
+        {"tl": f.timeline_id, "k": item_id, "p": f.party_id, "i": interaction_id},
+    )
+
+
+def test_a_discovery_cannot_name_both_an_interaction_and_an_event_source(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.world_time_id)
+
+    with pytest.raises(IntegrityError) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO knowledge.party_discoveries "
+                "(timeline_id, knowledge_item_id, party_id, discovered_via_interaction_id, "
+                "discovered_via_event_id) VALUES (:tl, :k, :p, :i, :e)"
+            ),
+            {
+                "tl": f.timeline_id,
+                "k": item_id,
+                "p": f.party_id,
+                "i": interaction_id,
+                "e": event_id,
+            },
+        )
+    assert "ck_party_discoveries_at_most_one_source" in str(exc.value)
+
+
+def test_a_discoverys_source_event_must_belong_to_the_same_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    item_id = make_knowledge_item(
+        db_connection, f.world_id, subject_area_connection_id=f.hidden_connection_id
+    )
+    other_timeline = make_timeline(db_connection, f.world_id, name="Other Timeline")
+    other_event = make_event(db_connection, f.world_id, other_timeline, f.world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "INSERT INTO knowledge.party_discoveries "
+                "(timeline_id, knowledge_item_id, party_id, discovered_via_event_id) "
+                "VALUES (:tl, :k, :p, :e)"
+            ),
+            {"tl": f.timeline_id, "k": item_id, "p": f.party_id, "e": other_event},
+        )
+    assert "belongs to timeline" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

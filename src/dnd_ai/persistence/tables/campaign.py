@@ -76,6 +76,19 @@ timelines = Table(
         nullable=False,
     ),
     *_timestamps(),
+    # Added by revision 058, once narrative.events existed to point at.
+    Column(
+        "branch_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="RESTRICT"),
+        comment=(
+            "The event, on the parent timeline, that caused this branch to diverge. "
+            "NULL for a root timeline and for any branch not yet given a causal event. "
+            "Must belong to parent_timeline_id and occur at or before "
+            "branch_world_time_id — enforced by campaign.enforce_timeline_branch() "
+            "(docs/architecture/DATABASE_MODEL.md §6.1)."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A branching chronology within a world. Campaigns are played on a timeline; a "
@@ -94,6 +107,11 @@ Index(
     "ix_timelines_branch_world_time_id",
     timelines.c.branch_world_time_id,
     postgresql_where=timelines.c.branch_world_time_id.isnot(None),
+)
+Index(
+    "ix_timelines_branch_event_id",
+    timelines.c.branch_event_id,
+    postgresql_where=timelines.c.branch_event_id.isnot(None),
 )
 Index(
     "ux_timelines_one_primary_per_world",
@@ -457,6 +475,17 @@ character_state = Table(
         ),
     ),
     *_timestamps(),
+    # Added by revision 066, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "character_id"),
     schema="campaign",
     comment=(
@@ -477,6 +506,11 @@ Index(
     "ix_character_state_character_build_id",
     character_state.c.character_build_id,
     postgresql_where=character_state.c.character_build_id.isnot(None),
+)
+Index(
+    "ix_character_state_last_event_id",
+    character_state.c.last_event_id,
+    postgresql_where=character_state.c.last_event_id.isnot(None),
 )
 
 character_conditions = Table(
@@ -502,6 +536,17 @@ character_conditions = Table(
     ),
     Column("source_description", Text()),
     Column("applied_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 066, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "character_id", "condition_id"),
     schema="campaign",
     comment=(
@@ -513,6 +558,11 @@ character_conditions = Table(
 
 Index("ix_character_conditions_character_id", character_conditions.c.character_id)
 Index("ix_character_conditions_condition_id", character_conditions.c.condition_id)
+Index(
+    "ix_character_conditions_last_event_id",
+    character_conditions.c.last_event_id,
+    postgresql_where=character_conditions.c.last_event_id.isnot(None),
+)
 
 character_resources = Table(
     "character_resources",
@@ -538,6 +588,17 @@ character_resources = Table(
     Column("current_amount", NONNEGATIVE_INTEGER, nullable=False),
     Column("maximum_amount", NONNEGATIVE_INTEGER, nullable=False),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 066, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "character_id", "resource_definition_id"),
     schema="campaign",
     comment=(
@@ -550,6 +611,11 @@ Index("ix_character_resources_character_id", character_resources.c.character_id)
 Index(
     "ix_character_resources_resource_definition_id",
     character_resources.c.resource_definition_id,
+)
+Index(
+    "ix_character_resources_last_event_id",
+    character_resources.c.last_event_id,
+    postgresql_where=character_resources.c.last_event_id.isnot(None),
 )
 
 # ---------------------------------------------------------------------------
@@ -576,6 +642,17 @@ location_state = Table(
     Column("alarm_level", NONNEGATIVE_INTEGER, nullable=False, server_default=text("0")),
     Column("condition_notes", Text()),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 060, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "location_id"),
     schema="campaign",
     comment=(
@@ -586,6 +663,11 @@ location_state = Table(
 )
 
 Index("ix_location_state_location_id", location_state.c.location_id)
+Index(
+    "ix_location_state_last_event_id",
+    location_state.c.last_event_id,
+    postgresql_where=location_state.c.last_event_id.isnot(None),
+)
 
 connection_statuses = _lookup_table(
     "campaign",
@@ -617,6 +699,17 @@ area_connection_state = Table(
         nullable=False,
     ),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 060, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "area_connection_id"),
     schema="campaign",
     comment=(
@@ -634,6 +727,11 @@ Index(
 Index(
     "ix_area_connection_state_connection_status_id",
     area_connection_state.c.connection_status_id,
+)
+Index(
+    "ix_area_connection_state_last_event_id",
+    area_connection_state.c.last_event_id,
+    postgresql_where=area_connection_state.c.last_event_id.isnot(None),
 )
 
 area_feature_state = Table(
@@ -654,6 +752,17 @@ area_feature_state = Table(
     Column("is_destroyed", Boolean(), nullable=False, server_default=text("false")),
     Column("condition_notes", Text()),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 060, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "area_feature_id"),
     schema="campaign",
     comment=(
@@ -663,6 +772,11 @@ area_feature_state = Table(
 )
 
 Index("ix_area_feature_state_area_feature_id", area_feature_state.c.area_feature_id)
+Index(
+    "ix_area_feature_state_last_event_id",
+    area_feature_state.c.last_event_id,
+    postgresql_where=area_feature_state.c.last_event_id.isnot(None),
+)
 
 hazard_statuses = _lookup_table(
     "campaign",
@@ -694,6 +808,17 @@ hazard_state = Table(
         nullable=False,
     ),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 060, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "area_hazard_id"),
     schema="campaign",
     comment=(
@@ -704,6 +829,11 @@ hazard_state = Table(
 
 Index("ix_hazard_state_area_hazard_id", hazard_state.c.area_hazard_id)
 Index("ix_hazard_state_hazard_status_id", hazard_state.c.hazard_status_id)
+Index(
+    "ix_hazard_state_last_event_id",
+    hazard_state.c.last_event_id,
+    postgresql_where=hazard_state.c.last_event_id.isnot(None),
+)
 
 interactable_statuses = _lookup_table(
     "campaign",
@@ -735,6 +865,17 @@ interactable_state = Table(
         nullable=False,
     ),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    # Added by revision 060, once narrative.events existed to point at.
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The event that produced this row's current values, when there was one "
+            "(conventions §13.4). NULL for rows predating this column and for "
+            "administrative/import-driven changes with no causing event."
+        ),
+    ),
     PrimaryKeyConstraint("timeline_id", "area_interactable_id"),
     schema="campaign",
     comment=(
@@ -751,6 +892,11 @@ Index(
 Index(
     "ix_interactable_state_interactable_status_id",
     interactable_state.c.interactable_status_id,
+)
+Index(
+    "ix_interactable_state_last_event_id",
+    interactable_state.c.last_event_id,
+    postgresql_where=interactable_state.c.last_event_id.isnot(None),
 )
 
 # ---------------------------------------------------------------------------
