@@ -80,7 +80,7 @@ module "database" {
   # DB sizing (dev-friendly defaults are already set in the module)
 
   # Avoid creating VPC endpoints in default VPC until SG rule uses actual CIDR (now fixed in module)
-  create_vpc_endpoints = true
+  create_vpc_endpoints = false
 
   additional_tags = var.additional_tags
 }
