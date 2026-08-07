@@ -552,6 +552,107 @@ def test_a_transfers_existing_source_and_recipient_world_checks_still_work(
     assert "mixes worlds" in str(exc.value)
 
 
+def test_a_transfers_caused_by_interaction_on_its_own_timeline_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.t100)
+
+    transfer_id = db_connection.execute(
+        text("""
+            INSERT INTO knowledge.information_transfers
+                (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                 caused_by_interaction_id)
+            VALUES (:tl, :source, :recipient, :interaction)
+            RETURNING information_transfer_id
+        """),
+        {
+            "tl": f.timeline_id,
+            "source": source_ek,
+            "recipient": recipient_npc,
+            "interaction": interaction_id,
+        },
+    ).scalar()
+
+    row = db_connection.execute(
+        text(
+            "SELECT caused_by_interaction_id FROM knowledge.information_transfers "
+            "WHERE information_transfer_id = :t"
+        ),
+        {"t": transfer_id},
+    ).one()
+    assert row.caused_by_interaction_id == interaction_id
+
+
+def test_a_transfers_caused_by_event_on_its_own_timeline_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.t100)
+
+    transfer_id = db_connection.execute(
+        text("""
+            INSERT INTO knowledge.information_transfers
+                (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                 caused_by_event_id)
+            VALUES (:tl, :source, :recipient, :event)
+            RETURNING information_transfer_id
+        """),
+        {
+            "tl": f.timeline_id,
+            "source": source_ek,
+            "recipient": recipient_npc,
+            "event": event_id,
+        },
+    ).scalar()
+
+    row = db_connection.execute(
+        text(
+            "SELECT caused_by_event_id FROM knowledge.information_transfers "
+            "WHERE information_transfer_id = :t"
+        ),
+        {"t": transfer_id},
+    ).one()
+    assert row.caused_by_event_id == event_id
+
+
+def test_a_transfers_occurred_at_world_time_in_the_timelines_world_is_accepted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+
+    transfer_id = db_connection.execute(
+        text("""
+            INSERT INTO knowledge.information_transfers
+                (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                 occurred_at_world_time_id)
+            VALUES (:tl, :source, :recipient, :world_time)
+            RETURNING information_transfer_id
+        """),
+        {
+            "tl": f.timeline_id,
+            "source": source_ek,
+            "recipient": recipient_npc,
+            "world_time": f.t100,
+        },
+    ).scalar()
+
+    row = db_connection.execute(
+        text(
+            "SELECT occurred_at_world_time_id FROM knowledge.information_transfers "
+            "WHERE information_transfer_id = :t"
+        ),
+        {"t": transfer_id},
+    ).one()
+    assert row.occurred_at_world_time_id == f.t100
+
+
 # ---------------------------------------------------------------------------
 # knowledge.knowledge_versions: append-only enforcement (revision 074)
 # ---------------------------------------------------------------------------
