@@ -104,5 +104,6 @@ Distinguished from schema-design defects per this project's own convention:
 ## Verification status
 
 - All local verification above ran and passed against AWS `dev` and a disposable scratch database: migration rename/re-target, upgrade/downgrade/upgrade round trip with `alembic check` clean at every step and exactly one head, a from-empty full `downgrade base → upgrade head` round trip, seed idempotency, the full `tests/unit`/`tests/database`/`tests/scenario` suite (2,058 tests), `ruff format --check`/`ruff check`/`mypy src` all clean.
-- Pushed to `agent/phase8-relationships-and-organizations` on top of PR #18's existing history.
-- CI result recorded once the corrected commit's head reaches a confirmed run — see the addendum below once available.
+- Pushed to `agent/phase8-relationships-and-organizations` on top of PR #18's existing history (commit `70fffbe`).
+- This pass's own final-head CI run reached a confirmed green run, polled via `scripts/wait_for_ci.py` to actual completion — run [`31217977401`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31217977401), `PASS`.
+- **Phase 8 is complete.** The PR's exact head commit has a confirmed green CI run, closing the bar every prior phase has been held to. The PR has not yet been merged to `main` — that is the user's call, not something done automatically as part of this verification.
