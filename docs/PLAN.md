@@ -1313,6 +1313,8 @@ Exit criteria:
 
 ### Phase 8: Relationships and organizations
 
+**Implementation complete, locally verified against AWS `dev`.** Revision 075 delivers the universal relationship model (`world.relationship_types`/`.relationships`/`.relationship_participants`/`.relationship_perspectives`), the specialized relationships (`world.organization_memberships`/`.employment_relationships`/`.ownership_relationships`/`.family_relationships`/`.political_relationships`), the organization CTI hierarchy (`world.organizations` plus `.businesses`/`.governments`/`.religious_organizations`/`.military_units`/`.political_factions`), the religion/religious-affiliation distinction (`world.religions`, `character.character_religious_affiliations`), and the two timeline-state tables `DATABASE_MODEL.md §17` had already named but no earlier phase built (`campaign.organization_state`/`.relationship_state`). Two commands (`src/dnd_ai/commands/relationships.py`): `evolve_relationship_reaction()` and `update_organization_status()`. All local verification — migration round trip, `alembic check`, the full test suite (2,022 tests), `ruff`/`mypy` — passed against AWS `dev`; not yet pushed or opened as a PR, so no CI run exists yet. See [PHASE8_VERIFICATION.md](PHASE8_VERIFICATION.md) for the full account.
+
 Deliver:
 
 - universal relationships

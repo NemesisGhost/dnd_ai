@@ -358,6 +358,18 @@ event_effects = Table(
     ),
     Column("application_status", Text(), nullable=False, server_default=text("'applied'::text")),
     *_timestamps(),
+    # Added by revision 075, once world.relationships existed to point at —
+    # the seventh column in the at-most-one-target pattern.
+    Column(
+        "target_relationship_id",
+        UUID(),
+        ForeignKey("world.relationships.relationship_id", ondelete="SET NULL"),
+        comment=(
+            "The relationship this event changed, when it has one — the "
+            "seventh target_* column in the at-most-one-of-N pattern "
+            "(revision 057, last extended by revision 073)."
+        ),
+    ),
     schema="narrative",
     comment=(
         "A change caused by an event: target, affected component, old/new "
@@ -402,6 +414,11 @@ Index(
     "ix_event_effects_target_quest_objective_id",
     event_effects.c.target_quest_objective_id,
     postgresql_where=event_effects.c.target_quest_objective_id.isnot(None),
+)
+Index(
+    "ix_event_effects_target_relationship_id",
+    event_effects.c.target_relationship_id,
+    postgresql_where=event_effects.c.target_relationship_id.isnot(None),
 )
 
 event_observations = Table(

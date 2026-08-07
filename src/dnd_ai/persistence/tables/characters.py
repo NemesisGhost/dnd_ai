@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 
 from ._shared import (
     NONNEGATIVE_INTEGER,
+    PERCENTAGE_0_100,
     _timestamps,
     _uuid_pk,
     metadata,
@@ -495,3 +496,55 @@ character_prepared_spells = Table(
 )
 
 Index("ix_character_prepared_spells_spell_id", character_prepared_spells.c.spell_id)
+
+# ---------------------------------------------------------------------------
+# character — religious affiliations (revision 075)
+# ---------------------------------------------------------------------------
+
+character_religious_affiliations = Table(
+    "character_religious_affiliations",
+    metadata,
+    _uuid_pk("character_religious_affiliation_id"),
+    Column(
+        "character_id",
+        UUID(),
+        ForeignKey("character.characters.character_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "religion_id",
+        UUID(),
+        ForeignKey("world.religions.religion_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("devotion", PERCENTAGE_0_100),
+    Column("belief_status", Text(), nullable=False, server_default=text("'believer'::text")),
+    Column("practice", Text()),
+    Column("interpretation", Text()),
+    Column("conflicts", Text()),
+    Column("public_display", Boolean(), nullable=False, server_default=text("true")),
+    *_timestamps(),
+    UniqueConstraint(
+        "character_id",
+        "religion_id",
+        name="ux_character_religious_affiliations_character_religion",
+    ),
+    schema="character",
+    comment=(
+        "A character's personal relationship with a religion — devotion, "
+        "belief status, practice, interpretation, conflicts, public display "
+        "(docs/DOMAIN_MODEL.md §10.7). Kept separate from organizational rank "
+        "(world.organization_memberships) and employment "
+        "(world.employment_relationships) — clergy office and organizational "
+        "rank remain organization memberships, not this table."
+    ),
+)
+
+Index(
+    "ix_character_religious_affiliations_character_id",
+    character_religious_affiliations.c.character_id,
+)
+Index(
+    "ix_character_religious_affiliations_religion_id",
+    character_religious_affiliations.c.religion_id,
+)
