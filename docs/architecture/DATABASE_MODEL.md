@@ -460,7 +460,7 @@ erDiagram
     WORLD_RELATIONSHIPS ||--o{ CAMPAIGN_RELATIONSHIP_STATE : state
 ```
 
-Built by **Phase 8 revision 075**.
+Built by **Phase 8 revision 076**.
 
 ### 10.1 Universal relationships
 
@@ -476,7 +476,7 @@ Relationships may connect any entities — an NPC parent of another NPC, an NPC 
 Class-table inheritance for relationship details that need typed columns beyond the generic participant/perspective shape (PK = `world.relationships.relationship_id`):
 
 - `world.organization_memberships` — `organization_id`, `member_entity_id`, `role`, `rank`, `is_public`, and an ADR 0010-shaped `effective_from_world_time_id`/`effective_to_world_time_id`/`membership_period` with an `EXCLUDE USING gist` over `(organization_id, member_entity_id, membership_period)` — the same overlap-prevention shape `campaign.party_memberships` established. Rejoining creates a new `world.relationships` row rather than reopening an old one.
-- `world.employment_relationships` — `employer_entity_id`, `employee_entity_id`, `job_title`, `is_current`/`effective_from`/`effective_to` (§12.4's "current records" pattern, not an exclusion constraint — no exit criterion requires overlap prevention for employment specifically)
+- `world.employment_relationships` — `employer_entity_id`, `employee_entity_id`, `job_title`, `effective_from_world_time_id`/`effective_to_world_time_id`; currentness is `effective_to_world_time_id IS NULL` (§12.4's "current records" pattern — one pattern per domain, not an exclusion constraint; no exit criterion requires overlap prevention for employment specifically)
 - `world.ownership_relationships` — `owner_entity_id`, `owned_entity_id`, `ownership_share`, `is_public`. Item ownership stays with the future Phase 9 item domain (`campaign.item_ownership`) rather than this table.
 - `world.family_relationships` — `family_unit_name`; participants (parent/child, sibling, spouse, …) are `world.relationship_participants` roles, not duplicated here
 - `world.political_relationships` — `is_active`, `treaty_terms`; the kind of political relationship is `world.relationships.relationship_type_id` (alliance/rivalry/war/control/…), not a second column here
@@ -706,8 +706,8 @@ Primary tables:
 - `campaign.area_feature_state` — built by Phase 5 revision 040 (`is_destroyed`, `condition_notes`); `last_event_id` added by Phase 6 revision 060
 - `campaign.hazard_state` — built by Phase 5 revision 040; `hazard_status_id` FK to a seeded lookup (armed/triggered/reset/bypassed/disarmed); `last_event_id` added by Phase 6 revision 060
 - `campaign.interactable_state` — built by Phase 5 revision 040; `interactable_status_id` FK to a seeded lookup (active/inactive/activated/deactivated/broken/locked); `last_event_id` added by Phase 6 revision 060
-- `campaign.organization_state` — built by **Phase 8 revision 075**; `organization_status_id` FK to a seeded lookup (active/dissolved/dormant/banned/underground/unknown); one current row per `(timeline, organization)`, using the shared `campaign.enforce_state_event_timeline()` guard directly.
-- `campaign.relationship_state` — built by **Phase 8 revision 075**; `relationship_status_id` FK to a seeded lookup (active/ended/broken/estranged/dormant/unknown) plus `affinity`/`trust`/`respect`/`fear`/`obligation`/`emotional_tone`/`private_interpretation`. Additional nullable `perspective_holder_entity_id` dimension — same NULL/set convention as `quest_state`'s `party_id`: `NULL` is the relationship's shared/objective status; set is that one participant's own current subjective reaction, and it must be a participant in the relationship (enforced by trigger). This is the row `src/dnd_ai/commands/relationships.py`'s `evolve_relationship_reaction()` updates — the "NPC and faction reactions can evolve from events" exit criterion — distinct from the stable, authored `world.relationship_perspectives` baseline (§10.1).
+- `campaign.organization_state` — built by **Phase 8 revision 076**; `organization_status_id` FK to a seeded lookup (active/dissolved/dormant/banned/underground/unknown); one current row per `(timeline, organization)`, using the shared `campaign.enforce_state_event_timeline()` guard directly.
+- `campaign.relationship_state` — built by **Phase 8 revision 076**; `relationship_status_id` FK to a seeded lookup (active/ended/broken/estranged/dormant/unknown) plus `affinity`/`trust`/`respect`/`fear`/`obligation`/`emotional_tone`/`private_interpretation`. Additional nullable `perspective_holder_entity_id` dimension — same NULL/set convention as `quest_state`'s `party_id`: `NULL` is the relationship's shared/objective status; set is that one participant's own current subjective reaction, and it must be a participant in the relationship (enforced by trigger). This is the row `src/dnd_ai/commands/relationships.py`'s `evolve_relationship_reaction()` updates — the "NPC and faction reactions can evolve from events" exit criterion — distinct from the stable, authored `world.relationship_perspectives` baseline (§10.1).
 - `campaign.item_state`
 - `campaign.quest_state` — built by **Phase 7 revision 073**; `quest_status_id` FK to a seeded lookup (unavailable/available/active/suspended/completed/failed/abandoned); `last_event_id` from creation, using the shared `campaign.enforce_state_event_timeline()` guard (revision 066) directly rather than needing its own copy. Additional nullable `party_id` dimension — see §14.
 - `campaign.objective_state` — built by **Phase 7 revision 073**; `objective_status_id` FK to a seeded lookup (hidden/available/active/completed/failed/skipped/superseded); same `last_event_id`/`party_id` shape as `quest_state`.

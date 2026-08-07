@@ -1236,7 +1236,7 @@ Index(
 )
 
 # ---------------------------------------------------------------------------
-# campaign — organization and relationship state (revision 075)
+# campaign — organization and relationship state (revision 076)
 # ---------------------------------------------------------------------------
 
 organization_statuses = _lookup_table(

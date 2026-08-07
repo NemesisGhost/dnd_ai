@@ -498,7 +498,7 @@ character_prepared_spells = Table(
 Index("ix_character_prepared_spells_spell_id", character_prepared_spells.c.spell_id)
 
 # ---------------------------------------------------------------------------
-# character — religious affiliations (revision 075)
+# character — religious affiliations (revision 076)
 # ---------------------------------------------------------------------------
 
 character_religious_affiliations = Table(

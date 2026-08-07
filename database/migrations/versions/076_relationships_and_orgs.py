@@ -2,8 +2,8 @@
 perspectives, specialized relationships, organizations and subtypes,
 religions, memberships, and their timeline state.
 
-Revision ID: 075_relationships_and_orgs
-Revises: 074_phase7_correction_pass
+Revision ID: 076_relationships_and_orgs
+Revises: 075_phase7_reparent_guards
 Create Date: 2026-08-07 12:00:00.000000
 
 Purpose:
@@ -136,14 +136,21 @@ Deliberate scoping decisions:
       'membership' — the command layer is expected to set this when it
       creates the pair, the same latitude narrative.quests takes with its
       story_arc_id (no check that the arc is "about" this quest).
-    - world.employment_relationships/.ownership_relationships use a single
-      is_current/effective_from/effective_to shape (§12.4's "current
-      records" pattern) rather than an ADR 0010 exclusion constraint like
+    - world.employment_relationships tracks validity with a current-records
+      shape (§12.4: `effective_to_world_time_id IS NULL` means current)
+      rather than an ADR 0010 exclusion constraint like
       organization_memberships. No exit criterion requires overlap
-      prevention for employment or ownership specifically, and building a
-      second exclusion-constrained interval table for every specialized
+      prevention for employment specifically, and building a second
+      exclusion-constrained interval table for every specialized
       relationship without a concrete caller would be speculative — see
-      docs/DATABASE_CONVENTIONS.md §33.1.
+      docs/DATABASE_CONVENTIONS.md §33.1. A deployable-integrity review
+      found the original draft mixed that pattern with a redundant,
+      unenforced `is_current` column with no world/chronology validation of
+      its own at all — §12.4 requires choosing one current-records pattern
+      per domain, not both — and removed the column. world.
+      ownership_relationships carries no temporal validity columns at all
+      (only `is_public`, an unrelated visibility flag), so it was never
+      part of this shape and needed no corresponding fix.
     - world.family_relationships/.political_relationships add one genuinely
       typed column each (family_unit_name; is_active/treaty_terms) beyond
       the generic participant/perspective shape, and no direct entity
@@ -172,8 +179,8 @@ See: docs/PLAN.md Phase 8 (relationships and organizations)
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "075_relationships_and_orgs"
-down_revision = "074_phase7_correction_pass"
+revision = "076_relationships_and_orgs"
+down_revision = "075_phase7_reparent_guards"
 branch_labels = None
 depends_on = None
 
@@ -511,6 +518,11 @@ def upgrade() -> None:
         BEFORE INSERT OR UPDATE ON world.relationships
         FOR EACH ROW EXECUTE FUNCTION world.enforce_relationship_validity();
     """)
+    op.execute("""
+        CREATE TRIGGER tr_relationships_enforce_immutable
+        BEFORE UPDATE ON world.relationships
+        FOR EACH ROW EXECUTE FUNCTION core.enforce_immutable_columns('world_id');
+    """)
 
     # ==========================================================================
     # 4. world.relationship_participants
@@ -587,6 +599,91 @@ def upgrade() -> None:
         CREATE TRIGGER tr_relationship_participants_enforce_world
         BEFORE INSERT OR UPDATE ON world.relationship_participants
         FOR EACH ROW EXECUTE FUNCTION world.enforce_relationship_participant_world();
+    """)
+
+    op.execute("""
+        CREATE OR REPLACE FUNCTION world.enforce_relationship_participant_removal()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_relationship_exists  BOOLEAN;
+            v_other_participant    BOOLEAN;
+            v_orphaned_perspective UUID;
+            v_orphaned_state       UUID;
+        BEGIN
+            IF TG_OP = 'UPDATE' AND NEW.relationship_id = OLD.relationship_id
+               AND NEW.entity_id = OLD.entity_id THEN
+                RETURN NEW;
+            END IF;
+
+            -- A cascading delete of the whole relationship removes perspectives
+            -- and relationship_state independently, through their own ON DELETE
+            -- CASCADE FKs to world.relationships. Skip the orphan check in that
+            -- case so a legitimate whole-relationship deletion is never blocked
+            -- by the order cascades happen to fire in.
+            SELECT EXISTS (
+                SELECT 1 FROM world.relationships WHERE relationship_id = OLD.relationship_id
+            ) INTO v_relationship_exists;
+            IF NOT v_relationship_exists THEN
+                RETURN COALESCE(NEW, OLD);
+            END IF;
+
+            SELECT EXISTS (
+                SELECT 1 FROM world.relationship_participants
+                WHERE relationship_id = OLD.relationship_id
+                  AND entity_id = OLD.entity_id
+                  AND relationship_participant_id != OLD.relationship_participant_id
+            ) INTO v_other_participant;
+            IF v_other_participant THEN
+                RETURN COALESCE(NEW, OLD);
+            END IF;
+
+            SELECT relationship_perspective_id INTO v_orphaned_perspective
+            FROM world.relationship_perspectives
+            WHERE relationship_id = OLD.relationship_id
+              AND perspective_holder_entity_id = OLD.entity_id
+            LIMIT 1;
+            IF v_orphaned_perspective IS NOT NULL THEN
+                RAISE EXCEPTION
+                    'Cannot remove entity % as a participant in relationship %: '
+                    'relationship_perspective % still holds a perspective on it',
+                    OLD.entity_id, OLD.relationship_id, v_orphaned_perspective
+                    USING ERRCODE = 'foreign_key_violation';
+            END IF;
+
+            SELECT relationship_state_id INTO v_orphaned_state
+            FROM campaign.relationship_state
+            WHERE relationship_id = OLD.relationship_id
+              AND perspective_holder_entity_id = OLD.entity_id
+            LIMIT 1;
+            IF v_orphaned_state IS NOT NULL THEN
+                RAISE EXCEPTION
+                    'Cannot remove entity % as a participant in relationship %: '
+                    'relationship_state % is still scoped to it',
+                    OLD.entity_id, OLD.relationship_id, v_orphaned_state
+                    USING ERRCODE = 'foreign_key_violation';
+            END IF;
+
+            RETURN COALESCE(NEW, OLD);
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION world.enforce_relationship_participant_removal() IS
+        'Reverse guard for world.relationship_participants: rejects an UPDATE '
+        'that changes (relationship_id, entity_id) or a DELETE when no other '
+        'participant row would still cover that pairing and an existing '
+        'world.relationship_perspectives or holder-scoped campaign.'
+        'relationship_state row still depends on it as a participant. Skipped '
+        'entirely when the parent world.relationships row no longer exists, so '
+        'deleting an entire relationship (and its cascading children) is never '
+        'blocked by cascade ordering.';
+    """)
+    op.execute("""
+        CREATE TRIGGER tr_relationship_participants_enforce_removal
+        BEFORE UPDATE OR DELETE ON world.relationship_participants
+        FOR EACH ROW EXECUTE FUNCTION world.enforce_relationship_participant_removal();
     """)
 
     # ==========================================================================
@@ -1294,7 +1391,6 @@ def upgrade() -> None:
             employee_entity_id             UUID NOT NULL
                                           REFERENCES core.entities(entity_id) ON DELETE CASCADE,
             job_title                       TEXT,
-            is_current                      BOOLEAN NOT NULL DEFAULT true,
             effective_from_world_time_id    UUID
                                           REFERENCES core.world_times(world_time_id)
                                           ON DELETE RESTRICT,
@@ -1305,16 +1401,21 @@ def upgrade() -> None:
             updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT ck_employment_relationships_not_self CHECK (
                 employer_entity_id IS DISTINCT FROM employee_entity_id
+            ),
+            CONSTRAINT ck_employment_relationships_end_requires_start CHECK (
+                effective_to_world_time_id IS NULL OR effective_from_world_time_id IS NOT NULL
             )
         );
     """)
     op.execute("""
         COMMENT ON TABLE world.employment_relationships IS
         'A specialized relationship: employer and employee '
-        '(docs/architecture/DATABASE_MODEL.md §10.2). is_current/effective_from/'
-        'effective_to (conventions §12.4''s "current records" pattern) rather '
-        'than an ADR 0010 exclusion constraint — see this revision''s docstring '
-        'scoping note.';
+        '(docs/architecture/DATABASE_MODEL.md §10.2). Currentness follows '
+        'conventions §12.4''s "effective_to_world_time_id IS NULL" pattern — the '
+        'one pattern per domain the convention requires, chosen over a separate '
+        'is_current column so contradictory current/end-dated combinations are '
+        'structurally impossible rather than merely guarded. No ADR 0010 '
+        'exclusion constraint — see this revision''s docstring scoping note.';
     """)
     op.execute("""
         CREATE TRIGGER tr_employment_relationships_set_updated_at
@@ -1349,6 +1450,10 @@ def upgrade() -> None:
             v_relationship_world  UUID;
             v_employer_world      UUID;
             v_employee_world      UUID;
+            v_start_world         UUID;
+            v_start_sort_key      BIGINT;
+            v_end_world           UUID;
+            v_end_sort_key        BIGINT;
         BEGIN
             SELECT world_id INTO v_relationship_world
             FROM world.relationships WHERE relationship_id = NEW.relationship_id;
@@ -1375,13 +1480,53 @@ def upgrade() -> None:
                     USING ERRCODE = 'integrity_constraint_violation';
             END IF;
 
+            IF NEW.effective_from_world_time_id IS NOT NULL THEN
+                SELECT world_id, sort_key INTO v_start_world, v_start_sort_key
+                FROM core.world_times WHERE world_time_id = NEW.effective_from_world_time_id;
+
+                IF v_start_world IS DISTINCT FROM v_relationship_world THEN
+                    RAISE EXCEPTION
+                        'Relationship % belongs to world %, but effective_from_world_time_id '
+                        '% belongs to world %',
+                        NEW.relationship_id, v_relationship_world,
+                        NEW.effective_from_world_time_id, v_start_world
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.effective_to_world_time_id IS NOT NULL THEN
+                SELECT world_id, sort_key INTO v_end_world, v_end_sort_key
+                FROM core.world_times WHERE world_time_id = NEW.effective_to_world_time_id;
+
+                IF v_end_world IS DISTINCT FROM v_relationship_world THEN
+                    RAISE EXCEPTION
+                        'Relationship % belongs to world %, but effective_to_world_time_id % '
+                        'belongs to world %',
+                        NEW.relationship_id, v_relationship_world,
+                        NEW.effective_to_world_time_id, v_end_world
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+
+                IF v_start_sort_key IS NOT NULL AND v_end_sort_key <= v_start_sort_key THEN
+                    RAISE EXCEPTION
+                        'Employment relationship % effective_to_world_time_id must be '
+                        'strictly after effective_from_world_time_id', NEW.relationship_id
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
             RETURN NEW;
         END;
         $$;
     """)
     op.execute("""
         COMMENT ON FUNCTION world.enforce_employment_relationship_world() IS
-        'Same-world guard for world.employment_relationships (conventions §9.5).';
+        'Same-world guard for world.employment_relationships (conventions §9.5), '
+        'plus: effective_from_world_time_id/effective_to_world_time_id, when set, '
+        'must belong to the relationship''s own world, and an end must be '
+        'strictly after the start (conventions §12.3) — the end-without-a-start '
+        'case itself is rejected by ck_employment_relationships_end_requires_start '
+        'before this trigger''s ordering check would even run.';
     """)
     op.execute("""
         CREATE TRIGGER tr_employment_relationships_enforce_world
@@ -1796,6 +1941,11 @@ def upgrade() -> None:
         BEFORE INSERT OR UPDATE ON campaign.relationship_state
         FOR EACH ROW EXECUTE FUNCTION campaign.enforce_state_event_timeline();
     """)
+    op.execute("""
+        CREATE TRIGGER tr_relationship_state_enforce_immutable
+        BEFORE UPDATE ON campaign.relationship_state
+        FOR EACH ROW EXECUTE FUNCTION core.enforce_immutable_columns('timeline_id');
+    """)
 
     # ==========================================================================
     # 17. narrative.event_types: relationship/organization seed rows
@@ -1840,6 +1990,74 @@ def upgrade() -> None:
         "ON narrative.event_effects (target_relationship_id) "
         "WHERE target_relationship_id IS NOT NULL;"
     )
+    op.execute("""
+        CREATE OR REPLACE FUNCTION narrative.enforce_event_effect_target_world()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_event_world    UUID;
+            v_target_world   UUID;
+        BEGIN
+            SELECT world_id INTO v_event_world
+            FROM core.entities WHERE entity_id = NEW.event_id;
+
+            IF NEW.target_entity_id IS NOT NULL THEN
+                SELECT world_id INTO v_target_world
+                FROM core.entities WHERE entity_id = NEW.target_entity_id;
+            ELSIF NEW.target_area_connection_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_connections ac
+                JOIN core.entities e ON e.entity_id = ac.from_dungeon_area_id
+                WHERE ac.area_connection_id = NEW.target_area_connection_id;
+            ELSIF NEW.target_area_feature_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_features af
+                JOIN core.entities e ON e.entity_id = af.dungeon_area_id
+                WHERE af.area_feature_id = NEW.target_area_feature_id;
+            ELSIF NEW.target_area_hazard_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_hazards ah
+                JOIN core.entities e ON e.entity_id = ah.dungeon_area_id
+                WHERE ah.area_hazard_id = NEW.target_area_hazard_id;
+            ELSIF NEW.target_area_interactable_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_interactables ai
+                JOIN core.entities e ON e.entity_id = ai.dungeon_area_id
+                WHERE ai.area_interactable_id = NEW.target_area_interactable_id;
+            ELSIF NEW.target_quest_objective_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM narrative.quest_objectives qo
+                JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
+                JOIN narrative.quests q ON q.quest_id = qs.quest_id
+                JOIN core.entities e ON e.entity_id = q.quest_id
+                WHERE qo.quest_objective_id = NEW.target_quest_objective_id;
+            ELSIF NEW.target_relationship_id IS NOT NULL THEN
+                SELECT world_id INTO v_target_world
+                FROM world.relationships WHERE relationship_id = NEW.target_relationship_id;
+            ELSE
+                RETURN NEW;
+            END IF;
+
+            IF v_target_world IS DISTINCT FROM v_event_world THEN
+                RAISE EXCEPTION
+                    'Event effect target belongs to world %, but event % belongs to world %',
+                    v_target_world, NEW.event_id, v_event_world
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION narrative.enforce_event_effect_target_world() IS
+        'World-agreement guard for narrative.event_effects: whichever target_* '
+        'column is set must belong to the same world as the event '
+        '(conventions §9.5). Extended by revision 074 to cover '
+        'target_quest_objective_id, and by revision 076 to cover '
+        'target_relationship_id.';
+    """)
 
     # ==========================================================================
     # 19. interaction.consequences.resulting_relationship_state_id
@@ -1862,13 +2080,100 @@ def upgrade() -> None:
         "WHERE resulting_relationship_state_id IS NOT NULL;"
     )
     op.execute("""
+        CREATE OR REPLACE FUNCTION interaction.enforce_consequence_world()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_interaction_timeline        UUID;
+            v_event_timeline              UUID;
+            v_discovery_timeline          UUID;
+            v_objective_state_timeline    UUID;
+            v_relationship_state_timeline UUID;
+        BEGIN
+            SELECT timeline_id INTO v_interaction_timeline
+            FROM interaction.interactions WHERE interaction_id = NEW.interaction_id;
+
+            IF NEW.resulting_event_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_event_timeline
+                FROM narrative.events WHERE event_id = NEW.resulting_event_id;
+
+                IF v_event_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_event_id % belongs to timeline %, but the '
+                        'interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_event_id, v_event_timeline,
+                        v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.resulting_party_discovery_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_discovery_timeline
+                FROM knowledge.party_discoveries
+                WHERE party_discovery_id = NEW.resulting_party_discovery_id;
+
+                IF v_discovery_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_party_discovery_id % belongs to timeline %, '
+                        'but the interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_party_discovery_id, v_discovery_timeline,
+                        v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.resulting_quest_objective_state_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_objective_state_timeline
+                FROM campaign.objective_state
+                WHERE objective_state_id = NEW.resulting_quest_objective_state_id;
+
+                IF v_objective_state_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_quest_objective_state_id % belongs to timeline '
+                        '%, but the interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_quest_objective_state_id,
+                        v_objective_state_timeline, v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.resulting_relationship_state_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_relationship_state_timeline
+                FROM campaign.relationship_state
+                WHERE relationship_state_id = NEW.resulting_relationship_state_id;
+
+                IF v_relationship_state_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_relationship_state_id % belongs to timeline '
+                        '%, but the interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_relationship_state_id,
+                        v_relationship_state_timeline, v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION interaction.enforce_consequence_world() IS
+        'Guards interaction.consequences: resulting_event_id/'
+        'resulting_party_discovery_id/resulting_quest_objective_state_id/'
+        'resulting_relationship_state_id (when set) must belong to the same '
+        'timeline as the interaction (conventions §9.5). Extended by revision 074 '
+        'to cover resulting_quest_objective_state_id, and by revision 076 to '
+        'cover resulting_relationship_state_id.';
+    """)
+    op.execute("""
         COMMENT ON TABLE interaction.consequences IS
         'A proposed or resolved outcome of an interaction — observations, '
         'events, state changes, discoveries, quest changes, or relationship '
         'changes (docs/DOMAIN_MODEL.md §16.6). Interaction-level, not '
         'action-level. quest_change gained a typed FK target in revision 073 '
         '(resulting_quest_objective_state_id); relationship_change gained one '
-        'in revision 075 (resulting_relationship_state_id, above).';
+        'in revision 076 (resulting_relationship_state_id, above).';
     """)
 
 
@@ -1903,6 +2208,145 @@ def downgrade() -> None:
         );
     """)
     op.execute("ALTER TABLE narrative.event_effects DROP COLUMN IF EXISTS target_relationship_id;")
+
+    # Restore interaction.enforce_consequence_world() to its exact revision-074
+    # body (quest-objective branch, no relationship branch).
+    op.execute("""
+        CREATE OR REPLACE FUNCTION interaction.enforce_consequence_world()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_interaction_timeline       UUID;
+            v_event_timeline             UUID;
+            v_discovery_timeline         UUID;
+            v_objective_state_timeline   UUID;
+        BEGIN
+            SELECT timeline_id INTO v_interaction_timeline
+            FROM interaction.interactions WHERE interaction_id = NEW.interaction_id;
+
+            IF NEW.resulting_event_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_event_timeline
+                FROM narrative.events WHERE event_id = NEW.resulting_event_id;
+
+                IF v_event_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_event_id % belongs to timeline %, but the '
+                        'interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_event_id, v_event_timeline,
+                        v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.resulting_party_discovery_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_discovery_timeline
+                FROM knowledge.party_discoveries
+                WHERE party_discovery_id = NEW.resulting_party_discovery_id;
+
+                IF v_discovery_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_party_discovery_id % belongs to timeline %, '
+                        'but the interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_party_discovery_id, v_discovery_timeline,
+                        v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            IF NEW.resulting_quest_objective_state_id IS NOT NULL THEN
+                SELECT timeline_id INTO v_objective_state_timeline
+                FROM campaign.objective_state
+                WHERE objective_state_id = NEW.resulting_quest_objective_state_id;
+
+                IF v_objective_state_timeline IS DISTINCT FROM v_interaction_timeline THEN
+                    RAISE EXCEPTION
+                        'Consequence % resulting_quest_objective_state_id % belongs to timeline '
+                        '%, but the interaction belongs to timeline %',
+                        NEW.consequence_id, NEW.resulting_quest_objective_state_id,
+                        v_objective_state_timeline, v_interaction_timeline
+                        USING ERRCODE = 'integrity_constraint_violation';
+                END IF;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION interaction.enforce_consequence_world() IS
+        'Guards interaction.consequences: resulting_event_id/'
+        'resulting_party_discovery_id/resulting_quest_objective_state_id (when set) '
+        'must belong to the same timeline as the interaction (conventions §9.5). '
+        'Extended by revision 074 to cover resulting_quest_objective_state_id.';
+    """)
+
+    # Restore narrative.enforce_event_effect_target_world() to its exact
+    # revision-074 body (quest-objective branch, no relationship branch).
+    op.execute("""
+        CREATE OR REPLACE FUNCTION narrative.enforce_event_effect_target_world()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_event_world    UUID;
+            v_target_world   UUID;
+        BEGIN
+            SELECT world_id INTO v_event_world
+            FROM core.entities WHERE entity_id = NEW.event_id;
+
+            IF NEW.target_entity_id IS NOT NULL THEN
+                SELECT world_id INTO v_target_world
+                FROM core.entities WHERE entity_id = NEW.target_entity_id;
+            ELSIF NEW.target_area_connection_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_connections ac
+                JOIN core.entities e ON e.entity_id = ac.from_dungeon_area_id
+                WHERE ac.area_connection_id = NEW.target_area_connection_id;
+            ELSIF NEW.target_area_feature_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_features af
+                JOIN core.entities e ON e.entity_id = af.dungeon_area_id
+                WHERE af.area_feature_id = NEW.target_area_feature_id;
+            ELSIF NEW.target_area_hazard_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_hazards ah
+                JOIN core.entities e ON e.entity_id = ah.dungeon_area_id
+                WHERE ah.area_hazard_id = NEW.target_area_hazard_id;
+            ELSIF NEW.target_area_interactable_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM world.area_interactables ai
+                JOIN core.entities e ON e.entity_id = ai.dungeon_area_id
+                WHERE ai.area_interactable_id = NEW.target_area_interactable_id;
+            ELSIF NEW.target_quest_objective_id IS NOT NULL THEN
+                SELECT e.world_id INTO v_target_world
+                FROM narrative.quest_objectives qo
+                JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
+                JOIN narrative.quests q ON q.quest_id = qs.quest_id
+                JOIN core.entities e ON e.entity_id = q.quest_id
+                WHERE qo.quest_objective_id = NEW.target_quest_objective_id;
+            ELSE
+                RETURN NEW;
+            END IF;
+
+            IF v_target_world IS DISTINCT FROM v_event_world THEN
+                RAISE EXCEPTION
+                    'Event effect target belongs to world %, but event % belongs to world %',
+                    v_target_world, NEW.event_id, v_event_world
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION narrative.enforce_event_effect_target_world() IS
+        'World-agreement guard for narrative.event_effects: whichever target_* '
+        'column is set must belong to the same world as the event '
+        '(conventions §9.5). Extended by revision 074 to cover '
+        'target_quest_objective_id.';
+    """)
 
     op.execute(
         "DELETE FROM narrative.event_types WHERE code IN "
@@ -1956,6 +2400,7 @@ def downgrade() -> None:
 
     op.execute("DROP TABLE IF EXISTS world.relationship_participants;")
     op.execute("DROP FUNCTION IF EXISTS world.enforce_relationship_participant_world();")
+    op.execute("DROP FUNCTION IF EXISTS world.enforce_relationship_participant_removal();")
 
     op.execute("DROP TABLE IF EXISTS world.relationships;")
     op.execute("DROP FUNCTION IF EXISTS world.enforce_relationship_validity();")

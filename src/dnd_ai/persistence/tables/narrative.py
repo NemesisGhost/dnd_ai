@@ -358,7 +358,7 @@ event_effects = Table(
     ),
     Column("application_status", Text(), nullable=False, server_default=text("'applied'::text")),
     *_timestamps(),
-    # Added by revision 075, once world.relationships existed to point at —
+    # Added by revision 076, once world.relationships existed to point at —
     # the seventh column in the at-most-one-target pattern.
     Column(
         "target_relationship_id",

@@ -33,7 +33,7 @@ from ._shared import (
 )
 
 # ---------------------------------------------------------------------------
-# world — universal relationships, participants, perspectives (revision 075)
+# world — universal relationships, participants, perspectives (revision 076)
 # ---------------------------------------------------------------------------
 
 relationship_types = _lookup_table(
@@ -207,7 +207,7 @@ Index(
 )
 
 # ---------------------------------------------------------------------------
-# world — organizations and subtypes (revision 075)
+# world — organizations and subtypes (revision 076)
 # ---------------------------------------------------------------------------
 
 organization_types = _lookup_table(
@@ -381,7 +381,7 @@ political_factions = Table(
 )
 
 # ---------------------------------------------------------------------------
-# world — religions and religious organizations (revision 075)
+# world — religions and religious organizations (revision 076)
 # ---------------------------------------------------------------------------
 
 religions = Table(
@@ -437,7 +437,7 @@ religious_organizations = Table(
 Index("ix_religious_organizations_religion_id", religious_organizations.c.religion_id)
 
 # ---------------------------------------------------------------------------
-# world — specialized relationships (revision 075)
+# world — specialized relationships (revision 076)
 # ---------------------------------------------------------------------------
 
 organization_memberships = Table(
@@ -524,7 +524,6 @@ employment_relationships = Table(
         nullable=False,
     ),
     Column("job_title", Text()),
-    Column("is_current", Boolean(), nullable=False, server_default=text("true")),
     Column(
         "effective_from_world_time_id",
         UUID(),
@@ -539,10 +538,12 @@ employment_relationships = Table(
     schema="world",
     comment=(
         "A specialized relationship: employer and employee "
-        "(docs/architecture/DATABASE_MODEL.md §10.2). is_current/effective_from/"
-        'effective_to (conventions §12.4\'s "current records" pattern) rather '
-        "than an ADR 0010 exclusion constraint — see this revision's docstring "
-        "scoping note."
+        "(docs/architecture/DATABASE_MODEL.md §10.2). Currentness follows "
+        'conventions §12.4\'s "effective_to_world_time_id IS NULL" pattern — the '
+        "one pattern per domain the convention requires, chosen over a separate "
+        "is_current column so contradictory current/end-dated combinations are "
+        "structurally impossible rather than merely guarded. No ADR 0010 "
+        "exclusion constraint — see this revision's docstring scoping note."
     ),
 )
 

@@ -1620,23 +1620,21 @@ def make_employment_relationship(
     employee_entity_id: uuid.UUID,
     *,
     job_title: str | None = None,
-    is_current: bool = True,
     effective_from_world_time_id: uuid.UUID | None = None,
     effective_to_world_time_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     connection.execute(
         text("""
             INSERT INTO world.employment_relationships
-                (relationship_id, employer_entity_id, employee_entity_id, job_title, is_current,
+                (relationship_id, employer_entity_id, employee_entity_id, job_title,
                  effective_from_world_time_id, effective_to_world_time_id)
-            VALUES (:relationship, :employer, :employee, :title, :current, :from_time, :to_time)
+            VALUES (:relationship, :employer, :employee, :title, :from_time, :to_time)
         """),
         {
             "relationship": relationship_id,
             "employer": employer_entity_id,
             "employee": employee_entity_id,
             "title": job_title,
-            "current": is_current,
             "from_time": effective_from_world_time_id,
             "to_time": effective_to_world_time_id,
         },

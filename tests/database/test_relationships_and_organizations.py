@@ -3,7 +3,7 @@ world.organizations and its CTI subtypes, world.religions/
 .religious_organizations, character.character_religious_affiliations, the
 specialized relationships (organization_memberships/employment_relationships/
 ownership_relationships/family_relationships/political_relationships), and
-campaign.organization_state/.relationship_state (revision 075).
+campaign.organization_state/.relationship_state (revision 076).
 
 Covers: organization/religion entity CTI and subtype enforcement, same-world
 guards across the new domain, the relationship-perspective/relationship-state
@@ -422,6 +422,156 @@ def test_an_employees_world_must_match_the_relationships_world(
     assert "belongs to world" in str(exc.value)
 
 
+def test_an_employment_relationships_chronology_can_be_valid(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+    make_employment_relationship(
+        db_connection,
+        relationship_id,
+        f.npc_a,
+        f.npc_b,
+        effective_from_world_time_id=f.t0,
+        effective_to_world_time_id=f.t1,
+    )
+
+
+def test_an_employment_relationships_start_must_share_its_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_world = make_world(db_connection, slug="employment-start-other-world")
+    foreign_time = make_world_time(db_connection, other_world, 100)
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_employment_relationship(
+            db_connection,
+            relationship_id,
+            f.npc_a,
+            f.npc_b,
+            effective_from_world_time_id=foreign_time,
+        )
+    assert "belongs to world" in str(exc.value)
+
+
+def test_an_employment_relationships_end_must_share_its_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_world = make_world(db_connection, slug="employment-end-other-world")
+    foreign_time = make_world_time(db_connection, other_world, 100)
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_employment_relationship(
+            db_connection,
+            relationship_id,
+            f.npc_a,
+            f.npc_b,
+            effective_from_world_time_id=f.t0,
+            effective_to_world_time_id=foreign_time,
+        )
+    assert "belongs to world" in str(exc.value)
+
+
+def test_an_employment_relationships_end_requires_a_start(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+
+    with pytest.raises(IntegrityError) as exc:
+        make_employment_relationship(
+            db_connection, relationship_id, f.npc_a, f.npc_b, effective_to_world_time_id=f.t0
+        )
+    assert "ck_employment_relationships_end_requires_start" in str(exc.value)
+
+
+def test_an_employment_relationships_end_cannot_equal_its_start(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_employment_relationship(
+            db_connection,
+            relationship_id,
+            f.npc_a,
+            f.npc_b,
+            effective_from_world_time_id=f.t0,
+            effective_to_world_time_id=f.t0,
+        )
+    assert "strictly after" in str(exc.value)
+
+
+def test_an_employment_relationships_end_cannot_precede_its_start(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_employment_relationship(
+            db_connection,
+            relationship_id,
+            f.npc_a,
+            f.npc_b,
+            effective_from_world_time_id=f.t1,
+            effective_to_world_time_id=f.t0,
+        )
+    assert "strictly after" in str(exc.value)
+
+
+def test_an_employment_relationships_currentness_is_defined_by_a_null_end(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Conventions §12.4: exactly one current-records pattern per domain.
+    world.employment_relationships uses effective_to_world_time_id IS NULL —
+    there is no separate is_current column to fall out of sync with it."""
+    current_relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+    make_employment_relationship(
+        db_connection,
+        current_relationship_id,
+        f.npc_a,
+        f.npc_b,
+        effective_from_world_time_id=f.t0,
+    )
+    ended_relationship_id = make_relationship(
+        db_connection, f.world_id, relationship_type_code="employment"
+    )
+    make_employment_relationship(
+        db_connection,
+        ended_relationship_id,
+        f.npc_a,
+        f.npc_b,
+        effective_from_world_time_id=f.t0,
+        effective_to_world_time_id=f.t1,
+    )
+
+    rows = db_connection.execute(
+        text("""
+            SELECT relationship_id, effective_to_world_time_id IS NULL AS is_current
+            FROM world.employment_relationships
+            WHERE relationship_id IN (:current_id, :ended_id)
+        """),
+        {"current_id": current_relationship_id, "ended_id": ended_relationship_id},
+    ).all()
+    is_current_by_id = {row.relationship_id: row.is_current for row in rows}
+    assert is_current_by_id[current_relationship_id] is True
+    assert is_current_by_id[ended_relationship_id] is False
+
+
 def test_an_ownership_relationship_can_be_created(db_connection: Connection, f: Fixture) -> None:
     organization_id = make_organization(
         db_connection, f.world_id, organization_type_code="business"
@@ -647,3 +797,257 @@ def test_a_consequence_can_reference_a_resulting_relationship_state(
         consequence_type="relationship_change",
         resulting_relationship_state_id=relationship_state_id,
     )
+
+
+def test_an_event_effects_relationship_target_must_share_its_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_world = make_world(db_connection, slug="event-effect-relationship-other-world")
+    foreign_relationship = make_relationship(db_connection, other_world)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.t0)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_event_effect(db_connection, event_id, target_relationship_id=foreign_relationship)
+    assert "belongs to world" in str(exc.value)
+
+
+def test_a_consequences_relationship_state_must_share_its_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id)
+    foreign_relationship = make_relationship(db_connection, f.world_id)
+    foreign_relationship_state = make_relationship_state(
+        db_connection, other_timeline, foreign_relationship
+    )
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.t0)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_consequence(
+            db_connection,
+            interaction_id,
+            consequence_type="relationship_change",
+            resulting_relationship_state_id=foreign_relationship_state,
+        )
+    assert "belongs to timeline" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# world.relationships.world_id / campaign.relationship_state.timeline_id
+# immutability (deployable-integrity correction)
+# ---------------------------------------------------------------------------
+
+
+def test_a_relationships_world_cannot_be_reparented(db_connection: Connection, f: Fixture) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    other_world = make_world(db_connection, slug="relationship-reparent-other-world")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE world.relationships SET world_id = :w WHERE relationship_id = :r"),
+            {"w": other_world, "r": relationship_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_a_relationships_description_can_still_be_updated(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    db_connection.execute(
+        text("UPDATE world.relationships SET description = 'Updated' WHERE relationship_id = :r"),
+        {"r": relationship_id},
+    )
+    row = db_connection.execute(
+        text("SELECT description FROM world.relationships WHERE relationship_id = :r"),
+        {"r": relationship_id},
+    ).one()
+    assert row.description == "Updated"
+
+
+def test_a_relationship_states_timeline_cannot_be_reparented(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    relationship_state_id = make_relationship_state(db_connection, f.timeline_id, relationship_id)
+    other_timeline = make_timeline(db_connection, f.world_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE campaign.relationship_state SET timeline_id = :t "
+                "WHERE relationship_state_id = :rs"
+            ),
+            {"t": other_timeline, "rs": relationship_state_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_a_relationship_states_status_can_still_be_updated(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The exact non-identity update src/dnd_ai/commands/relationships.py
+    evolve_relationship_reaction() performs on an existing row: status and
+    reaction fields change, timeline_id does not."""
+    relationship_id = make_relationship(db_connection, f.world_id)
+    relationship_state_id = make_relationship_state(
+        db_connection, f.timeline_id, relationship_id, status_code="active"
+    )
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.t0)
+    db_connection.execute(
+        text("""
+            UPDATE campaign.relationship_state
+            SET relationship_status_id =
+                (SELECT relationship_status_id FROM campaign.relationship_statuses
+                 WHERE code = 'estranged'),
+                affinity = -50, last_event_id = :event
+            WHERE relationship_state_id = :rs
+        """),
+        {"event": event_id, "rs": relationship_state_id},
+    )
+    row = db_connection.execute(
+        text("""
+            SELECT (SELECT code FROM campaign.relationship_statuses
+                    WHERE relationship_status_id = rs.relationship_status_id) AS status_code,
+                   affinity
+            FROM campaign.relationship_state rs WHERE relationship_state_id = :rs
+        """),
+        {"rs": relationship_state_id},
+    ).one()
+    assert row.status_code == "estranged"
+    assert row.affinity == -50
+
+
+# ---------------------------------------------------------------------------
+# world.relationship_participants reverse guard against orphaning
+# world.relationship_perspectives / campaign.relationship_state
+# ---------------------------------------------------------------------------
+
+
+def test_a_participant_with_no_dependents_can_be_deleted(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    participant_id = make_relationship_participant(db_connection, relationship_id, f.npc_a)
+    db_connection.execute(
+        text("DELETE FROM world.relationship_participants WHERE relationship_participant_id = :p"),
+        {"p": participant_id},
+    )
+
+
+def test_cannot_delete_a_participant_still_holding_a_perspective(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    participant_id = make_relationship_participant(db_connection, relationship_id, f.npc_a)
+    make_relationship_perspective(db_connection, relationship_id, f.npc_a)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "DELETE FROM world.relationship_participants WHERE relationship_participant_id = :p"
+            ),
+            {"p": participant_id},
+        )
+    assert "relationship_perspective" in str(exc.value)
+
+
+def test_cannot_delete_a_participant_still_scoped_by_relationship_state(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    participant_id = make_relationship_participant(db_connection, relationship_id, f.npc_a)
+    make_relationship_state(
+        db_connection, f.timeline_id, relationship_id, perspective_holder_entity_id=f.npc_a
+    )
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "DELETE FROM world.relationship_participants WHERE relationship_participant_id = :p"
+            ),
+            {"p": participant_id},
+        )
+    assert "relationship_state" in str(exc.value)
+
+
+def test_cannot_reparent_a_participants_entity_when_a_perspective_depends_on_it(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    participant_id = make_relationship_participant(db_connection, relationship_id, f.npc_a)
+    make_relationship_perspective(db_connection, relationship_id, f.npc_a)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE world.relationship_participants SET entity_id = :e "
+                "WHERE relationship_participant_id = :p"
+            ),
+            {"e": f.npc_b, "p": participant_id},
+        )
+    assert "relationship_perspective" in str(exc.value)
+
+
+def test_changing_a_participants_role_without_reparenting_is_unaffected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    relationship_id = make_relationship(db_connection, f.world_id)
+    participant_id = make_relationship_participant(
+        db_connection, relationship_id, f.npc_a, role_code="subject"
+    )
+    make_relationship_perspective(db_connection, relationship_id, f.npc_a)
+
+    db_connection.execute(
+        text("""
+            UPDATE world.relationship_participants
+            SET participant_role_id =
+                (SELECT relationship_participant_role_id FROM world.relationship_participant_roles
+                 WHERE code = 'object')
+            WHERE relationship_participant_id = :p
+        """),
+        {"p": participant_id},
+    )
+
+
+def test_deleting_one_of_two_roles_for_the_same_participant_is_allowed(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """A perspective/state row only cares that the entity is *a* participant
+    in the relationship, not which role — deleting one of two role rows for
+    the same entity must not be blocked while the other role row still
+    covers it."""
+    relationship_id = make_relationship(db_connection, f.world_id)
+    subject_participant_id = make_relationship_participant(
+        db_connection, relationship_id, f.npc_a, role_code="subject"
+    )
+    make_relationship_participant(db_connection, relationship_id, f.npc_a, role_code="object")
+    make_relationship_perspective(db_connection, relationship_id, f.npc_a)
+
+    db_connection.execute(
+        text("DELETE FROM world.relationship_participants WHERE relationship_participant_id = :p"),
+        {"p": subject_participant_id},
+    )
+
+
+def test_deleting_an_entire_relationship_cascades_despite_dependents(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Legitimate whole-relationship deletion (and its cascading children)
+    must never be blocked by the participant-removal reverse guard,
+    regardless of what order Postgres processes the sibling cascades in."""
+    relationship_id = make_relationship(db_connection, f.world_id)
+    make_relationship_participant(db_connection, relationship_id, f.npc_a)
+    make_relationship_perspective(db_connection, relationship_id, f.npc_a)
+    make_relationship_state(
+        db_connection, f.timeline_id, relationship_id, perspective_holder_entity_id=f.npc_a
+    )
+
+    db_connection.execute(
+        text("DELETE FROM world.relationships WHERE relationship_id = :r"), {"r": relationship_id}
+    )
+
+    remaining = db_connection.execute(
+        text("SELECT count(*) FROM world.relationship_participants WHERE relationship_id = :r"),
+        {"r": relationship_id},
+    ).scalar()
+    assert remaining == 0

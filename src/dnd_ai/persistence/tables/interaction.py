@@ -379,7 +379,7 @@ consequences = Table(
             "relationship_change remains Phase 8's job."
         ),
     ),
-    # Added by revision 075, once campaign.relationship_state existed to
+    # Added by revision 076, once campaign.relationship_state existed to
     # point at — closes this table's own documented relationship_change
     # placeholder.
     Column(
@@ -401,7 +401,7 @@ consequences = Table(
         "changes (docs/DOMAIN_MODEL.md §16.6). Interaction-level, not "
         "action-level. quest_change gained a typed FK target in revision 073 "
         "(resulting_quest_objective_state_id); relationship_change gained one "
-        "in revision 075 (resulting_relationship_state_id, above)."
+        "in revision 076 (resulting_relationship_state_id, above)."
     ),
 )
 
