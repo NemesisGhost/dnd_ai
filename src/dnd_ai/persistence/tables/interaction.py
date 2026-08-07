@@ -365,14 +365,28 @@ consequences = Table(
     ),
     Column("description", Text()),
     *_timestamps(),
+    # Added by revision 073, once campaign.objective_state existed to point
+    # at — closes this table's own documented quest_change placeholder.
+    Column(
+        "resulting_quest_objective_state_id",
+        UUID(),
+        ForeignKey("campaign.objective_state.objective_state_id", ondelete="SET NULL"),
+        comment=(
+            "The objective-state row a quest_change consequence produced, when it "
+            "has one. Closes revision 061's own documented placeholder "
+            '("quest_change ... consequence types have no FK target at all yet ... '
+            'Phase 7/8 domains do not exist") for its quest half; '
+            "relationship_change remains Phase 8's job."
+        ),
+    ),
     schema="interaction",
     comment=(
         "A proposed or resolved outcome of an interaction — observations, "
         "events, state changes, discoveries, quest changes, or relationship "
         "changes (docs/DOMAIN_MODEL.md §16.6). Interaction-level, not "
-        "action-level. quest_change/relationship_change have no typed FK "
-        "target yet (Phase 7/8 domains do not exist) — see this revision's "
-        "docstring."
+        "action-level. relationship_change has no typed FK target yet "
+        "(Phase 8's domain does not exist); quest_change gained one in "
+        "revision 073 (resulting_quest_objective_state_id, below)."
     ),
 )
 
@@ -386,6 +400,11 @@ Index(
     "ix_consequences_resulting_party_discovery_id",
     consequences.c.resulting_party_discovery_id,
     postgresql_where=consequences.c.resulting_party_discovery_id.isnot(None),
+)
+Index(
+    "ix_consequences_resulting_quest_objective_state_id",
+    consequences.c.resulting_quest_objective_state_id,
+    postgresql_where=consequences.c.resulting_quest_objective_state_id.isnot(None),
 )
 
 external_messages = Table(
