@@ -267,30 +267,6 @@ def _lock_interaction_for_resolution(connection: Connection, interaction_id: uui
         )
 
 
-def _interaction_check_completion(
-    connection: Connection, interaction_id: uuid.UUID
-) -> tuple[int, int]:
-    """(total check requests, requests with a result) across every action the
-    interaction has — not just the one check_request this resolve_check()
-    call is resolving. perform_interaction() creates a single action today,
-    but check_requests is action-scoped and DOMAIN_MODEL.md §16.2 allows a
-    complex interaction several actions, so completion is interaction-wide.
-    """
-    total, resolved = connection.execute(
-        text("""
-            SELECT count(cr.check_request_id), count(res.check_result_id)
-            FROM interaction.check_requests cr
-            JOIN interaction.actions a ON a.action_id = cr.action_id
-            LEFT JOIN interaction.check_results res ON res.check_request_id = cr.check_request_id
-            WHERE a.interaction_id = :interaction
-        """),
-        {"interaction": interaction_id},
-    ).one()
-    assert isinstance(total, int)
-    assert isinstance(resolved, int)
-    return total, resolved
-
-
 def _lock_area_connection(connection: Connection, area_connection_id: uuid.UUID) -> None:
     """Acquire an exclusive row lock on the connection itself (a structural
     row that always exists, unlike its possibly-absent campaign.
@@ -383,29 +359,17 @@ def _resolve_interaction(
     interaction_id: uuid.UUID,
     event_id: uuid.UUID | None,
     description: str | None,
-    is_final: bool,
 ) -> None:
-    """Link this call's event (if any) to the interaction and move its
-    status forward: to 'resolving' if unresolved check_requests remain, or
-    to the terminal 'resolved' status once every check_request the
-    interaction has (is_final) has a result. A complex interaction may have
-    several check_requests (perform_interaction creates one today, but
-    DOMAIN_MODEL.md §16.2 allows more per action, and resolve_check() may be
-    called once per request) — a single-check interaction goes straight
-    from 'initiated' to 'resolved' (its first result is also its last), and
-    a multi-check interaction passes through 'resolving' for every result
-    before the final one. Once 'resolving', interaction.enforce_interaction_
-    locked() (revision 067) already treats it the same as 'resolved' for
-    UPDATE/DELETE on structural records — append-only begins at the first
-    result, not only once everything is answered — while interaction.
-    enforce_interaction_accepting_check_results() (revision 071) still
-    allows further check_results INSERTs during it. The 'resolved'
-    transition, once made, can never be undone
-    (interaction.enforce_interaction_status_irreversible(), revision 070).
+    """Link this call's event (if any) to the interaction. The status
+    transition itself (initiated -> resolving -> resolved) is no longer set
+    here — interaction.advance_interaction_status_on_check_result()
+    (revision 072) now owns it, firing atomically with the check_results
+    INSERT resolve_check() already performs, so it applies to any caller
+    that records a check result, not only this command.
 
     A failed or non-matching check still contributes no event — it simply
     has nothing to link and no consequence to record (SYSTEM_ARCHITECTURE.md
-    §6) — but still counts toward completion.
+    §6).
     """
     if event_id is not None:
         connection.execute(
@@ -423,14 +387,6 @@ def _resolve_interaction(
             """),
             {"interaction": interaction_id, "event": event_id, "description": description},
         )
-
-    connection.execute(
-        text(
-            "UPDATE interaction.interactions SET status = :status "
-            "WHERE interaction_id = :interaction"
-        ),
-        {"status": "resolved" if is_final else "resolving", "interaction": interaction_id},
-    )
 
 
 def resolve_check(
@@ -452,11 +408,11 @@ def resolve_check(
     still records its result — it simply has no further reaction, per
     docs/architecture/SYSTEM_ARCHITECTURE.md §6 step 5 ("create events when
     the mutation is narratively significant"). The parent interaction's
-    status moves initiated -> resolving -> resolved: a call that leaves
-    check_requests still unanswered moves it (from either status) to
-    'resolving', and a call that answers the last outstanding one moves it
-    to the terminal 'resolved' — never before, and never more than once
-    (_resolve_interaction).
+    status moves initiated -> resolving -> resolved as a side effect of the
+    check_results INSERT itself
+    (interaction.advance_interaction_status_on_check_result(), revision
+    072) — never before the last outstanding check_request has a result,
+    and never more than once.
 
     The parent interaction is locked (_lock_interaction_for_resolution)
     before anything else happens: this both rejects resolving a check whose
@@ -543,12 +499,10 @@ def resolve_check(
                     )
                     area_connection_opened = True
 
-        total_checks, resolved_checks = _interaction_check_completion(connection, interaction_id)
         _resolve_interaction(
             connection,
             interaction_id=interaction_id,
             event_id=event_id,
-            is_final=resolved_checks >= total_checks,
             description=(
                 f"Check satisfied area connection {target_area_connection_id}'s requirement; "
                 "route opened."

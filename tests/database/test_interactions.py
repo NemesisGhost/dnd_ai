@@ -1,5 +1,6 @@
 """interaction.interactions, .actions, .targets, .check_requests,
-.check_results, .consequences, .external_messages (revisions 061, 067, 070).
+.check_results, .consequences, .external_messages (revisions 061, 067, 070,
+072).
 
 Covers: the world-agreement guard on each table, the timeline/campaign/session
 consistency chain on interactions, the check_requests kind/ability/skill
@@ -9,7 +10,12 @@ cross-row lookups. Revision 067's structural append-only guard and revision
 070's status-irreversibility and check_results-requires-an-open-interaction
 guards are covered here too, directly against the database rather than only
 through the application-layer scenario in
-tests/scenario/test_resolve_conditional_route_check.py.
+tests/scenario/test_resolve_conditional_route_check.py. Revision 072 closed
+two related gaps: interaction.interactions.status now advances atomically
+with a check_results INSERT regardless of caller (not only through
+resolve_check()), and interaction.actions/.targets/.check_requests now
+reject being *created* once the interaction has left 'initiated', not only
+being edited.
 """
 
 import pytest
@@ -36,6 +42,7 @@ from tests.factories import (
     make_ruleset_version_for_world,
     make_session,
     make_skill,
+    make_target,
     make_timeline,
     make_world,
     make_world_time,
@@ -411,6 +418,18 @@ def test_at_most_one_result_per_check_request(db_connection: Connection, f: Fixt
         check_kind="ability_check",
         ability_id=f.ability_id,
     )
+    # A second, still-unanswered check_request keeps the interaction at
+    # 'resolving' rather than 'resolved' after the first result below —
+    # otherwise revision 072's own terminal-interaction guard would reject
+    # the duplicate-result attempt first, proving nothing about the unique
+    # constraint this test actually targets.
+    make_check_request(
+        db_connection,
+        f.action_id,
+        f.actor_id,
+        check_kind="ability_check",
+        ability_id=f.ability_id,
+    )
     db_connection.execute(
         text(
             "INSERT INTO interaction.check_results (check_request_id, degree_of_success) "
@@ -704,3 +723,185 @@ def test_a_check_result_can_be_recorded_while_the_interaction_is_resolving(
     )
 
     make_check_result(db_connection, check_request_id, degree_of_success="success")
+
+
+# ---------------------------------------------------------------------------
+# Database-owned status advance on check_results INSERT (revision 072) —
+# proven here against a direct INSERT, not only through resolve_check().
+# ---------------------------------------------------------------------------
+
+
+def test_the_first_direct_check_result_of_a_two_check_interaction_moves_it_to_resolving(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """interaction.advance_interaction_status_on_check_result() owns the
+    initiated -> resolving transition atomically with the INSERT, so it
+    applies to any caller, not only resolve_check()."""
+    first_request = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+
+    first_result_id = make_check_result(db_connection, first_request, degree_of_success="success")
+
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolving", "a second check_request is still unanswered"
+
+    # Representative structural history: the check_result/check_request
+    # that just caused the transition are already append-only (revision
+    # 067), even with another check_request still outstanding.
+    with pytest.raises(CONSTRAINT_ERRORS) as update_exc, db_connection.begin_nested():
+        db_connection.execute(
+            text(
+                "UPDATE interaction.check_results SET degree_of_success = 'failure' "
+                "WHERE check_result_id = :r"
+            ),
+            {"r": first_result_id},
+        )
+    assert "append-only" in str(update_exc.value)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as delete_exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("DELETE FROM interaction.check_requests WHERE check_request_id = :r"),
+            {"r": first_request},
+        )
+    assert "append-only" in str(delete_exc.value)
+
+
+def test_the_final_direct_check_result_of_a_two_check_interaction_resolves_it(
+    db_connection: Connection, f: Fixture
+) -> None:
+    first_request = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    second_request = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_result(db_connection, first_request, degree_of_success="success")
+    make_check_result(db_connection, second_request, degree_of_success="failure")
+
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolved"
+
+
+def test_the_only_direct_check_result_of_a_single_check_interaction_resolves_it_directly(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """A single-check interaction's first result is also its last, so it
+    moves straight from initiated to resolved without passing through
+    resolving."""
+    request_id = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_result(db_connection, request_id, degree_of_success="success")
+
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# Structural rows can only be created while initiated (revision 072)
+# ---------------------------------------------------------------------------
+
+
+def test_actions_targets_and_check_requests_can_be_created_while_initiated(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Normal interaction construction: revision 072's new creation guards
+    must not block the ordinary initiated-status build-up path."""
+    action_id = make_action(db_connection, f.interaction_id, f.actor_id, sequence_number=9)
+    target_id = make_target(db_connection, action_id, target_area_hazard_id=f.hazard_id)
+    make_check_request(
+        db_connection,
+        action_id,
+        f.actor_id,
+        check_kind="ability_check",
+        ability_id=f.ability_id,
+        target_id=target_id,
+    )
+
+
+def test_a_new_check_request_is_rejected_while_resolving(
+    db_connection: Connection, f: Fixture
+) -> None:
+    first_request = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_result(db_connection, first_request, degree_of_success="success")
+
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolving"
+
+    before_count = db_connection.execute(
+        text("SELECT count(*) FROM interaction.check_requests WHERE action_id = :a"),
+        {"a": f.action_id},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        make_check_request(
+            db_connection,
+            f.action_id,
+            f.actor_id,
+            check_kind="ability_check",
+            ability_id=f.ability_id,
+        )
+    assert "append-only" in str(exc.value)
+
+    after_count = db_connection.execute(
+        text("SELECT count(*) FROM interaction.check_requests WHERE action_id = :a"),
+        {"a": f.action_id},
+    ).scalar()
+    assert after_count == before_count, "the rejected insert must not have left a row behind"
+
+
+def test_a_new_check_request_is_rejected_once_resolved(
+    db_connection: Connection, f: Fixture
+) -> None:
+    request_id = make_check_request(
+        db_connection, f.action_id, f.actor_id, check_kind="ability_check", ability_id=f.ability_id
+    )
+    make_check_result(db_connection, request_id, degree_of_success="success")
+
+    status = db_connection.execute(
+        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": f.interaction_id},
+    ).scalar()
+    assert status == "resolved"
+
+    before_count = db_connection.execute(
+        text("SELECT count(*) FROM interaction.check_requests WHERE action_id = :a"),
+        {"a": f.action_id},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        make_check_request(
+            db_connection,
+            f.action_id,
+            f.actor_id,
+            check_kind="ability_check",
+            ability_id=f.ability_id,
+        )
+    assert "append-only" in str(exc.value)
+
+    after_count = db_connection.execute(
+        text("SELECT count(*) FROM interaction.check_requests WHERE action_id = :a"),
+        {"a": f.action_id},
+    ).scalar()
+    assert after_count == before_count, "the rejected insert must not have left a row behind"

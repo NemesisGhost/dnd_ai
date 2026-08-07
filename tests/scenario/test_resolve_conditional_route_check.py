@@ -50,7 +50,6 @@ from tests.factories import (
     make_ability,
     make_area_connection,
     make_character,
-    make_check_request,
     make_dungeon,
     make_dungeon_area,
     make_ruleset_version_for_world,
@@ -555,36 +554,33 @@ def test_resolving_a_check_against_an_already_terminal_interaction_is_rejected(
     postgres_engine: Engine, f: Fixture
 ) -> None:
     """Item 3: once an interaction has reached a terminal status, resolving
-    another check against it is rejected before any write happens — even
-    one added directly rather than through perform_interaction (revision 070
+    a check against it is rejected before any write happens (revision 070
     additionally rejects the same case at the database level, see
     tests/database/test_interactions.py::
     test_a_check_result_cannot_be_recorded_against_an_already_resolved_interaction).
+
+    The request under test is created before the interaction becomes
+    terminal — revision 072 now rejects inserting a *new* check_request
+    once resolution has begun (see tests/database/test_interactions.py's
+    check_requests-creatable tests), so a request added afterward, as this
+    test used to do, is no longer reachable. An administrative cancellation
+    (interaction.interactions.status set directly to 'cancelled', not
+    reached through resolve_check()) is the realistic way a request created
+    while still 'initiated' ends up abandoned before ever being answered.
     """
     interaction_result = _perform_pick_lock(postgres_engine, f)
-    resolve_check(
-        postgres_engine,
-        check_request_id=interaction_result.check_request_ids[0],
-        roll=18,
-        total_modifier=2,
-        total=20,
-        degree_of_success="success",
-    )
-
     with postgres_engine.begin() as connection:
-        extra_check_request_id = make_check_request(
-            connection,
-            interaction_result.action_id,
-            f.actor_id,
-            check_kind="skill_check",
-            skill_id=f.skill_id,
-            difficulty=15,
+        connection.execute(
+            text(
+                "UPDATE interaction.interactions SET status = 'cancelled' WHERE interaction_id = :i"
+            ),
+            {"i": interaction_result.interaction_id},
         )
 
     with pytest.raises(ValueError, match="terminal"):
         resolve_check(
             postgres_engine,
-            check_request_id=extra_check_request_id,
+            check_request_id=interaction_result.check_request_ids[0],
             roll=18,
             total_modifier=2,
             total=20,
@@ -594,6 +590,6 @@ def test_resolving_a_check_against_an_already_terminal_interaction_is_rejected(
     with postgres_engine.connect() as verify:
         result_count = verify.execute(
             text("SELECT count(*) FROM interaction.check_results WHERE check_request_id = :r"),
-            {"r": extra_check_request_id},
+            {"r": interaction_result.check_request_ids[0]},
         ).scalar()
     assert result_count == 0, "the rejected resolution must not have left a partial write"
