@@ -1,6 +1,6 @@
 # Phase 7 Verification Checklist
 
-Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a first revision (073) covering both this phase's deliverables — the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here — plus one application-layer command, `advance_objective()`. A review of that work (PR #17) found six production defects, closed by a correction pass (revision 074) — see "Correction Pass" below. **This document does not yet claim Phase 7 complete.** All local verification for the correction pass has passed against AWS `dev`, but its own final-head CI run has not yet been confirmed; see "Verification status" at the end.
+Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a first revision (073) covering both this phase's deliverables — the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here — plus one application-layer command, `advance_objective()`. A review of that work (PR #17) found six production defects, closed by a correction pass (revision 074) — see "Correction Pass" below. **Phase 7 is complete.** The correction pass's exact final head reached a confirmed green CI run; see "Verification status" at the end.
 
 ## Exit Criteria
 
@@ -97,9 +97,9 @@ None. All 40 new tests, and the three `alembic check` comparisons (shared `dev` 
 
 **Revision 073, for the record:** [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17) reached a confirmed green CI run at commit `fa3bc5f`, polled via `scripts/wait_for_ci.py` to actual completion — run [`31145097614`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31145097614), `PASS` (after one transient AWS-RDS SSL connection fault in the initial attempt was re-run via the GitHub API, not a code defect). A subsequent documentation-only commit (`b15c663`) recording that result also reached a confirmed green run — [`31147256307`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31147256307), `PASS`.
 
-**Revision 074 (correction pass), as of this writing:**
+**Revision 074 (correction pass):**
 
-- All local verification above (migration round trips including a from-empty database, `alembic check`, seed idempotency, the full `tests/unit`/`tests/database`/`tests/scenario` suite, `ruff`/`mypy`) has run and passed against AWS `dev`.
-- Pushed to `agent/phase7-quests-and-knowledge` on top of PR #17's existing history; the PR now carries this pass's commits too.
-- This pass's own final-head CI run **has not yet been confirmed** — outstanding as of this writing. This section will be updated, or a PR comment added, with the run ID once `scripts/wait_for_ci.py` confirms it: no speculative run IDs, and no documentation-only commit inserted solely to record it.
-- The PR has not yet been merged to `main` — that is the user's call, not something done automatically as part of this verification. **Phase 7 is not described as complete in `CLAUDE.md`/`README.md`/`PLAN.md` until this pass's exact final head has a confirmed green CI run** — the same bar every prior phase, and Phase 6's own correction passes, have been held to.
+- All local verification above (migration round trips including a from-empty database, `alembic check`, seed idempotency, the full `tests/unit`/`tests/database`/`tests/scenario` suite, `ruff`/`mypy`) ran and passed against AWS `dev`.
+- Pushed to `agent/phase7-quests-and-knowledge` on top of PR #17's existing history (commit `08bed33`); the PR now carries this pass's commits too.
+- This pass's own final-head CI run reached a confirmed green run, polled via `scripts/wait_for_ci.py` to actual completion — run [`31152099974`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31152099974), `PASS`, on the first attempt (no re-run needed this time).
+- **Phase 7 is complete.** The PR's exact head commit has a confirmed green CI run, closing the bar every prior phase — and Phase 6's own correction passes — has been held to. The PR has not yet been merged to `main` — that is the user's call, not something done automatically as part of this verification.
