@@ -13,7 +13,8 @@ monolithic module. 85 tables at the split (Phase 6 entry gates); revision
 interaction.* domain (8 tables), on top of that baseline. Revision 073
 added the Phase 7 quest domain (9 narrative.* tables plus 4 campaign.*
 quest/objective state tables) and knowledge-domain expansion (5 new
-knowledge.* tables), for 120 tables total.
+knowledge.* tables), for 120 tables total. Revision 074 (a Phase 7
+correction pass) added campaign.party_knowledge, for 121 tables total.
 """
 
 import importlib
@@ -49,6 +50,7 @@ EXPECTED_TABLES = {
         "campaign.objective_state",
         "campaign.objective_statuses",
         "campaign.parties",
+        "campaign.party_knowledge",
         "campaign.party_memberships",
         "campaign.quest_state",
         "campaign.quest_statuses",

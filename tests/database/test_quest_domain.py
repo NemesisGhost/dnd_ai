@@ -17,9 +17,12 @@ from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 from tests.factories import (
     make_area_connection,
     make_character,
+    make_consequence,
     make_dungeon,
     make_dungeon_area,
     make_event,
+    make_event_effect,
+    make_interaction,
     make_objective_dependency,
     make_objective_state,
     make_party,
@@ -298,3 +301,122 @@ def test_a_rewards_knowledge_item_must_share_its_world(
             {"outcome": outcome_id, "item": foreign_item},
         )
     assert "belongs to world" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# narrative.quest_objectives: completion_rule / visibility_policy (revision 074)
+# ---------------------------------------------------------------------------
+
+
+def test_an_objective_can_carry_completion_rule_metadata(
+    db_connection: Connection, f: Fixture
+) -> None:
+    objective_id = make_quest_objective(
+        db_connection,
+        f.stage_id,
+        completion_rule={"rule": "quantity_threshold", "threshold": 3},
+        visibility_policy="hidden_until_discovered",
+    )
+
+    row = db_connection.execute(
+        text(
+            "SELECT completion_rule, visibility_policy FROM narrative.quest_objectives "
+            "WHERE quest_objective_id = :o"
+        ),
+        {"o": objective_id},
+    ).one()
+    assert row.completion_rule == {"rule": "quantity_threshold", "threshold": 3}
+    assert row.visibility_policy == "hidden_until_discovered"
+
+
+def test_an_objective_defaults_to_visible_with_no_completion_rule(
+    db_connection: Connection, f: Fixture
+) -> None:
+    objective_id = make_quest_objective(db_connection, f.stage_id)
+
+    row = db_connection.execute(
+        text(
+            "SELECT completion_rule, visibility_policy FROM narrative.quest_objectives "
+            "WHERE quest_objective_id = :o"
+        ),
+        {"o": objective_id},
+    ).one()
+    assert row.completion_rule is None
+    assert row.visibility_policy == "visible"
+
+
+def test_an_objective_requires_a_valid_visibility_policy(
+    db_connection: Connection, f: Fixture
+) -> None:
+    with pytest.raises(IntegrityError) as exc:
+        make_quest_objective(db_connection, f.stage_id, visibility_policy="invisible")
+    assert "ck_quest_objectives_visibility_policy" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# narrative.event_effects.target_quest_objective_id world guard (revision 074)
+# ---------------------------------------------------------------------------
+
+
+def test_an_event_effect_can_target_a_quest_objective(
+    db_connection: Connection, f: Fixture
+) -> None:
+    objective_id = make_quest_objective(db_connection, f.stage_id)
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.world_time_id)
+    make_event_effect(db_connection, event_id, target_quest_objective_id=objective_id)
+
+
+def test_an_event_effects_quest_objective_target_must_share_its_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_world = make_world(db_connection, slug="event-effect-objective-other-world")
+    other_quest = make_quest(db_connection, other_world)
+    other_stage = make_quest_stage(db_connection, other_quest)
+    foreign_objective = make_quest_objective(db_connection, other_stage)
+
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_event_effect(db_connection, event_id, target_quest_objective_id=foreign_objective)
+    assert "belongs to world" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# interaction.consequences.resulting_quest_objective_state_id timeline guard
+# (revision 074)
+# ---------------------------------------------------------------------------
+
+
+def test_a_consequence_can_result_in_a_quest_objective_state(
+    db_connection: Connection, f: Fixture
+) -> None:
+    objective_id = make_quest_objective(db_connection, f.stage_id)
+    objective_state_id = make_objective_state(db_connection, f.timeline_id, objective_id)
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+
+    make_consequence(
+        db_connection,
+        interaction_id,
+        consequence_type="quest_change",
+        resulting_quest_objective_state_id=objective_state_id,
+    )
+
+
+def test_a_consequences_quest_objective_state_must_share_its_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id)
+    other_stage = make_quest_stage(db_connection, f.quest_id)
+    other_objective = make_quest_objective(db_connection, other_stage)
+    foreign_objective_state = make_objective_state(db_connection, other_timeline, other_objective)
+
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.world_time_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_consequence(
+            db_connection,
+            interaction_id,
+            consequence_type="quest_change",
+            resulting_quest_objective_state_id=foreign_objective_state,
+        )
+    assert "belongs to timeline" in str(exc.value)

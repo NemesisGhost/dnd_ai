@@ -603,6 +603,31 @@ quest_objectives = Table(
             "(docs/DOMAIN_MODEL.md §14). NULL for objectives with no quantity."
         ),
     ),
+    Column(
+        "completion_rule",
+        JSONB(),
+        comment=(
+            "Structured completion-rule metadata (docs/PLAN.md §14.1) — e.g. "
+            '{"rule": "quantity_threshold", "threshold": 3} — distinct from '
+            "completion_mode (automatic vs. GM-confirmed, i.e. who decides) and from "
+            "quantity_required (a single scalar). NULL when the objective's "
+            "completion condition needs no structured metadata beyond its type and "
+            "target."
+        ),
+    ),
+    Column(
+        "visibility_policy",
+        Text(),
+        nullable=False,
+        server_default=text("'visible'::text"),
+        comment=(
+            "Whether and when this objective is shown to players (docs/PLAN.md §14.1) "
+            "— distinct from requirement_level='hidden' (whether the objective is "
+            "mandatory for quest completion, not whether players can see it). An "
+            "inferred, illustrative vocabulary — docs/PLAN.md does not enumerate "
+            "policy values, only the concept."
+        ),
+    ),
     *_timestamps(),
     schema="narrative",
     comment=(

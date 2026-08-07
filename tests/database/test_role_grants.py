@@ -146,6 +146,7 @@ MANAGED_TABLES = [
     ("knowledge", "character_expertise"),
     ("knowledge", "information_transfers"),
     ("knowledge", "public_knowledge"),
+    ("campaign", "party_knowledge"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

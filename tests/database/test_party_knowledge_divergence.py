@@ -1,11 +1,18 @@
 """Party knowledge differs from canonical truth (docs/PLAN.md Phase 7 exit
 criterion). knowledge.knowledge_items.truth_status_id is the canonical
-answer; knowledge.entity_knowledge/.party_discoveries record what a knower
-or party actually believes, which may — and, per docs/DATABASE_CONVENTIONS.md
-§15.2, must be allowed to — disagree. This was already representable since
-Phase 5 (revision 041); this test is the first to prove the divergence
-itself, and to exercise it alongside Phase 7's own additions
-(knowledge_versions, information_transfers).
+answer; campaign.party_knowledge/knowledge.entity_knowledge/.party_discoveries
+record what a party or knower actually believes, which may — and, per
+docs/DATABASE_CONVENTIONS.md §15.2, must be allowed to — disagree.
+
+The exit criterion is specifically about *party*-level belief
+(docs/PLAN.md §15, docs/DOMAIN_MODEL.md §15.4), which campaign.
+party_knowledge (revision 074) represents directly — distinct from
+knowledge.party_discoveries, which records only that/when/how a party
+acquired an item and has no belief/confidence/interpretation columns of
+its own to diverge with. The individual-knower case
+(knowledge.entity_knowledge) was already representable since Phase 5
+(revision 041) and is kept here too, since it is a real, related case this
+same file already covered.
 """
 
 import pytest
@@ -15,6 +22,7 @@ from tests.factories import (
     make_character,
     make_knowledge_item,
     make_party,
+    make_party_knowledge,
     make_timeline,
     make_world,
 )
@@ -42,12 +50,58 @@ def f(db_connection: Connection) -> Fixture:
     return Fixture(db_connection, "party-knowledge-divergence-world")
 
 
-def test_a_party_can_believe_a_claim_the_canonical_truth_contradicts(
+def test_the_partys_own_belief_can_contradict_canonical_truth(
     db_connection: Connection, f: Fixture
 ) -> None:
-    """The knowledge item is canonically false, but the party fully believes
-    it — a false belief is valid game data (conventions §15.2) and must not
-    be silently corrected."""
+    """This is the exit criterion's actual claim: the *party's own*
+    campaign.party_knowledge row — not an individual knower's — records
+    belief/confidence/interpretation that conflicts with the item's
+    canonical truth_status_id ('false')."""
+    truth_status = db_connection.execute(
+        text("""
+            SELECT ts.code FROM knowledge.knowledge_items ki
+            JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
+            WHERE ki.knowledge_item_id = :i
+        """),
+        {"i": f.knowledge_item_id},
+    ).scalar()
+    assert truth_status == "false"
+
+    make_party_knowledge(
+        db_connection,
+        f.timeline_id,
+        f.party_id,
+        f.knowledge_item_id,
+        awareness_level="aware",
+        confidence=90,
+        interpretation="The party is convinced Delwyn is the thief.",
+    )
+
+    belief = db_connection.execute(
+        text("""
+            SELECT awareness_level, confidence, interpretation
+            FROM campaign.party_knowledge
+            WHERE timeline_id = :tl AND party_id = :party AND knowledge_item_id = :item
+        """),
+        {"tl": f.timeline_id, "party": f.party_id, "item": f.knowledge_item_id},
+    ).one()
+
+    assert belief.awareness_level == "aware"
+    assert belief.confidence == 90
+    assert "convinced" in belief.interpretation
+    # The party's own belief row is recorded independently of, and in direct
+    # contradiction to, the item's own canonical truth_status ('false') —
+    # nothing about writing this row touched or required changing
+    # knowledge_items.truth_status_id.
+
+
+def test_an_individual_knower_can_also_believe_a_claim_the_canonical_truth_contradicts(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The related individual-knower case: an NPC's own
+    knowledge.entity_knowledge row diverges from canonical truth the same
+    way — a false belief is valid game data (conventions §15.2) and must
+    not be silently corrected."""
     truth_status = db_connection.execute(
         text("""
             SELECT ts.code FROM knowledge.knowledge_items ki

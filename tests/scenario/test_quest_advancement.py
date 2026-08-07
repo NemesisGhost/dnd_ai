@@ -10,18 +10,20 @@ event, the updated campaign.objective_state, and the linking
 narrative.event_effects row — not by inspecting the transaction boundary.
 """
 
+import threading
 import uuid
 from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.commands.quests import advance_objective
+from dnd_ai.commands.quests import AdvanceObjectiveResult, advance_objective
 from tests.factories import (
     make_area_interactable,
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_objective_state,
     make_quest,
     make_quest_objective,
     make_quest_stage,
@@ -168,3 +170,118 @@ def test_an_invalid_new_status_is_rejected(postgres_engine: Engine, f: Fixture) 
             world_time_id=f.world_time_id,
             new_status_code="active",
         )
+
+
+def test_advancing_an_existing_nonterminal_state_updates_it(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Non-concurrent update path: an objective already active (created
+    directly, as GM-driven state would be, not through advance_objective
+    itself) moves to completed, with the transition's before/after recorded
+    correctly."""
+    with postgres_engine.begin() as connection:
+        make_objective_state(connection, f.timeline_id, f.objective_id, status_code="active")
+
+    result = advance_objective(
+        postgres_engine,
+        quest_objective_id=f.objective_id,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        new_status_code="completed",
+        actor_entity_id=f.actor_id,
+    )
+
+    assert result.previous_status_code == "active"
+    assert result.new_status_code == "completed"
+
+    with postgres_engine.connect() as verify:
+        effect_row = verify.execute(
+            text("""
+                SELECT previous_value, new_value
+                FROM narrative.event_effects WHERE event_id = :e
+            """),
+            {"e": result.event_id},
+        ).one()
+        assert effect_row.previous_value == "active"
+        assert effect_row.new_value == "completed"
+
+    assert _objective_state(postgres_engine, f) == ("completed", result.event_id)
+
+
+def test_two_concurrent_first_advancements_serialize_to_exactly_one_result(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Concurrency regression: without _lock_quest_objective, two concurrent
+    advance_objective() calls for the same (timeline, objective, no party)
+    scope — both starting from "no campaign.objective_state row yet" — could
+    each observe "no state" and race to INSERT, colliding on
+    ux_objective_state_timeline_objective_no_party. Two real threads,
+    released together via a Barrier so they race for real, prove the lock
+    actually serializes them: exactly one call succeeds and leaves exactly
+    one committed campaign.objective_state/narrative.events/narrative.
+    event_effects result; the other is cleanly rejected as terminal (not a
+    raw IntegrityError from the unique index)."""
+    barrier = threading.Barrier(2)
+    results: dict[str, AdvanceObjectiveResult] = {}
+    errors: dict[str, Exception] = {}
+
+    def _advance(label: str, new_status_code: str) -> None:
+        barrier.wait(timeout=30)
+        try:
+            results[label] = advance_objective(
+                postgres_engine,
+                quest_objective_id=f.objective_id,
+                timeline_id=f.timeline_id,
+                world_time_id=f.world_time_id,
+                new_status_code=new_status_code,
+                actor_entity_id=f.actor_id,
+            )
+        except ValueError as exc:
+            errors[label] = exc
+
+    thread_a = threading.Thread(target=_advance, args=("a", "completed"))
+    thread_b = threading.Thread(target=_advance, args=("b", "failed"))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=30)
+    thread_b.join(timeout=30)
+    assert not thread_a.is_alive(), "advance_objective for thread a did not finish"
+    assert not thread_b.is_alive(), "advance_objective for thread b did not finish"
+
+    assert len(results) == 1, f"expected exactly one call to succeed, got {len(results)}"
+    assert len(errors) == 1, f"expected exactly one call to be rejected, got {len(errors)}"
+    assert "terminal" in str(next(iter(errors.values())))
+
+    winner = next(iter(results.values()))
+
+    with postgres_engine.connect() as verify:
+        state_count = verify.execute(
+            text("""
+                SELECT count(*) FROM campaign.objective_state
+                WHERE timeline_id = :t AND quest_objective_id = :o
+            """),
+            {"t": f.timeline_id, "o": f.objective_id},
+        ).scalar()
+        assert state_count == 1
+
+        event_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.events ev
+                JOIN narrative.event_types et ON et.event_type_id = ev.event_type_id
+                WHERE et.code IN ('objective_completed', 'objective_failed')
+                  AND ev.timeline_id = :t
+            """),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 1
+
+        effect_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.event_effects
+                WHERE target_quest_objective_id = :o
+            """),
+            {"o": f.objective_id},
+        ).scalar()
+        assert effect_count == 1
+
+    assert _objective_state(postgres_engine, f) == (winner.new_status_code, winner.event_id)

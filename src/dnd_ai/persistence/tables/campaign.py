@@ -15,6 +15,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import INT8RANGE, TIMESTAMP, UUID
@@ -22,6 +23,7 @@ from sqlalchemy.types import Integer
 
 from ._shared import (
     NONNEGATIVE_INTEGER,
+    PERCENTAGE_0_100,
     _lookup_table,
     _timestamps,
     _uuid_pk,
@@ -1153,4 +1155,82 @@ Index(
     objective_state.c.party_id,
     unique=True,
     postgresql_where=objective_state.c.party_id.isnot(None),
+)
+
+# ---------------------------------------------------------------------------
+# campaign — party knowledge (revision 074)
+# ---------------------------------------------------------------------------
+
+party_knowledge = Table(
+    "party_knowledge",
+    metadata,
+    _uuid_pk("party_knowledge_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "party_id",
+        UUID(),
+        ForeignKey("campaign.parties.party_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "knowledge_item_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_items.knowledge_item_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "knowledge_version_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_versions.knowledge_version_id", ondelete="SET NULL"),
+        comment=(
+            "The specific (possibly distorted) version the party heard, when it was a "
+            "distorted retelling rather than the canonical statement — same role as "
+            "knowledge.entity_knowledge.knowledge_version_id."
+        ),
+    ),
+    Column("awareness_level", Text(), nullable=False, server_default=text("'aware'::text")),
+    Column("confidence", PERCENTAGE_0_100),
+    Column("interpretation", Text()),
+    Column("willing_to_share", Boolean(), nullable=False, server_default=text("true")),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    UniqueConstraint(
+        "timeline_id", "party_id", "knowledge_item_id", name="ux_party_knowledge_current"
+    ),
+    schema="campaign",
+    comment=(
+        "The party's own current effective belief about a knowledge item on a "
+        "timeline (docs/DOMAIN_MODEL.md §15.4, docs/PLAN.md §15) — distinct from "
+        "knowledge.party_discoveries, which records only when/how the party "
+        "acquired the item and carries no belief/confidence/interpretation of its "
+        "own. Does not imply every party member shares this understanding unless "
+        "the application explicitly promotes it to individual "
+        "knowledge.entity_knowledge rows. A false belief is valid game data and is "
+        "never overwritten merely because the canonical truth is known elsewhere — "
+        "same rule as knowledge.entity_knowledge (revision 041). One row per "
+        "(timeline, party, knowledge item)."
+    ),
+)
+
+Index("ix_party_knowledge_timeline_id", party_knowledge.c.timeline_id)
+Index("ix_party_knowledge_party_id", party_knowledge.c.party_id)
+Index("ix_party_knowledge_knowledge_item_id", party_knowledge.c.knowledge_item_id)
+Index(
+    "ix_party_knowledge_knowledge_version_id",
+    party_knowledge.c.knowledge_version_id,
+    postgresql_where=party_knowledge.c.knowledge_version_id.isnot(None),
+)
+Index(
+    "ix_party_knowledge_last_event_id",
+    party_knowledge.c.last_event_id,
+    postgresql_where=party_knowledge.c.last_event_id.isnot(None),
 )

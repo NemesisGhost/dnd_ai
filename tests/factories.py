@@ -12,6 +12,7 @@ exception §32.3 allows. Replace these with command calls once the command layer
 lands, rather than growing them into a parallel write path.
 """
 
+import json
 import uuid
 
 from sqlalchemy import Connection, text
@@ -938,14 +939,15 @@ def make_consequence(
     status: str = "proposed",
     resulting_event_id: uuid.UUID | None = None,
     resulting_party_discovery_id: uuid.UUID | None = None,
+    resulting_quest_objective_state_id: uuid.UUID | None = None,
     description: str | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO interaction.consequences
                 (interaction_id, consequence_type, status, resulting_event_id,
-                 resulting_party_discovery_id, description)
-            VALUES (:interaction, :type, :status, :event, :discovery, :description)
+                 resulting_party_discovery_id, resulting_quest_objective_state_id, description)
+            VALUES (:interaction, :type, :status, :event, :discovery, :objective_state, :description)
             RETURNING consequence_id
         """),
         {
@@ -954,7 +956,34 @@ def make_consequence(
             "status": status,
             "event": resulting_event_id,
             "discovery": resulting_party_discovery_id,
+            "objective_state": resulting_quest_objective_state_id,
             "description": description,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_event_effect(
+    connection: Connection,
+    event_id: uuid.UUID,
+    *,
+    target_entity_id: uuid.UUID | None = None,
+    target_quest_objective_id: uuid.UUID | None = None,
+    target_component: str = "status",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.event_effects
+                (event_id, target_entity_id, target_quest_objective_id, target_component)
+            VALUES (:event, :entity, :objective, :component)
+            RETURNING event_effect_id
+        """),
+        {
+            "event": event_id,
+            "entity": target_entity_id,
+            "objective": target_quest_objective_id,
+            "component": target_component,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
@@ -1037,6 +1066,8 @@ def make_quest_objective(
     name: str = "Test Objective",
     requirement_level: str = "required",
     completion_mode: str = "automatic",
+    completion_rule: dict[str, object] | None = None,
+    visibility_policy: str = "visible",
     target_entity_id: uuid.UUID | None = None,
     target_area_connection_id: uuid.UUID | None = None,
     target_area_feature_id: uuid.UUID | None = None,
@@ -1047,12 +1078,12 @@ def make_quest_objective(
         text("""
             INSERT INTO narrative.quest_objectives
                 (quest_stage_id, objective_type_id, name, requirement_level, completion_mode,
-                 target_entity_id, target_area_connection_id, target_area_feature_id,
-                 target_area_hazard_id, target_area_interactable_id)
+                 completion_rule, visibility_policy, target_entity_id, target_area_connection_id,
+                 target_area_feature_id, target_area_hazard_id, target_area_interactable_id)
             VALUES (
                 :stage,
                 (SELECT objective_type_id FROM narrative.objective_types WHERE code = :otc),
-                :name, :requirement, :completion,
+                :name, :requirement, :completion, :completion_rule, :visibility,
                 :entity, :connection, :feature, :hazard, :interactable
             )
             RETURNING quest_objective_id
@@ -1063,6 +1094,8 @@ def make_quest_objective(
             "name": name,
             "requirement": requirement_level,
             "completion": completion_mode,
+            "completion_rule": json.dumps(completion_rule) if completion_rule is not None else None,
+            "visibility": visibility_policy,
             "entity": target_entity_id,
             "connection": target_area_connection_id,
             "feature": target_area_feature_id,
@@ -1171,6 +1204,64 @@ def make_objective_state(
             "objective": quest_objective_id,
             "party": party_id,
             "status": status_code,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_knowledge_version(
+    connection: Connection,
+    knowledge_item_id: uuid.UUID,
+    *,
+    version_statement: str = "A distorted retelling.",
+    distortion_type: str = "embellishment",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.knowledge_versions
+                (knowledge_item_id, version_statement, distortion_type)
+            VALUES (:item, :statement, :distortion)
+            RETURNING knowledge_version_id
+        """),
+        {"item": knowledge_item_id, "statement": version_statement, "distortion": distortion_type},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_party_knowledge(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    *,
+    knowledge_version_id: uuid.UUID | None = None,
+    awareness_level: str = "aware",
+    confidence: int | None = None,
+    interpretation: str | None = None,
+    willing_to_share: bool = True,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.party_knowledge
+                (timeline_id, party_id, knowledge_item_id, knowledge_version_id, awareness_level,
+                 confidence, interpretation, willing_to_share, last_event_id)
+            VALUES (:timeline, :party, :item, :version, :awareness, :confidence, :interpretation,
+                    :share, :event)
+            RETURNING party_knowledge_id
+        """),
+        {
+            "timeline": timeline_id,
+            "party": party_id,
+            "item": knowledge_item_id,
+            "version": knowledge_version_id,
+            "awareness": awareness_level,
+            "confidence": confidence,
+            "interpretation": interpretation,
+            "share": willing_to_share,
             "event": last_event_id,
         },
     ).scalar()

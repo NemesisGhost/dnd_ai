@@ -365,3 +365,293 @@ def test_public_knowledge_must_share_its_world(db_connection: Connection, f: Fix
             {"tl": f.timeline_id, "item": f.knowledge_item_id, "location": foreign_location},
         )
     assert "mixes worlds" in str(exc.value)
+
+
+def test_public_knowledge_known_since_can_be_set(db_connection: Connection, f: Fixture) -> None:
+    location_id = make_location(db_connection, f.world_id)
+    db_connection.execute(
+        text("""
+            INSERT INTO knowledge.public_knowledge
+                (timeline_id, knowledge_item_id, location_id, known_since_world_time_id)
+            VALUES (:tl, :item, :location, :known_since)
+        """),
+        {
+            "tl": f.timeline_id,
+            "item": f.knowledge_item_id,
+            "location": location_id,
+            "known_since": f.t100,
+        },
+    )
+
+
+def test_public_knowledge_known_since_must_share_the_timelines_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    location_id = make_location(db_connection, f.world_id)
+    other_world = make_world(db_connection, slug="public-knowledge-known-since-other-world")
+    foreign_world_time = make_world_time(db_connection, other_world, 100)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.public_knowledge
+                    (timeline_id, knowledge_item_id, location_id, known_since_world_time_id)
+                VALUES (:tl, :item, :location, :known_since)
+            """),
+            {
+                "tl": f.timeline_id,
+                "item": f.knowledge_item_id,
+                "location": location_id,
+                "known_since": foreign_world_time,
+            },
+        )
+    assert "known_since_world_time_id" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# knowledge.information_transfers: timeline-scope guards (revision 074)
+# ---------------------------------------------------------------------------
+
+
+def test_a_transfers_source_must_share_its_own_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The source entity_knowledge row shares the transfer's *world* (an
+    existing check) but belongs to a *different* timeline within it —
+    revision 074's addition, not caught by the world-only check."""
+    other_timeline = make_timeline(db_connection, f.world_id)
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = db_connection.execute(
+        text("""
+            INSERT INTO knowledge.entity_knowledge (timeline_id, knowledge_item_id, knower_entity_id)
+            VALUES (:tl, :item, :knower)
+            RETURNING entity_knowledge_id
+        """),
+        {"tl": other_timeline, "item": f.knowledge_item_id, "knower": source_npc},
+    ).scalar()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.information_transfers
+                    (timeline_id, source_entity_knowledge_id, recipient_entity_id)
+                VALUES (:tl, :source, :recipient)
+            """),
+            {"tl": f.timeline_id, "source": source_ek, "recipient": recipient_npc},
+        )
+    assert "source_entity_knowledge_id" in str(exc.value)
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_a_transfers_caused_by_interaction_must_share_its_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id)
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+    foreign_interaction = make_interaction(db_connection, other_timeline, f.t100)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.information_transfers
+                    (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                     caused_by_interaction_id)
+                VALUES (:tl, :source, :recipient, :interaction)
+            """),
+            {
+                "tl": f.timeline_id,
+                "source": source_ek,
+                "recipient": recipient_npc,
+                "interaction": foreign_interaction,
+            },
+        )
+    assert "caused_by_interaction_id" in str(exc.value)
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_a_transfers_caused_by_event_must_share_its_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = make_timeline(db_connection, f.world_id)
+    other_world_time = make_world_time(db_connection, f.world_id, 300)
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+    foreign_event = make_event(db_connection, f.world_id, other_timeline, other_world_time)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.information_transfers
+                    (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                     caused_by_event_id)
+                VALUES (:tl, :source, :recipient, :event)
+            """),
+            {
+                "tl": f.timeline_id,
+                "source": source_ek,
+                "recipient": recipient_npc,
+                "event": foreign_event,
+            },
+        )
+    assert "caused_by_event_id" in str(exc.value)
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_a_transfers_occurred_at_world_time_must_share_the_timelines_world(
+    db_connection: Connection, f: Fixture
+) -> None:
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    recipient_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+
+    other_world = make_world(db_connection, slug="transfer-occurred-at-other-world")
+    foreign_world_time = make_world_time(db_connection, other_world, 100)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.information_transfers
+                    (timeline_id, source_entity_knowledge_id, recipient_entity_id,
+                     occurred_at_world_time_id)
+                VALUES (:tl, :source, :recipient, :world_time)
+            """),
+            {
+                "tl": f.timeline_id,
+                "source": source_ek,
+                "recipient": recipient_npc,
+                "world_time": foreign_world_time,
+            },
+        )
+    assert "occurred_at_world_time_id" in str(exc.value)
+
+
+def test_a_transfers_existing_source_and_recipient_world_checks_still_work(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Regression guard: revision 074 rewrote this function's body — the
+    original world-agreement behaviour must survive unchanged."""
+    source_npc = make_character(db_connection, f.world_id, entity_type_code="npc")
+    source_ek = _make_entity_knowledge(db_connection, f, source_npc)
+
+    other_world = make_world(db_connection, slug="transfer-recipient-other-world")
+    foreign_recipient = make_character(db_connection, other_world, entity_type_code="npc")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO knowledge.information_transfers
+                    (timeline_id, source_entity_knowledge_id, recipient_entity_id)
+                VALUES (:tl, :source, :recipient)
+            """),
+            {"tl": f.timeline_id, "source": source_ek, "recipient": foreign_recipient},
+        )
+    assert "mixes worlds" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# knowledge.knowledge_versions: append-only enforcement (revision 074)
+# ---------------------------------------------------------------------------
+
+
+def test_a_knowledge_version_cannot_be_rewritten(db_connection: Connection, f: Fixture) -> None:
+    version_id = _make_version(db_connection, f.knowledge_item_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_versions SET version_statement = 'Edited.' "
+                "WHERE knowledge_version_id = :v"
+            ),
+            {"v": version_id},
+        )
+    assert "append-only" in str(exc.value)
+
+
+def test_a_knowledge_version_cannot_be_reparented(db_connection: Connection, f: Fixture) -> None:
+    other_item_id = make_knowledge_item(db_connection, f.world_id, statement="A different claim.")
+    version_id = _make_version(db_connection, f.knowledge_item_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_versions SET knowledge_item_id = :other "
+                "WHERE knowledge_version_id = :v"
+            ),
+            {"other": other_item_id, "v": version_id},
+        )
+    assert "append-only" in str(exc.value)
+
+
+def test_a_knowledge_version_cannot_be_deleted(db_connection: Connection, f: Fixture) -> None:
+    version_id = _make_version(db_connection, f.knowledge_item_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("DELETE FROM knowledge.knowledge_versions WHERE knowledge_version_id = :v"),
+            {"v": version_id},
+        )
+    assert "append-only" in str(exc.value)
+
+
+def test_a_referenced_knowledge_versions_item_invariant_cannot_be_invalidated(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """An entity_knowledge row cites a version of its own item
+    (enforce_entity_knowledge_version_item's invariant). Reparenting that
+    version out from under it — the only way the invariant could be broken
+    after the fact — is exactly what the append-only guard above blocks."""
+    version_id = _make_version(db_connection, f.knowledge_item_id)
+    npc_id = make_character(db_connection, f.world_id, entity_type_code="npc")
+    db_connection.execute(
+        text("""
+            INSERT INTO knowledge.entity_knowledge
+                (timeline_id, knowledge_item_id, knower_entity_id, knowledge_version_id)
+            VALUES (:tl, :item, :knower, :version)
+        """),
+        {
+            "tl": f.timeline_id,
+            "item": f.knowledge_item_id,
+            "knower": npc_id,
+            "version": version_id,
+        },
+    )
+    other_item_id = make_knowledge_item(db_connection, f.world_id, statement="A different claim.")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_versions SET knowledge_item_id = :other "
+                "WHERE knowledge_version_id = :v"
+            ),
+            {"other": other_item_id, "v": version_id},
+        )
+    assert "append-only" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# knowledge.knowledge_types: required seed codes (docs/PLAN.md §15.1)
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_types_contains_every_required_code(db_connection: Connection) -> None:
+    required = {
+        "fact",
+        "rumor",
+        "secret",
+        "belief",
+        "theory",
+        "prophecy",
+        "misconception",
+        "instruction",
+        "memory",
+        "doctrine",
+    }
+    seeded = {
+        row[0] for row in db_connection.execute(text("SELECT code FROM knowledge.knowledge_types"))
+    }
+    missing = required - seeded
+    assert not missing, f"knowledge.knowledge_types is missing required codes: {sorted(missing)}"

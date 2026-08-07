@@ -2,11 +2,14 @@
 quest objective, atomically (docs/PLAN.md Phase 7 exit criterion, CLAUDE.md
 rule 6).
 
-Mirrors dnd_ai.commands.interactions.resolve_check's shape: lock the
-timeline-scoped state row first (so two concurrent advancements of the same
-objective serialize rather than race), record the causing narrative.events
-row, update campaign.objective_state to match, and link the two through a
-narrative.event_effects row — all in one transaction.
+Mirrors dnd_ai.commands.interactions.resolve_check's shape: lock a
+structural row that always exists (narrative.quest_objectives, the same
+role world.area_connections plays for _lock_area_connection) before
+touching the possibly-absent campaign.objective_state row, so two
+concurrent advancements of the same objective serialize rather than race,
+then record the causing narrative.events row, update campaign.
+objective_state to match, and link the two through a narrative.
+event_effects row — all in one transaction.
 """
 
 import json
@@ -48,6 +51,28 @@ def _quest_objective_world(connection: Connection, quest_objective_id: uuid.UUID
     return world_id
 
 
+def _lock_quest_objective(connection: Connection, quest_objective_id: uuid.UUID) -> None:
+    """Acquire an exclusive row lock on the objective itself (a structural
+    row that always exists, unlike its possibly-absent campaign.
+    objective_state row) before touching campaign.objective_state at all.
+
+    _lock_objective_state's own SELECT ... FOR UPDATE has nothing to lock
+    until a state row already exists, so on a first transition two
+    concurrent advance_objective() calls for the same (timeline,
+    objective[, party]) scope could both observe "no state yet" and race
+    to INSERT into campaign.objective_state, colliding on
+    ux_objective_state_timeline_objective_no_party/_party — the same class
+    of gap Phase 6's correction pass (revision 067) found in
+    resolve_check() and fixed with _lock_area_connection. Locking this
+    always-present row first closes it here the same way."""
+    connection.execute(
+        text(
+            "SELECT quest_objective_id FROM narrative.quest_objectives WHERE quest_objective_id = :o FOR UPDATE"
+        ),
+        {"o": quest_objective_id},
+    )
+
+
 def _lock_objective_state(
     connection: Connection,
     *,
@@ -56,11 +81,10 @@ def _lock_objective_state(
     party_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID, str] | None:
     """Row-lock the current campaign.objective_state row for this
-    (timeline, objective[, party]), if one exists, so a concurrent
-    advancement of the same objective serializes rather than both reading
-    the same "not yet terminal" state — the exact race Phase 6's
-    correction pass (revision 067/068) had to retrofit onto resolve_check();
-    this command acquires the lock up front instead."""
+    (timeline, objective[, party]), if one exists. Only meaningful once
+    _lock_quest_objective has already been called — see that function's
+    docstring for why locking this row alone is not sufficient on a first
+    transition."""
     row = connection.execute(
         text("""
             SELECT objective_state_id,
@@ -118,6 +142,7 @@ def advance_objective(
 
     with engine.begin() as connection:
         world_id = _quest_objective_world(connection, quest_objective_id)
+        _lock_quest_objective(connection, quest_objective_id)
 
         existing = _lock_objective_state(
             connection,
