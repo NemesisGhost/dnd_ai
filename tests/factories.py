@@ -1127,6 +1127,26 @@ def make_objective_dependency(
     return value
 
 
+def make_quest_participant(
+    connection: Connection,
+    quest_id: uuid.UUID,
+    participant_entity_id: uuid.UUID,
+    *,
+    participant_role: str = "involved",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.quest_participants
+                (quest_id, participant_entity_id, participant_role)
+            VALUES (:quest, :participant, :role)
+            RETURNING quest_participant_id
+        """),
+        {"quest": quest_id, "participant": participant_entity_id, "role": participant_role},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_quest_outcome(
     connection: Connection,
     quest_id: uuid.UUID,

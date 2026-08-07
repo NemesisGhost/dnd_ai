@@ -1,6 +1,6 @@
 # Phase 7 Verification Checklist
 
-Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a first revision (073) covering both this phase's deliverables — the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here — plus one application-layer command, `advance_objective()`. A review of that work (PR #17) found six production defects, closed by a correction pass (revision 074) — see "Correction Pass" below. **Phase 7 is complete.** The correction pass's exact final head reached a confirmed green CI run; see "Verification status" at the end.
+Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a first revision (073) covering both this phase's deliverables — the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here — plus one application-layer command, `advance_objective()`. A review of that work (PR #17) found six production defects, closed by a correction pass (revision 074) — see "Correction Pass" below. PR #17 merged to `main`. A subsequent deployable-integrity review of the merged domain found one remaining gap — reverse (parent-scope) mutation was unguarded — closed by a second correction pass (revision 075, `075_phase7_reparent_guards`), on a fresh branch off `main` since Phase 8 (not yet merged) had already claimed the `075` migration-file prefix on its own branch. See "Second Correction Pass" below. **Phase 7 is complete.**
 
 ## Exit Criteria
 
@@ -20,6 +20,22 @@ A review of PR #17's revision 073 found six production defects that survived its
 
 Downgrading revision 074 restores `narrative.enforce_event_effect_target_world()`, `interaction.enforce_consequence_world()`, `knowledge.enforce_information_transfer_world()`, and `knowledge.enforce_public_knowledge_world()` to their exact pre-074 bodies (verified: none of the restored bodies reference a column only revision 073 added, so a subsequent downgrade of 073 itself leaves no dangling reference).
 
+## Second Correction Pass
+
+A post-merge deployable-integrity review of the quest/knowledge domain found that every same-world/same-scope trigger revision 073 built validates on INSERT and UPDATE of the *child* row only — none of them re-run when a *parent* row's own scope identity changes out from under already-valid dependents. This is the same class of gap revision 030 (Phase 4) already closed once for `core.world_times`/`.entities`/`campaign.timelines`/`.parties`/`.campaigns`. Five concrete mutation paths were identified:
+
+1. `narrative.story_arcs.world_id` could change after `narrative.quests` reference the arc.
+2. `narrative.quest_stages.quest_id` could change after `narrative.quest_objectives`/`.objective_dependencies`/`campaign.objective_state`/`narrative.event_effects` reference the hierarchy (transitively through `quest_objectives`); `narrative.quest_objectives.quest_stage_id` could change after those same dependents reference the objective directly.
+3. `narrative.quest_outcomes.quest_id` could change after `narrative.quest_rewards` reference the outcome.
+4. `knowledge.entity_knowledge.timeline_id` could change after `knowledge.information_transfers` references it as `source_entity_knowledge_id`.
+5. `campaign.objective_state.timeline_id` could change after `interaction.consequences` references it through `resulting_quest_objective_state_id`.
+
+None of these six columns represent a legitimate "move" operation (grepped `src/dnd_ai/commands` and `tests/factories.py` before writing the revision: nothing in the repository updates any of them after insert). **Fixed** by revision 075 (`075_phase7_reparent_guards`), reusing revision 030's existing `core.enforce_immutable_columns()` generic trigger function — attached to all six columns as `BEFORE UPDATE` triggers — rather than building six bespoke reverse-guard triggers or a transactional revalidate path for a change that should not happen at all. No reverse guard (as opposed to immutability) was needed anywhere: none of the six columns support a legitimate reparenting operation in this domain.
+
+**Tests:** `tests/database/test_phase7_reparent_guards.py`, 17 cases — one negative (reparent rejected) and one positive (a legitimate non-identity column update still succeeds) per protected column, plus the four additional world/timeline-agreement cases the review separately called out as uncovered: `campaign.quest_state` rejecting a quest from another world, `campaign.objective_state` rejecting an objective from another world, `campaign.objective_state` rejecting a `last_event_id` from another timeline, and `narrative.quest_participants` accepting a same-world participant while rejecting a cross-world one (this table had no test coverage at all before this pass). `tests/factories.py` gained one new factory, `make_quest_participant()`.
+
+Downgrading revision 075 drops all six triggers; `core.enforce_immutable_columns()` itself is untouched (owned by, and dropped only by, revision 030's own downgrade).
+
 ## First-Time Obligations ([§23](PLAN.md#23-delivery-phases))
 
 - **Close Phase 5's knowledge-domain deferral.** `knowledge.knowledge_versions`, `.information_transfers`, `.expertise_domains`/`.character_expertise`, `.public_knowledge`, and temporal validity on `knowledge_items` — all named explicitly in `DATABASE_MODEL.md §15`'s "Explicit Phase 5 / Phase 7 boundary" note — are delivered by revision 073. `knowledge.entity_knowledge.knowledge_version_id` (nullable) additionally closes revision 041's own "nothing to version yet" placeholder.
@@ -31,6 +47,8 @@ Downgrading revision 074 restores `narrative.enforce_event_effect_target_world()
 **Revision 073:** 18 new tables, 1 new command module (`src/dnd_ai/commands/quests.py`, one command: `advance_objective()`), 12 new trigger functions, 4 new seeded lookups (~35 rows), 2 new `narrative.event_types` seed rows, and 5 columns added to four previously-existing tables.
 
 **Revision 074 (correction pass):** 1 new table (`campaign.party_knowledge`), 2 new columns on `narrative.quest_objectives` (`completion_rule`, `visibility_policy`), 4 new `knowledge.knowledge_types` seed rows, 4 new trigger functions (2 for `party_knowledge`, 1 for `knowledge_versions` immutability, 1 shared-function extension count not included), 4 existing trigger functions extended in place (`enforce_event_effect_target_world`, `enforce_consequence_world`, `enforce_information_transfer_world`, `enforce_public_knowledge_world`), and one application-layer locking fix (`advance_objective()`'s `_lock_quest_objective`).
+
+**Revision 075 (second correction pass):** 0 new tables, 0 new columns, 0 new trigger functions — reuses revision 030's existing `core.enforce_immutable_columns()`. 6 new `BEFORE UPDATE` triggers attached to pre-existing tables (`narrative.story_arcs`, `.quest_stages`, `.quest_objectives`, `.quest_outcomes`, `knowledge.entity_knowledge`, `campaign.objective_state`). 1 new test file (`tests/database/test_phase7_reparent_guards.py`, 17 cases), 1 new test factory (`make_quest_participant()`).
 
 | Area | Delivers |
 |---|---|
@@ -50,12 +68,12 @@ Downgrading revision 074 restores `narrative.enforce_event_effect_target_world()
 | Seed idempotency | `narrative.objective_types` (10 rows), `campaign.quest_statuses` (7 rows), `campaign.objective_statuses` (7 rows), `knowledge.expertise_domains` (12 rows) all seeded with `ON CONFLICT (code) DO NOTHING`, same pattern as every prior lookup. Six additional rows into pre-existing lookups: `narrative.event_types` gained `objective_completed`/`objective_failed` (073); `knowledge.knowledge_types` gained `fact`/`prophecy`/`misconception`/`doctrine` (074). Re-running the four new `knowledge_types` seed statements a second time directly against a migrated database confirmed no duplicate rows resulted. |
 | Constraint tests | Every nontrivial CHECK/trigger added in either revision has a positive and a negative test (§32.1) — see "Test counts" below. |
 | Comments and FK indexes | Zero tables without a comment. `test_every_foreign_key_is_indexed` (Phase 6's schema-documentation tripwire) caught three initially-missed indexes (`information_transfers.occurred_at_world_time_id`, `public_knowledge.known_since_world_time_id`, `story_arcs.source_id`) on first run of revision 073; fixed and reverified. |
-| Downgrade | Revision 073 verified via `alembic downgrade 072_interaction_lifecycle_gaps → upgrade head` against AWS `dev`, twice, each followed by `alembic check` reporting no diff. Revision 074 verified the same way (`downgrade 072 → upgrade head`, i.e. through both 073 and 074), plus an **empty-database** upgrade-to-head (a freshly created database, revision 001 through 074, no incremental state) and a second `072 → head → 072 → head` round trip against that same fresh database — both clean. |
+| Downgrade | Revision 073 verified via `alembic downgrade 072_interaction_lifecycle_gaps → upgrade head` against AWS `dev`, twice, each followed by `alembic check` reporting no diff. Revision 074 verified the same way (`downgrade 072 → upgrade head`, i.e. through both 073 and 074), plus an **empty-database** upgrade-to-head (a freshly created database, revision 001 through 074, no incremental state) and a second `072 → head → 072 → head` round trip against that same fresh database — both clean. Revision 075 verified via `alembic downgrade 074_phase7_correction_pass → upgrade head`, followed by `alembic check` reporting no diff. |
 | CI green | See "Verification status" below. |
 
 ### Test counts
 
-Phase 6's closing baseline was **1,574 collected tests**. After revision 073: **1,759 tests** (+185). After revision 074 (correction pass): **1,799 tests** (+40), all passing against AWS `dev`.
+Phase 6's closing baseline was **1,574 collected tests**. After revision 073: **1,759 tests** (+185). After revision 074 (correction pass): **1,799 tests** (+40). After revision 075 (second correction pass): **1,819 tests** (+17 from `test_phase7_reparent_guards.py`; the remaining +3 versus the 074 count came from unrelated coverage added on `main` after PR #17 merged), all passing against AWS `dev`.
 
 ## Verification commands and results
 
@@ -76,6 +94,8 @@ Revision 073 result (for the record): **1,759 passed**, one Alembic head (`073_q
 
 Revision 074 (correction pass) result: the commands above, plus a from-empty verification against a freshly created database (`CREATE DATABASE`, then `alembic upgrade head` directly from base — no prior incremental state) and a second `072 → head → 072 → head` round trip against that same fresh database. **1,799 passed**, one Alembic head (`074_phase7_correction_pass`), `alembic check` clean in every case (against the shared `dev` working database and against the from-empty database, before and after both round trips), seed idempotency confirmed by directly re-running the four new `knowledge_types` seed statements a second time (no duplicate rows), `ruff format --check`/`ruff check`/`mypy src` all clean.
 
+Revision 075 (second correction pass) result: developed on `agent/phase7-reparent-guards`, a fresh branch off `main` (`down_revision = "074_phase7_correction_pass"`), since the not-yet-merged Phase 8 branch had already claimed the `075` migration-file prefix for an unrelated domain. `alembic upgrade head`, `alembic check` (no diff), `alembic downgrade 074_phase7_correction_pass → upgrade head`, `alembic check` again (no diff) — all against AWS `dev`. **1,819 passed** across `tests/unit`/`tests/database`/`tests/scenario` (1,385s for `tests/database` alone), one Alembic head (`075_phase7_reparent_guards`), `ruff format --check`/`ruff check`/`mypy src` all clean. AWS `dev`'s alembic state was at Phase 8's `075_relationships_and_orgs` (from PR #18, not yet merged) at the start of this session — that PR's own migration file was temporarily borrowed to run its `downgrade()` cleanly back to `074` before this revision's branch (which does not include Phase 8's migration file) could run against it; Phase 8's schema is trivially reapplied by upgrading to its own head again when that PR resumes.
+
 ### Bugs found while verifying revision 073
 
 Distinguished from schema-design defects per this project's own convention:
@@ -93,6 +113,10 @@ None of these were schema-design defects — each was either an omission caught 
 
 None. All 40 new tests, and the three `alembic check` comparisons (shared `dev` database round trip, from-empty database, from-empty database's own round trip), passed on first run.
 
+### Bugs found while verifying revision 075
+
+None. All 17 new tests, the migration round trip, and both `alembic check` comparisons passed on first run. `ruff format --check` flagged one line-length issue in the new test file on first save (auto-fixed by `ruff format`, not a logic defect).
+
 ## Verification status
 
 **Revision 073, for the record:** [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17) reached a confirmed green CI run at commit `fa3bc5f`, polled via `scripts/wait_for_ci.py` to actual completion — run [`31145097614`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31145097614), `PASS` (after one transient AWS-RDS SSL connection fault in the initial attempt was re-run via the GitHub API, not a code defect). A subsequent documentation-only commit (`b15c663`) recording that result also reached a confirmed green run — [`31147256307`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31147256307), `PASS`.
@@ -102,4 +126,11 @@ None. All 40 new tests, and the three `alembic check` comparisons (shared `dev` 
 - All local verification above (migration round trips including a from-empty database, `alembic check`, seed idempotency, the full `tests/unit`/`tests/database`/`tests/scenario` suite, `ruff`/`mypy`) ran and passed against AWS `dev`.
 - Pushed to `agent/phase7-quests-and-knowledge` on top of PR #17's existing history (commit `08bed33`); the PR now carries this pass's commits too.
 - This pass's own final-head CI run reached a confirmed green run, polled via `scripts/wait_for_ci.py` to actual completion — run [`31152099974`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31152099974), `PASS`, on the first attempt (no re-run needed this time).
-- **Phase 7 is complete.** The PR's exact head commit has a confirmed green CI run, closing the bar every prior phase — and Phase 6's own correction passes — has been held to. The PR has not yet been merged to `main` — that is the user's call, not something done automatically as part of this verification.
+- Phase 7 reached completion on this basis and PR #17 was merged to `main`.
+
+**Revision 075 (second correction pass):**
+
+- All local verification above (migration round trip, `alembic check` before and after, the full `tests/unit`/`tests/database`/`tests/scenario` suite, `ruff`/`mypy`) ran and passed against AWS `dev`.
+- Developed on `agent/phase7-reparent-guards`, branched from `main` post-merge (not from the not-yet-merged Phase 8 branch), keeping this correction independent of Phase 8.
+- CI result recorded once the PR's head commit reaches a confirmed run — see the addendum below this table once available.
+- **Phase 7 remains complete**; this pass closes a deployable-integrity gap discovered after merge, the same way Phase 6's own post-review correction passes did.
