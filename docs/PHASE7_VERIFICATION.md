@@ -132,5 +132,6 @@ None. All 17 new tests, the migration round trip, and both `alembic check` compa
 
 - All local verification above (migration round trip, `alembic check` before and after, the full `tests/unit`/`tests/database`/`tests/scenario` suite, `ruff`/`mypy`) ran and passed against AWS `dev`.
 - Developed on `agent/phase7-reparent-guards`, branched from `main` post-merge (not from the not-yet-merged Phase 8 branch), keeping this correction independent of Phase 8.
-- CI result recorded once the PR's head commit reaches a confirmed run — see the addendum below this table once available.
-- **Phase 7 remains complete**; this pass closes a deployable-integrity gap discovered after merge, the same way Phase 6's own post-review correction passes did.
+- Pushed to `agent/phase7-reparent-guards`; [PR #19](https://github.com/NemesisGhost/dnd_ai/pull/19) opened against `main`.
+- This pass's head commit (`1577650`) reached a confirmed green CI run, polled via `scripts/wait_for_ci.py` to actual completion — run [`31209498539`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31209498539), `PASS`, on the first attempt.
+- **Phase 7 remains complete**; this pass closes a deployable-integrity gap discovered after merge, the same way Phase 6's own post-review correction passes did. PR #19 has not yet been merged to `main` — that is the user's call.
