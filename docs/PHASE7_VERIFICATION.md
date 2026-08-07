@@ -1,6 +1,6 @@
 # Phase 7 Verification Checklist
 
-Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a single revision (073) covering both this phase's deliverables: the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here. One application-layer command, `advance_objective()`, was added alongside it.
+Records the verification performed for Phase 7 (Quests and knowledge) per [PLAN.md §23](PLAN.md#23-delivery-phases) and the exit-review process in [§23.1](PLAN.md#231-phase-exit-review). Delivered as a single revision (073) covering both this phase's deliverables: the quest domain in full, and the knowledge-domain gaps Phase 5's pulled-forward slice (revision 041) explicitly deferred here. One application-layer command, `advance_objective()`, was added alongside it. **Phase 7 is complete.** [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17) reached a confirmed green CI run at its head commit; see "Verification status" below.
 
 ## Exit Criteria
 
@@ -74,4 +74,6 @@ None of these were schema-design defects — each was either an omission caught 
 
 ## Verification status
 
-All local verification above ran and passed against AWS `dev`. Not yet pushed, opened as a PR, or confirmed on CI — this section will be updated once that happens, following the same bar every prior phase has been held to: **do not describe Phase 7 as complete until this section says so.**
+All local verification above ran and passed against AWS `dev`. Pushed as `agent/phase7-quests-and-knowledge`, opened as [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17). That PR's head commit (`fa3bc5f`) reached a confirmed green CI run, polled via `scripts/wait_for_ci.py` to actual completion — run [`31145097614`](https://github.com/NemesisGhost/dnd_ai/actions/runs/31145097614), `PASS`. The initial attempt failed with a single `psycopg.OperationalError: consuming input failed: SSL error: unexpected eof while reading` during test setup (`tests/database/test_quest_domain.py::test_a_quest_needs_no_story_arc`) — the same class of transient AWS-RDS connection fault the Phase 6 merge commit's own CI run hit, not a code defect (every other test in both jobs passed). The failed job was re-run via the GitHub API (`rerun-failed-jobs`) rather than a new commit, and the same run ID reached `PASS`.
+
+**Phase 7 is complete.** The PR's exact head commit has a confirmed green CI run, closing the bar every prior phase has been held to. The PR has not yet been merged to `main` — that is the user's call, not something done automatically as part of this verification.
