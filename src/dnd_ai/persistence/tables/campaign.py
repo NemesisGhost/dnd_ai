@@ -989,3 +989,168 @@ Index(
     character_location_history.c.departed_at_world_time_id,
     postgresql_where=character_location_history.c.departed_at_world_time_id.isnot(None),
 )
+
+# ---------------------------------------------------------------------------
+# campaign — quest and objective state (revision 073)
+# ---------------------------------------------------------------------------
+
+quest_statuses = _lookup_table(
+    "campaign",
+    "quest_statuses",
+    "quest_status_id",
+    "Timeline-scoped quest progression (docs/ENTITY_LIFECYCLE.md §16): "
+    "unavailable, available, active, suspended, completed, failed, abandoned.",
+)
+
+quest_state = Table(
+    "quest_state",
+    metadata,
+    _uuid_pk("quest_state_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "quest_id",
+        UUID(),
+        ForeignKey("narrative.quests.quest_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "party_id",
+        UUID(),
+        ForeignKey("campaign.parties.party_id", ondelete="CASCADE"),
+        comment=(
+            "NULL for timeline/campaign-wide progress; set for a party pursuing "
+            "this quest independently of any other party on the same timeline."
+        ),
+    ),
+    Column(
+        "quest_status_id",
+        UUID(),
+        ForeignKey("campaign.quest_statuses.quest_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "Tracks active quest progress for a timeline, optionally scoped to one "
+        "party (docs/DOMAIN_MODEL.md §14.6). party_id NULL means timeline/campaign- "
+        "wide tracking rather than any one party's; party_id set means this row "
+        "tracks that specific party's progress. One current row per "
+        "(timeline, quest[, party]) — see the partial unique indexes below."
+    ),
+)
+
+Index("ix_quest_state_timeline_id", quest_state.c.timeline_id)
+Index("ix_quest_state_quest_id", quest_state.c.quest_id)
+Index(
+    "ix_quest_state_party_id",
+    quest_state.c.party_id,
+    postgresql_where=quest_state.c.party_id.isnot(None),
+)
+Index("ix_quest_state_quest_status_id", quest_state.c.quest_status_id)
+Index(
+    "ix_quest_state_last_event_id",
+    quest_state.c.last_event_id,
+    postgresql_where=quest_state.c.last_event_id.isnot(None),
+)
+Index(
+    "ux_quest_state_timeline_quest_no_party",
+    quest_state.c.timeline_id,
+    quest_state.c.quest_id,
+    unique=True,
+    postgresql_where=quest_state.c.party_id.is_(None),
+)
+Index(
+    "ux_quest_state_timeline_quest_party",
+    quest_state.c.timeline_id,
+    quest_state.c.quest_id,
+    quest_state.c.party_id,
+    unique=True,
+    postgresql_where=quest_state.c.party_id.isnot(None),
+)
+
+objective_statuses = _lookup_table(
+    "campaign",
+    "objective_statuses",
+    "objective_status_id",
+    "Timeline-scoped objective progression (docs/DOMAIN_MODEL.md §14.7): "
+    "hidden, available, active, completed, failed, skipped, superseded.",
+)
+
+objective_state = Table(
+    "objective_state",
+    metadata,
+    _uuid_pk("objective_state_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "quest_objective_id",
+        UUID(),
+        ForeignKey("narrative.quest_objectives.quest_objective_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("party_id", UUID(), ForeignKey("campaign.parties.party_id", ondelete="CASCADE")),
+    Column(
+        "objective_status_id",
+        UUID(),
+        ForeignKey("campaign.objective_statuses.objective_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "Tracks one quest objective's current status for a timeline, optionally "
+        "scoped to one party — same party_id NULL/set convention as "
+        "campaign.quest_state above. Transitions must reference a triggering event "
+        "or GM decision (docs/DOMAIN_MODEL.md §14.7); last_event_id is the causal "
+        "reference (conventions §13.4). One current row per "
+        "(timeline, objective[, party])."
+    ),
+)
+
+Index("ix_objective_state_timeline_id", objective_state.c.timeline_id)
+Index("ix_objective_state_quest_objective_id", objective_state.c.quest_objective_id)
+Index(
+    "ix_objective_state_party_id",
+    objective_state.c.party_id,
+    postgresql_where=objective_state.c.party_id.isnot(None),
+)
+Index("ix_objective_state_objective_status_id", objective_state.c.objective_status_id)
+Index(
+    "ix_objective_state_last_event_id",
+    objective_state.c.last_event_id,
+    postgresql_where=objective_state.c.last_event_id.isnot(None),
+)
+Index(
+    "ux_objective_state_timeline_objective_no_party",
+    objective_state.c.timeline_id,
+    objective_state.c.quest_objective_id,
+    unique=True,
+    postgresql_where=objective_state.c.party_id.is_(None),
+)
+Index(
+    "ux_objective_state_timeline_objective_party",
+    objective_state.c.timeline_id,
+    objective_state.c.quest_objective_id,
+    objective_state.c.party_id,
+    unique=True,
+    postgresql_where=objective_state.c.party_id.isnot(None),
+)

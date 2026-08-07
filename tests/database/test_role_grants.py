@@ -127,6 +127,25 @@ MANAGED_TABLES = [
     ("interaction", "check_results"),
     ("interaction", "consequences"),
     ("interaction", "external_messages"),
+    # Phase 7 — quests and knowledge
+    ("narrative", "story_arcs"),
+    ("narrative", "quests"),
+    ("narrative", "quest_stages"),
+    ("narrative", "objective_types"),
+    ("narrative", "quest_objectives"),
+    ("narrative", "objective_dependencies"),
+    ("narrative", "quest_participants"),
+    ("narrative", "quest_outcomes"),
+    ("narrative", "quest_rewards"),
+    ("campaign", "quest_statuses"),
+    ("campaign", "quest_state"),
+    ("campaign", "objective_statuses"),
+    ("campaign", "objective_state"),
+    ("knowledge", "knowledge_versions"),
+    ("knowledge", "expertise_domains"),
+    ("knowledge", "character_expertise"),
+    ("knowledge", "information_transfers"),
+    ("knowledge", "public_knowledge"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

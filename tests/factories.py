@@ -967,3 +967,212 @@ def make_world_entity(connection: Connection, slug: str) -> uuid.UUID:
     world = make_world(connection, slug=slug)
     entity_type = make_entity_type(connection, f"{slug.replace('-', '_')}_type")
     return make_entity(connection, world, entity_type)
+
+
+def make_story_arc(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    name: str = "Test Story Arc",
+    status: str = "active",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.story_arcs (world_id, name, status)
+            VALUES (:world, :name, :status)
+            RETURNING story_arc_id
+        """),
+        {"world": world_id, "name": name, "status": status},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_quest(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    story_arc_id: uuid.UUID | None = None,
+    name: str = "Test Quest",
+) -> uuid.UUID:
+    """A core.entities row plus its narrative.quests row. Returns the shared
+    UUID (the quest_id, same as the entity_id)."""
+    quest_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "quest")
+    quest_id = make_entity(connection, world_id, quest_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO narrative.quests (quest_id, story_arc_id)
+            VALUES (:id, :arc)
+        """),
+        {"id": quest_id, "arc": story_arc_id},
+    )
+    return quest_id
+
+
+def make_quest_stage(
+    connection: Connection,
+    quest_id: uuid.UUID,
+    *,
+    name: str = "Test Stage",
+    sequence_number: int = 0,
+    stage_type: str = "sequential",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.quest_stages (quest_id, name, sequence_number, stage_type)
+            VALUES (:quest, :name, :seq, :type)
+            RETURNING quest_stage_id
+        """),
+        {"quest": quest_id, "name": name, "seq": sequence_number, "type": stage_type},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_quest_objective(
+    connection: Connection,
+    quest_stage_id: uuid.UUID,
+    *,
+    objective_type_code: str = "other",
+    name: str = "Test Objective",
+    requirement_level: str = "required",
+    completion_mode: str = "automatic",
+    target_entity_id: uuid.UUID | None = None,
+    target_area_connection_id: uuid.UUID | None = None,
+    target_area_feature_id: uuid.UUID | None = None,
+    target_area_hazard_id: uuid.UUID | None = None,
+    target_area_interactable_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.quest_objectives
+                (quest_stage_id, objective_type_id, name, requirement_level, completion_mode,
+                 target_entity_id, target_area_connection_id, target_area_feature_id,
+                 target_area_hazard_id, target_area_interactable_id)
+            VALUES (
+                :stage,
+                (SELECT objective_type_id FROM narrative.objective_types WHERE code = :otc),
+                :name, :requirement, :completion,
+                :entity, :connection, :feature, :hazard, :interactable
+            )
+            RETURNING quest_objective_id
+        """),
+        {
+            "stage": quest_stage_id,
+            "otc": objective_type_code,
+            "name": name,
+            "requirement": requirement_level,
+            "completion": completion_mode,
+            "entity": target_entity_id,
+            "connection": target_area_connection_id,
+            "feature": target_area_feature_id,
+            "hazard": target_area_hazard_id,
+            "interactable": target_area_interactable_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_objective_dependency(
+    connection: Connection,
+    objective_id: uuid.UUID,
+    depends_on_objective_id: uuid.UUID,
+    *,
+    dependency_type: str = "prerequisite",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.objective_dependencies
+                (objective_id, depends_on_objective_id, dependency_type)
+            VALUES (:objective, :depends_on, :type)
+            RETURNING objective_dependency_id
+        """),
+        {"objective": objective_id, "depends_on": depends_on_objective_id, "type": dependency_type},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_quest_outcome(
+    connection: Connection,
+    quest_id: uuid.UUID,
+    *,
+    code: str = "success",
+    name: str = "Success",
+    outcome_category: str = "success",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.quest_outcomes (quest_id, code, name, outcome_category)
+            VALUES (:quest, :code, :name, :category)
+            RETURNING quest_outcome_id
+        """),
+        {"quest": quest_id, "code": code, "name": name, "category": outcome_category},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_quest_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    *,
+    party_id: uuid.UUID | None = None,
+    status_code: str = "active",
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.quest_state
+                (timeline_id, quest_id, party_id, quest_status_id, last_event_id)
+            VALUES (
+                :timeline, :quest, :party,
+                (SELECT quest_status_id FROM campaign.quest_statuses WHERE code = :status),
+                :event
+            )
+            RETURNING quest_state_id
+        """),
+        {
+            "timeline": timeline_id,
+            "quest": quest_id,
+            "party": party_id,
+            "status": status_code,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_objective_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    quest_objective_id: uuid.UUID,
+    *,
+    party_id: uuid.UUID | None = None,
+    status_code: str = "active",
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.objective_state
+                (timeline_id, quest_objective_id, party_id, objective_status_id, last_event_id)
+            VALUES (
+                :timeline, :objective, :party,
+                (SELECT objective_status_id FROM campaign.objective_statuses WHERE code = :status),
+                :event
+            )
+            RETURNING objective_state_id
+        """),
+        {
+            "timeline": timeline_id,
+            "objective": quest_objective_id,
+            "party": party_id,
+            "status": status_code,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value

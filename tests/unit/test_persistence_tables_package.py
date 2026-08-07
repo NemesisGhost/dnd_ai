@@ -10,7 +10,10 @@ package's top-level re-export — so `from dnd_ai.persistence.tables
 import worlds` (or `metadata`) keeps working exactly as it did against the
 monolithic module. 85 tables at the split (Phase 6 entry gates); revision
 057 added the narrative.* domain (9 tables), and revision 061 added the
-interaction.* domain (8 tables), on top of that baseline.
+interaction.* domain (8 tables), on top of that baseline. Revision 073
+added the Phase 7 quest domain (9 narrative.* tables plus 4 campaign.*
+quest/objective state tables) and knowledge-domain expansion (5 new
+knowledge.* tables), for 120 tables total.
 """
 
 import importlib
@@ -43,8 +46,12 @@ EXPECTED_TABLES = {
         "campaign.interactable_state",
         "campaign.interactable_statuses",
         "campaign.location_state",
+        "campaign.objective_state",
+        "campaign.objective_statuses",
         "campaign.parties",
         "campaign.party_memberships",
+        "campaign.quest_state",
+        "campaign.quest_statuses",
         "campaign.sessions",
         "campaign.timelines",
     ],
@@ -93,10 +100,15 @@ EXPECTED_TABLES = {
         "interaction.targets",
     ],
     "knowledge": [
+        "knowledge.character_expertise",
         "knowledge.entity_knowledge",
+        "knowledge.expertise_domains",
+        "knowledge.information_transfers",
         "knowledge.knowledge_items",
         "knowledge.knowledge_types",
+        "knowledge.knowledge_versions",
         "knowledge.party_discoveries",
+        "knowledge.public_knowledge",
         "knowledge.truth_statuses",
     ],
     "locations": [
@@ -121,6 +133,15 @@ EXPECTED_TABLES = {
         "narrative.event_statuses",
         "narrative.event_types",
         "narrative.events",
+        "narrative.objective_dependencies",
+        "narrative.objective_types",
+        "narrative.quest_objectives",
+        "narrative.quest_outcomes",
+        "narrative.quest_participants",
+        "narrative.quest_rewards",
+        "narrative.quest_stages",
+        "narrative.quests",
+        "narrative.story_arcs",
     ],
     "rules": [
         "rules.abilities",
