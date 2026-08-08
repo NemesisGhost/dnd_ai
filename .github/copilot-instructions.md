@@ -16,7 +16,9 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 **What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
 
-**Current implementation status**: Phases 1 through 4 are complete and CI-verified. Phase 5's gameplay features, production invariants, resumed-waiter tests, and independent final-state assertions are complete; its formal test-infrastructure/tooling closeout: a tenth review found the test-only cleanup helper's thread-based worker could not deliver a literal no-survivor guarantee, a tenth pass replaced it with an independently terminable worker process, an eleventh review found that process could still report false success and silently discard cleanup failures, an eleventh pass fixed it, a twelfth review found the eleventh pass's own verification-tooling claim didn't hold up to its exit code and its IPC redesign still relied on an abandonable thread, a twelfth pass fixed those findings, a thirteenth review then found the twelfth pass's own missing-outcome classification, backend verification, and `Process.start()` failure handling were themselves still incomplete, a thirteenth pass fixed those findings, and a fourteenth review then found the thirteenth pass's own forced-termination classification, partial-start cleanup, and regression-test safety net were themselves still incomplete — a fourteenth pass fixed those findings and is verified locally (93 tests in `test_entity_type_change_protection.py`, 1,189 total), pending confirmation from [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run; [its remaining-issues register](../docs/PHASE5_REMAINING_ISSUES.md) reflects the same status. The [Phase 6](../docs/PLAN.md#phase-6-events-and-interactions) repository-context modularization gate is closed; the Phase 5 formal-correctness gate is blocked pending that CI confirmation, so Phase 6 feature/schema work should not begin yet. No API or UI exists yet.
+**Current implementation status**: Phases 1 through 8 are complete and CI-verified — foundation, core world platform, timelines/campaigns, rules and shared characters, locations and dungeon play, events and interactions, quests and knowledge, and relationships/organizations. Per-phase evidence is in `docs/PHASEn_VERIFICATION.md`; [Phase 9](../docs/PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization) (items, inventory, encounters, Foundry sync) is next. The first application-layer command handlers exist in `src/dnd_ai/commands`; no API or UI exists yet.
+
+**Verification pivot (2026-08-07)**: Phases 1–8 were developed directly against AWS `dev` RDS. From Phase 9, development runs against a **local PostgreSQL 18 server** with CI against `dev` as the merge gate ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md), [PLAN.md §23.0](../docs/PLAN.md#230-verification-policy)). The pinned PostgreSQL major version moved 15.x → 18.x; the deployed `dev` instance is **not yet upgraded** to match, so local and CI currently differ by a major version — see [PLAN.md §29.8](../docs/PLAN.md#298-open-items).
 
 ---
 
@@ -44,7 +46,7 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 8. **Knowledge is per-knower, never global** (no `is_discovered` flags on entities)
 9. **Persistent entities are archived, not deleted** (set `archived_at`, keep row)
 10. **No secrets in code or seed files** (AWS Secrets Manager only)
-11. **Deploy and verify in AWS** (RDS for database tests; ECS Fargate for deployables; local containers are fallback only)
+11. **Develop locally, verify in AWS** — database/scenario tests run against a local PostgreSQL 18 server (same major version as RDS); CI runs them against `dev` RDS and is the merge gate; deployables run on ECS Fargate. A green local run is never the last word ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md))
 
 **If a task requires breaking a rule: STOP and flag it.**
 
@@ -54,11 +56,11 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 - **Infrastructure**: AWS (RDS PostgreSQL, S3, Secrets Manager, KMS). Initial deployment target is a modular monolith — not Lambda-per-function
 - **IaC**: Terraform (modules under `terraform/modules/`, environments under `terraform/environments/`)
-- **Database**: PostgreSQL 15.x on RDS; migrations via Alembic
+- **Database**: PostgreSQL 18.x — local server for development, RDS for deployed environments; the major version must match across both. Migrations via Alembic
 - **Backend**: Python 3.12+, SQLAlchemy 2.x **Core** (not the ORM), psycopg 3, Pydantic v2
 - **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §27
 - **UI**: React (web/admin client)
-- **Tooling**: uv, pytest against deployed AWS `dev`, ruff, mypy. Testcontainers is a fallback only when AWS is genuinely unreachable
+- **Tooling**: uv, pytest against a local PostgreSQL 18 server (CI repeats it against `dev` RDS), ruff, mypy
 - **Integrations**: FoundryVTT module, Discord bot, MCP interface (all clients, all through API)
 
 Full rationale: [docs/DEVELOPMENT.md §1](../docs/DEVELOPMENT.md#1-toolchain). Do not introduce alternatives.
@@ -362,6 +364,8 @@ terraform apply tfplan
 - **Don't know code layer?** → `docs/architecture/SYSTEM_ARCHITECTURE.md` §5
 - **Don't know which library/tool?** → `docs/DEVELOPMENT.md` §1
 - **Don't know where a file goes?** → `docs/DEVELOPMENT.md` §2
+- **Setting up a dev database?** → `docs/DEVELOPMENT.md` §3 (local PostgreSQL 18, not AWS)
+- **Green locally, red in CI?** → `docs/PLAN.md` §23.0 — check PostgreSQL major version and extensions first
 - **Deploying or debugging AWS?** → `docs/INFRASTRUCTURE.md`
 - **User asks to extend legacy code?** → Explain restart, create new per current architecture
 - **About to break one of 11 rules?** → STOP, flag to user

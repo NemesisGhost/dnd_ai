@@ -2,14 +2,14 @@
 
 Onboarding for new contributors: getting a working environment, then the workflow for changing things.
 
-**Start with §1.** Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), every phase — migrations and their `tests/database`/`tests/scenario` suites — is verified against the deployed AWS `dev` environment, not a local stand-in. **You need AWS access to contribute**, not just to touch infrastructure.
+**Start with §1.** Per [PLAN.md §23.0](PLAN.md#230-verification-policy) and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), development runs against a **local PostgreSQL 18 server**. You do **not** need an AWS account to contribute schema or application code — CI verifies every push against the deployed `dev` RDS instance on your behalf. AWS access (§2) is needed only to change infrastructure, deploy, or reproduce a CI-only failure.
 
 ---
 
 ## Table of Contents
 
-- [1. AWS account setup (start here)](#1-aws-account-setup-start-here)
-- [2. Toolchain and environment](#2-toolchain-and-environment)
+- [1. Local setup (start here)](#1-local-setup-start-here)
+- [2. AWS access (optional)](#2-aws-access-optional)
 - [3. External API keys](#3-external-api-keys)
 - [4. Changing application code](#4-changing-application-code)
 - [5. Changing infrastructure](#5-changing-infrastructure)
@@ -19,16 +19,67 @@ Onboarding for new contributors: getting a working environment, then the workflo
 
 ---
 
-## 1. AWS account setup (start here)
+## 1. Local setup (start here)
 
-Phases 1 through 4 are complete and CI-verified. Phase 5's production implementation and five-invariant concurrency suite are complete; its formal test-infrastructure/tooling closeout: a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process was itself found, by an eleventh review, to still be able to report false success and silently discard cleanup failures, an eleventh pass fixed it, a twelfth review found the eleventh pass's own verification-tooling claim didn't hold up to its exit code and its IPC redesign still relied on an abandonable thread, a twelfth pass fixed those findings, a thirteenth review then found the twelfth pass's own missing-outcome classification, backend verification, and `Process.start()` failure handling were themselves still incomplete, a thirteenth pass fixed those findings, and a fourteenth review then found the thirteenth pass's own forced-termination classification, partial-start cleanup, and regression-test safety net were themselves still incomplete — a fourteenth pass fixed those findings and is verified locally (93 tests in `test_entity_type_change_protection.py`, 1,189 total), pending confirmation from [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run, and [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) reflects the same status. The [Phase 6 repository-context modularization gate](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate remains blocked until that CI run confirms. Every phase verifies against the deployed `dev` RDS instance (migrations, `tests/database`, `tests/scenario`) — see [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [§29.9](PLAN.md#299-aws-first-verification-mechanism) for why and how. A local PostgreSQL container is a documented fallback for when AWS is genuinely unreachable, not the default path — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
+Phases 1 through 8 are complete and CI-verified; Phase 9 is next. See [PLAN.md §23](PLAN.md#23-delivery-phases) for what each delivered and `docs/PHASEn_VERIFICATION.md` for the evidence.
 
-### 1.1 Install and configure
+Development runs against a **local PostgreSQL 18 server** ([PLAN.md §23.0](PLAN.md#230-verification-policy), [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)). Nothing in this section needs an AWS account.
+
+### 1.1 Required tools
+
+| Tool | Version | Notes |
+|---|---|---|
+| Git | any | |
+| **PostgreSQL** | **18.x** | The major version must match what RDS runs. Install options per platform: [DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql) |
+| Python | 3.12+ | Pinned in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
+| uv | latest | Dependency management — [install](https://docs.astral.sh/uv/getting-started/installation/) |
+
+Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the React UI, which has not begun.
+
+**Install PostgreSQL 18, not whatever version is convenient.** A local server on a different major version produces green local runs that fail CI — the one drift this two-tier verification model is arranged to prevent ([PLAN.md §23.0](PLAN.md#230-verification-policy)).
+
+### 1.2 Setup
+
+The full walkthrough is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup). The short version:
+
+```bash
+psql --version                    # must report 18.x
+createdb -U postgres dnd_ai
+
+uv sync
+cp .env.example .env              # defaults already point at a local server
+
+uv run alembic -c database/alembic.ini upgrade head
+uv run pytest
+```
+
+The project's six database roles are created by the `001_bootstrap` migration, not by hand — that is what keeps your local server in agreement with `dev`.
+
+### 1.3 Then read
+
+Follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy): read [PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) plus the current phase entry, search [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the affected vocabulary, read only the [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms you will change, and consult [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) when application-layer placement is in scope. Do not preload the complete documentation set.
+
+Skip to §4 unless you need AWS access or are changing infrastructure.
+
+---
+
+## 2. AWS access (optional)
+
+**You do not need this to contribute code.** CI runs the AWS verification tier using repository-level credentials, so a pull request is verified against `dev` RDS whether or not you personally have an account.
+
+You need AWS access to:
+
+- change infrastructure under `terraform/` (§5),
+- deploy or operate the `dev` environment,
+- reproduce a CI failure that does not reproduce locally, by running the suite directly against `dev` ([DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional)).
+
+### 2.1 Install and configure
 
 | Tool | Install |
 |---|---|
 | AWS CLI v2 | [aws.amazon.com/cli](https://aws.amazon.com/cli/) or `winget install Amazon.AWSCLI` |
 | Terraform >= 1.5 | [developer.hashicorp.com/terraform/install](https://developer.hashicorp.com/terraform/install) or `winget install HashiCorp.Terraform` |
+| `curl` | any | Used to look up your current IP when opening dev access |
 
 ```powershell
 aws configure --profile dnd-ai-dev
@@ -40,7 +91,15 @@ aws sts get-caller-identity     # must succeed before anything else
 
 `build.ps1` accepts the profile directly: `./build.ps1 -Environment dev -Action plan -AwsProfile dnd-ai-dev`.
 
-### 1.2 Creating a deployment identity
+To reach the `dev` database, open a session-scoped ingress rule and close it when you're done — it isn't automatic outside CI:
+
+```bash
+scripts/aws-db-allow-my-ip.sh open
+# ... work against the dev endpoint (DATABASE_URL needs sslmode=require) ...
+scripts/aws-db-allow-my-ip.sh close
+```
+
+### 2.2 Creating a deployment identity
 
 If your organization uses IAM Identity Center, use `aws configure sso` and skip this.
 
@@ -77,42 +136,11 @@ The IAM portion needs only enough to manage the RDS enhanced-monitoring service 
 
 `PowerUserAccess` plus that policy is a reasonable shortcut. On a personal account where you are already the only user, `AdministratorAccess` is defensible — just don't do it on a shared account and call it least privilege.
 
-### 1.3 Deploying `dev`, once
+### 2.3 Deploying `dev`, once
 
-`dev` is now shared, always-on infrastructure that every contributor's tests run against — someone needs to have deployed it before anyone can do §2 onward. If it's already up (ask in the project's usual channel, or just try `terraform -chdir=terraform/environments/dev output` first), skip to §2.
+`dev` is shared, always-on infrastructure that CI verifies every pull request against — someone needs to have deployed it for CI to be green at all. If it's already up (try `terraform -chdir=terraform/environments/dev output` first), there is nothing to do here.
 
-Otherwise follow [QUICKSTART.md](QUICKSTART.md), with [CHECKLIST.md](CHECKLIST.md) as the pre-flight. Reference material is [INFRASTRUCTURE.md](INFRASTRUCTURE.md). Set `enable_public_access = true` — required for the reachability mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) — and do **not** narrow `my_ip_cidr` to a single IP the way an old single-developer setup would; per-session access is granted per §2 below, not baked into the Terraform variable.
-
----
-
-## 2. Toolchain and environment
-
-Required, beyond the AWS access from §1:
-
-| Tool | Version | Notes |
-|---|---|---|
-| Git | any | |
-| Python | 3.12+ | Pinned in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
-| uv | latest | Dependency management — [install](https://docs.astral.sh/uv/getting-started/installation/) |
-| `curl` | any | Used to look up your current IP when opening dev access |
-| Docker | any | **Fallback only** — for the local-container path in [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) when AWS is unreachable |
-
-Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the React UI, which has not begun.
-
-Setup, in full, is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup). The short version:
-
-```bash
-uv sync
-cp .env.example .env              # then edit DATABASE_URL to point at the dev endpoint
-scripts/aws-db-allow-my-ip.sh open # opens dev access for your current IP
-uv run alembic -c database/alembic.ini current
-```
-
-Run `scripts/aws-db-allow-my-ip.sh close` when you're done for the session — it isn't automatic outside CI.
-
-Then follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy): read [PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) plus the current phase entry, search [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the affected vocabulary, read only the [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms you will change, and consult [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) when application-layer placement is in scope. Do not preload the complete documentation set.
-
-Skip to §4 unless you specifically need to change infrastructure itself, rather than just using the deployed `dev` environment.
+Otherwise follow [QUICKSTART.md](QUICKSTART.md), with [CHECKLIST.md](CHECKLIST.md) as the pre-flight. Reference material is [INFRASTRUCTURE.md](INFRASTRUCTURE.md). Set `enable_public_access = true` — required for the reachability mechanism in [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci) — and do **not** narrow `my_ip_cidr` to a single IP the way an old single-developer setup would; per-caller access is granted out-of-band per §2.1, not baked into the Terraform variable.
 
 ---
 
@@ -138,7 +166,9 @@ uv run mypy src
 uv run pytest
 ```
 
-All four must pass before opening a pull request. The full workflow — Alembic revision requirements, the three test layers, CI expectations — is [DEVELOPMENT.md §4–§8](DEVELOPMENT.md#4-database-and-migrations), and the definition of done is [§10](DEVELOPMENT.md#10-definition-of-done).
+All four must pass locally before opening a pull request, and CI must then go green against `dev` RDS — that AWS run is the merge gate, not your local result ([PLAN.md §23.0](PLAN.md#230-verification-policy)). If a green local run turns into a red CI run, treat it as an RDS-specific defect or local/`dev` drift and investigate; do not re-run until it passes.
+
+The full workflow — Alembic revision requirements, the three test layers, CI expectations — is [DEVELOPMENT.md §4–§8](DEVELOPMENT.md#4-database-and-migrations), and the definition of done is [§10](DEVELOPMENT.md#10-definition-of-done).
 
 Before writing anything, confirm it belongs to the current phase entry in [PLAN.md](PLAN.md), and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
 
@@ -162,7 +192,9 @@ Known defects in the current Terraform are catalogued in [INFRASTRUCTURE.md §11
 
 ## 6. Cost management
 
-`dev` runs ~$25–35/month ([INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost)). Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) it's now shared, always-on infrastructure that every contributor's tests depend on — **do not destroy or stop it** as a cost-saving measure; that breaks everyone else's ability to run `tests/database`/`tests/scenario` until it's back. This is an accepted ongoing project cost, not per-developer spend to individually manage.
+`dev` runs ~$25–35/month ([INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost)). It is shared, always-on infrastructure that **CI** depends on — **do not destroy or stop it** as a cost-saving measure; that turns every pull request red until it's back ([PLAN.md §23.0](PLAN.md#230-verification-policy)). This is an accepted ongoing project cost, not per-developer spend to individually manage.
+
+Since [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) moved development to a local server, `dev` carries CI load only rather than CI plus every contributor's test runs. That reduces contention on the shared `db.t3.micro`; it does not reduce the standing cost, which is the instance existing rather than the queries hitting it.
 
 Set a billing alarm in AWS Budgets so a runaway cost (an oversized instance class, an accidentally-left-open ingress rule from a failed CI run, storage growth from real usage) gets noticed quickly rather than discovered a month later. If cost genuinely needs to come down, that's an infrastructure change (right-sizing `instance_class`, revisiting VPC endpoints) proposed and applied deliberately per §5 — not an ad hoc destroy/recreate cycle.
 
@@ -198,6 +230,8 @@ Documentation is part of the change, not a follow-up. If a change introduces a n
 | How should this table look? | [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) + [architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) |
 | Where does this code go? | [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) |
 | Which library or tool? | [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
+| Local database won't connect? | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
+| Green locally, red in CI? | [PLAN.md §23.0](PLAN.md#230-verification-policy) — check PostgreSQL major version and extensions first |
 | How do I create/archive an entity? | [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) |
 | Terraform or AWS problem? | [INFRASTRUCTURE.md §10](INFRASTRUCTURE.md#10-troubleshooting) |
 

@@ -473,7 +473,7 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 Initial deployment is a modular monolith with separate workers, deployed to AWS. A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving. Service boundaries can become process boundaries later when operational evidence justifies it.
 
-Everything runs in AWS — there is no supported local-deployment topology. Local execution exists only as a fallback for when AWS is unreachable ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
+Everything runs in AWS — there is no supported local-deployment topology, and [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md) does not add one. That ADR moved *development and testing* onto a local PostgreSQL server; the deployables below still run only on ECS Fargate against RDS ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
 
 | Deployable | AWS target | Notes |
 |---|---|---|
@@ -563,7 +563,7 @@ Do not prematurely split domains into distributed microservices while core invar
 
 ### Integration tests
 
-Run against the deployed AWS `dev` database, not a local container ([PLAN.md §23.0](../PLAN.md#230-aws-verification-policy)):
+Run against a local PostgreSQL 18 server during development and against the deployed AWS `dev` database in CI — never against SQLite or a mock ([PLAN.md §23.0](../PLAN.md#230-verification-policy)):
 
 - PostgreSQL constraints and functions
 - transactional state/event updates
@@ -593,5 +593,5 @@ The primary end-to-end scenario is the dungeon/quest flow defined in `docs/archi
 7. Timeline resolution is centralized.
 8. Rules data is versioned and ruleset-scoped.
 9. Integrations retain internal UUID mappings.
-10. Everything is deployed to and verified in AWS; local execution is a fallback for unreachable AWS, not a supported topology ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
-10. The initial implementation should remain a modular monolith unless evidence supports decomposition.
+10. Everything is deployed to AWS and verified there before it ships. Development runs against a local PostgreSQL server of the same major version; CI against `dev` RDS is the merge gate. There is no local deployment topology ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md), [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md)).
+11. The initial implementation should remain a modular monolith unless evidence supports decomposition.

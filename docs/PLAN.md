@@ -1165,27 +1165,38 @@ Imported text must not directly create canon without review.
 
 The active plan keeps only compact stubs for completed Phases 0–5. Their detailed deliverables, exit criteria, first-time obligations, and closeout narrative are preserved in [PLAN_PHASES_0_5_ARCHIVE.md](PLAN_PHASES_0_5_ARCHIVE.md) and should be loaded only for historical or regression work. Phase verification files remain the evidence of what actually ran.
 
-### 23.0 AWS verification policy
+### 23.0 Verification policy
 
-Every phase from Phase 1 onward is verified against the deployed AWS `dev` environment, not against a local or containerized stand-in. This applies to that phase's migrations and to its `tests/database`/`tests/scenario` suites. Local Docker PostgreSQL and testcontainers are permitted only when AWS is genuinely unreachable (no network, an account-wide outage) — not as the default inner loop. See [§29.9](#299-aws-first-verification-mechanism) for how this is achieved without weakening `staging`/`prod` isolation, and [DEVELOPMENT.md §6](DEVELOPMENT.md#6-testing) for the resulting test workflow.
+Development is local; delivery is verified on AWS. These are two different steps, and conflating them is what [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) corrected in the original AWS-first policy ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md)).
 
-`tests/unit` is unaffected — it uses no database at all, so there is nothing to verify against AWS.
+**Tier 1 — the inner loop runs against a local PostgreSQL 18 server.** Writing a migration, iterating on a constraint or trigger, and running `tests/database`/`tests/scenario` all happen locally, with no AWS credentials, no security-group rule, and no network dependency. This is the default and expected way to work, not a fallback. Setup is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
 
-The same rule applies to *running* code, not just schema: once a phase delivers a deployable — an API, the background worker, an adapter — that deployable runs on AWS in `dev` and is exercised there. The compute platform, deployment flow, and the per-phase table of which deployable is expected from when are in [§30](#30-aws-deployment-plan-for-application-services); the decision behind all of it is [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+The local server must be the **same PostgreSQL major version the project deploys** ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). A local server on a different major version is a defect, not a preference — it reintroduces exactly the divergence this policy exists to prevent.
+
+**Tier 2 — CI verifies the same work against the deployed AWS `dev` RDS instance.** `.github/workflows/ci.yml` runs migrations from empty to head, the downgrade round trip, `alembic check`, seed idempotency, and the full test suite against a per-run ephemeral database on `dev`, using the mechanism in [§29.9](#299-shared-dev-verification-mechanism-ci). This is a **merge gate**, not advisory. It exists because a class of defect is only reachable on RDS — IAM authentication, `rds_superuser` boundaries, `rds.force_ssl`, parameter groups, managed-role behavior. The ungated `GRANT rds_iam` in the bootstrap revision was exactly this, and it survived a fully green local run.
+
+`tests/unit` is unaffected by either tier — it uses no database at all.
+
+The AWS obligation still applies to *running* code, not just schema: once a phase delivers a deployable — an API, the background worker, an adapter — that deployable runs on AWS in `dev` and is exercised there. There is no local deployment topology and none is planned ([SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology)). The compute platform, deployment flow, and the per-phase table of which deployable is expected from when are in [§30](#30-aws-deployment-plan-for-application-services).
 
 A phase's exit criteria below are therefore necessary but not sufficient. A phase is done when, additionally:
 
-1. Its migrations have run against the deployed `dev` database.
-2. Its `tests/database`/`tests/scenario` suites pass against that database.
-3. Its deployables (if any — see [§30.8](#308-per-phase-deployment-expectations)) are running in `dev` and exercised there.
+1. Its migrations run cleanly — up, and down where supported — against a local PostgreSQL 18 database.
+2. Its `tests/database`/`tests/scenario` suites pass locally.
+3. A CI run on the phase's final head commit is green against the deployed `dev` database, and its run ID is recorded in `docs/PHASEn_VERIFICATION.md`.
+4. Its deployables (if any — see [§30.8](#308-per-phase-deployment-expectations)) are running in `dev` and exercised there.
 
-"It passes locally" is not a verification claim this project accepts for anything touching the database or a deployable.
+"It passes locally" is the expected *first* claim and is never the last one. A phase closes on item 3, not item 2.
+
+**When local and CI disagree, CI is right.** A green local run followed by a red CI run is not flaky infrastructure to be re-run until it passes; it is an RDS-specific defect, or local and `dev` have drifted apart. Investigate before re-running. The one exception the project has observed is a transient RDS connection fault during Phase 6, which was diagnosed as such and re-run deliberately — that is a judgment recorded in the verification file, not a default response.
 
 ### 23.1 Phase exit review
 
 Every phase ends with a review, before the next one starts. Phase 1 produced six defects that no amount of offline checking would have found, and several of them were latent for days because the exit criteria could be marked done without evidence. This section is the correction.
 
 **Write down what was actually verified.** Each phase produces `docs/PHASEn_VERIFICATION.md`, following the shape of [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md): what was run and against what, the bugs found and fixed, and what remains outstanding. "Verified" means a command was run and its output observed — not that the code looks right. State the method next to the claim, so a reader can tell `alembic --sql` output from a live run.
+
+Under [§23.0](#230-verification-policy) that record now has **two targets**, and the file must distinguish them: what was run against the local PostgreSQL 18 server, and the CI run ID that proved the same work against `dev` RDS. A verification file that reports only local results has not recorded a closed phase.
 
 **Re-check the recurring obligations.** These can regress silently in any phase that touches schema, and several are invisible until something downstream breaks:
 
@@ -1196,8 +1207,9 @@ Every phase ends with a review, before the next one starts. Phase 1 produced six
 | Seed idempotency | Seeding twice must be a no-op ([DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing)) |
 | Constraint tests | Positive *and* negative per [§32.1](DATABASE_CONVENTIONS.md#321-constraint-tests). An untested `CHECK` is an unverified rule |
 | Comments and FK indexes | [§31](DATABASE_CONVENTIONS.md#31-documentation-conventions) and [§19.1](DATABASE_CONVENTIONS.md#191-foreign-key-indexes), in the same revision that creates the object |
-| Downgrade | Round trip to `base` and back, against `dev`. Phase 1's downgrade was broken for weeks while looking fine |
-| CI green | On a real push, not locally |
+| Downgrade | Round trip to `base` and back. Cheap to run locally now, so run it every phase — Phase 1's downgrade was broken for weeks while looking fine. CI repeats it against `dev` |
+| Local/`dev` agreement | Same PostgreSQL major version, same extensions, same six bootstrap roles. Drift here shows up as a green local run and a red CI run ([§23.0](#230-verification-policy)) |
+| CI green | On a real push, against `dev` RDS, on the phase's **final head** commit — not an earlier one, and not locally |
 
 **Review the next phase before starting it.** Ask three questions and amend [§23](#23-delivery-phases) with the answers:
 
@@ -1402,6 +1414,8 @@ This scenario is the primary architectural test. A design that cannot support it
 
 ### 25.1 Database tests
 
+Run against a local PostgreSQL 18 server during development and against the deployed `dev` RDS instance in CI, per [§23.0](#230-verification-policy). Both targets run the identical suite; nothing is skipped or conditionally disabled on either.
+
 Test:
 
 - constraints
@@ -1476,17 +1490,18 @@ Use versioned migrations from the first commit. Alembic is the decided tool (see
 
 Never use destructive `DROP TABLE ... CASCADE` initialization scripts outside disposable development databases.
 
-See [§29.5–§29.7](#29-aws-terraform-deployment-plan-for-postgresql) for how migrations are actually executed against a private AWS RDS instance.
+Migrations are executed three ways, all from the same revision files: directly against a local server during development ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)), against a per-run ephemeral database on `dev` in CI ([§29.9](#299-shared-dev-verification-mechanism-ci)), and — once `staging`/`prod` exist — as a one-off ECS task in their private subnets ([§29.6](#296-migration-execution-mechanism)). See [§29.5–§29.7](#29-aws-terraform-deployment-plan-for-postgresql) for the AWS paths.
 
 ### 26.2 Environments
 
 Maintain separate:
 
-- `dev` (shared, always-on — automated test and day-to-day development both verify against this environment per [§23.0](#230-aws-verification-policy), not a local stand-in)
+- **local** — a PostgreSQL 18 server on each developer's own machine. The default development and test target per [§23.0](#230-verification-policy). Disposable by definition: it holds nothing that isn't reproducible from migrations plus seeds, it is not backed up, and it is not an environment anything deploys to.
+- `dev` — shared, always-on AWS RDS. CI verifies every commit against it; it is the merge gate, not the inner loop. Do not destroy or stop it as routine cost hygiene ([CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management)).
 - staging
 - production
 
-Local PostgreSQL (Docker) is a fallback for when AWS is genuinely unreachable, not a maintained environment in its own right.
+Local and `dev` must stay in agreement on PostgreSQL major version, installed extensions, and the six bootstrap roles. Drift between them is the failure mode this two-tier model trades for a faster loop — see [§23.0](#230-verification-policy).
 
 ### 26.3 Backups
 
@@ -1561,7 +1576,7 @@ This section is the **plan** — what the infrastructure should become. [INFRAST
 
 `terraform/modules/database` and `terraform/modules/secrets` already exist and provide:
 
-- An RDS PostgreSQL instance (version pinned via `postgres_version`, currently 15.4), encrypted at rest with a dedicated KMS key.
+- An RDS PostgreSQL instance (version pinned via `postgres_version`), encrypted at rest with a dedicated KMS key. The module default is still `15.18` and the deployed `dev` instance still runs it; the project's pinned target is now **PostgreSQL 18.x** to match the local development server ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Closing that gap is an open item — see [§29.8](#298-open-items).
 - A VPC with two private subnets across two availability zones (or reuse of an existing VPC/subnets), a security group scoped to `allowed_cidr_blocks` / `allowed_security_group_ids`, and VPC interface endpoints for Secrets Manager and KMS so private subnets don't need a NAT Gateway by default.
 - An AWS-managed master user secret (`manage_master_user_password = true`) — no master password is ever stored in Terraform state or code.
 - IAM database authentication enabled on the instance (`iam_database_authentication_enabled = true`), ready for use once application-level roles are created.
@@ -1658,7 +1673,7 @@ Runtime behavior: `pip install -r requirements.txt && alembic upgrade head`, aut
 
 This was originally chosen as the lowest-setup-cost option for the project's pre-implementation stage, reusing AWS primitives (EC2, SSM, S3, IAM) already understood from the deleted `db_runner` and requiring no container registry or CI/CD platform decision.
 
-**That deferral is now resolved**: [§30](#30-aws-deployment-plan-for-application-services) commits the project to ECS Fargate, and migrations become a one-off task running the same image as every other service ([§30.2](#302-compute-ecs-fargate), [§30.6](#306-deployment-flow)). The standing EC2 runner described above is therefore a **transitional** mechanism — worth building only if `staging`/`prod` need migrating before the Fargate pipeline exists. If application deployment lands first, skip it entirely and go straight to the one-off task. Either way, `dev` does not need it: `dev` migrations run directly per [§29.9](#299-aws-first-verification-mechanism).
+**That deferral is now resolved**: [§30](#30-aws-deployment-plan-for-application-services) commits the project to ECS Fargate, and migrations become a one-off task running the same image as every other service ([§30.2](#302-compute-ecs-fargate), [§30.6](#306-deployment-flow)). The standing EC2 runner described above is therefore a **transitional** mechanism — worth building only if `staging`/`prod` need migrating before the Fargate pipeline exists. If application deployment lands first, skip it entirely and go straight to the one-off task. Either way, `dev` does not need it: `dev` migrations run directly per [§29.9](#299-shared-dev-verification-mechanism-ci).
 
 ### 29.7 Deployment runbook
 
@@ -1673,16 +1688,17 @@ This was originally chosen as the lowest-setup-cost option for the project's pre
 
 Additional defects found in the current Terraform — notably that `dev` cannot be destroyed because `deletion_protection` is never overridden to `false`, and that `my_ip_cidr` defaults to `0.0.0.0/0` — are catalogued in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
 
+- **PostgreSQL major-version upgrade to 18.x**: the project now pins PostgreSQL 18.x ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) to match the local development server, but `terraform/modules/database` still defaults `postgres_version` to `15.18` and the deployed `dev` instance runs it. RDS offers 18.1–18.4. Bringing `dev` in line needs three things, in order: add an `allow_major_version_upgrade` variable to the module (it has none, so an engine-version change alone will fail the apply rather than silently upgrading), confirm the custom parameter group is valid for the `postgres18` family, then apply. Until this lands, local runs on 18.4 and CI runs on 15.18 — the exact local/`dev` drift [§23.0](#230-verification-policy) warns about, and the highest-priority item in this list.
 - **Multi-AZ**: `terraform/modules/database` has no `multi_az` variable yet; add one before standing up `prod`.
 - **Read replicas**: deferred until query load actually justifies one, per [DATABASE_CONVENTIONS.md §33](DATABASE_CONVENTIONS.md).
 - **CloudWatch alarms**: CPU, storage, connection count, and (once applicable) replica lag are not yet defined anywhere in the module.
 - **Cost**: with current `dev` defaults (`db.t3.micro`, 20GB gp3, VPC endpoints instead of NAT, an on-demand migration runner) expect roughly the same range the project saw before the restart (~$20/month for `dev`). `staging`/`prod` will cost more once Multi-AZ and larger instance classes are applied — measure rather than guess once those environments exist.
 
-### 29.9 AWS-first verification mechanism
+### 29.9 Shared-dev verification mechanism (CI)
 
-Per [§23.0](#230-aws-verification-policy), every phase's migrations and `tests/database`/`tests/scenario` suites run against the deployed `dev` RDS instance, not a local or containerized stand-in. This needs two things: a way in for CI and developers, and isolation so concurrent test runs on the one shared instance don't collide.
+Per [§23.0](#230-verification-policy), CI verifies every commit's migrations and `tests/database`/`tests/scenario` suites against the deployed `dev` RDS instance. (Developers run the same suites locally — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup); this section is the AWS half of the two-tier model, and since [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) it is primarily CI's path rather than a routine developer one.) It needs two things: a way in, and isolation so concurrent runs on the one shared instance don't collide.
 
-**Reachability — dev only, via temporary security-group ingress, not a new bridge module.** `dev` already supports `enable_public_access` (§29.3) with its security group ID exposed as the `database_security_group_id` output. Rather than standing up an SSM bastion/tunnel for routine test access, CI and developers manage a narrow, short-lived ingress rule directly against that security group with the AWS CLI, scoped to the caller's own current public IP, for the duration of the run only:
+**Reachability — dev only, via temporary security-group ingress, not a new bridge module.** `dev` already supports `enable_public_access` (§29.3) with its security group ID exposed as the `database_security_group_id` output. Rather than standing up an SSM bastion/tunnel for routine test access, CI manages a narrow, short-lived ingress rule directly against that security group with the AWS CLI, scoped to the caller's own current public IP, for the duration of the run only. A developer occasionally needs the same thing — reproducing a CI-only failure, or inspecting `dev` directly — and uses `scripts/aws-db-allow-my-ip.sh`, which wraps exactly this:
 
 ```bash
 SG_ID=$(terraform -chdir=terraform/environments/dev output -raw database_security_group_id)
@@ -1699,9 +1715,13 @@ aws ec2 revoke-security-group-ingress --group-id "$SG_ID" \
 
 This reuses infrastructure that already exists rather than adding a new module. It bypasses Terraform for the add/revoke (a `terraform plan` run mid-session will show the rule as drift and is expected to remove it on apply — harmless as long as CI always revokes at job end, including on failure). `enable_public_access` must be `true` for `dev`; `staging` and `prod` stay `publicly_accessible = false` per §29.3 and are never opened this way — their migrations continue to go through the SSM-based migration runner in §29.6, and there is currently no plan to run `tests/database`/`tests/scenario` against them at all (they exist to host real environments, not to be a shared test fixture).
 
-**Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. Each CI run or developer test session creates its own throwaway database on the shared instance (for example, `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests, and drops it — real isolation on shared infrastructure without needing a database per environment. `scripts/ci_ephemeral_database.py` and `.github/workflows/ci.yml` implement this today using the RDS master login because no narrower `CREATEDB`-capable test login exists yet. Before using this mechanism unattended in a prod-adjacent environment, add a dedicated login role with `CREATEDB` plus `rds_iam`, listed in `iam_auth_db_users`. `migration_owner` must not gain `CREATEDB`: it is `NOLOGIN` and nothing connects as it.
+**Isolation — an ephemeral database per test run, not per-schema.** Bootstrap-created roles (`migration_owner`, `app_read_write`, etc.) are cluster-wide in PostgreSQL and already exist on the instance; schemas, domains, and extensions are per-database. Each CI run creates its own throwaway database on the shared instance (for example, `dnd_ai_test_<run-id>`), runs `alembic upgrade head` inside it, runs tests, and drops it — real isolation on shared infrastructure without needing a database per environment. `scripts/ci_ephemeral_database.py` and `.github/workflows/ci.yml` implement this today using the RDS master login because no narrower `CREATEDB`-capable test login exists yet. The same per-run ephemeral-database pattern is what `tests/conftest.py` applies locally, so the suite behaves identically against either target. Before using this mechanism unattended in a prod-adjacent environment, add a dedicated login role with `CREATEDB` plus `rds_iam`, listed in `iam_auth_db_users`. `migration_owner` must not gain `CREATEDB`: it is `NOLOGIN` and nothing connects as it.
 
 **Implementation status.** Temporary runner ingress and ephemeral database isolation are implemented and have run successfully against live `dev`, including GitHub Actions run [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355). Cleanup now fails the workflow if either cleanup operation fails, rather than masking it, with `scripts/ci_cleanup.py`'s combining logic exercised against every failure combination by a safe, AWS-free unit test (see [PHASE4_VERIFICATION.md § Second closeout](PHASE4_VERIFICATION.md#second-closeout-2026-08-02)). Remaining work is the dedicated least-privilege test login above. The private migration runner in §29.6 remains a separate `staging`/`prod` obligation.
+
+**Unchanged by [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md).** Moving the inner loop to a local server does not retire any of this. `.github/workflows/ci.yml` keeps its AWS job exactly as built — OIDC role assumption, scoped ingress, ephemeral database, always-run cleanup — because it is now the *only* thing standing between an RDS-specific defect and `main`. What changes is who runs it routinely: CI on every push and pull request, rather than every developer on every test run.
+
+**Local counterpart.** The local tier needs none of the above: a local server is directly reachable, and `tests/conftest.py` creates and drops its own ephemeral database on it. What the local tier does need is *agreement* with `dev` — same PostgreSQL major version, same extensions, same six bootstrap roles — which is why the setup in [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) runs the same `001_bootstrap` revision rather than a hand-rolled local schema.
 
 ---
 
@@ -1711,7 +1731,7 @@ This reuses infrastructure that already exists rather than adding a new module. 
 
 [§29](#29-aws-terraform-deployment-plan-for-postgresql) covers the database. This section covers everything else that runs: the FastAPI application, the background worker that drains the outbox ([SYSTEM_ARCHITECTURE.md §10](architecture/SYSTEM_ARCHITECTURE.md#10-internal-event-dispatcher-and-outbox)), the Discord adapter, and one-off jobs including migrations.
 
-It exists because [§23.0](#230-aws-verification-policy) requires every phase to be deployed and verified in AWS, and because the concrete deployment target was previously unrecorded — [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) named vendor-neutral deployables and [§29.6](#296-migration-execution-mechanism) explicitly deferred the container-registry and CI/CD decision. That decision is now made and recorded in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+It exists because [§23.0](#230-verification-policy) requires every phase to be deployed and verified in AWS, and because the concrete deployment target was previously unrecorded — [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) named vendor-neutral deployables and [§29.6](#296-migration-execution-mechanism) explicitly deferred the container-registry and CI/CD decision. That decision is now made and recorded in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
 
 Nothing in this section is built yet. It is the plan; [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state) is what exists.
 
@@ -1768,7 +1788,7 @@ The telemetry requirements are in [SYSTEM_ARCHITECTURE.md §19](architecture/SYS
 
 ### 30.8 Per-phase deployment expectations
 
-Application services do not exist until there is application code to run. Phases 2–7 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-aws-verification-policy): migrations and tests verified against the deployed `dev` database.
+Application services do not exist until there is application code to run. Phases 2–8 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-verification-policy): a green CI run against the deployed `dev` database on the phase's final head commit. Their development happens locally.
 
 The additional obligations in this section begin when the corresponding deployable first exists:
 
@@ -1780,7 +1800,7 @@ The additional obligations in this section begin when the corresponding deployab
 | Phase 10 (AI and Discord) | Discord adapter service; AI provider credentials resolved from Secrets Manager at runtime |
 | Phase 11 (Import tools) | Import job as a one-off task |
 
-A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them.
+A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§23.0](#230-verification-policy)), but there is no local substitute for the deployment itself.
 
 ### 30.9 Open items
 

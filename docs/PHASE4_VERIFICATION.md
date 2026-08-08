@@ -8,7 +8,7 @@ Verifies Phase 4 (Rules and shared characters) per [PLAN.md §23](PLAN.md#23-del
 - [x] A character sheet can be assembled from structured data — the seeded ruleset (§6 below) supplies real classes, species, spells, and features a build can reference; `test_character_builds.py` exercises ability scores, multiclass levels, proficiencies, and spellcasting profiles against it
 - [x] A subtype row cannot exist without its parent `core.entities` row, cannot use a primary key of its own, and cannot attach to a parent of the wrong entity type — each rejected by the database, each with a negative test (`test_characters.py`, verbatim test names matching the criterion's own wording)
 
-All verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-aws-verification-policy): full downgrade-to-`base` and upgrade-to-`head` round trip through all 22 revisions, `alembic check` clean, 523 tests passing.
+All verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-verification-policy): full downgrade-to-`base` and upgrade-to-`head` round trip through all 22 revisions, `alembic check` clean, 523 tests passing.
 
 ## Preceded by a documentation reconciliation
 

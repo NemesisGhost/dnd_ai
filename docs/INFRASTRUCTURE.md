@@ -12,7 +12,8 @@ Today that is only the PostgreSQL database and its supporting resources, which i
 | Deploy quickly, having done it before | [QUICKSTART.md](QUICKSTART.md) |
 | Confirm you're ready to apply | [CHECKLIST.md](CHECKLIST.md) |
 | Look up a variable, output, or error | **This document** |
-| Get everyday dev/test access to `dev` | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
+| Set up your everyday dev/test database (local, not AWS) | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
+| Reach the `dev` database directly | [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional) |
 | Know what the infrastructure *should* become | [PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) |
 
 [PLAN.md §29](PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) is the authoritative **plan**; this document describes **what exists today**. Where the two disagree about intent, §29 wins.
@@ -87,13 +88,13 @@ The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambd
 | Terraform | >= 1.5 | [developer.hashicorp.com/terraform/install](https://developer.hashicorp.com/terraform/install) — or `winget install HashiCorp.Terraform` | `terraform version` |
 | PowerShell | 5.1+ | Preinstalled on Windows | `$PSVersionTable.PSVersion` |
 | `jq` | any | `winget install jqlang.jq` | `jq --version` |
-| `psql` | 15.x | Ships with PostgreSQL; or `winget install PostgreSQL.PostgreSQL.15` | `psql --version` |
+| `psql` | 18.x | Already installed if you followed [DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql); otherwise `winget install PostgreSQL.PostgreSQL.18` | `psql --version` |
 
 `jq` and `psql` are only needed for the credential-retrieval and manual connection steps in [§5](#5-outputs-and-connecting). `build.ps1` and `upsert-secrets.ps1` need PowerShell; plain `terraform` commands work from any shell.
 
 The AWS provider is pinned to `~> 5.0` in `terraform/environments/dev/main.tf`.
 
-Credential configuration, named profiles, and creating a scoped deployment identity are covered in [CONTRIBUTING.md §1](CONTRIBUTING.md#1-aws-account-setup-start-here). Verify with `aws sts get-caller-identity` before anything else — a missing or expired credential is the most common cause of a failed first apply.
+Credential configuration, named profiles, and creating a scoped deployment identity are covered in [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-access-optional). Verify with `aws sts get-caller-identity` before anything else — a missing or expired credential is the most common cause of a failed first apply.
 
 ### 2.2 Required IAM permissions
 
@@ -108,7 +109,7 @@ The apply creates resources across six services. The identity running Terraform 
 | IAM | The RDS enhanced-monitoring service role | `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:PassRole`, `iam:GetRole`, `iam:DeleteRole` |
 | CloudWatch Logs | PostgreSQL log export | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:DescribeLogGroups` |
 
-`PowerUserAccess` covers everything except the IAM role creation; pair it with the narrow role policy in [CONTRIBUTING.md §1.2](CONTRIBUTING.md#12-creating-a-deployment-identity). Least-privilege policies for the *runtime* roles — as opposed to the deploying identity — are in [§6](#6-secrets).
+`PowerUserAccess` covers everything except the IAM role creation; pair it with the narrow role policy in [CONTRIBUTING.md §2.2](CONTRIBUTING.md#22-creating-a-deployment-identity). Least-privilege policies for the *runtime* roles — as opposed to the deploying identity — are in [§6](#6-secrets).
 
 The pre-flight checklist is [CHECKLIST.md](CHECKLIST.md).
 
@@ -124,7 +125,7 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 ./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
+> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
 
 Terraform directly, if you prefer:
 
@@ -148,7 +149,7 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `aws_region` | `us-east-1` | Deployment region |
 | `owner_name` | `developer` | Applied as an `Owner` tag to all resources |
-| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), not driven through this variable |
+| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), not driven through this variable |
 | `enable_public_access` | `false` | Makes the RDS instance publicly accessible; dev only. Set `true` — required for the day-to-day AWS-verification workflow, not just occasional manual access |
 | `vpc_id` | `""` | Override to deploy into a specific VPC instead of the default one |
 | `private_subnet_ids` | `[]` | Override subnet selection |
@@ -160,7 +161,7 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `database_name` | `dnd_ai` | Not `dnd_ai_dev` |
 | `master_username` | `dnd_admin` | Not `postgres` |
-| `postgres_version` | `15.4` | Pinned; [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) governs the supported version |
+| `postgres_version` | `15.18` | **Stale.** [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) now pins PostgreSQL **18.x** to match the local development server; RDS offers 18.1–18.4. See gap 10 in [§11](#11-known-gaps-and-discrepancies) |
 | `instance_class` | `db.t3.micro` | |
 | `allocated_storage` / `max_allocated_storage` | `20` / `100` | GB, gp3, autoscaling |
 | `backup_retention_period` | `7` | Days |
@@ -229,7 +230,7 @@ psql -h (terraform -chdir=terraform/environments/dev output -raw database_endpoi
 $env:PGPASSWORD = $null
 ```
 
-This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), or from inside the VPC.
+This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), or from inside the VPC.
 
 ---
 
@@ -293,7 +294,7 @@ aws secretsmanager list-secrets --query "SecretList[?starts_with(Name,'dnd-ai')]
 
 Expected after a successful apply:
 
-- RDS instance `DBInstanceStatus` is `available`, engine `postgres`, version 15.x
+- RDS instance `DBInstanceStatus` is `available`, engine `postgres`, version 15.x on the currently deployed `dev` (the project pins 18.x — gap 0 in [§11](#11-known-gaps-and-discrepancies))
 - A KMS key and a database security group
 - Secrets Manager entries for the RDS master user plus the named OpenAI/Discord entries
 - VPC interface endpoints for Secrets Manager and KMS
@@ -358,12 +359,14 @@ Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset aft
 
 Documented so they get fixed rather than rediscovered. These are **code** issues, not doc issues:
 
+0. **PostgreSQL major version is behind the pin — highest priority.** `postgres_version` defaults to `15.18` and the deployed `dev` instance runs it, but [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) now pins **18.x** to match the local development server that [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) made the default loop. RDS offers 18.1–18.4. Closing this needs, in order: (a) an `allow_major_version_upgrade` variable on `terraform/modules/database` — the module has none, so changing `engine_version` alone fails the apply rather than silently upgrading, which is a safe failure but still a failure; (b) confirmation that the custom parameter group in `rds.tf` is valid for the `postgres18` family, since parameter groups are family-scoped and do not carry across a major upgrade; (c) apply, with a manual snapshot taken first. Until this lands, developers run PostgreSQL 18 locally while CI runs 15.18 — the precise local/`dev` drift [PLAN.md §23.0](PLAN.md#230-verification-policy) warns about. Tracked in [PLAN.md §29.8](PLAN.md#298-open-items).
+
 1. **`dev` cannot be destroyed.** `deletion_protection` is not overridden to `false`, contradicting [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Same for `skip_final_snapshot`, which leaves an unwanted final snapshot on every dev teardown.
-2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open. Now that per-session access is meant to go through `scripts/aws-db-allow-my-ip.sh` and CI's own authorize/revoke step rather than this variable (§3, [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism)), consider dropping it to a single harmless placeholder CIDR rather than keeping it as a real access path at all.
+2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open. Now that per-session access is meant to go through `scripts/aws-db-allow-my-ip.sh` and CI's own authorize/revoke step rather than this variable (§3, [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), consider dropping it to a single harmless placeholder CIDR rather than keeping it as a real access path at all.
 3. **`database_secret_name` returns an ARN**, not a name. Either rename the output or change the value.
 4. **`app_config_secret_name` is hardcoded to `""`**, and `deployment_summary.secrets.app_config` to `null`. Dead outputs — remove or implement.
 5. **The `secrets` module exposes `api_gateway_api_key_secret_*` and `basic_auth_secret_*`** outputs that belong to the removed pre-restart Lambda API. Confirm whether the current architecture needs them; if not, remove.
 6. **No remote state.** Local state blocks any second operator and risks loss. Bootstrap per [PLAN.md §29.2](PLAN.md#292-remote-terraform-state) before `staging` exists.
 7. **No `multi_az` variable**, required before `prod` per [PLAN.md §29.8](PLAN.md#298-open-items).
-8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism) works today — `tests/conftest.py`, `scripts/ci_ephemeral_database.py`, and this session's Phase 4 corrections work have all exercised it successfully — but only because it connects as the RDS master user, which has `CREATEDB` incidentally rather than by design. The bootstrap revision's six roles are still scoped to schema-level DDL/DML only, none with `CREATEDB`. Add a dedicated, narrower **login** role for this before running the mechanism unattended in prod-adjacent environments — not by granting `CREATEDB` to `migration_owner`, which is `NOLOGIN` and nothing connects as ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
+8. **No `CREATEDB`-capable test role.** The ephemeral-per-run database mechanism in [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci) works today — `tests/conftest.py`, `scripts/ci_ephemeral_database.py`, and this session's Phase 4 corrections work have all exercised it successfully — but only because it connects as the RDS master user, which has `CREATEDB` incidentally rather than by design. The bootstrap revision's six roles are still scoped to schema-level DDL/DML only, none with `CREATEDB`. Add a dedicated, narrower **login** role for this before running the mechanism unattended in prod-adjacent environments — not by granting `CREATEDB` to `migration_owner`, which is `NOLOGIN` and nothing connects as ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
 9. ~~`scripts/aws-db-allow-my-ip.sh` and the CI IP-allowlist step don't exist yet~~ — resolved. Both exist (`scripts/aws-db-allow-my-ip.sh`; the "Open dev access for this runner"/cleanup steps in `.github/workflows/ci.yml`) and have been exercised against the deployed `dev` security group. The required GitHub configuration is present and the complete workflow passed in run [`30765722355`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30765722355). Cleanup no longer masks drop/revoke failures with `|| true`: `scripts/ci_cleanup.py` always attempts both, fails the step if either failed, and its combining logic is exercised against every failure combination by `tests/unit/test_ci_cleanup.py` without touching real AWS resources (see [PHASE4_VERIFICATION.md § Second closeout](PHASE4_VERIFICATION.md#second-closeout-2026-08-02)).
