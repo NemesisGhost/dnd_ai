@@ -3,9 +3,20 @@
 # =====================================================
 
 # Parameter group for PostgreSQL
+#
+# name_prefix + create_before_destroy: `family` forces replacement of this
+# resource on a major-version change, but a fixed `name` would deadlock that
+# replacement while attached to a live instance (the old group can't be
+# destroyed while in use, and the new one can't reuse the name). This gives
+# the correct order — create the new group, point the instance at it, then
+# destroy the old one. See docs/POSTGRES18_UPGRADE_PLAN.md §B1.
 resource "aws_db_parameter_group" "main" {
-  family = "postgres15"
-  name   = "${var.project_name}-${var.environment}-db-params"
+  family      = var.parameter_group_family
+  name_prefix = "${var.project_name}-${var.environment}-db-params-"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   parameter {
     name  = "log_statement"
@@ -34,13 +45,14 @@ resource "aws_db_instance" "main" {
   identifier = "${var.project_name}-${var.environment}-db"
 
   # Engine configuration
-  engine                = "postgres"
-  engine_version        = var.postgres_version
-  instance_class        = var.instance_class
-  allocated_storage     = var.allocated_storage
-  max_allocated_storage = var.max_allocated_storage
-  storage_type          = var.storage_type
-  storage_encrypted     = true
+  engine                     = "postgres"
+  engine_version             = var.postgres_version
+  auto_minor_version_upgrade = var.auto_minor_version_upgrade
+  instance_class             = var.instance_class
+  allocated_storage          = var.allocated_storage
+  max_allocated_storage      = var.max_allocated_storage
+  storage_type               = var.storage_type
+  storage_encrypted          = true
   # Note: kms_key_id omitted - uses AWS-managed encryption key
   # To use customer-managed KMS key, set kms_key_id = aws_kms_key.db_encryption.arn
 

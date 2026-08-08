@@ -70,7 +70,30 @@ variable "master_username" {
 variable "postgres_version" {
   description = "PostgreSQL version"
   type        = string
-  default     = "15.18"
+  default     = "18.4"
+}
+
+variable "parameter_group_family" {
+  description = <<-EOT
+    RDS parameter group family, e.g. "postgres18". Must match the major
+    version of postgres_version — parameter groups are family-scoped and do
+    not carry across a major version change. Kept as an explicit variable
+    rather than derived from postgres_version by string surgery, so the two
+    stay deliberately in sync at every call site.
+  EOT
+  type        = string
+  default     = "postgres18"
+}
+
+variable "auto_minor_version_upgrade" {
+  description = <<-EOT
+    Whether RDS may apply minor version upgrades automatically during the
+    maintenance window. Default false so a pinned postgres_version (e.g.
+    "18.4") stays exactly that version rather than silently drifting to a
+    later minor release and showing up as unexplained Terraform drift.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "instance_class" {

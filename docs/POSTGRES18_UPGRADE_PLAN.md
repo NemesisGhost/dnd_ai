@@ -149,7 +149,9 @@ Beyond cost, there is a correctness argument. This project's premise is that the
 >
 > The parameter-group fix in [B1](#b1-terraform-module-changes) is different and stays in scope: it is needed *today*, because the family has to become `postgres18` for this change to work at all.
 
-### B1. Terraform module changes
+### B1. Terraform module changes — done, not applied
+
+**Implemented 2026-08-08** in `terraform/modules/database/rds.tf`, `variables.tf`, and `terraform/environments/dev/main.tf`. `terraform validate` passes (`terraform init -backend=false` + `validate`, no AWS calls, no state access). **Not yet run through `terraform plan`/`apply`** — B2 onward requires a live coordination window and is a separate step.
 
 Two required changes, plus two now deferred by [B0](#b0-strategy-replace-the-instance-dont-upgrade-it):
 
