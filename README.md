@@ -32,7 +32,7 @@ Phase 8 (relationships and organizations) delivered the universal relationship m
 
 The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, locations and dungeon structure with typed timeline state, a knowledge/discovery model, events/interactions/checks with branch-aware history, the first application-layer command handlers, the quest domain, and the relationships/organizations domain. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, items/encounters, or playable campaign workflows; those remain scheduled in later phases.
 
-**Verification pivot (2026-08-07).** Phases 1–8 were developed directly against the deployed AWS `dev` RDS instance, per the original AWS-first policy. From Phase 9 onward, development and testing run against a **local PostgreSQL 18 server**, and CI against `dev` is the merge gate — the reasoning, and the cost this trades away, are in [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md). The project's pinned PostgreSQL major version moved from 15.x to 18.x in the same change; the deployed `dev` instance has not yet been upgraded to match, which is tracked as the top item in [docs/PLAN.md §29.8](docs/PLAN.md#298-open-items).
+**Verification pivot (2026-08-07), closed 2026-08-08.** Phases 1–8 were developed directly against the deployed AWS `dev` RDS instance, per the original AWS-first policy. From Phase 9 onward, development and testing run against a **local PostgreSQL 18 server**, and CI against `dev` is the merge gate — the reasoning, and the cost this trades away, are in [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md). The project's pinned PostgreSQL major version moved from 15.x to 18.x in the same change; `dev` was replaced with a fresh PostgreSQL 18.4 instance to match, per [docs/POSTGRES18_UPGRADE_PLAN.md](docs/POSTGRES18_UPGRADE_PLAN.md).
 
 This is still a restart, not an incremental evolution of the prior implementation.
 
@@ -824,7 +824,7 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — reference: variables, outputs, verification, teardown, known gaps
 - [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) — the authoritative plan for what the infrastructure should become
 
-Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3.5](docs/DEVELOPMENT.md#35-connecting-to-aws-dev-occasional). Set `postgres_version` to 18.x rather than inheriting the module's stale `15.18` default (gap 0 in [docs/INFRASTRUCTURE.md §11](docs/INFRASTRUCTURE.md#11-known-gaps-and-discrepancies)).
+Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3.5](docs/DEVELOPMENT.md#35-connecting-to-aws-dev-occasional). The module's `postgres_version` default is now `18.4`, matching what `dev` runs — no override needed for a fresh environment.
 
 **Cost:** roughly $25–35/month. `dev` is shared, always-on infrastructure that CI verifies every pull request against ([docs/PLAN.md §23.0](docs/PLAN.md#230-verification-policy)) — don't destroy or stop it as routine cost-saving; see [docs/CONTRIBUTING.md §6](docs/CONTRIBUTING.md#6-cost-management).
 

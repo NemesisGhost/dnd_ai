@@ -1,11 +1,13 @@
 # PostgreSQL 18 Upgrade and Local-Loop Enablement Plan
 
+**Status: closed, 2026-08-08.** Both workstreams below are complete and verified. `dev` runs PostgreSQL 18.4; local and CI agree. The gate this plan describes has lifted — Phase 9 may proceed. [§8](#8-closeout-2026-08-08) has the full outcome; this document is kept as-executed rather than rewritten, so the body below still reads as a forward-looking plan in places — treat any present/future tense describing gated or pending work as historical.
+
 Two pieces of work left open by the 2026-08-07 verification pivot ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)):
 
 - **Workstream A** — make the local-first loop real in code. The documentation describes it; `tests/conftest.py` and `scripts/verify.sh` still target AWS by default.
 - **Workstream B** — upgrade the deployed `dev` RDS instance from PostgreSQL 15.18 to 18.4, closing the local/`dev` major-version drift recorded as gap 0 in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) and the top item in [PLAN.md §29.8](PLAN.md#298-open-items).
 
-**Gate: no further feature work is pushed to AWS until both workstreams are complete.** In practice that means Phase 9 ([PLAN.md](PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization)) does not merge until this plan closes, because every push runs CI, and CI migrates the `dev` database. See [§5](#5-what-the-gate-permits) for what the gate does and does not block.
+**Gate (closed): no further feature work is pushed to AWS until both workstreams are complete.** In practice that meant Phase 9 ([PLAN.md](PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization)) would not merge until this plan closed, because every push runs CI, and CI migrates the `dev` database. See [§5](#5-what-the-gate-permits) for what the gate did and did not block.
 
 ---
 
@@ -18,6 +20,7 @@ Two pieces of work left open by the 2026-08-07 verification pivot ([ADR 0011](ad
 - [5. What the gate permits](#5-what-the-gate-permits)
 - [6. Risks and rollback](#6-risks-and-rollback)
 - [7. Done criteria](#7-done-criteria)
+- [8. Closeout (2026-08-08)](#8-closeout-2026-08-08)
 
 ---
 
@@ -45,7 +48,7 @@ Verified against AWS and the repository on 2026-08-08, not assumed:
 | RDS offers PostgreSQL 18.1–18.4; all use parameter group family `postgres18` | `describe-db-engine-versions --engine postgres` |
 | `rds.force_ssl` defaults to **`1`** on `postgres18` — SSL enforcement survives, so `sslmode=require` stays correct for `dev` | `describe-engine-default-parameters --db-parameter-group-family postgres18` |
 | All three parameters the module sets (`log_statement`, `log_min_duration_statement`, `shared_preload_libraries`) exist and are modifiable on `postgres18` | same |
-| `shared_preload_libraries` defaults to `pg_stat_statements,pg_tle` on 18; the module sets it to `pg_stat_statements` only | same — see [B1](#b1-terraform-module-changes) note |
+| `shared_preload_libraries` defaults to `pg_stat_statements,pg_tle` on 18; the module sets it to `pg_stat_statements` only | same — see [B1](#b1-terraform-module-changes--done-and-applied) note |
 | The `dev` environment does **not** override `postgres_version`, `deletion_protection`, or `skip_final_snapshot`; it inherits module defaults | `terraform/environments/dev/main.tf` |
 | The module has **no** `allow_major_version_upgrade`, `apply_immediately`, or `auto_minor_version_upgrade` variable | `terraform/modules/database/variables.tf` |
 | The parameter group hardcodes `family = "postgres15"` and a **fixed `name`** | `terraform/modules/database/rds.tf:6-8` |
@@ -149,7 +152,7 @@ Beyond cost, there is a correctness argument. This project's premise is that the
 
 > **What this defers, and why that is not a debt.** Replacement lets us skip the `allow_major_version_upgrade` and `apply_immediately` variables. It would be easy to call these "deferred work that `staging`/`prod` will hit later," but that reasoning does not survive contact with the facts: neither environment exists, and when they are stood up they will be *provisioned* at 18.x, not upgraded to it — so nothing needs an in-place major upgrade until PostgreSQL 19, against an environment that by then holds data worth keeping. Building the variables now is speculative infrastructure for a scenario with no date on it. They are recorded in [PLAN.md §29.8](PLAN.md#298-open-items) with that concrete trigger attached, per the deferral discipline in [§23.1](PLAN.md#231-phase-exit-review) ("deferrals have to be swept up by whichever phase makes X exist").
 >
-> The parameter-group fix in [B1](#b1-terraform-module-changes) is different and stays in scope: it is needed *today*, because the family has to become `postgres18` for this change to work at all.
+> The parameter-group fix in [B1](#b1-terraform-module-changes--done-and-applied) is different and stays in scope: it is needed *today*, because the family has to become `postgres18` for this change to work at all.
 
 ### B1. Terraform module changes — done and applied
 
@@ -223,16 +226,17 @@ Outcome: `available`, `EngineVersion 18.4`, parameter group `in-sync` with **no 
 
 `DEV_DB_SECURITY_GROUP_ID` remained valid throughout, confirmed in B3. `DEV_DB_ADMIN_URL` was rotated as part of B3, not as follow-up.
 
-### B6. Close the documentation loop
+### B6. Close the documentation loop — done, 2026-08-08
 
 Per [CLAUDE.md §7](../CLAUDE.md#7-before-implementing-a-feature), same change:
 
-- [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) — strike gap 0; update the `postgres_version` row in §4 and the version assertion in §7
-- [PLAN.md §29.8](PLAN.md#298-open-items) — strike the upgrade item; [§29.1](PLAN.md#291-scope-and-current-state) — drop the "module default is still 15.18" caveat
-- [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) — remove the drift warning; §2.3's "verified as trusted on the AWS `dev` instance, 15.18" becomes 18.4
-- [CLAUDE.md](../CLAUDE.md) §2 and [README.md](../README.md) — remove the "not yet upgraded" caveats from both verification-pivot notes
-- [CHECKLIST.md](CHECKLIST.md), [QUICKSTART.md](QUICKSTART.md) — drop the "stale default" warnings
-- Write the outcome up. This is infrastructure work rather than a delivery phase, so it belongs in this document's own closeout section rather than a `PHASEn_VERIFICATION.md`.
+- [x] [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) — gap 0 struck (resolved); gap 1 (`deletion_protection`) also struck, since B3 needed it as a prerequisite; the `postgres_version` row in §4, the version assertion in §7, and the now-stale "this will fail" teardown claim in §8 all updated
+- [x] [PLAN.md §29.8](PLAN.md#298-open-items) — upgrade item struck; [§29.1](PLAN.md#291-scope-and-current-state) — "module default is still 15.18" caveat replaced with the resolved state; the Phase 9 merge-blocker blockquote removed
+- [x] [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) — drift warning replaced with confirmation all three targets agree; §2.3's trusted-extensions claim updated to 18.4, backed by this session's actual bootstrap run rather than the earlier static AWS metadata check alone
+- [x] [CLAUDE.md](../CLAUDE.md) §2 and [README.md](../README.md) — "not yet upgraded" caveats replaced with closure notes; CLAUDE.md's doc-index row for this plan removed now that it's historical record rather than active-reading guidance
+- [x] [CHECKLIST.md](CHECKLIST.md), [QUICKSTART.md](QUICKSTART.md) — stale-default warnings dropped
+- [x] Two findings this session surfaced that weren't in the original B6 checklist, also fixed: `rds.force_ssl` no longer exists as a GUC on this engine build ([DEVELOPMENT.md §3.3](DEVELOPMENT.md#33-toolchain-and-environment), [QUICKSTART.md](QUICKSTART.md) both updated to describe verified behavior rather than a parameter that turned out not to exist); `.github/copilot-instructions.md` carried the same "not yet upgraded" caveat as CLAUDE.md/README.md and needed the same fix
+- [x] Outcome written up in [§8](#8-closeout-2026-08-08) below, since this is infrastructure work rather than a delivery phase and doesn't get a `PHASEn_VERIFICATION.md`
 
 ---
 
@@ -275,10 +279,38 @@ The one thing that *is* awkward to reverse is the CI configuration. If the repla
 
 - [x] Full test suite green against local PostgreSQL 18.4 (A3) — 2026-08-08
 - [x] `scripts/verify.sh full` makes no AWS calls against a local target (A5) — 2026-08-08
-- [ ] `dev` reports `EngineVersion` `18.4`, status `available`, parameter group `in-sync` (B3)
-- [ ] `DEV_DB_ADMIN_URL` rotated to the replacement instance's endpoint and password; `DEV_DB_SECURITY_GROUP_ID` confirmed unchanged (B3)
-- [ ] Bootstrap run on the fresh instance; six roles verified with `migration_owner` `NOLOGIN` and outside `rds_iam`; `rds.force_ssl` = `1` (B4)
-- [ ] Migration round trip, `alembic check`, seed idempotency, and the full suite all green against the upgraded instance (B5)
-- [ ] **A green CI run on a pushed commit against `dev` at 18.4** — the authoritative evidence ([PLAN.md §23.0](PLAN.md#230-verification-policy))
-- [ ] Local and `dev` now agree on major version; gap 0 struck and every doc caveat removed (B6)
-- [ ] The gate lifts: Phase 9 may proceed
+- [x] `dev` reports `EngineVersion` `18.4`, status `available`, parameter group `in-sync` (B3) — 2026-08-08
+- [x] `DEV_DB_ADMIN_URL` rotated to the replacement instance's endpoint and password; `DEV_DB_SECURITY_GROUP_ID` confirmed unchanged (B3) — 2026-08-08
+- [x] Bootstrap run on the fresh instance; six roles verified with `migration_owner` `NOLOGIN` and outside `rds_iam` (B4) — 2026-08-08. `rds.force_ssl` itself doesn't exist as a GUC on this engine build; SSL enforcement verified directly instead (non-SSL connection rejected) — see B4
+- [x] Migration round trip, `alembic check`, seed idempotency, and the full suite all green against the upgraded instance (B5) — 2026-08-08
+- [x] **A green CI run on a pushed commit against `dev` at 18.4** — the authoritative evidence ([PLAN.md §23.0](PLAN.md#230-verification-policy)) — [run 31279752667](https://github.com/NemesisGhost/dnd_ai/actions/runs/31279752667), commit `4e87b6c`
+- [x] Local and `dev` now agree on major version; gap 0 struck and every doc caveat removed (B6) — 2026-08-08
+- [x] The gate lifts: Phase 9 may proceed
+
+---
+
+## 8. Closeout (2026-08-08)
+
+Both workstreams closed in a single day, same session that wrote the plan. Summary for anyone landing here later without reading the whole thing.
+
+**What changed:**
+
+- Development and testing now run against a local PostgreSQL 18 server by default (`tests/conftest.py`, `scripts/verify.sh`), with no AWS interaction unless `DATABASE_URL` explicitly names an RDS endpoint.
+- `dev` is a **replacement** RDS instance, not an upgraded one — same identifier, same endpoint, same security group, but a genuinely fresh PostgreSQL 18.4 database created via `terraform apply -replace=module.database.aws_db_instance.main`, not `pg_upgrade`. See [B0](#b0-strategy-replace-the-instance-dont-upgrade-it) for why that was the right call once it was established no environment holds data that has to survive.
+- `terraform/modules/database` now defaults to PostgreSQL 18.4, fixes a parameter-group replacement deadlock that would have bitten any future major-version change, and `dev` explicitly overrides `deletion_protection`/`skip_final_snapshot` for fast, blocker-free teardown.
+
+**What this plan predicted correctly:** the B0 replace-vs-upgrade tradeoff table, the parameter-group deadlock fix, the `deletion_protection` blocker, and the need to rotate `DEV_DB_ADMIN_URL` all played out exactly as written.
+
+**What this plan didn't predict, all found and fixed during execution rather than designed around in advance:**
+
+1. **`DEV_DB_ADMIN_URL` was already stale before this work even started** — an unrelated pre-existing credential drift (AWS's managed master-password rotation had moved past what the GitHub secret held), caught by Workstream A's first CI run. Fixed the same way B3's rotation was later fixed: fetch the current value, verify a connection with it, then write the secret — never the other way around.
+2. **B2's plan review caught real orphaned infrastructure** — a VPC-endpoints security group with no endpoints left to serve, predating this session. Investigated (`aws ec2 describe-vpc-endpoints` returned empty) before including its cleanup in the apply, exactly per the "if any of those appear, stop" instruction this document wrote for itself.
+3. **`terraform apply -replace` doesn't modify the resource being replaced before destroying it** — so B1's `deletion_protection = false` change, though correctly written, never touched the *old* instance's live setting, and the first replace attempt failed outright. Fixed out-of-band, same command the project's own teardown docs already used.
+4. **A real bug in the module surfaced on the first genuinely fresh parameter-group create**: `shared_preload_libraries` is a static PostgreSQL parameter, and the module never set `apply_method = "pending-reboot"` for it — it silently held a working value in the old group's state through means that are still unclear, but a `create_before_destroy` create hit the schema default (`"immediate"`) and RDS rejected it outright. Fixed in source, not worked around.
+5. **`rds.force_ssl` doesn't exist as a GUC on this RDS PostgreSQL 18 build at all.** Every doc that named it as the SSL-enforcement mechanism was wrong the moment `dev` moved to 18.4 — caught by checking `pg_settings` directly rather than trusting the parameter group's static-metadata check from earlier in this same session, and confirmed the actual behavior (SSL enforcement) is unchanged by testing a rejected non-SSL connection directly.
+
+The throughline: every one of these was caught by *verifying* rather than *assuming* — reading the actual `terraform plan` diff instead of trusting intent, testing a live connection instead of trusting a cached credential, querying `pg_settings` instead of trusting a parameter group's declared default. None of them would have surfaced from documentation review alone.
+
+**Local/CI verification, all against the actual replacement instance:** migration round trip (`downgrade base` 31s, `upgrade head` 84s), `alembic check` (empty diff, 49s), full test suite (`unit`/`database`/`scenario`, ~32 minutes, includes seed idempotency) — all green. [PR #20](https://github.com/NemesisGhost/dnd_ai/pull/20)'s CI history shows the full arc: one red run (the pre-existing stale-secret finding, unrelated to this plan), two green runs on 15.18 (proving Workstream A's local-first tooling is genuinely target-agnostic), and a final green run on 18.4 (the authoritative evidence this plan was staked on).
+
+Phase 9 may now proceed.

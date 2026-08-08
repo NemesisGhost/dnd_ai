@@ -80,9 +80,12 @@ terraform -chdir=terraform/environments/dev output database_name       # dnd_ai
 | User | `dnd_admin` — not `postgres` |
 | SSL | **Required** |
 
-`sslmode=require` is not optional. The parameter group sets `rds.force_ssl=1`, so a
+`sslmode=require` is not optional. `dev` enforces SSL at the `pg_hba.conf` level, so a
 non-SSL connection is rejected outright with a `pg_hba.conf` error that doesn't
-mention SSL. A stock local PostgreSQL server has no TLS configured at all — and
+mention SSL. (On PostgreSQL 15 this was surfaced as an `rds.force_ssl` parameter;
+as of the PostgreSQL 18 replacement that GUC is gone entirely — confirmed absent
+from `pg_settings` — but the enforcement itself is unchanged, verified directly.)
+A stock local PostgreSQL server has no TLS configured at all — and
 since that is where everyday development now happens ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)),
 this is easy to miss until the first time you connect to `dev`.
 
@@ -169,7 +172,7 @@ never be used to connect — it is `NOLOGIN` by design
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
-**This currently fails** — `deletion_protection` defaults to `true` and dev never overrides it. Disable it first:
+This now works directly — `dev` overrides `deletion_protection = false` explicitly (resolved 2026-08-08, see [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) gap 1). If you ever do hit it blocking a destroy, disable it first:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db --no-deletion-protection --apply-immediately
@@ -184,7 +187,7 @@ See [INFRASTRUCTURE.md §8](INFRASTRUCTURE.md#8-teardown).
 **What did I just deploy?**
 A VPC-attached PostgreSQL RDS instance, a KMS key, a security group, VPC endpoints for Secrets Manager and KMS, and empty Secrets Manager entries. Full inventory: [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state).
 
-Note the engine version: the module still defaults to `15.18`, while the project now pins PostgreSQL **18.x** ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). See gap 0 in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) before deploying a new environment — a fresh deploy should go straight to 18.x rather than inheriting the stale default.
+The module's engine-version default is `18.4`, matching what the project pins ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) and what `dev` runs — no override needed for a fresh deploy.
 
 **Can I use the database yet?**
 Right after `terraform apply`, it's an **empty** PostgreSQL instance — no schemas, roles, or extensions. The bootstrap revision that creates them exists in `database/migrations/versions/001_bootstrap.py`; run `alembic upgrade head` against it (see the next question) to actually get there.

@@ -13,7 +13,6 @@ Run through this before `terraform apply`. Explanations live elsewhere — this 
 - [ ] You actually need this. Everyday development runs against a **local PostgreSQL 18 server** ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)); this deploys the shared AWS environment CI verifies against ([PLAN.md §23.0](PLAN.md#230-verification-policy))
 - [ ] This is a one-time deploy of shared, always-on infrastructure — confirm `dev` isn't already deployed by someone else first (`terraform -chdir=terraform/environments/dev output`)
 - [ ] You accept ~$25–35/month as an ongoing cost, not a per-session toggle ([CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management))
-- [ ] `postgres_version` is set to **18.x**, not the module's stale `15.18` default ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version), gap 0 in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies))
 
 ## Tooling
 

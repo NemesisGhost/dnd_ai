@@ -1344,7 +1344,7 @@ Exit criteria:
 
 ### Phase 9: Items, inventory, encounters, and Foundry synchronization
 
-> **🚧 Blocked from merging until [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) closes.** Local development of this phase is unaffected and can start immediately; what is gated is pushing it, because every push runs CI and CI migrates `dev` — which is still on PostgreSQL 15.18 while local development runs 18.4. Phase 9 is also the first phase developed under the local-first loop in [§23.0](#230-verification-policy), so its verification file is the first to record both a local result and a CI run ID.
+Phase 9 is the first phase developed under the local-first loop in [§23.0](#230-verification-policy) — its verification file is the first to record both a local result and a CI run ID. The [PostgreSQL 18 gate](POSTGRES18_UPGRADE_PLAN.md) that previously blocked this phase from merging closed 2026-08-08: `dev` now runs PostgreSQL 18.4, matching local.
 
 Deliver:
 
@@ -1578,7 +1578,7 @@ This section is the **plan** — what the infrastructure should become. [INFRAST
 
 `terraform/modules/database` and `terraform/modules/secrets` already exist and provide:
 
-- An RDS PostgreSQL instance (version pinned via `postgres_version`), encrypted at rest with a dedicated KMS key. The module default is still `15.18` and the deployed `dev` instance still runs it; the project's pinned target is now **PostgreSQL 18.x** to match the local development server ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Closing that gap is an open item — see [§29.8](#298-open-items).
+- An RDS PostgreSQL instance (version pinned via `postgres_version`, now `18.4`), encrypted at rest with a dedicated KMS key. Matches the project's pinned target ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) and the local development server — `dev` was replaced onto this version 2026-08-08, see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md).
 - A VPC with two private subnets across two availability zones (or reuse of an existing VPC/subnets), a security group scoped to `allowed_cidr_blocks` / `allowed_security_group_ids`, and VPC interface endpoints for Secrets Manager and KMS so private subnets don't need a NAT Gateway by default.
 - An AWS-managed master user secret (`manage_master_user_password = true`) — no master password is ever stored in Terraform state or code.
 - IAM database authentication enabled on the instance (`iam_database_authentication_enabled = true`), ready for use once application-level roles are created.
@@ -1690,7 +1690,7 @@ This was originally chosen as the lowest-setup-cost option for the project's pre
 
 Additional defects found in the current Terraform — notably that `dev` cannot be destroyed because `deletion_protection` is never overridden to `false`, and that `my_ip_cidr` defaults to `0.0.0.0/0` — are catalogued in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
 
-- **PostgreSQL 18.4 on `dev` — planned in full; blocks Phase 9.** The project now pins PostgreSQL 18.x ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) to match the local development server, but `terraform/modules/database` still defaults `postgres_version` to `15.18` and the deployed `dev` instance runs it. Because `dev` holds no live data, the approach is to **replace the instance rather than upgrade it in place** — a fresh 18.4 instance is what `staging`/`prod` will provision, avoids all `pg_upgrade` residue, and makes rollback a re-apply rather than a snapshot restore. The complete sequence, including the local-loop code work that de-risks it, is [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). Until it lands, local runs on 18.4 and CI runs on 15.18 — the exact local/`dev` drift [§23.0](#230-verification-policy) warns about, and **no feature work is pushed to AWS in the meantime**.
+- ~~PostgreSQL 18.4 on `dev`~~ — resolved 2026-08-08. `dev` was replaced with a fresh PostgreSQL 18.4 instance (`terraform apply -replace=module.database.aws_db_instance.main`, not an in-place upgrade — see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) B0 for why). Local and CI now agree on major version.
 - **`allow_major_version_upgrade` and `apply_immediately`**: neither exists on `terraform/modules/database`, and neither is being added. They serve only an *in-place* major version upgrade. Nothing in this project needs one: `dev` is replaced rather than upgraded (above), and `staging`/`prod` — when they exist — will be provisioned at 18.x rather than upgraded to it. **Trigger for building them:** the first environment that holds data which must survive a major version upgrade, which is not the case for any environment today. Recorded here rather than built speculatively, per the deferral discipline in [§23.1](#231-phase-exit-review).
 - **Multi-AZ**: `terraform/modules/database` has no `multi_az` variable yet; add one before standing up `prod`.
 - **Read replicas**: deferred until query load actually justifies one, per [DATABASE_CONVENTIONS.md §33](DATABASE_CONVENTIONS.md).

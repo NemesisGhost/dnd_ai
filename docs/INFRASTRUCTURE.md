@@ -161,12 +161,12 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `database_name` | `dnd_ai` | Not `dnd_ai_dev` |
 | `master_username` | `dnd_admin` | Not `postgres` |
-| `postgres_version` | `15.18` | **Stale.** [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) now pins PostgreSQL **18.x** to match the local development server; RDS offers 18.1–18.4. See gap 10 in [§11](#11-known-gaps-and-discrepancies) |
+| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) |
 | `instance_class` | `db.t3.micro` | |
 | `allocated_storage` / `max_allocated_storage` | `20` / `100` | GB, gp3, autoscaling |
 | `backup_retention_period` | `7` | Days |
-| `deletion_protection` | `true` | **Blocks `terraform destroy`** — see [§8](#8-teardown) |
-| `skip_final_snapshot` | `false` | A final snapshot is taken on delete |
+| `deletion_protection` | `true` | Module default — meant for `staging`/`prod`. **`dev` overrides this to `false`** in `terraform/environments/dev/main.tf`, per [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod) |
+| `skip_final_snapshot` | `false` | Module default. **`dev` overrides this to `true`** — no final snapshot on delete, matching its disposable-by-design status |
 | `iam_database_authentication_enabled` | `true` | Ready for the IAM-auth roles in [PLAN.md §29.5](PLAN.md#295-database-role-schema-and-extension-bootstrap) |
 | `enhanced_monitoring` / `performance_insights_enabled` | `true` | |
 | `create_vpc_endpoints` | `true` | Secrets Manager + KMS interface endpoints |
@@ -294,7 +294,7 @@ aws secretsmanager list-secrets --query "SecretList[?starts_with(Name,'dnd-ai')]
 
 Expected after a successful apply:
 
-- RDS instance `DBInstanceStatus` is `available`, engine `postgres`, version 15.x on the currently deployed `dev` (the project pins 18.x — gap 0 in [§11](#11-known-gaps-and-discrepancies))
+- RDS instance `DBInstanceStatus` is `available`, engine `postgres`, version `18.4`
 - A KMS key and a database security group
 - Secrets Manager entries for the RDS master user plus the named OpenAI/Discord entries
 - VPC interface endpoints for Secrets Manager and KMS
@@ -309,7 +309,7 @@ Once the bootstrap revision from [PLAN.md §29.5](PLAN.md#295-database-role-sche
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
-**This will fail as currently configured.** `deletion_protection` defaults to `true` in the `database` module and the `dev` environment does not override it. Either set `deletion_protection = false` (and `skip_final_snapshot = true`) in the `dev` module block — which is what [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod) specifies for dev — or disable protection on the instance first:
+This now works without extra steps: `dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf`, resolved 2026-08-08 as part of [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) (that plan needed exactly this to replace the RDS instance). If you ever hit `deletion_protection` blocking a destroy anyway — for example against an instance created before this override existed — disable it directly first:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db `
@@ -359,9 +359,9 @@ Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset aft
 
 Documented so they get fixed rather than rediscovered. These are **code** issues, not doc issues:
 
-0. **PostgreSQL major version is behind the pin — highest priority.** `postgres_version` defaults to `15.18` and the deployed `dev` instance runs it, but [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version) now pins **18.x** to match the local development server that [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) made the default loop. RDS offers 18.1–18.4. **Now planned in full: [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)**, which supersedes the sketch that was here. Because `dev` holds no live data, the approach is to **replace the instance rather than upgrade it in place**, which sidesteps `pg_upgrade` entirely. AWS confirms the `postgres18` family accepts all three parameters this module sets and that `rds.force_ssl` still defaults to `1`. Two module defects are in scope: `aws_db_parameter_group.main` combines a `ForceNew` `family` with a fixed `name`, which deadlocks replacement whenever the group is attached to a live instance (fix: `name_prefix` + `create_before_destroy`), and `dev` inherits `deletion_protection = true` / `skip_final_snapshot = false` — gap 1 below, which must be closed first because it blocks any instance replacement. Until this lands, developers run PostgreSQL 18 locally while CI runs 15.18 — the precise local/`dev` drift [PLAN.md §23.0](PLAN.md#230-verification-policy) warns about — and **no feature work is pushed to AWS**. Tracked in [PLAN.md §29.8](PLAN.md#298-open-items).
+0. ~~PostgreSQL major version is behind the pin~~ — resolved 2026-08-08. `dev` was replaced with a fresh PostgreSQL 18.4 instance (targeted `terraform apply -replace=module.database.aws_db_instance.main`, not an in-place `pg_upgrade`), matching [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. Full account, including two real bugs this surfaced and fixed (`deletion_protection` blocking the first replace attempt, and a missing `apply_method = "pending-reboot"` on the `shared_preload_libraries` parameter), is [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). One residual finding worth knowing: `rds.force_ssl` is not a recognized GUC on this engine build at all (absent from `pg_settings`) — SSL is still enforced, verified empirically (a `sslmode=disable` connection is rejected), just not through that parameter anymore. Gap 1 below (`deletion_protection`/`skip_final_snapshot` for `dev`) was closed as a prerequisite for this replacement.
 
-1. **`dev` cannot be destroyed.** `deletion_protection` is not overridden to `false`, contradicting [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Same for `skip_final_snapshot`, which leaves an unwanted final snapshot on every dev teardown.
+1. ~~`dev` cannot be destroyed.~~ — resolved 2026-08-08, as a prerequisite for the PostgreSQL 18 instance replacement in [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). `terraform/environments/dev/main.tf` now passes `deletion_protection = false` and `skip_final_snapshot = true` explicitly, matching [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod). Verified live: the first replacement attempt failed against the *old* instance's still-`true` protection (a `-replace` destroy-then-create never modifies the resource being replaced first), fixed by disabling it out-of-band before retrying — see B3 in the plan doc for the full account.
 2. **`my_ip_cidr` defaults to `0.0.0.0/0`.** A default of `null` with explicit validation would fail closed instead of open. Now that per-session access is meant to go through `scripts/aws-db-allow-my-ip.sh` and CI's own authorize/revoke step rather than this variable (§3, [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)), consider dropping it to a single harmless placeholder CIDR rather than keeping it as a real access path at all.
 3. **`database_secret_name` returns an ARN**, not a name. Either rename the output or change the value.
 4. **`app_config_secret_name` is hardcoded to `""`**, and `deployment_summary.secrets.app_config` to `null`. Dead outputs — remove or implement.

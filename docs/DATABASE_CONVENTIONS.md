@@ -35,7 +35,7 @@ The goals are consistency, maintainability, predictable querying, safe evolution
 | AWS `dev` / `staging` / `prod` | `postgres_version` in `terraform/modules/database` |
 | CI | Whatever `dev` runs; CI creates an ephemeral database on it rather than standing up its own |
 
-The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)) and 18.x — available on RDS as 18.1 through 18.4 — became the version both targets could share. **The Terraform default is still `15.18` and the deployed `dev` instance still runs it**; closing that gap is tracked as the highest-priority item in [PLAN.md §29.8](PLAN.md#298-open-items). Until it closes, local and `dev` are on different major versions, which is exactly the drift the next paragraph forbids.
+The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)) and 18.x — available on RDS as 18.1 through 18.4 — became the version both targets could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)); all three rows above now agree.
 
 **A local server on a different major version than the deployment target is a defect, not a preference.** It produces green local runs that fail CI, and it reintroduces the divergence between what is verified and what is deployed that [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) was written to eliminate. Match the version; do not use whatever is already installed.
 
@@ -70,7 +70,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 Extensions are installed through migrations or infrastructure bootstrap under a controlled database owner. Application users must not have extension-management permissions.
 
-`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, 15.18). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
+`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, both on 15.18 originally and again on 18.4 after the [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) replacement — the full `001_bootstrap` migration and later extension-adding revisions all succeeded without `rds_superuser`). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
 
 The same extensions must be installable on a local development server, since the identical `001_bootstrap` revision runs there ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)). A stock local install provides all three in `contrib`; a missing one shows up as a bootstrap failure on the first `alembic upgrade head`, not as a subtle divergence later.
 

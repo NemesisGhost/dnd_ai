@@ -175,7 +175,7 @@ cp .env.example .env    # defaults already point at a local server
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai
 ```
 
-No `sslmode=require` locally: a stock local server has no TLS configured, whereas `dev`'s parameter group sets `rds.force_ssl=1` and rejects a plain connection outright. That asymmetry is the single most common surprise when you do connect to `dev`.
+No `sslmode=require` locally: a stock local server has no TLS configured, whereas `dev` enforces SSL and rejects a plain connection outright (`FATAL: no pg_hba.conf entry for host "...", ... no encryption`) — that asymmetry is the single most common surprise when you do connect to `dev`. On earlier RDS PostgreSQL versions this showed up as an `rds.force_ssl` parameter; as of the PostgreSQL 18 replacement ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)) that GUC no longer exists at all (confirmed absent from `pg_settings`) — enforcement moved to `pg_hba.conf`, verified directly rather than by parameter inspection.
 
 ### 3.4 Verify
 
