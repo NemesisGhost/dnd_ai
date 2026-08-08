@@ -10,6 +10,14 @@ concrete scenario, drive it through the real commands, and verify the
 recorded event, the updated campaign.relationship_state/organization_state,
 and the linking narrative.event_effects row — not by inspecting the
 transaction boundary.
+
+Also covers, mirroring advance_objective's own coverage: a first-write
+concurrency regression for update_organization_status() (the organization
+half of the same _lock_relationship/_lock_organization guard
+evolve_relationship_reaction() already has a test for), and an atomic-
+rollback proof for both commands — an invalid status code failing at
+lookup_id() after _insert_event_row() has already run, leaving no partial
+write, verified against independent final database state.
 """
 
 import threading
@@ -19,8 +27,10 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.commands._shared import LookupCodeNotFoundError
 from dnd_ai.commands.relationships import (
     EvolveRelationshipReactionResult,
+    UpdateOrganizationStatusResult,
     evolve_relationship_reaction,
     update_organization_status,
 )
@@ -342,3 +352,173 @@ def test_two_concurrent_first_reactions_for_the_same_holder_serialize(
             {"t": f.timeline_id},
         ).scalar()
         assert event_count == 2
+
+
+def test_two_concurrent_first_organization_status_updates_serialize(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The organization half of the same concurrency regression:
+    update_organization_status()'s _lock_organization row lock must
+    serialize two concurrent first updates for the same (timeline,
+    organization) scope the same way _lock_relationship does for
+    evolve_relationship_reaction — no race on
+    ux_organization_state_timeline_organization, exactly one
+    campaign.organization_state row, and the two committed events chain
+    into a genuine serialized history (one observes the other's committed
+    previous_status_code) rather than each assuming it went first."""
+    barrier = threading.Barrier(2)
+    results: dict[str, UpdateOrganizationStatusResult] = {}
+    errors: dict[str, Exception] = {}
+
+    def _update(label: str, status_code: str) -> None:
+        barrier.wait(timeout=30)
+        try:
+            results[label] = update_organization_status(
+                postgres_engine,
+                organization_id=f.faction_id,
+                timeline_id=f.timeline_id,
+                world_time_id=f.world_time_id,
+                new_status_code=status_code,
+            )
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            errors[label] = exc
+
+    thread_a = threading.Thread(target=_update, args=("a", "banned"))
+    thread_b = threading.Thread(target=_update, args=("b", "underground"))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=30)
+    thread_b.join(timeout=30)
+    assert not thread_a.is_alive(), "update_organization_status for thread a did not finish"
+    assert not thread_b.is_alive(), "update_organization_status for thread b did not finish"
+
+    assert not errors, f"expected both calls to serialize cleanly, got errors: {errors}"
+    assert len(results) == 2
+
+    with postgres_engine.connect() as verify:
+        state_count = verify.execute(
+            text("""
+                SELECT count(*) FROM campaign.organization_state
+                WHERE timeline_id = :t AND organization_id = :o
+            """),
+            {"t": f.timeline_id, "o": f.faction_id},
+        ).scalar()
+        assert state_count == 1
+
+        effect_rows = verify.execute(
+            text("""
+                SELECT ee.previous_value, ee.new_value
+                FROM narrative.event_effects ee
+                JOIN narrative.events ev ON ev.event_id = ee.event_id
+                JOIN narrative.event_types et ON et.event_type_id = ev.event_type_id
+                WHERE et.code = 'organization_status_changed' AND ev.timeline_id = :t
+                  AND ee.target_entity_id = :o
+            """),
+            {"t": f.timeline_id, "o": f.faction_id},
+        ).all()
+
+    assert len(effect_rows) == 2
+    first_writer = [r for r in effect_rows if r.previous_value is None]
+    second_writer = [r for r in effect_rows if r.previous_value is not None]
+    assert len(first_writer) == 1, "exactly one update should have observed no prior status"
+    assert len(second_writer) == 1, "exactly one update should have observed the other's write"
+    assert second_writer[0].previous_value == first_writer[0].new_value, (
+        "the second write's previous_value should chain from the first write's new_value, "
+        "proving the two events form a genuine serialized history rather than a race"
+    )
+    assert {r.new_value for r in effect_rows} == {"banned", "underground"}
+
+
+def test_a_failed_relationship_reaction_leaves_no_partial_write(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Atomicity proof: an invalid new_status_code is a credible production
+    failure — lookup_id() raises LookupCodeNotFoundError, but only after
+    _insert_event_row() has already inserted narrative.events (and its
+    actor participant row) inside the same transaction. The whole
+    engine.begin() transaction must roll back, leaving no trace of the
+    event, the relationship_state row, or the event_effects row — proven
+    by independently querying final database state, not merely by
+    catching the exception."""
+    with pytest.raises(LookupCodeNotFoundError):
+        evolve_relationship_reaction(
+            postgres_engine,
+            relationship_id=f.relationship_id,
+            timeline_id=f.timeline_id,
+            world_time_id=f.world_time_id,
+            new_status_code="not_a_real_status",
+            perspective_holder_entity_id=f.faction_id,
+            actor_entity_id=f.actor_id,
+        )
+
+    with postgres_engine.connect() as verify:
+        event_count = verify.execute(
+            text("SELECT count(*) FROM narrative.events WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 0, "an event survived a rolled-back evolve_relationship_reaction"
+
+        state_count = verify.execute(
+            text("""
+                SELECT count(*) FROM campaign.relationship_state
+                WHERE timeline_id = :t AND relationship_id = :r
+            """),
+            {"t": f.timeline_id, "r": f.relationship_id},
+        ).scalar()
+        assert state_count == 0, (
+            "a relationship_state row survived a rolled-back evolve_relationship_reaction"
+        )
+
+        effect_count = verify.execute(
+            text("SELECT count(*) FROM narrative.event_effects WHERE target_relationship_id = :r"),
+            {"r": f.relationship_id},
+        ).scalar()
+        assert effect_count == 0, (
+            "an event_effects row survived a rolled-back evolve_relationship_reaction"
+        )
+
+    assert _baseline_perspective_unchanged(postgres_engine, f)
+
+
+def test_a_failed_organization_status_update_leaves_no_partial_write(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The organization half of the same atomicity proof: an invalid
+    new_status_code fails at lookup_id(), after _insert_event_row() has
+    already run, and the whole transaction must roll back — no event, no
+    organization_state row, no event_effects row survives."""
+    with pytest.raises(LookupCodeNotFoundError):
+        update_organization_status(
+            postgres_engine,
+            organization_id=f.faction_id,
+            timeline_id=f.timeline_id,
+            world_time_id=f.world_time_id,
+            new_status_code="not_a_real_status",
+            actor_entity_id=f.actor_id,
+        )
+
+    with postgres_engine.connect() as verify:
+        event_count = verify.execute(
+            text("SELECT count(*) FROM narrative.events WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 0, "an event survived a rolled-back update_organization_status"
+
+        state_count = verify.execute(
+            text("""
+                SELECT count(*) FROM campaign.organization_state
+                WHERE timeline_id = :t AND organization_id = :o
+            """),
+            {"t": f.timeline_id, "o": f.faction_id},
+        ).scalar()
+        assert state_count == 0, (
+            "an organization_state row survived a rolled-back update_organization_status"
+        )
+
+        effect_count = verify.execute(
+            text("SELECT count(*) FROM narrative.event_effects WHERE target_entity_id = :o"),
+            {"o": f.faction_id},
+        ).scalar()
+        assert effect_count == 0, (
+            "an event_effects row survived a rolled-back update_organization_status"
+        )
