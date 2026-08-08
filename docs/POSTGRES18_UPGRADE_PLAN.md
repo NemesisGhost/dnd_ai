@@ -116,7 +116,9 @@ Record the result — including the local PostgreSQL version string — in the e
 - [x] `ruff format --check`, `ruff check`, `mypy src` green
 - [x] No `testcontainers` import or dependency remains — removed from `pyproject.toml`'s `dev` extra, `uv lock` + `uv sync` confirm it is uninstalled
 - [x] `scripts/verify.sh full` performs **zero** AWS calls with a local `DATABASE_URL` — confirmed by running with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`/`AWS_PROFILE` all cleared; the run still passed, so nothing in the path attempted an AWS call
-- [ ] CI green against `dev` — still on 15.18 at this point, which also proves the changes are genuinely target-agnostic. Not yet pushed; pending per [§5](#5-what-the-gate-permits)
+- [x] CI green against `dev` — still on 15.18 at this point, which also proves the changes are genuinely target-agnostic. [PR #20](https://github.com/NemesisGhost/dnd_ai/pull/20), [run 31271992388](https://github.com/NemesisGhost/dnd_ai/actions/runs/31271992388), commit `f9afe09`, green after the secret rotation below. **Workstream A is fully proven: same code, green on local 18.4 and CI 15.18.**
+
+> **Unrelated finding, 2026-08-08: `DEV_DB_ADMIN_URL` was stale.** PR #20's first CI run failed at "Create ephemeral test database" with `password authentication failed for user "dnd_admin"` — before pytest even ran, so not a Workstream A regression. Root cause: `dev`'s master password is AWS-managed (`manage_master_user_password = true`) and rotates automatically; the GitHub secret had drifted out of sync with it. Confirmed by fetching the current Secrets Manager value (read-only) and connecting with it successfully through a temporary local ingress rule, opened and closed via `scripts/aws-db-allow-my-ip.sh`. Fixed by rotating `DEV_DB_ADMIN_URL` to the current value via the GitHub Actions secrets API (public-key sealed-box encryption via `pynacl`, no `gh` CLI available in this environment), verifying the connection *before* writing. CI re-triggered (rerun of the same run, not a new commit). This same drift will recur after B3 replaces the instance — B3 step 4 already accounts for it.
 
 ---
 
