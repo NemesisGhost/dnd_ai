@@ -460,24 +460,26 @@ erDiagram
     WORLD_RELATIONSHIPS ||--o{ CAMPAIGN_RELATIONSHIP_STATE : state
 ```
 
+Built by **Phase 8 revision 076**.
+
 ### 10.1 Universal relationships
 
-- `world.relationship_types` — lookup: parent-of, member-of, controls, owned-by, reveres, capital-of, connected-to, …
-- `world.relationships`
-- `world.relationship_participants`
+- `world.relationship_types` — lookup: family, employment, membership, ownership, alliance, rivalry, war, control, worship, adjacency, capital_of, parent_of, other
+- `world.relationships` — not entity-rooted, same reasoning as `world.area_connections`/`interaction.interactions`/`narrative.story_arcs`: a structural record connecting entities with no independent canonical identity of its own
+- `world.relationship_participants` — an entity's typed role in a relationship (`world.relationship_participant_roles`, a lookup: subject/object, parent/child, employer/employee, owner/property, ruler/territory, member/organization, ally/rival, other)
 - `world.relationship_perspectives`
 
-Relationships may connect any entities — an NPC parent of another NPC, an NPC member of an organization, an organization controlling a settlement, an item owned by an NPC, a religion revered by a city, a dungeon area connected to another. The base relationship row stores shared facts and history; perspectives store how each participant perceives the relationship (affinity, trust, respect, fear, obligation, emotional tone, private interpretation) — the objective/subjective split rule 5 of §21 depends on.
+Relationships may connect any entities — an NPC parent of another NPC, an NPC member of an organization, an organization controlling a settlement, an item owned by an NPC, a religion revered by a city, a dungeon area connected to another. The base relationship row stores shared facts and history; perspectives store a participant's **authored, world-scoped baseline** subjective view (affinity, trust, respect, fear, obligation, emotional tone, private interpretation) — the objective/subjective split rule 5 of §21 depends on. This baseline is stable content, not something an event updates — comparable to `character.npc_characteristics`. The **current, timeline-scoped, event-driven** version that can diverge after a branch is `campaign.relationship_state` (§17), not this table; a perspective's holder must be a participant in the same relationship, enforced by trigger.
 
 ### 10.2 Specialized relationship subtypes
 
-Class-table inheritance for relationship details that need typed columns beyond the generic participant/perspective shape:
+Class-table inheritance for relationship details that need typed columns beyond the generic participant/perspective shape (PK = `world.relationships.relationship_id`):
 
-- `world.organization_memberships`
-- `world.employment_relationships`
-- `world.ownership_relationships`
-- `world.family_relationships`
-- `world.political_relationships`
+- `world.organization_memberships` — `organization_id`, `member_entity_id`, `role`, `rank`, `is_public`, and an ADR 0010-shaped `effective_from_world_time_id`/`effective_to_world_time_id`/`membership_period` with an `EXCLUDE USING gist` over `(organization_id, member_entity_id, membership_period)` — the same overlap-prevention shape `campaign.party_memberships` established. Rejoining creates a new `world.relationships` row rather than reopening an old one.
+- `world.employment_relationships` — `employer_entity_id`, `employee_entity_id`, `job_title`, `effective_from_world_time_id`/`effective_to_world_time_id`; currentness is `effective_to_world_time_id IS NULL` (§12.4's "current records" pattern — one pattern per domain, not an exclusion constraint; no exit criterion requires overlap prevention for employment specifically)
+- `world.ownership_relationships` — `owner_entity_id`, `owned_entity_id`, `ownership_share`, `is_public`. Item ownership stays with the future Phase 9 item domain (`campaign.item_ownership`) rather than this table.
+- `world.family_relationships` — `family_unit_name`; participants (parent/child, sibling, spouse, …) are `world.relationship_participants` roles, not duplicated here
+- `world.political_relationships` — `is_active`, `treaty_terms`; the kind of political relationship is `world.relationships.relationship_type_id` (alliance/rivalry/war/control/…), not a second column here
 
 ### 10.3 Organizations
 
@@ -493,15 +495,19 @@ core.entities
         -> world.political_factions
 ```
 
-An organization row stores its type, founded/dissolved world times, headquarters, parent organization, public description, internal description, and status. Membership is a specialized relationship (§10.2), supporting multiple roles, rejoining, secret membership, ranks, and historical periods — it is not a separate ad hoc table.
+An organization row stores `organization_type_id` (a lookup — government, business, guild, military_unit, religious_organization, criminal_organization, political_faction, secret_society, other), founded/dissolved world times, headquarters (`world.locations`), parent organization (self-referencing), public description, and internal description. Only five of the nine `organization_type_id` values additionally get their own CTI leaf table above (each with at least one typed column beyond the generic organization row); guild/criminal_organization/secret_society/other are expressed through the lookup value alone, the same way a bare `character.characters` row needs no further subtype table.
+
+**Operational status is timeline state, not a column here.** An organization's current active/dissolved/dormant/banned/underground/unknown status is `campaign.organization_state` (§17) — the same definition/state split `narrative.quests`/`campaign.quest_state` already established; `world.organizations` carries no `status`/`organization_status_id` column of its own. Jurisdiction and territorial control (`world.governments`) are expressed through the universal relationship model (`relationship_type = control`) rather than a typed column, per this section's own "organization controlling a settlement" example; offices and leaders are `world.organization_memberships`, agencies are child organizations (`parent_organization_id`).
+
+Membership is a specialized relationship (§10.2), supporting multiple roles, rejoining, secret membership, ranks, and historical periods — it is not a separate ad hoc table.
 
 ### 10.4 Religion distinction
 
 A religion is a belief system; a church, temple, order, or cult is an organization that may serve it. Conflating the two loses the distinction between believing something and belonging to (or being employed by) an institution built around it.
 
-- `world.religions`
-- `world.religious_organizations`
-- `character.character_religious_affiliations` — personal belief, kept separate from organizational rank (`world.organization_memberships`) and employment (`world.employment_relationships`)
+- `world.religions` — entity-rooted, a separate CTI chain from `world.organizations`; `pantheon_structure` is illustrative free text. Holy sites and reverence are expressed through the universal relationship model (`relationship_type = worship`), not typed columns; doctrines/rituals/sacred texts/symbols/traditions have no exit criterion requiring structured columns yet and are carried by the inherited `core.entities.summary`/`core.entity_names`.
+- `world.religious_organizations` — CTI leaf of `world.organizations`, with a `religion_id` FK to `world.religions`
+- `character.character_religious_affiliations` — personal belief (devotion, belief status, practice, interpretation, conflicts, public display), kept separate from organizational rank (`world.organization_memberships`) and employment (`world.employment_relationships`)
 
 ## 11. Item model
 
@@ -700,8 +706,8 @@ Primary tables:
 - `campaign.area_feature_state` — built by Phase 5 revision 040 (`is_destroyed`, `condition_notes`); `last_event_id` added by Phase 6 revision 060
 - `campaign.hazard_state` — built by Phase 5 revision 040; `hazard_status_id` FK to a seeded lookup (armed/triggered/reset/bypassed/disarmed); `last_event_id` added by Phase 6 revision 060
 - `campaign.interactable_state` — built by Phase 5 revision 040; `interactable_status_id` FK to a seeded lookup (active/inactive/activated/deactivated/broken/locked); `last_event_id` added by Phase 6 revision 060
-- `campaign.organization_state`
-- `campaign.relationship_state`
+- `campaign.organization_state` — built by **Phase 8 revision 076**; `organization_status_id` FK to a seeded lookup (active/dissolved/dormant/banned/underground/unknown); one current row per `(timeline, organization)`, using the shared `campaign.enforce_state_event_timeline()` guard directly.
+- `campaign.relationship_state` — built by **Phase 8 revision 076**; `relationship_status_id` FK to a seeded lookup (active/ended/broken/estranged/dormant/unknown) plus `affinity`/`trust`/`respect`/`fear`/`obligation`/`emotional_tone`/`private_interpretation`. Additional nullable `perspective_holder_entity_id` dimension — same NULL/set convention as `quest_state`'s `party_id`: `NULL` is the relationship's shared/objective status; set is that one participant's own current subjective reaction, and it must be a participant in the relationship (enforced by trigger). This is the row `src/dnd_ai/commands/relationships.py`'s `evolve_relationship_reaction()` updates — the "NPC and faction reactions can evolve from events" exit criterion — distinct from the stable, authored `world.relationship_perspectives` baseline (§10.1).
 - `campaign.item_state`
 - `campaign.quest_state` — built by **Phase 7 revision 073**; `quest_status_id` FK to a seeded lookup (unavailable/available/active/suspended/completed/failed/abandoned); `last_event_id` from creation, using the shared `campaign.enforce_state_event_timeline()` guard (revision 066) directly rather than needing its own copy. Additional nullable `party_id` dimension — see §14.
 - `campaign.objective_state` — built by **Phase 7 revision 073**; `objective_status_id` FK to a seeded lookup (hidden/available/active/completed/failed/skipped/superseded); same `last_event_id`/`party_id` shape as `quest_state`.

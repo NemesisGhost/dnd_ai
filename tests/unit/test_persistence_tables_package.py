@@ -15,6 +15,10 @@ added the Phase 7 quest domain (9 narrative.* tables plus 4 campaign.*
 quest/objective state tables) and knowledge-domain expansion (5 new
 knowledge.* tables), for 120 tables total. Revision 074 (a Phase 7
 correction pass) added campaign.party_knowledge, for 121 tables total.
+Revision 075 added the Phase 8 relationships/organizations domain (18
+new world.* tables in a new relationships domain module, 4 new
+campaign.* organization/relationship state tables, and 1 new
+character.* table), for 144 tables total.
 """
 
 import importlib
@@ -49,11 +53,15 @@ EXPECTED_TABLES = {
         "campaign.location_state",
         "campaign.objective_state",
         "campaign.objective_statuses",
+        "campaign.organization_state",
+        "campaign.organization_statuses",
         "campaign.parties",
         "campaign.party_knowledge",
         "campaign.party_memberships",
         "campaign.quest_state",
         "campaign.quest_statuses",
+        "campaign.relationship_state",
+        "campaign.relationship_statuses",
         "campaign.sessions",
         "campaign.timelines",
     ],
@@ -68,6 +76,7 @@ EXPECTED_TABLES = {
         "character.character_movements",
         "character.character_prepared_spells",
         "character.character_proficiencies",
+        "character.character_religious_affiliations",
         "character.character_senses",
         "character.character_spellcasting_profiles",
         "character.characters",
@@ -144,6 +153,26 @@ EXPECTED_TABLES = {
         "narrative.quest_stages",
         "narrative.quests",
         "narrative.story_arcs",
+    ],
+    "relationships": [
+        "world.businesses",
+        "world.employment_relationships",
+        "world.family_relationships",
+        "world.governments",
+        "world.military_units",
+        "world.organization_memberships",
+        "world.organization_types",
+        "world.organizations",
+        "world.ownership_relationships",
+        "world.political_factions",
+        "world.political_relationships",
+        "world.relationship_participant_roles",
+        "world.relationship_participants",
+        "world.relationship_perspectives",
+        "world.relationship_types",
+        "world.relationships",
+        "world.religions",
+        "world.religious_organizations",
     ],
     "rules": [
         "rules.abilities",

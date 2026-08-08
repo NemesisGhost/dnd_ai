@@ -940,14 +940,17 @@ def make_consequence(
     resulting_event_id: uuid.UUID | None = None,
     resulting_party_discovery_id: uuid.UUID | None = None,
     resulting_quest_objective_state_id: uuid.UUID | None = None,
+    resulting_relationship_state_id: uuid.UUID | None = None,
     description: str | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO interaction.consequences
                 (interaction_id, consequence_type, status, resulting_event_id,
-                 resulting_party_discovery_id, resulting_quest_objective_state_id, description)
-            VALUES (:interaction, :type, :status, :event, :discovery, :objective_state, :description)
+                 resulting_party_discovery_id, resulting_quest_objective_state_id,
+                 resulting_relationship_state_id, description)
+            VALUES (:interaction, :type, :status, :event, :discovery, :objective_state,
+                    :relationship_state, :description)
             RETURNING consequence_id
         """),
         {
@@ -957,6 +960,7 @@ def make_consequence(
             "event": resulting_event_id,
             "discovery": resulting_party_discovery_id,
             "objective_state": resulting_quest_objective_state_id,
+            "relationship_state": resulting_relationship_state_id,
             "description": description,
         },
     ).scalar()
@@ -970,19 +974,22 @@ def make_event_effect(
     *,
     target_entity_id: uuid.UUID | None = None,
     target_quest_objective_id: uuid.UUID | None = None,
+    target_relationship_id: uuid.UUID | None = None,
     target_component: str = "status",
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO narrative.event_effects
-                (event_id, target_entity_id, target_quest_objective_id, target_component)
-            VALUES (:event, :entity, :objective, :component)
+                (event_id, target_entity_id, target_quest_objective_id, target_relationship_id,
+                 target_component)
+            VALUES (:event, :entity, :objective, :relationship, :component)
             RETURNING event_effect_id
         """),
         {
             "event": event_id,
             "entity": target_entity_id,
             "objective": target_quest_objective_id,
+            "relationship": target_relationship_id,
             "component": target_component,
         },
     ).scalar()
@@ -1282,6 +1289,487 @@ def make_party_knowledge(
             "confidence": confidence,
             "interpretation": interpretation,
             "share": willing_to_share,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_relationship(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    relationship_type_code: str = "alliance",
+    description: str | None = None,
+    started_world_time_id: uuid.UUID | None = None,
+    ended_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.relationships
+                (world_id, relationship_type_id, description, started_world_time_id,
+                 ended_world_time_id)
+            VALUES (
+                :world,
+                (SELECT relationship_type_id FROM world.relationship_types WHERE code = :rtc),
+                :description, :started, :ended
+            )
+            RETURNING relationship_id
+        """),
+        {
+            "world": world_id,
+            "rtc": relationship_type_code,
+            "description": description,
+            "started": started_world_time_id,
+            "ended": ended_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_relationship_participant(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    entity_id: uuid.UUID,
+    *,
+    role_code: str = "subject",
+    notes: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.relationship_participants
+                (relationship_id, entity_id, participant_role_id, notes)
+            VALUES (
+                :relationship, :entity,
+                (SELECT relationship_participant_role_id FROM world.relationship_participant_roles
+                 WHERE code = :rc),
+                :notes
+            )
+            RETURNING relationship_participant_id
+        """),
+        {"relationship": relationship_id, "entity": entity_id, "rc": role_code, "notes": notes},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_relationship_perspective(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    perspective_holder_entity_id: uuid.UUID,
+    *,
+    affinity: int | None = None,
+    trust: int | None = None,
+    respect: int | None = None,
+    fear: int | None = None,
+    obligation: int | None = None,
+    emotional_tone: str | None = None,
+    private_interpretation: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO world.relationship_perspectives
+                (relationship_id, perspective_holder_entity_id, affinity, trust, respect, fear,
+                 obligation, emotional_tone, private_interpretation)
+            VALUES (:relationship, :holder, :affinity, :trust, :respect, :fear, :obligation, :tone,
+                    :interpretation)
+            RETURNING relationship_perspective_id
+        """),
+        {
+            "relationship": relationship_id,
+            "holder": perspective_holder_entity_id,
+            "affinity": affinity,
+            "trust": trust,
+            "respect": respect,
+            "fear": fear,
+            "obligation": obligation,
+            "tone": emotional_tone,
+            "interpretation": private_interpretation,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+_ORGANIZATION_CTI_ENTITY_TYPES = frozenset(
+    {"business", "government", "religious_organization", "military_unit", "political_faction"}
+)
+
+
+def make_organization(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    organization_type_code: str = "guild",
+    name: str = "Test Organization",
+    parent_organization_id: uuid.UUID | None = None,
+    headquarters_location_id: uuid.UUID | None = None,
+    founded_world_time_id: uuid.UUID | None = None,
+    dissolved_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A core.entities row plus its world.organizations row. Returns the
+    shared UUID (the organization_id, same as the entity_id).
+
+    organization_type_code sets world.organizations.organization_type_id (the
+    descriptive lookup) always. When it names one of the five subtypes with
+    its own CTI leaf table (business/government/religious_organization/
+    military_unit/political_faction), core.entities.entity_type_id is set to
+    that same code too, so a caller can immediately follow up with
+    make_business()/make_government()/etc. without core.enforce_entity_
+    subtype() rejecting it — the same two-tier scheme
+    docs/architecture/DATABASE_MODEL.md §10.3 describes. Any other code
+    (guild, criminal_organization, secret_society, other) gets the bare
+    'organization' entity type, since none of those has a CTI leaf table.
+    """
+    entity_type_code = (
+        organization_type_code
+        if organization_type_code in _ORGANIZATION_CTI_ENTITY_TYPES
+        else "organization"
+    )
+    entity_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", entity_type_code
+    )
+    organization_id = make_entity(connection, world_id, entity_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO world.organizations
+                (organization_id, organization_type_id, parent_organization_id,
+                 founded_world_time_id, dissolved_world_time_id, headquarters_location_id)
+            VALUES (
+                :id,
+                (SELECT organization_type_id FROM world.organization_types WHERE code = :otc),
+                :parent, :founded, :dissolved, :hq
+            )
+        """),
+        {
+            "id": organization_id,
+            "otc": organization_type_code,
+            "parent": parent_organization_id,
+            "founded": founded_world_time_id,
+            "dissolved": dissolved_world_time_id,
+            "hq": headquarters_location_id,
+        },
+    )
+    return organization_id
+
+
+def make_business(
+    connection: Connection,
+    organization_id: uuid.UUID,
+    *,
+    business_type: str | None = None,
+    operating_status: str = "operating",
+    reputation: int | None = None,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.businesses (business_id, business_type, operating_status, reputation)
+            VALUES (:id, :type, :status, :reputation)
+        """),
+        {
+            "id": organization_id,
+            "type": business_type,
+            "status": operating_status,
+            "reputation": reputation,
+        },
+    )
+    return organization_id
+
+
+def make_government(
+    connection: Connection, organization_id: uuid.UUID, *, government_form: str | None = None
+) -> uuid.UUID:
+    connection.execute(
+        text("INSERT INTO world.governments (government_id, government_form) VALUES (:id, :form)"),
+        {"id": organization_id, "form": government_form},
+    )
+    return organization_id
+
+
+def make_military_unit(
+    connection: Connection, organization_id: uuid.UUID, *, unit_type: str | None = None
+) -> uuid.UUID:
+    connection.execute(
+        text("INSERT INTO world.military_units (military_unit_id, unit_type) VALUES (:id, :type)"),
+        {"id": organization_id, "type": unit_type},
+    )
+    return organization_id
+
+
+def make_political_faction(
+    connection: Connection, organization_id: uuid.UUID, *, ideology: str | None = None
+) -> uuid.UUID:
+    connection.execute(
+        text(
+            "INSERT INTO world.political_factions (political_faction_id, ideology) "
+            "VALUES (:id, :ideology)"
+        ),
+        {"id": organization_id, "ideology": ideology},
+    )
+    return organization_id
+
+
+def make_religion(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    name: str = "Test Religion",
+    pantheon_structure: str | None = None,
+) -> uuid.UUID:
+    """A core.entities row plus its world.religions row. Returns the shared
+    UUID (the religion_id, same as the entity_id)."""
+    entity_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "religion")
+    religion_id = make_entity(connection, world_id, entity_type_id, name=name)
+    connection.execute(
+        text(
+            "INSERT INTO world.religions (religion_id, pantheon_structure) VALUES (:id, :structure)"
+        ),
+        {"id": religion_id, "structure": pantheon_structure},
+    )
+    return religion_id
+
+
+def make_religious_organization(
+    connection: Connection, organization_id: uuid.UUID, religion_id: uuid.UUID
+) -> uuid.UUID:
+    connection.execute(
+        text(
+            "INSERT INTO world.religious_organizations (religious_organization_id, religion_id) "
+            "VALUES (:id, :religion)"
+        ),
+        {"id": organization_id, "religion": religion_id},
+    )
+    return organization_id
+
+
+def make_character_religious_affiliation(
+    connection: Connection,
+    character_id: uuid.UUID,
+    religion_id: uuid.UUID,
+    *,
+    devotion: int | None = None,
+    belief_status: str = "believer",
+    practice: str | None = None,
+    interpretation: str | None = None,
+    conflicts: str | None = None,
+    public_display: bool = True,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO character.character_religious_affiliations
+                (character_id, religion_id, devotion, belief_status, practice, interpretation,
+                 conflicts, public_display)
+            VALUES (:character, :religion, :devotion, :belief, :practice, :interpretation,
+                    :conflicts, :public)
+            RETURNING character_religious_affiliation_id
+        """),
+        {
+            "character": character_id,
+            "religion": religion_id,
+            "devotion": devotion,
+            "belief": belief_status,
+            "practice": practice,
+            "interpretation": interpretation,
+            "conflicts": conflicts,
+            "public": public_display,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_organization_membership(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    member_entity_id: uuid.UUID,
+    effective_from_world_time_id: uuid.UUID,
+    *,
+    effective_to_world_time_id: uuid.UUID | None = None,
+    role: str | None = None,
+    rank: str | None = None,
+    is_public: bool = True,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.organization_memberships
+                (relationship_id, organization_id, member_entity_id, role, rank, is_public,
+                 effective_from_world_time_id, effective_to_world_time_id)
+            VALUES (:relationship, :organization, :member, :role, :rank, :public, :from_time, :to_time)
+        """),
+        {
+            "relationship": relationship_id,
+            "organization": organization_id,
+            "member": member_entity_id,
+            "role": role,
+            "rank": rank,
+            "public": is_public,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
+        },
+    )
+    return relationship_id
+
+
+def make_employment_relationship(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    employer_entity_id: uuid.UUID,
+    employee_entity_id: uuid.UUID,
+    *,
+    job_title: str | None = None,
+    effective_from_world_time_id: uuid.UUID | None = None,
+    effective_to_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.employment_relationships
+                (relationship_id, employer_entity_id, employee_entity_id, job_title,
+                 effective_from_world_time_id, effective_to_world_time_id)
+            VALUES (:relationship, :employer, :employee, :title, :from_time, :to_time)
+        """),
+        {
+            "relationship": relationship_id,
+            "employer": employer_entity_id,
+            "employee": employee_entity_id,
+            "title": job_title,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
+        },
+    )
+    return relationship_id
+
+
+def make_ownership_relationship(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    owner_entity_id: uuid.UUID,
+    owned_entity_id: uuid.UUID,
+    *,
+    ownership_share: int | None = None,
+    is_public: bool = True,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.ownership_relationships
+                (relationship_id, owner_entity_id, owned_entity_id, ownership_share, is_public)
+            VALUES (:relationship, :owner, :owned, :share, :public)
+        """),
+        {
+            "relationship": relationship_id,
+            "owner": owner_entity_id,
+            "owned": owned_entity_id,
+            "share": ownership_share,
+            "public": is_public,
+        },
+    )
+    return relationship_id
+
+
+def make_family_relationship(
+    connection: Connection, relationship_id: uuid.UUID, *, family_unit_name: str | None = None
+) -> uuid.UUID:
+    connection.execute(
+        text(
+            "INSERT INTO world.family_relationships (relationship_id, family_unit_name) "
+            "VALUES (:id, :name)"
+        ),
+        {"id": relationship_id, "name": family_unit_name},
+    )
+    return relationship_id
+
+
+def make_political_relationship(
+    connection: Connection,
+    relationship_id: uuid.UUID,
+    *,
+    is_active: bool = True,
+    treaty_terms: str | None = None,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.political_relationships (relationship_id, is_active, treaty_terms)
+            VALUES (:id, :active, :terms)
+        """),
+        {"id": relationship_id, "active": is_active, "terms": treaty_terms},
+    )
+    return relationship_id
+
+
+def make_organization_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    *,
+    status_code: str = "active",
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.organization_state
+                (timeline_id, organization_id, organization_status_id, last_event_id)
+            VALUES (
+                :timeline, :organization,
+                (SELECT organization_status_id FROM campaign.organization_statuses
+                 WHERE code = :status),
+                :event
+            )
+            RETURNING organization_state_id
+        """),
+        {
+            "timeline": timeline_id,
+            "organization": organization_id,
+            "status": status_code,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_relationship_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    relationship_id: uuid.UUID,
+    *,
+    perspective_holder_entity_id: uuid.UUID | None = None,
+    status_code: str = "active",
+    affinity: int | None = None,
+    trust: int | None = None,
+    respect: int | None = None,
+    fear: int | None = None,
+    obligation: int | None = None,
+    emotional_tone: str | None = None,
+    private_interpretation: str | None = None,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.relationship_state
+                (timeline_id, relationship_id, perspective_holder_entity_id, relationship_status_id,
+                 affinity, trust, respect, fear, obligation, emotional_tone, private_interpretation,
+                 last_event_id)
+            VALUES (
+                :timeline, :relationship, :holder,
+                (SELECT relationship_status_id FROM campaign.relationship_statuses WHERE code = :status),
+                :affinity, :trust, :respect, :fear, :obligation, :tone, :interpretation, :event
+            )
+            RETURNING relationship_state_id
+        """),
+        {
+            "timeline": timeline_id,
+            "relationship": relationship_id,
+            "holder": perspective_holder_entity_id,
+            "status": status_code,
+            "affinity": affinity,
+            "trust": trust,
+            "respect": respect,
+            "fear": fear,
+            "obligation": obligation,
+            "tone": emotional_tone,
+            "interpretation": private_interpretation,
             "event": last_event_id,
         },
     ).scalar()

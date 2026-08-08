@@ -19,7 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import INT8RANGE, TIMESTAMP, UUID
-from sqlalchemy.types import Integer
+from sqlalchemy.types import Integer, SmallInteger
 
 from ._shared import (
     NONNEGATIVE_INTEGER,
@@ -1233,4 +1233,162 @@ Index(
     "ix_party_knowledge_last_event_id",
     party_knowledge.c.last_event_id,
     postgresql_where=party_knowledge.c.last_event_id.isnot(None),
+)
+
+# ---------------------------------------------------------------------------
+# campaign — organization and relationship state (revision 076)
+# ---------------------------------------------------------------------------
+
+organization_statuses = _lookup_table(
+    "campaign",
+    "organization_statuses",
+    "organization_status_id",
+    "Timeline-scoped organization operational status — active, "
+    "dissolved, dormant, banned, underground, unknown.",
+)
+
+organization_state = Table(
+    "organization_state",
+    metadata,
+    _uuid_pk("organization_state_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "organization_id",
+        UUID(),
+        ForeignKey("world.organizations.organization_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "organization_status_id",
+        UUID(),
+        ForeignKey("campaign.organization_statuses.organization_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    UniqueConstraint(
+        "timeline_id", "organization_id", name="ux_organization_state_timeline_organization"
+    ),
+    schema="campaign",
+    comment=(
+        "Tracks an organization's current operational status for a timeline "
+        "(docs/architecture/DATABASE_MODEL.md §17) — can diverge after a "
+        "branch and evolve from events, unlike the stable world.organizations "
+        "definition row. One current row per (timeline, organization)."
+    ),
+)
+
+Index("ix_organization_state_timeline_id", organization_state.c.timeline_id)
+Index("ix_organization_state_organization_id", organization_state.c.organization_id)
+Index("ix_organization_state_organization_status_id", organization_state.c.organization_status_id)
+Index(
+    "ix_organization_state_last_event_id",
+    organization_state.c.last_event_id,
+    postgresql_where=organization_state.c.last_event_id.isnot(None),
+)
+
+relationship_statuses = _lookup_table(
+    "campaign",
+    "relationship_statuses",
+    "relationship_status_id",
+    "Timeline-scoped relationship status — active, ended, broken, estranged, dormant, unknown.",
+)
+
+relationship_state = Table(
+    "relationship_state",
+    metadata,
+    _uuid_pk("relationship_state_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "relationship_id",
+        UUID(),
+        ForeignKey("world.relationships.relationship_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "perspective_holder_entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        comment=(
+            "NULL for the relationship's shared/objective status; set for one "
+            "participant's own current subjective reaction — same convention "
+            "as campaign.quest_state.party_id."
+        ),
+    ),
+    Column(
+        "relationship_status_id",
+        UUID(),
+        ForeignKey("campaign.relationship_statuses.relationship_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("affinity", SmallInteger()),
+    Column("trust", SmallInteger()),
+    Column("respect", SmallInteger()),
+    Column("fear", SmallInteger()),
+    Column("obligation", SmallInteger()),
+    Column("emotional_tone", Text()),
+    Column("private_interpretation", Text()),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "Tracks a relationship's current status for a timeline, optionally "
+        "scoped to one perspective holder (docs/architecture/DATABASE_MODEL.md "
+        "§17) — same perspective_holder_entity_id NULL/set convention as "
+        "campaign.quest_state's party_id: NULL is the shared/objective status, "
+        "set is that one participant's current subjective reaction (affinity, "
+        "trust, respect, fear, obligation, emotional tone). This is the row "
+        "events update — see docs/PLAN.md's \"NPC and faction reactions can "
+        'evolve from events" exit criterion — unlike the stable, authored '
+        "world.relationship_perspectives baseline. One current row per "
+        "(timeline, relationship[, perspective holder]) — see the partial "
+        "unique indexes below."
+    ),
+)
+
+Index("ix_relationship_state_timeline_id", relationship_state.c.timeline_id)
+Index("ix_relationship_state_relationship_id", relationship_state.c.relationship_id)
+Index(
+    "ix_relationship_state_perspective_holder_entity_id",
+    relationship_state.c.perspective_holder_entity_id,
+    postgresql_where=relationship_state.c.perspective_holder_entity_id.isnot(None),
+)
+Index("ix_relationship_state_relationship_status_id", relationship_state.c.relationship_status_id)
+Index(
+    "ix_relationship_state_last_event_id",
+    relationship_state.c.last_event_id,
+    postgresql_where=relationship_state.c.last_event_id.isnot(None),
+)
+Index(
+    "ux_relationship_state_timeline_relationship_no_holder",
+    relationship_state.c.timeline_id,
+    relationship_state.c.relationship_id,
+    unique=True,
+    postgresql_where=relationship_state.c.perspective_holder_entity_id.is_(None),
+)
+Index(
+    "ux_relationship_state_timeline_relationship_holder",
+    relationship_state.c.timeline_id,
+    relationship_state.c.relationship_id,
+    relationship_state.c.perspective_holder_entity_id,
+    unique=True,
+    postgresql_where=relationship_state.c.perspective_holder_entity_id.isnot(None),
 )

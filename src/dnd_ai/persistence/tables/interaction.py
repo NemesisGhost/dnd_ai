@@ -379,14 +379,29 @@ consequences = Table(
             "relationship_change remains Phase 8's job."
         ),
     ),
+    # Added by revision 076, once campaign.relationship_state existed to
+    # point at — closes this table's own documented relationship_change
+    # placeholder.
+    Column(
+        "resulting_relationship_state_id",
+        UUID(),
+        ForeignKey("campaign.relationship_state.relationship_state_id", ondelete="SET NULL"),
+        comment=(
+            "The relationship-state row a relationship_change consequence "
+            "produced, when it has one. Closes revision 061's own documented "
+            'placeholder ("relationship_change ... consequence types have no '
+            'FK target at all yet ... Phase 7/8 domains do not exist") for '
+            "its relationship half."
+        ),
+    ),
     schema="interaction",
     comment=(
         "A proposed or resolved outcome of an interaction — observations, "
         "events, state changes, discoveries, quest changes, or relationship "
         "changes (docs/DOMAIN_MODEL.md §16.6). Interaction-level, not "
-        "action-level. relationship_change has no typed FK target yet "
-        "(Phase 8's domain does not exist); quest_change gained one in "
-        "revision 073 (resulting_quest_objective_state_id, below)."
+        "action-level. quest_change gained a typed FK target in revision 073 "
+        "(resulting_quest_objective_state_id); relationship_change gained one "
+        "in revision 076 (resulting_relationship_state_id, above)."
     ),
 )
 
@@ -405,6 +420,11 @@ Index(
     "ix_consequences_resulting_quest_objective_state_id",
     consequences.c.resulting_quest_objective_state_id,
     postgresql_where=consequences.c.resulting_quest_objective_state_id.isnot(None),
+)
+Index(
+    "ix_consequences_resulting_relationship_state_id",
+    consequences.c.resulting_relationship_state_id,
+    postgresql_where=consequences.c.resulting_relationship_state_id.isnot(None),
 )
 
 external_messages = Table(
