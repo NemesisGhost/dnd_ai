@@ -112,11 +112,11 @@ Record the result — including the local PostgreSQL version string — in the e
 
 ### A5. Exit criteria for A
 
-- [ ] Full suite green against local PostgreSQL 18.4, including the migration round trip and `alembic check`
-- [ ] `ruff format --check`, `ruff check`, `mypy src` green
-- [ ] No `testcontainers` import or dependency remains
-- [ ] `scripts/verify.sh full` performs **zero** AWS calls with a local `DATABASE_URL` (confirm by running with no AWS credentials configured)
-- [ ] CI green against `dev` — still on 15.18 at this point, which also proves the changes are genuinely target-agnostic
+- [x] Full suite green against local PostgreSQL 18.4, including the migration round trip and `alembic check` — verified 2026-08-08: all 76 migrations upgrade cleanly, `downgrade base` / `upgrade head` round trip in 4s, full suite (`tests/unit`, `tests/database`, `tests/scenario`) green, `alembic check` empty diff
+- [x] `ruff format --check`, `ruff check`, `mypy src` green
+- [x] No `testcontainers` import or dependency remains — removed from `pyproject.toml`'s `dev` extra, `uv lock` + `uv sync` confirm it is uninstalled
+- [x] `scripts/verify.sh full` performs **zero** AWS calls with a local `DATABASE_URL` — confirmed by running with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`/`AWS_PROFILE` all cleared; the run still passed, so nothing in the path attempted an AWS call
+- [ ] CI green against `dev` — still on 15.18 at this point, which also proves the changes are genuinely target-agnostic. Not yet pushed; pending per [§5](#5-what-the-gate-permits)
 
 ---
 
@@ -283,8 +283,8 @@ The one thing that *is* awkward to reverse is the CI configuration. If the repla
 
 ## 7. Done criteria
 
-- [ ] Full test suite green against local PostgreSQL 18.4 (A3)
-- [ ] `scripts/verify.sh full` makes no AWS calls against a local target (A5)
+- [x] Full test suite green against local PostgreSQL 18.4 (A3) — 2026-08-08
+- [x] `scripts/verify.sh full` makes no AWS calls against a local target (A5) — 2026-08-08
 - [ ] `dev` reports `EngineVersion` `18.4`, status `available`, parameter group `in-sync` (B3)
 - [ ] `DEV_DB_ADMIN_URL` rotated to the replacement instance's endpoint and password; `DEV_DB_SECURITY_GROUP_ID` confirmed unchanged (B3)
 - [ ] Bootstrap run on the fresh instance; six roles verified with `migration_owner` `NOLOGIN` and outside `rds_iam`; `rds.force_ssl` = `1` (B4)

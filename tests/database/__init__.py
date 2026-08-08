@@ -1,6 +1,7 @@
-"""Database tests — PostgreSQL container required.
+"""Database tests — PostgreSQL required (a local PostgreSQL 18 server by
+default; CI runs the same suite against AWS dev RDS as the merge gate).
 
-These tests exercise database-level behavior using testcontainers:
+These tests exercise database-level behavior:
 - Constraints (CHECK, UNIQUE, FOREIGN KEY, EXCLUDE)
 - Triggers and stored functions
 - Subtype consistency (class-table inheritance)
