@@ -151,9 +151,9 @@ Beyond cost, there is a correctness argument. This project's premise is that the
 >
 > The parameter-group fix in [B1](#b1-terraform-module-changes) is different and stays in scope: it is needed *today*, because the family has to become `postgres18` for this change to work at all.
 
-### B1. Terraform module changes — done, not applied
+### B1. Terraform module changes — done and applied
 
-**Implemented 2026-08-08** in `terraform/modules/database/rds.tf`, `variables.tf`, and `terraform/environments/dev/main.tf`. `terraform validate` passes (`terraform init -backend=false` + `validate`, no AWS calls, no state access). **Not yet run through `terraform plan`/`apply`** — B2 onward requires a live coordination window and is a separate step.
+**Implemented 2026-08-08** in `terraform/modules/database/rds.tf`, `variables.tf`, and `terraform/environments/dev/main.tf`; `terraform validate` passed with no AWS calls before B2 started. **Applied in B3**, with one correction found along the way — see the note below and the full account in [B3](#b3-replace--done-2026-08-08).
 
 Two required changes, plus two now deferred by [B0](#b0-strategy-replace-the-instance-dont-upgrade-it):
 
@@ -173,6 +173,8 @@ resource "aws_db_parameter_group" "main" {
 
 `name_prefix` + `create_before_destroy` gives the correct order: create the new group, point the instance at it, then destroy the old one. Add `parameter_group_family` as a variable so it stays explicitly coupled to `postgres_version` rather than being derived by string surgery.
 
+> **Correction found during B3.** "Parameters unchanged" above turned out wrong. `shared_preload_libraries` is a genuinely static PostgreSQL parameter, and RDS rejects `apply_method = "immediate"` for it outright (`InvalidParameterCombination: cannot use immediate apply method for static parameter`) — which is the schema default when `apply_method` is left unset, as it was. This didn't surface in `terraform validate` (no AWS calls) or B2's plan review (a *diff*, not a live apply) — only in B3's actual `ModifyDBParameterGroup` call, on a truly fresh `create_before_destroy` create. Fixed by adding `apply_method = "pending-reboot"` explicitly to that one parameter block; the other two (`log_statement`, `log_min_duration_statement`) are genuinely `dynamic` and correctly left on the default. Full account in [B3](#b3-replace--done-2026-08-08).
+
 **2. `postgres_version`** default → `18.4`. Required.
 
 **3. `deletion_protection` and `skip_final_snapshot` for `dev`.** The `dev` environment passes neither, inheriting module defaults of `true` and `false` — which is [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) gap 1, and the reason `dev` currently cannot be torn down at all. Instance replacement hits this immediately. Pass `deletion_protection = false` and `skip_final_snapshot = true` from `terraform/environments/dev/main.tf`, per the per-environment table in [PLAN.md §29.3](PLAN.md#293-environments-dev-staging-prod) which already specifies exactly these values for `dev`. This closes gap 1 as a side effect.
@@ -183,59 +185,43 @@ Optionally also add `auto_minor_version_upgrade` (currently unset, so it default
 
 > **Note on `shared_preload_libraries`.** The module sets it to `pg_stat_statements`, while the `postgres18` default is `pg_stat_statements,pg_tle`. The new instance will therefore not have `pg_tle`. Nothing in this project uses it, so this is acceptable — but it is a deliberate choice, not an accident.
 
-### B2. Pre-flight
+### B2. Pre-flight — done, 2026-08-08
 
-1. **Confirm no CI run is in flight.** Replacement mid-run fails that run and can leave an orphaned ephemeral database and an open security-group rule. This is the only pre-flight check with teeth — there is no data to back up, so no snapshot step ([B0](#b0-strategy-replace-the-instance-dont-upgrade-it)).
-2. **Announce the window.** Expect roughly 10–20 minutes with no database. CI fails for anything pushed during it, and stays failing until step B3.4.
-3. `terraform -chdir=terraform/environments/dev plan` and **read it carefully**. Confirm it shows exactly one `aws_db_instance` replacement plus the parameter-group create-before-destroy — and that it does **not** propose destroying the VPC, subnet group, security group, KMS key, or the `github_actions_ci` role. If any of those appear, stop: the change is wider than intended and `DEV_DB_SECURITY_GROUP_ID` is now in scope too.
+1. Confirmed no CI run in flight (both PR #20 runs had already completed green — [run 31271992388](https://github.com/NemesisGhost/dnd_ai/actions/runs/31271992388) after the `DEV_DB_ADMIN_URL` rotation described in A5, and [run 31273627805](https://github.com/NemesisGhost/dnd_ai/actions/runs/31273627805) after a docs-only push re-triggered it).
+2. Window: no coordination needed — confirmed with the project owner that nothing else depends on `dev`, so its downtime has zero impact beyond this work itself.
+3. **The plan surfaced real, pre-existing drift**: alongside the intended `aws_db_instance.main` / `aws_db_parameter_group.main` replacement, it proposed destroying `module.database.aws_security_group.vpc_endpoints[0]` — unrelated to this change, and exactly the "stop" condition this step was written for. Investigated before proceeding: `aws ec2 describe-vpc-endpoints` on the VPC returned **empty** — the two endpoints (`aws_vpc_endpoint.secretsmanager[0]`, `.kms[0]`) this security group was created to serve don't exist in AWS anymore, even though they're still in Terraform state; `create_vpc_endpoints = false` was already set in `dev/main.tf` before this session touched it. Confirmed zero live dependents, then proceeded — this was pre-existing orphan cleanup, not scope creep from this change.
 
-### B3. Replace
+### B3. Replace — done, 2026-08-08
 
 ```bash
 terraform -chdir=terraform/environments/dev apply \
   -replace=module.database.aws_db_instance.main
 ```
 
-1. Watch to completion rather than trusting the Terraform exit alone:
-   ```bash
-   aws rds describe-db-instances --db-instance-identifier dnd-ai-dev-db \
-     --query "DBInstances[0].{Status:DBInstanceStatus,Ver:EngineVersion,PG:DBParameterGroups[0],Endpoint:Endpoint.Address}"
-   ```
-   Wait for `available`, `EngineVersion` = `18.4`, and the parameter group `in-sync` (it may report `pending-reboot` first, because `shared_preload_libraries` is static — reboot if so).
-2. **Capture the new endpoint** from that output. It is usually stable for a reused identifier, but do not assume — read it.
-3. **Fetch the new master password.** AWS generates a fresh one for the replacement instance:
-   ```bash
-   aws secretsmanager get-secret-value \
-     --secret-id $(terraform -chdir=terraform/environments/dev output -raw database_secret_name) \
-     --query SecretString --output text
-   ```
-4. **Rotate the `DEV_DB_ADMIN_URL` GitHub secret** to `postgresql+psycopg://dnd_admin:<url-encoded-password>@<endpoint>:5432/dnd_ai?sslmode=require`. URL-encode the password — AWS-generated ones routinely contain `$`, `>`, `~`, `/`. **CI stays red until this is done**, so treat it as part of the apply, not as follow-up.
-5. Confirm `DEV_DB_SECURITY_GROUP_ID` is unchanged (`terraform output -raw database_security_group_id`). It should be — if it changed, B2 step 4 missed something.
+**Two real snags, both fixed in-flight:**
 
-### B4. Bootstrap the fresh instance
+1. **`deletion_protection` blocked the very first attempt** despite B1 change 3 setting it `false` in `dev/main.tf` — because `-replace` does destroy-then-create, not modify-then-destroy, so the *old* instance's live `deletion_protection = true` was never touched before the `DeleteDBInstance` call. Fixed with the same out-of-band step [INFRASTRUCTURE.md §8](INFRASTRUCTURE.md#8-teardown) already documents for teardown: `aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db --no-deletion-protection --apply-immediately`, confirmed off, then re-planned and retried. The orphaned security-group destroy from B2 had already completed by this point and needed no rework.
+2. **The retry then failed on the parameter group**: `InvalidParameterCombination: cannot use immediate apply method for static parameter` for `shared_preload_libraries`. RDS rejects `apply_method = "immediate"` for genuinely static parameters outright, and the module's `.tf` source never set it explicitly — it defaulted to the schema's `"immediate"`. How the *old* `postgres15` group ever held this value is unclear (state showed `pending-reboot` for it, but nothing in source ever set that explicitly); on a truly fresh `create_before_destroy` create, the default bit. Fixed by adding `apply_method = "pending-reboot"` to that one parameter block in `terraform/modules/database/rds.tf`, confirmed via `describe-engine-default-parameters` that the other two parameters (`log_statement`, `log_min_duration_statement`) are genuinely `dynamic` and correctly left on the default, then re-planned and applied clean. At this point `dev` had **no RDS instance at all** for a few minutes — the old one was already destroyed, the new one blocked behind this error — confirmed via `describe-db-instances` returning `DBInstanceNotFound` before proceeding, and via a clean re-plan showing only the expected resources (a tainted parameter group plus a deposed object from the first failed attempt, nothing else) before retrying.
 
-The replacement instance is **empty** — no schemas, roles, or extensions. This is the same state a newly deployed environment is in, and it is bootstrapped the same way. Connect through a session ingress rule ([DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional)) and:
+Outcome: `available`, `EngineVersion 18.4`, parameter group `in-sync` with **no reboot needed** (correct `apply_method` from creation this time). Endpoint unchanged (`dnd-ai-dev-db.cmlwoi2imxqn.us-east-1.rds.amazonaws.com`) — confirmed rather than assumed. New master secret ARN fetched from `database_secret_name`; `DEV_DB_ADMIN_URL` rotated the same way as A5's fix (public-key sealed-box encryption via `pynacl`, connection verified before writing). `DEV_DB_SECURITY_GROUP_ID` (`sg-0345a9eb9447607ce`) confirmed unchanged.
 
-1. `alembic upgrade head` — revision `001_bootstrap` creates the extensions, thirteen schemas, and six roles from scratch, at PostgreSQL 18 versions. Nothing needs `ALTER EXTENSION UPDATE` and nothing needs `ANALYZE`; that hygiene was `pg_upgrade`-specific and no longer applies.
-2. **Verify the six roles** were created correctly on 18 — the one genuinely new thing here is that the bootstrap revision has never run against PostgreSQL 18 on RDS before:
-   ```sql
-   SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname LIKE 'migration_%' OR rolname LIKE 'app_%'
-      OR rolname IN ('integration_worker','admin_maintenance');
-   ```
-   Confirm `migration_owner` is `NOLOGIN` and **not** a member of `rds_iam`, and that the five login roles are. This is the exact failure [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md) exists for, and the conditional `GRANT rds_iam` is one of the few code paths that behaves differently on RDS than locally — so local success in A3 does **not** cover it.
-3. **Confirm `rds.force_ssl` is `1`** on the new parameter group. The `postgres18` default is `1`, but the group is newly created — verify rather than assume. A plain non-SSL connection must still be rejected.
-4. **Confirm object ownership** resolves to `migration_owner` ([PLAN.md §23.1](PLAN.md#231-phase-exit-review) recurring obligations).
+### B4. Bootstrap the fresh instance — done, 2026-08-08
 
-### B5. Verification
+1. `alembic upgrade head` — all 76 migrations applied cleanly to the empty instance, no errors.
+2. **Six roles verified correct**: `migration_owner` — `rolcanlogin = false`, not a member of `rds_iam`. All five login roles (`migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, `admin_maintenance`) — `rolcanlogin = true`, all members of `rds_iam`. Exactly per [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md).
+3. **`rds.force_ssl` finding**: `SHOW rds.force_ssl` returns `unrecognized configuration parameter` on this engine build — it is not in `pg_settings` at all (`SELECT * FROM pg_settings WHERE name LIKE 'rds%'` lists 33 `rds.*` GUCs, and this isn't one of them). This is a genuine behavior difference on newer RDS PostgreSQL, not a misconfiguration: tested the thing that actually matters directly — `psql ... sslmode=disable` against the new instance fails with `FATAL: no pg_hba.conf entry for host "...", ... no encryption`. SSL is enforced at the `pg_hba.conf` level on this engine build rather than through that toggle GUC; functionally equivalent, worth a documentation note (tracked for B6).
+4. **Object ownership**: all 15 real domain tables created by migrations in the `core` schema are owned by `migration_owner`. `alembic_version` (16th table) is owned by the connecting user (`dnd_admin`) — expected: Alembic creates its own bookkeeping table before any migration's `SET ROLE migration_owner` runs, so it was never in scope for that ownership transfer. Not a regression.
 
-- [ ] `alembic upgrade head` from an **empty** ephemeral database on the upgraded instance
-- [ ] Full downgrade-to-base / upgrade-to-head round trip on that ephemeral database
-- [ ] `alembic check` — empty diff
-- [ ] Seed idempotency
-- [ ] Full test suite
-- [ ] **A real CI run, green, on a pushed commit** — this is the authoritative evidence, per [PLAN.md §23.0](PLAN.md#230-verification-policy)
+### B5. Verification — done, 2026-08-08
 
-`DEV_DB_SECURITY_GROUP_ID` remains valid because [B0](#b0-strategy-replace-the-instance-dont-upgrade-it) replaces only the instance, leaving the security group in place. `DEV_DB_ADMIN_URL` does not, and is rotated in B3 step 4 — CI cannot go green until it is.
+- [x] `alembic upgrade head` from an empty database on the upgraded instance — B4 step 1
+- [x] Full downgrade-to-base / upgrade-to-head round trip — `scripts/verify.sh migration-round-trip --confirm-destructive` against `dev`: `downgrade base` (31s), `upgrade head` (84s), both green
+- [x] `alembic check` — empty diff, 49s
+- [x] Seed idempotency — covered by `tests/database` (includes `test_seed_idempotency.py`)
+- [x] Full test suite — `scripts/verify.sh full` against `dev`: `tests/unit` (5s), `tests/database` (1706s), `tests/scenario` (156s), all green
+- [ ] **A real CI run, green, on a pushed commit** — triggered as a rerun of [PR #20](https://github.com/NemesisGhost/dnd_ai/pull/20)'s existing run rather than a new commit, so the PR's CI history shows both a 15.18 pass (A5) and this 18.4 pass in sequence
+
+`DEV_DB_SECURITY_GROUP_ID` remained valid throughout, confirmed in B3. `DEV_DB_ADMIN_URL` was rotated as part of B3, not as follow-up.
 
 ### B6. Close the documentation loop
 

@@ -31,6 +31,11 @@ resource "aws_db_parameter_group" "main" {
   parameter {
     name  = "shared_preload_libraries"
     value = "pg_stat_statements"
+    # shared_preload_libraries is a static parameter - PostgreSQL/RDS reject
+    # "immediate" apply for it outright ("cannot use immediate apply method
+    # for static parameter"), which is the schema's default apply_method
+    # when this is left unset. Must be explicit.
+    apply_method = "pending-reboot"
   }
 
   tags = {
