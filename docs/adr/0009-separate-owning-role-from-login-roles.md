@@ -58,7 +58,7 @@ Three rules make this work and must survive future edits:
 
 **Foreclosed**
 
-- `migration_owner` can never be used to connect, so it cannot be the subject of an `rds-db:connect` grant, hold `CREATEDB` for the ephemeral test databases in [§29.9](../PLAN.md#299-aws-first-verification-mechanism), or serve as a break-glass login. Those all need login roles.
+- `migration_owner` can never be used to connect, so it cannot be the subject of an `rds-db:connect` grant, hold `CREATEDB` for the ephemeral test databases in [§29.9](../PLAN.md#299-shared-dev-verification-mechanism-ci), or serve as a break-glass login. Those all need login roles.
 
 ## Verification status
 

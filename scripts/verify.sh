@@ -16,10 +16,13 @@
 #   scripts/verify.sh migration-round-trip --confirm-destructive
 #
 # `database`/`scenario`/`full`/`migration-round-trip` need DATABASE_URL
-# already set per docs/DEVELOPMENT.md §3 (or DND_AI_USE_LOCAL_POSTGRES=1 as
-# the documented fallback); they open a short-lived dev security-group
-# ingress rule via scripts/aws-db-allow-my-ip.sh and always attempt to close
-# it on exit, even on failure. Ingress-revocation failure is never swallowed:
+# already set per docs/DEVELOPMENT.md §3 — a local PostgreSQL server by
+# default. Ingress is only relevant when DATABASE_URL names an AWS RDS
+# endpoint (matched by a *.rds.amazonaws.com host, see needs_ingress()
+# below): in that case they open a short-lived dev security-group ingress
+# rule via scripts/aws-db-allow-my-ip.sh and always attempt to close it on
+# exit, even on failure. Against a local target, open_ingress is a no-op and
+# nothing AWS-related runs. Ingress-revocation failure is never swallowed:
 # it fails an otherwise-successful run, and — if a stage already failed — is
 # reported alongside that failure without overriding it as the primary cause.
 # This is the same guaranteed-teardown discipline docs/PHASE5_VERIFICATION.md's
@@ -138,7 +141,17 @@ cleanup() {
 }
 trap 'cleanup "$?"' EXIT
 
+# True only when DATABASE_URL names an AWS RDS endpoint. A local PostgreSQL
+# server (the default per docs/DEVELOPMENT.md §3) has no security group to
+# open, so open_ingress below must not attempt one.
+needs_ingress() {
+  [[ "${DATABASE_URL:-}" == *.rds.amazonaws.com* ]]
+}
+
 open_ingress() {
+  if ! needs_ingress; then
+    return 0
+  fi
   if [[ "$INGRESS_OPENED" -eq 0 ]]; then
     "$INGRESS_SCRIPT" open >/dev/null
     INGRESS_OPENED=1

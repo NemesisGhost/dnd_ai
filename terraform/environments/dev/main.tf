@@ -79,6 +79,13 @@ module "database" {
 
   # DB sizing (dev-friendly defaults are already set in the module)
 
+  # dev is disposable per docs/PLAN.md §29.3 and §26.2: fast teardown, no
+  # final snapshot. The module defaults (deletion_protection = true,
+  # skip_final_snapshot = false) are meant for staging/prod, not dev — see
+  # INFRASTRUCTURE.md §11 gap 1 and docs/POSTGRES18_UPGRADE_PLAN.md §B1.
+  deletion_protection = false
+  skip_final_snapshot = true
+
   # Avoid creating VPC endpoints in default VPC until SG rule uses actual CIDR (now fixed in module)
   create_vpc_endpoints = false
 

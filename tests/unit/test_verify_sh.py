@@ -118,11 +118,28 @@ def test_failing_stage_fails_the_run_and_prints_its_output(sandbox: Path) -> Non
     assert "All requested stages passed." not in result.stdout
 
 
+# Per ADR 0011, open_ingress() is a no-op unless DATABASE_URL names an AWS RDS
+# endpoint (see needs_ingress() in verify.sh and the two tests below this
+# module). Every test in this file that means to exercise the open/close
+# path — as opposed to the local-target no-op path, tested separately —
+# must supply this, or open_ingress() will skip the stub entirely regardless
+# of STUB_OPEN_EXIT/STUB_CLOSE_EXIT.
+_RDS_DATABASE_URL = (
+    "postgresql+psycopg://dnd_admin:pw@dnd-ai-dev-db.abc123.us-east-1.rds.amazonaws.com"
+    ":5432/dnd_ai?sslmode=require"
+)
+
+
 def test_successful_stage_and_successful_revocation_passes(sandbox: Path) -> None:
     result = _run_verify(
         sandbox,
         ["database"],
-        env_overrides={"STUB_UV_EXIT": "0", "STUB_OPEN_EXIT": "0", "STUB_CLOSE_EXIT": "0"},
+        env_overrides={
+            "STUB_UV_EXIT": "0",
+            "STUB_OPEN_EXIT": "0",
+            "STUB_CLOSE_EXIT": "0",
+            "DATABASE_URL": _RDS_DATABASE_URL,
+        },
     )
     assert result.returncode == 0
     assert "PASS: pytest tests/database" in result.stdout
@@ -133,7 +150,12 @@ def test_successful_stage_with_failed_revocation_fails_the_run(sandbox: Path) ->
     result = _run_verify(
         sandbox,
         ["database"],
-        env_overrides={"STUB_UV_EXIT": "0", "STUB_OPEN_EXIT": "0", "STUB_CLOSE_EXIT": "1"},
+        env_overrides={
+            "STUB_UV_EXIT": "0",
+            "STUB_OPEN_EXIT": "0",
+            "STUB_CLOSE_EXIT": "1",
+            "DATABASE_URL": _RDS_DATABASE_URL,
+        },
     )
     assert result.returncode == 1
     assert "PASS: pytest tests/database" in result.stdout
@@ -147,7 +169,12 @@ def test_failed_stage_with_failed_revocation_preserves_stage_failure_as_primary(
     result = _run_verify(
         sandbox,
         ["database"],
-        env_overrides={"STUB_UV_EXIT": "1", "STUB_OPEN_EXIT": "0", "STUB_CLOSE_EXIT": "1"},
+        env_overrides={
+            "STUB_UV_EXIT": "1",
+            "STUB_OPEN_EXIT": "0",
+            "STUB_CLOSE_EXIT": "1",
+            "DATABASE_URL": _RDS_DATABASE_URL,
+        },
     )
     assert result.returncode == 1
     assert "FAIL: pytest tests/database" in result.stdout
@@ -166,6 +193,44 @@ def test_close_ingress_is_a_no_op_when_ingress_was_never_opened(sandbox: Path) -
     )
     assert result.returncode == 0
     assert "All requested stages passed." in result.stdout
+
+
+def test_database_mode_does_not_open_ingress_for_a_local_database_url(sandbox: Path) -> None:
+    """Per ADR 0011, a local PostgreSQL DATABASE_URL must never trigger the
+    AWS ingress open/close path. Both stubs are configured to fail if
+    invoked at all, so this only passes if needs_ingress() correctly gates
+    open_ingress() on an *.rds.amazonaws.com host and skips it here."""
+    result = _run_verify(
+        sandbox,
+        ["database"],
+        env_overrides={
+            "STUB_UV_EXIT": "0",
+            "STUB_OPEN_EXIT": "1",
+            "STUB_CLOSE_EXIT": "1",
+            "DATABASE_URL": "postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai",
+        },
+    )
+    assert result.returncode == 0
+    assert "PASS: pytest tests/database" in result.stdout
+    assert "All requested stages passed." in result.stdout
+
+
+def test_database_mode_opens_and_closes_ingress_for_an_rds_database_url(sandbox: Path) -> None:
+    """The converse of the local case above: an *.rds.amazonaws.com
+    DATABASE_URL must still open and close ingress exactly as before."""
+    result = _run_verify(
+        sandbox,
+        ["database"],
+        env_overrides={
+            "STUB_UV_EXIT": "0",
+            "STUB_OPEN_EXIT": "0",
+            "STUB_CLOSE_EXIT": "1",
+            "DATABASE_URL": _RDS_DATABASE_URL,
+        },
+    )
+    assert result.returncode == 1
+    assert "PASS: pytest tests/database" in result.stdout
+    assert "ingress revocation failed" in result.stderr
 
 
 @pytest.mark.parametrize(

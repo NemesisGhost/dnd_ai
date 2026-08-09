@@ -1,8 +1,8 @@
 # Quick Start
 
-The fast path to a deployed development database. Assumes AWS CLI and Terraform are already installed and configured — if not, start with [CONTRIBUTING.md](CONTRIBUTING.md#1-aws-account-setup-start-here).
+The fast path to a deployed development database. Assumes AWS CLI and Terraform are already installed and configured — if not, start with [CONTRIBUTING.md](CONTRIBUTING.md#2-aws-access-optional).
 
-> **This is now a prerequisite for everyday development, not an occasional side quest.** Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), migrations and the `tests/database`/`tests/scenario` suites verify against this deployed `dev` instance, not a local container. If `dev` is already deployed by someone else, skip this document and go straight to [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup).
+> **You probably don't need this.** Since [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), everyday development runs against a **local PostgreSQL 18 server** — set that up via [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) instead. This document deploys the shared AWS `dev` environment, which CI verifies every pull request against ([PLAN.md §23.0](PLAN.md#230-verification-policy)). Read on only if `dev` does not exist yet, or you are changing the infrastructure itself.
 
 ---
 
@@ -20,7 +20,7 @@ my_ip_cidr           = "203.0.113.42/32"    # narrow static baseline only — th
 enable_public_access = true                  # required — see PLAN.md §29.9
 ```
 
-Day-to-day access for yourself and CI is *not* this variable — it's a short-lived security-group rule opened and closed per session via `scripts/aws-db-allow-my-ip.sh` (see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)). `my_ip_cidr` just needs to be narrow, not `0.0.0.0/0`.
+Access for CI and for your own occasional direct connections is *not* this variable — it's a short-lived security-group rule opened and closed per session via `scripts/aws-db-allow-my-ip.sh` (see [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional)). `my_ip_cidr` just needs to be narrow, not `0.0.0.0/0`.
 
 Find your IP:
 
@@ -80,10 +80,14 @@ terraform -chdir=terraform/environments/dev output database_name       # dnd_ai
 | User | `dnd_admin` — not `postgres` |
 | SSL | **Required** |
 
-`sslmode=require` is not optional. The parameter group sets `rds.force_ssl=1`, so a
+`sslmode=require` is not optional. `dev` enforces SSL at the `pg_hba.conf` level, so a
 non-SSL connection is rejected outright with a `pg_hba.conf` error that doesn't
-mention SSL. A local Docker container has no SSL configured at all, so this is easy
-to miss until the first time you connect to something real.
+mention SSL. (On PostgreSQL 15 this was surfaced as an `rds.force_ssl` parameter;
+as of the PostgreSQL 18 replacement that GUC is gone entirely — confirmed absent
+from `pg_settings` — but the enforcement itself is unchanged, verified directly.)
+A stock local PostgreSQL server has no TLS configured at all — and
+since that is where everyday development now happens ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)),
+this is easy to miss until the first time you connect to `dev`.
 
 ### Get the password
 
@@ -102,10 +106,11 @@ don't paste it into a file that isn't gitignored.
 **A GUI client** (DBeaver, pgAdmin, DataGrip) — enter the four fields above and set
 SSL mode to `require`. Usually the most pleasant way to browse schema.
 
-**`psql`**, if you want a terminal. It is not installed by default on Windows:
+**`psql`**, if you want a terminal. You already have it if you followed
+[DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql); otherwise:
 
 ```powershell
-winget install PostgreSQL.PostgreSQL.15
+winget install PostgreSQL.PostgreSQL.18
 
 $env:PGPASSWORD = "<password>"
 psql -h <endpoint-host> -U dnd_admin -d dnd_ai "sslmode=require"
@@ -148,7 +153,7 @@ scripts/aws-db-allow-my-ip.sh close
 
 Two things to know about it. The rule is added outside Terraform, so a later
 `terraform plan` reports it as drift and wants to remove it — expected, and explained
-in [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism). And it does not touch
+in [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci). And it does not touch
 the `my_ip_cidr` baseline; if your address has changed for good, update
 `terraform.tfvars` rather than accumulating session rules.
 
@@ -167,7 +172,7 @@ never be used to connect — it is `NOLOGIN` by design
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
-**This currently fails** — `deletion_protection` defaults to `true` and dev never overrides it. Disable it first:
+This now works directly — `dev` overrides `deletion_protection = false` explicitly (resolved 2026-08-08, see [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) gap 1). If you ever do hit it blocking a destroy, disable it first:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db --no-deletion-protection --apply-immediately
@@ -180,7 +185,9 @@ See [INFRASTRUCTURE.md §8](INFRASTRUCTURE.md#8-teardown).
 ## FAQ
 
 **What did I just deploy?**
-A VPC-attached PostgreSQL 15 RDS instance, a KMS key, a security group, VPC endpoints for Secrets Manager and KMS, and empty Secrets Manager entries. Full inventory: [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state).
+A VPC-attached PostgreSQL RDS instance, a KMS key, a security group, VPC endpoints for Secrets Manager and KMS, and empty Secrets Manager entries. Full inventory: [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state).
+
+The module's engine-version default is `18.4`, matching what the project pins ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) and what `dev` runs — no override needed for a fresh deploy.
 
 **Can I use the database yet?**
 Right after `terraform apply`, it's an **empty** PostgreSQL instance — no schemas, roles, or extensions. The bootstrap revision that creates them exists in `database/migrations/versions/001_bootstrap.py`; run `alembic upgrade head` against it (see the next question) to actually get there.
@@ -192,7 +199,7 @@ See [§5](#5-connect-to-the-database) above — connection details, fetching the
 Almost always the security group: your IP changed and the rule no longer matches, so packets are dropped rather than refused. Run `scripts/aws-db-allow-my-ip.sh open` ([§5](#5-connect-to-the-database)). If it fails immediately instead of hanging with a `pg_hba.conf` error, you're missing `sslmode=require`.
 
 **How do I run migrations against it?**
-Open a session-scoped ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`), then `uv run alembic -c database/alembic.ini upgrade head` with `DATABASE_URL` pointed at the `dev` endpoint, same as any other environment — see [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) and [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism). This works because `dev` is deliberately reachable this way; `staging`/`prod` stay private and go through the SSM-based runner in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) instead, which is unbuilt.
+Open a session-scoped ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`), then `uv run alembic -c database/alembic.ini upgrade head` with `DATABASE_URL` pointed at the `dev` endpoint, same as any other environment — see [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-occasional) and [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci). Routine development doesn't need this — CI migrates `dev` on every push. This works because `dev` is deliberately reachable this way; `staging`/`prod` stay private and go through the SSM-based runner in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) instead, which is unbuilt.
 
 **What does it cost?**
 ~$25–35/month. Breakdown and how to reduce it: [INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost) and [CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management).

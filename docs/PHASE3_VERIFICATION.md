@@ -13,7 +13,7 @@ Verifies Phase 3 (Timelines and campaigns) per [PLAN.md §23](PLAN.md#23-deliver
 - [x] Membership endpoints from the wrong world and intervals whose end is not later than their start are rejected by the database
 - [~] Branch structure is verified in this phase; inherited-history isolation is explicitly recorded as unverified until Phase 6 supplies events and the effective-history query. See "Not proven: branch isolation" below.
 
-All verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-aws-verification-policy): full downgrade-to-`base` and upgrade-to-`head` round trip, `alembic check` clean, 327 tests passing.
+All verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-verification-policy): full downgrade-to-`base` and upgrade-to-`head` round trip, `alembic check` clean, 327 tests passing.
 
 ### Not proven: branch isolation
 

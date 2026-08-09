@@ -20,7 +20,7 @@ Against that live instance, with `DATABASE_URL` built from the AWS-managed maste
 - `alembic upgrade head` — both revisions, clean.
 - `alembic downgrade base` then `alembic upgrade head` again — the full round trip, including `001_bootstrap`'s `REASSIGN OWNED`/`DROP OWNED`/`DROP ROLE` cleanup path, which had never been exercised against real RDS before this.
 - Schema/role/ownership state confirmed directly: all 13 schemas present, `core` owned by `migration_owner`, `migration_owner` shows `rolcanlogin = false` while the five login roles show `true`, `rds_iam` granted to exactly those five (not `migration_owner`), `core.alembic_version` still owned by the connecting user (untouched by the ownership split).
-- `pytest tests/database` — the ephemeral-per-run database mechanism from [PLAN.md §29.9](PLAN.md#299-aws-first-verification-mechanism): creates `dnd_ai_test_<random>` on the shared instance, migrates it, runs the constraint tests, drops it. Confirmed no orphaned databases afterward.
+- `pytest tests/database` — the ephemeral-per-run database mechanism from [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci): creates `dnd_ai_test_<random>` on the shared instance, migrates it, runs the constraint tests, drops it. Confirmed no orphaned databases afterward.
 - Full suite (`uv run pytest`, real `uv` environment, not an ad-hoc venv) — 15 passed.
 - CI: pushed to `main`, both `lint-and-type-check` and `aws-verification` jobs passed on GitHub's own runners — OIDC auth, session-scoped security-group rule opened and revoked, ephemeral database created and dropped, migrations, downgrade, `alembic check`, full test suite.
 
@@ -37,7 +37,7 @@ Every one of these was invisible to offline SQL generation and would have been i
 
 ## Local Fallback (AWS Unreachable Only)
 
-Per [PLAN.md §23.0](PLAN.md#230-aws-verification-policy), this is not the default path. Set `DND_AI_USE_LOCAL_POSTGRES=1` and point `DATABASE_URL` at a local container:
+Per [PLAN.md §23.0](PLAN.md#230-verification-policy), this is not the default path. Set `DND_AI_USE_LOCAL_POSTGRES=1` and point `DATABASE_URL` at a local container:
 
 ```bash
 docker run -d --name dnd-ai-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=dnd_ai -p 5432:5432 postgres:15

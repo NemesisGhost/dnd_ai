@@ -8,7 +8,7 @@ Records the verification performed for Phase 5 (Locations and dungeon play) per 
 - [x] Hidden connections remain distinct from party knowledge — `world.area_connections.is_hidden` (and the equivalent column on features/hazards/interactables) is a structural fact with no party reference anywhere in its table; discovery is recorded separately in `knowledge.party_discoveries`, scoped per party. `test_knowledge_domain.py::test_a_hidden_connections_own_row_never_reveals_party_knowledge` asserts both structurally (`world.area_connections` has no `discover`/`known`-named column) and behaviorally (two parties on the same timeline have independent discovery records for the same connection, which itself stays `is_hidden = true` throughout); the navigation scenario above checks the same thing in context.
 - [x] Actions can alter dungeon state — all five typed state tables (`campaign.location_state`, `.area_connection_state`, `.area_feature_state`, `.hazard_state`, `.interactable_state`) support in-place transitions, exercised by `test_dungeon_timeline_state.py` (e.g. a connection moving from locked to open, a hazard from armed to disarmed) and correctly maintain `updated_at` on every change (revision 046), proven by mutating a real state column across genuinely separate transactions rather than only by overriding the column directly (`test_dungeon_state_updated_at.py`).
 
-The listed criteria and tests were verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-aws-verification-policy): upgrade to `head` through all 19 revisions (038–056), downgrade/upgrade round trips covering the four revision-bearing corrections passes (including the revision-052 splice point in both directions), `alembic check` clean, and the full test suite — see "Verification commands and results" under the fourth, fifth, and sixth corrections passes below. Deep/corrupt-hierarchy, populated-upgrade, complete-whitespace, and child-location-lock coverage are all included, and the concurrency suite proves resumed-waiter behavior with independent final-state assertions. The focused helper tests prove forced termination, cleanup-error reporting, startup-timeout handling, and failed-cancellation containment all leave no worker behind — see the sixth through twelfth exit reviews below for the sequence of hardening passes that closed each gap in the test-only helper in turn; none of them changed a production or migration file.
+The listed criteria and tests were verified against the deployed AWS `dev` RDS instance, per [§23.0](PLAN.md#230-verification-policy): upgrade to `head` through all 19 revisions (038–056), downgrade/upgrade round trips covering the four revision-bearing corrections passes (including the revision-052 splice point in both directions), `alembic check` clean, and the full test suite — see "Verification commands and results" under the fourth, fifth, and sixth corrections passes below. Deep/corrupt-hierarchy, populated-upgrade, complete-whitespace, and child-location-lock coverage are all included, and the concurrency suite proves resumed-waiter behavior with independent final-state assertions. The focused helper tests prove forced termination, cleanup-error reporting, startup-timeout handling, and failed-cancellation containment all leave no worker behind — see the sixth through twelfth exit reviews below for the sequence of hardening passes that closed each gap in the test-only helper in turn; none of them changed a production or migration file.
 
 ## Preceded by a scope decision
 
@@ -78,7 +78,7 @@ None of the eight findings were caused by a wrong architectural decision — all
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs:
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs:
 
 | Command | Result |
 |---|---|
@@ -109,7 +109,7 @@ None of these four schema-level findings were caused by a wrong architectural de
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per the second exit review's explicit instruction, the previously-green CI run (`30785396702`, for revisions 038–047) was not relied on for this pass — it predates revisions 048–051 and their tests.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per the second exit review's explicit instruction, the previously-green CI run (`30785396702`, for revisions 038–047) was not relied on for this pass — it predates revisions 048–051 and their tests.
 
 | Command | Result |
 |---|---|
@@ -137,7 +137,7 @@ None of the five findings changed the architectural direction. The fourth review
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per this pass's own review instruction, no prior CI run (all of which predate revisions 052–055 and their tests) was relied on as evidence for this pass.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per this pass's own review instruction, no prior CI run (all of which predate revisions 052–055 and their tests) was relied on as evidence for this pass.
 
 | Command | Result |
 |---|---|
@@ -174,7 +174,7 @@ None of the two findings changed the architectural direction; both are the same 
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per every prior pass's own instruction, no earlier CI run (all of which predate revision 056 and its tests) was relied on as evidence for this pass.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs. Per every prior pass's own instruction, no earlier CI run (all of which predate revision 056 and its tests) was relied on as evidence for this pass.
 
 | Command | Result |
 |---|---|
@@ -203,7 +203,7 @@ None of these two findings changed the architectural direction; both are refinem
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|
@@ -237,7 +237,7 @@ No schema or migration change was needed or made. Revision 056 and the revision-
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|
@@ -276,7 +276,7 @@ An eighth pass closed both containment gaps the seventh review found, entirely w
 
 ### Verification commands and results
 
-Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|
@@ -309,7 +309,7 @@ A ninth review of commit `c9f13a7` accepted the eighth pass's diagnosis but foun
 
 ### Verification commands and results
 
-Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|
@@ -347,7 +347,7 @@ A tenth review of merged PR #12 (commit `15c8b24`) accepted that the ninth pass'
 
 ### Verification commands and results
 
-Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|
@@ -436,7 +436,7 @@ Review of merged PR #14 (merge commit `7ec0945`, containing implementation commi
 
 ### Verification commands and results
 
-Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs, plus the narrow local tooling this pass fixed first and then used throughout.
+Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs, plus the narrow local tooling this pass fixed first and then used throughout.
 
 | Command | Result |
 |---|---|
@@ -489,7 +489,7 @@ Review of PR #15 at commit `d0032dc` accepted that the twelfth pass's verificati
 
 ### Verification commands and results
 
-Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-aws-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
+Run locally against the deployed AWS `dev` RDS instance (per [§23.0](PLAN.md#230-verification-policy)), matching the commands `.github/workflows/ci.yml` runs.
 
 | Command | Result |
 |---|---|

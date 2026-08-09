@@ -27,7 +27,17 @@ The goals are consistency, maintainability, predictable querying, safe evolution
 
 ### 2.1 Supported PostgreSQL version
 
-Target a currently supported PostgreSQL major version in AWS RDS. The exact production version must be pinned in infrastructure and local development configuration.
+**PostgreSQL 18.x.** One major version, pinned in three places that must agree:
+
+| Where | Pinned by |
+|---|---|
+| Local development server | Each developer's install — [DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql) |
+| AWS `dev` / `staging` / `prod` | `postgres_version` in `terraform/modules/database` |
+| CI | Whatever `dev` runs; CI creates an ephemeral database on it rather than standing up its own |
+
+The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)) and 18.x — available on RDS as 18.1 through 18.4 — became the version both targets could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)); all three rows above now agree.
+
+**A local server on a different major version than the deployment target is a defect, not a preference.** It produces green local runs that fail CI, and it reintroduces the divergence between what is verified and what is deployed that [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) was written to eliminate. Match the version; do not use whatever is already installed.
 
 Do not rely on behavior that differs across PostgreSQL major versions without an automated compatibility test.
 
@@ -60,7 +70,9 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 Extensions are installed through migrations or infrastructure bootstrap under a controlled database owner. Application users must not have extension-management permissions.
 
-`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, 15.18). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
+`pgcrypto`, `pg_trgm`, and `btree_gist` are all **trusted** extensions on PostgreSQL 13+ (verified as trusted on the AWS `dev` instance, both on 15.18 originally and again on 18.4 after the [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) replacement — the full `001_bootstrap` migration and later extension-adding revisions all succeeded without `rds_superuser`). A non-superuser may therefore install them with only `CREATE` on the database — the roles never need `rds_superuser`.
+
+The same extensions must be installable on a local development server, since the identical `001_bootstrap` revision runs there ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)). A stock local install provides all three in `contrib`; a missing one shows up as a bootstrap failure on the first `alembic upgrade head`, not as a subtle divergence later.
 
 That privilege belongs to **`migration_owner`**, not to the connecting login role. Revision `001_bootstrap` ends with `SET ROLE migration_owner`, and `env.py` issues the same `SET ROLE` on connect, so every later revision runs as `migration_owner`; a `CREATE EXTENSION` in one of them fails with `permission denied to create extension` unless that role holds database-level `CREATE`. The bootstrap grants it for exactly this reason. A migration that adds an extension must not assume the connecting user's privileges apply to it.
 
@@ -1223,7 +1235,7 @@ Each migration must include:
 
 Do not use `DROP TABLE IF EXISTS ... CASCADE` in persistent environment migrations.
 
-Destructive reset scripts may exist only under clearly labeled local test tooling.
+Destructive reset scripts may exist only under clearly labeled local test tooling. A developer's local PostgreSQL server is disposable by definition ([PLAN.md §26.2](PLAN.md#262-environments)) and is the one place such tooling is appropriate — never write a reset script that could resolve its target to `dev`, `staging`, or `prod`.
 
 ### 25.4 Seed data
 
@@ -1243,13 +1255,15 @@ Before production, use expand-and-contract migrations for breaking changes:
 
 ### 25.6 Migration testing
 
-CI must test:
+CI must test, against the deployed `dev` RDS instance ([PLAN.md §23.0](PLAN.md#230-verification-policy)):
 
 - migration from empty database
 - upgrade through all revisions
 - schema comparison
 - seed idempotency
 - downgrade for recent development migrations where supported
+
+All five also run locally, and should be run there first — they are cheap against a local server, where the full downgrade-to-base round trip costs seconds and destroys nothing shared. `scripts/verify.sh` wraps them. Local results are the expected first evidence; the CI run against `dev` is what closes a phase.
 
 ---
 

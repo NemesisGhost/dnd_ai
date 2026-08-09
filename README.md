@@ -32,6 +32,8 @@ Phase 8 (relationships and organizations) delivered the universal relationship m
 
 The repository currently provides the PostgreSQL/Alembic foundation, AWS RDS infrastructure, core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, locations and dungeon structure with typed timeline state, a knowledge/discovery model, events/interactions/checks with branch-aware history, the first application-layer command handlers, the quest domain, and the relationships/organizations domain. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, items/encounters, or playable campaign workflows; those remain scheduled in later phases.
 
+**Verification pivot (2026-08-07), closed 2026-08-08.** Phases 1–8 were developed directly against the deployed AWS `dev` RDS instance, per the original AWS-first policy. From Phase 9 onward, development and testing run against a **local PostgreSQL 18 server**, and CI against `dev` is the merge gate — the reasoning, and the cost this trades away, are in [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md). The project's pinned PostgreSQL major version moved from 15.x to 18.x in the same change; `dev` was replaced with a fresh PostgreSQL 18.4 instance to match, per [docs/POSTGRES18_UPGRADE_PLAN.md](docs/POSTGRES18_UPGRADE_PLAN.md).
+
 This is still a restart, not an incremental evolution of the prior implementation.
 
 The repository previously contained database schema, Lambda functions, and prototype scripts from an earlier iteration of the platform (`Database/`, `DirectAPICalls/`, `PDFChatBot/`, `src/lambda-functions/`, and related build scripts). That code predated the persistent-world model described in this document and has been removed rather than extended or migrated. The Terraform configuration was trimmed to match: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) remain, while the modules and environment wiring built specifically for the old schema and Lambda functions (`db_runner`, `lambda-api`, `lambda-with-build`, and their environment configs) were removed.
@@ -797,15 +799,15 @@ New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing
 
-Database work is deployed to and verified in AWS: migrations and the `tests/database`/`tests/scenario` suites run against the deployed `dev` RDS instance. Application deployables will run on ECS Fargate when they are built; no application compute exists yet. See [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy), [§30](docs/PLAN.md#30-aws-deployment-plan-for-application-services), and [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md). A local Docker PostgreSQL container is a documented fallback only, for when AWS is genuinely unreachable.
+Development runs against a **local PostgreSQL 18 server** — migrations and the `tests/database`/`tests/scenario` suites need no AWS account, no credentials, and no network. CI then runs the identical suites against the deployed `dev` RDS instance, and that run is the merge gate. Application deployables will run on ECS Fargate when they are built; no application compute exists yet, and there is no local deployment topology. See [docs/PLAN.md §23.0](docs/PLAN.md#230-verification-policy), [§30](docs/PLAN.md#30-aws-deployment-plan-for-application-services), [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md), and [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md).
 
 1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
 2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
-3. **Set up your environment** — [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup). Toolchain and repository layout are pinned in §1–2 of that document.
+3. **Set up your environment** — [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup): PostgreSQL 18 locally, then `uv sync`. Toolchain and repository layout are pinned in §1–2 of that document.
 4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
 5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
-Phases 1 through 5 are **complete**. Phase 6 is current. [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process, including the proportionality and stop-loss rules that keep test-harness hardening from displacing delivery work.
+Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase developed under the local-first loop. [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process, including the proportionality and stop-loss rules that keep test-harness hardening from displacing delivery work.
 
 ### If you are deploying infrastructure
 
@@ -822,9 +824,9 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — reference: variables, outputs, verification, teardown, known gaps
 - [docs/PLAN.md §29](docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) — the authoritative plan for what the infrastructure should become
 
-Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup).
+Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3.5](docs/DEVELOPMENT.md#35-connecting-to-aws-dev-occasional). The module's `postgres_version` default is now `18.4`, matching what `dev` runs — no override needed for a fresh environment.
 
-**Cost:** roughly $25–35/month. Per [docs/PLAN.md §23.0](docs/PLAN.md#230-aws-verification-policy), `dev` is now shared, always-on infrastructure that every contributor's tests depend on — don't destroy or stop it as routine cost-saving; see [docs/CONTRIBUTING.md §6](docs/CONTRIBUTING.md#6-cost-management).
+**Cost:** roughly $25–35/month. `dev` is shared, always-on infrastructure that CI verifies every pull request against ([docs/PLAN.md §23.0](docs/PLAN.md#230-verification-policy)) — don't destroy or stop it as routine cost-saving; see [docs/CONTRIBUTING.md §6](docs/CONTRIBUTING.md#6-cost-management).
 
 ---
 
@@ -865,7 +867,7 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; ADRs 0008–0010 record the AWS-first policy, database ownership model, and fictional-time interval representation.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; ADRs 0008–0011 record the AWS deployment policy, the database ownership model, fictional-time interval representation, and the local-first development loop. Read [0008](docs/adr/0008-aws-first-deployment-and-verification.md) and [0011](docs/adr/0011-local-first-development-aws-verified-delivery.md) together — 0011 amends 0008's inner-loop clause and leaves the rest standing.
 
 ---
 

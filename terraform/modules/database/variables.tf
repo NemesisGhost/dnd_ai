@@ -68,9 +68,35 @@ variable "master_username" {
 }
 
 variable "postgres_version" {
-  description = "PostgreSQL version"
+  description = <<-EOT
+    PostgreSQL engine version, e.g. "18.4" or "18". The RDS parameter group
+    family (e.g. "postgres18") is derived from this automatically —
+    local.parameter_group_family in rds.tf — so the two can never disagree.
+    There is no separate parameter_group_family variable to keep in sync.
+  EOT
   type        = string
-  default     = "15.18"
+  default     = "18.4"
+
+  validation {
+    # Must be parseable as a major or major.minor version number for the
+    # local.postgres_major / local.parameter_group_family derivation in
+    # rds.tf to produce a sane family name (e.g. "postgres18") instead of
+    # silently building a garbage one AWS would only reject later, deep
+    # inside a ModifyDBParameterGroup/CreateDBInstance call.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?$", var.postgres_version))
+    error_message = "postgres_version must be a major or major.minor version number, e.g. \"18\" or \"18.4\"."
+  }
+}
+
+variable "auto_minor_version_upgrade" {
+  description = <<-EOT
+    Whether RDS may apply minor version upgrades automatically during the
+    maintenance window. Default false so a pinned postgres_version (e.g.
+    "18.4") stays exactly that version rather than silently drifting to a
+    later minor release and showing up as unexplained Terraform drift.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "instance_class" {

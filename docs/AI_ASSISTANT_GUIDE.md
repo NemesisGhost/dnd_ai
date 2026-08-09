@@ -200,18 +200,21 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 - `DB_PASSWORD = "mypassword123"` in Python code
 - API keys in seed SQL files or committed configs
 
-### 11. Deploy and verify in AWS
+### 11. Develop locally, verify in AWS
 
 ✅ **Correct**:
-- Run migrations and database/scenario tests against the deployed AWS `dev` RDS instance
+- Run migrations and database/scenario tests against a local PostgreSQL server whose **major version matches RDS** (currently 18.x)
+- Treat the CI run against the deployed `dev` RDS instance as the merge gate and the phase-exit evidence
+- Record both in `docs/PHASEn_VERIFICATION.md`: what passed locally, and the CI run ID that proved it on RDS
 - Exercise each deployable on ECS Fargate in `dev` once its phase introduces it
-- Use a local PostgreSQL container only as a documented fallback when AWS is genuinely unreachable
 
 ❌ **Wrong**:
-- Treating a passing testcontainers run as phase-exit evidence
+- Treating a green local run as phase-exit evidence on its own
+- Installing whatever PostgreSQL major version is convenient locally — that produces green local runs that fail CI
+- Re-running a red CI job that followed a green local run, instead of investigating it as an RDS-specific defect or local/`dev` drift
 - Deferring deployment verification until the end of the project
 
-See [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+See [PLAN.md §23.0](PLAN.md#230-verification-policy), [ADR 0008](adr/0008-aws-first-deployment-and-verification.md), and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md).
 
 ---
 
@@ -219,16 +222,16 @@ See [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) and [ADR 0008](adr/000
 
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. Everything is deployed to and verified in AWS ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md)); the pre-restart Lambda/API Gateway wiring was removed and is not coming back |
+| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. Everything deploys to AWS and is verified there by CI ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md), [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)); the pre-restart Lambda/API Gateway wiring was removed and is not coming back |
 | **Compute** | ECS Fargate | API, background worker, Discord adapter, and one-off jobs (including migrations) run one shared image from ECR. Modular monolith, not Lambda-per-function. See [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) — planned, unbuilt |
 | **IaC** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
-| **Database** | PostgreSQL 15.x | RDS, version pinned in Terraform; migrations via Alembic |
+| **Database** | PostgreSQL 18.x | Local server for development, RDS for `dev`/`staging`/`prod`; the major version must match across both ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
 | **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
 | **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) |
 | **UI** | React | Web/admin client talking to REST API; not yet started |
 | **Integrations** | FoundryVTT Module, Discord Bot, MCP Interface | All are clients, all go through application API |
 | **Migrations** | Alembic | See [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions) |
-| **Tooling** | uv, pytest against deployed AWS `dev` (testcontainers is a fallback only), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); AWS-verification policy in [PLAN.md §23.0](PLAN.md#230-aws-verification-policy) |
+| **Tooling** | uv, pytest against a local PostgreSQL 18 server (CI repeats it against `dev` RDS), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); verification policy in [PLAN.md §23.0](PLAN.md#230-verification-policy) |
 
 **Do not introduce new technologies** without explicit design review and documentation update.
 
