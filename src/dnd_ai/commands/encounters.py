@@ -164,6 +164,236 @@ def _character_hit_points(
     return value
 
 
+def _resolve_combat_turn_impl(
+    connection: Connection,
+    *,
+    encounter_id: uuid.UUID,
+    round_number: int,
+    turn_order: int,
+    actor_entity_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    action_kind: str = "attack",
+    target_entity_id: uuid.UUID | None = None,
+    item_instance_id: uuid.UUID | None = None,
+    spell_id: uuid.UUID | None = None,
+    hit: bool | None = None,
+    damage_amount: int | None = None,
+    damage_type_id: uuid.UUID | None = None,
+    resulting_condition_id: uuid.UUID | None = None,
+    interaction_type_code: str = "attack",
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    event_details: str | None = None,
+) -> ResolveCombatTurnResult:
+    """The actual work of resolve_combat_turn(), on a connection the caller
+    already has open — without opening or closing a transaction of its own,
+    so a caller composing a larger atomic unit of work (e.g.
+    dnd_ai.commands.integration.apply_foundry_combat_sync(), which must
+    commit the combat mutation and its own completion bookkeeping together
+    or not at all) can call this directly inside its own engine.begin(),
+    the same _insert_event_row()-style composition pattern used throughout
+    this package. resolve_combat_turn(), below, is the public convenience
+    wrapper for a caller with no other work to combine it with.
+
+    hit=False never applies damage or records an event, regardless of
+    damage_amount; hit=None applies damage when damage_amount is positive
+    (no hit/miss distinction reported). See the inline comment above the
+    damage-application check for the full reasoning.
+    """
+    timeline_id = _lock_encounter(connection, encounter_id)
+    encounter_round_id = _get_or_create_round(
+        connection, encounter_id=encounter_id, round_number=round_number
+    )
+    participant_id = _participant_id(
+        connection, encounter_id=encounter_id, participant_entity_id=actor_entity_id
+    )
+
+    world_id = connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": timeline_id},
+    ).scalar()
+    assert isinstance(world_id, uuid.UUID)
+
+    interaction_type_id = lookup_id(
+        connection,
+        "interaction",
+        "interaction_types",
+        "interaction_type_id",
+        interaction_type_code,
+    )
+    interaction_id = connection.execute(
+        text("""
+            INSERT INTO interaction.interactions
+                (timeline_id, campaign_id, session_id, interaction_type_id, world_time_id)
+            VALUES (:timeline, :campaign, :session, :itype, :world_time)
+            RETURNING interaction_id
+        """),
+        {
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "itype": interaction_type_id,
+            "world_time": world_time_id,
+        },
+    ).scalar()
+    assert isinstance(interaction_id, uuid.UUID)
+
+    action_id = connection.execute(
+        text("""
+            INSERT INTO interaction.actions (interaction_id, actor_entity_id)
+            VALUES (:interaction, :actor)
+            RETURNING action_id
+        """),
+        {"interaction": interaction_id, "actor": actor_entity_id},
+    ).scalar()
+    assert isinstance(action_id, uuid.UUID)
+
+    target_id = None
+    if target_entity_id is not None:
+        target_id = connection.execute(
+            text("""
+                INSERT INTO interaction.targets (action_id, target_entity_id)
+                VALUES (:action, :entity)
+                RETURNING target_id
+            """),
+            {"action": action_id, "entity": target_entity_id},
+        ).scalar()
+        assert isinstance(target_id, uuid.UUID)
+
+    combat_action_id = connection.execute(
+        text("""
+            INSERT INTO interaction.combat_actions
+                (action_id, target_id, action_kind, item_instance_id, spell_id, hit,
+                 damage_amount, damage_type_id, resulting_condition_id)
+            VALUES (:action, :target, :kind, :item, :spell, :hit, :damage, :damage_type,
+                    :condition)
+            RETURNING combat_action_id
+        """),
+        {
+            "action": action_id,
+            "target": target_id,
+            "kind": action_kind,
+            "item": item_instance_id,
+            "spell": spell_id,
+            "hit": hit,
+            "damage": damage_amount,
+            "damage_type": damage_type_id,
+            "condition": resulting_condition_id,
+        },
+    ).scalar()
+    assert isinstance(combat_action_id, uuid.UUID)
+
+    encounter_turn_id = connection.execute(
+        text("""
+            INSERT INTO narrative.encounter_turns
+                (encounter_round_id, participant_id, turn_order, combat_action_id)
+            VALUES (:round, :participant, :order, :combat_action)
+            RETURNING encounter_turn_id
+        """),
+        {
+            "round": encounter_round_id,
+            "participant": participant_id,
+            "order": turn_order,
+            "combat_action": combat_action_id,
+        },
+    ).scalar()
+    assert isinstance(encounter_turn_id, uuid.UUID)
+
+    # Not every attack roll needs a permanent world event
+    # (docs/architecture/DATABASE_MODEL.md §12.3) — only promote to a
+    # narrative.events row when there was actual persistent state to
+    # change: real damage, against a target with an existing
+    # campaign.character_state row on this timeline. A miss, a
+    # non-damaging action, or damage against an entity with no tracked
+    # HP (e.g. an untracked monster) leaves only the turn/combat_action
+    # record behind.
+    #
+    # hit is the authority on whether the action connected: hit=False
+    # never applies damage or records an event, even if a caller also
+    # passed a positive damage_amount (a submitted-but-not-landed
+    # damage roll) — damage_amount is still stored on combat_actions
+    # above regardless, since it's useful payload/result data either
+    # way. hit=None means the caller didn't report hit/miss at all
+    # (not every combat source distinguishes the two); damage is
+    # applied in that case if damage_amount is positive, preserving
+    # this function's original behavior for callers with no hit/miss
+    # concept — only hit=False is a hard stop.
+    event_id: uuid.UUID | None = None
+    previous_hit_points: int | None = None
+    new_hit_points: int | None = None
+
+    if (
+        hit is not False
+        and damage_amount is not None
+        and damage_amount > 0
+        and target_entity_id is not None
+    ):
+        previous_hit_points = _character_hit_points(
+            connection, timeline_id=timeline_id, character_id=target_entity_id
+        )
+
+    if previous_hit_points is not None:
+        assert target_entity_id is not None
+        assert damage_amount is not None
+        new_hit_points = previous_hit_points - damage_amount
+
+        event_id = _insert_event_row(
+            connection,
+            world_id=world_id,
+            timeline_id=timeline_id,
+            world_time_id=world_time_id,
+            event_type_code="combat_damage_dealt",
+            name="Combat damage dealt",
+            details=event_details,
+            campaign_id=campaign_id,
+            session_id=session_id,
+            participants=(
+                EventParticipant(entity_id=actor_entity_id, role_code="actor"),
+                EventParticipant(entity_id=target_entity_id, role_code="victim"),
+            ),
+            cause_description=None,
+        )
+        connection.execute(
+            text("""
+                INSERT INTO narrative.event_causes (event_id, cause_encounter_id)
+                VALUES (:event, :encounter)
+            """),
+            {"event": event_id, "encounter": encounter_id},
+        )
+        connection.execute(
+            text("""
+                UPDATE campaign.character_state
+                SET current_hit_points = :hp, updated_at = now()
+                WHERE timeline_id = :timeline AND character_id = :character
+            """),
+            {"hp": new_hit_points, "timeline": timeline_id, "character": target_entity_id},
+        )
+        connection.execute(
+            text("""
+                INSERT INTO narrative.event_effects
+                    (event_id, target_entity_id, target_component, previous_value,
+                     new_value, effective_world_time_id)
+                VALUES (:event, :character, 'current_hit_points', :previous, :new,
+                        :world_time)
+            """),
+            {
+                "event": event_id,
+                "character": target_entity_id,
+                "previous": json.dumps(previous_hit_points),
+                "new": json.dumps(new_hit_points),
+                "world_time": world_time_id,
+            },
+        )
+
+    return ResolveCombatTurnResult(
+        encounter_turn_id=encounter_turn_id,
+        combat_action_id=combat_action_id,
+        event_id=event_id,
+        previous_hit_points=previous_hit_points,
+        new_hit_points=new_hit_points,
+    )
+
+
 def resolve_combat_turn(
     engine: Engine,
     *,
@@ -189,184 +419,31 @@ def resolve_combat_turn(
     it resolved via, and (when it dealt damage to a character with existing
     campaign.character_state on this timeline) the resulting HP change,
     with a causal narrative.events row citing the encounter — atomically.
+    Public convenience API: opens and commits its own transaction. See
+    _resolve_combat_turn_impl() for the composable form a caller with its
+    own transaction (e.g. apply_foundry_combat_sync()) uses instead.
     """
     with engine.begin() as connection:
-        timeline_id = _lock_encounter(connection, encounter_id)
-        encounter_round_id = _get_or_create_round(
-            connection, encounter_id=encounter_id, round_number=round_number
-        )
-        participant_id = _participant_id(
-            connection, encounter_id=encounter_id, participant_entity_id=actor_entity_id
-        )
-
-        world_id = connection.execute(
-            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
-            {"t": timeline_id},
-        ).scalar()
-        assert isinstance(world_id, uuid.UUID)
-
-        interaction_type_id = lookup_id(
+        return _resolve_combat_turn_impl(
             connection,
-            "interaction",
-            "interaction_types",
-            "interaction_type_id",
-            interaction_type_code,
+            encounter_id=encounter_id,
+            round_number=round_number,
+            turn_order=turn_order,
+            actor_entity_id=actor_entity_id,
+            world_time_id=world_time_id,
+            action_kind=action_kind,
+            target_entity_id=target_entity_id,
+            item_instance_id=item_instance_id,
+            spell_id=spell_id,
+            hit=hit,
+            damage_amount=damage_amount,
+            damage_type_id=damage_type_id,
+            resulting_condition_id=resulting_condition_id,
+            interaction_type_code=interaction_type_code,
+            campaign_id=campaign_id,
+            session_id=session_id,
+            event_details=event_details,
         )
-        interaction_id = connection.execute(
-            text("""
-                INSERT INTO interaction.interactions
-                    (timeline_id, campaign_id, session_id, interaction_type_id, world_time_id)
-                VALUES (:timeline, :campaign, :session, :itype, :world_time)
-                RETURNING interaction_id
-            """),
-            {
-                "timeline": timeline_id,
-                "campaign": campaign_id,
-                "session": session_id,
-                "itype": interaction_type_id,
-                "world_time": world_time_id,
-            },
-        ).scalar()
-        assert isinstance(interaction_id, uuid.UUID)
-
-        action_id = connection.execute(
-            text("""
-                INSERT INTO interaction.actions (interaction_id, actor_entity_id)
-                VALUES (:interaction, :actor)
-                RETURNING action_id
-            """),
-            {"interaction": interaction_id, "actor": actor_entity_id},
-        ).scalar()
-        assert isinstance(action_id, uuid.UUID)
-
-        target_id = None
-        if target_entity_id is not None:
-            target_id = connection.execute(
-                text("""
-                    INSERT INTO interaction.targets (action_id, target_entity_id)
-                    VALUES (:action, :entity)
-                    RETURNING target_id
-                """),
-                {"action": action_id, "entity": target_entity_id},
-            ).scalar()
-            assert isinstance(target_id, uuid.UUID)
-
-        combat_action_id = connection.execute(
-            text("""
-                INSERT INTO interaction.combat_actions
-                    (action_id, target_id, action_kind, item_instance_id, spell_id, hit,
-                     damage_amount, damage_type_id, resulting_condition_id)
-                VALUES (:action, :target, :kind, :item, :spell, :hit, :damage, :damage_type,
-                        :condition)
-                RETURNING combat_action_id
-            """),
-            {
-                "action": action_id,
-                "target": target_id,
-                "kind": action_kind,
-                "item": item_instance_id,
-                "spell": spell_id,
-                "hit": hit,
-                "damage": damage_amount,
-                "damage_type": damage_type_id,
-                "condition": resulting_condition_id,
-            },
-        ).scalar()
-        assert isinstance(combat_action_id, uuid.UUID)
-
-        encounter_turn_id = connection.execute(
-            text("""
-                INSERT INTO narrative.encounter_turns
-                    (encounter_round_id, participant_id, turn_order, combat_action_id)
-                VALUES (:round, :participant, :order, :combat_action)
-                RETURNING encounter_turn_id
-            """),
-            {
-                "round": encounter_round_id,
-                "participant": participant_id,
-                "order": turn_order,
-                "combat_action": combat_action_id,
-            },
-        ).scalar()
-        assert isinstance(encounter_turn_id, uuid.UUID)
-
-        # Not every attack roll needs a permanent world event
-        # (docs/architecture/DATABASE_MODEL.md §12.3) — only promote to a
-        # narrative.events row when there was actual persistent state to
-        # change: real damage, against a target with an existing
-        # campaign.character_state row on this timeline. A miss, a
-        # non-damaging action, or damage against an entity with no tracked
-        # HP (e.g. an untracked monster) leaves only the turn/combat_action
-        # record behind.
-        event_id: uuid.UUID | None = None
-        previous_hit_points: int | None = None
-        new_hit_points: int | None = None
-
-        if damage_amount is not None and damage_amount > 0 and target_entity_id is not None:
-            previous_hit_points = _character_hit_points(
-                connection, timeline_id=timeline_id, character_id=target_entity_id
-            )
-
-        if previous_hit_points is not None:
-            assert target_entity_id is not None
-            assert damage_amount is not None
-            new_hit_points = previous_hit_points - damage_amount
-
-            event_id = _insert_event_row(
-                connection,
-                world_id=world_id,
-                timeline_id=timeline_id,
-                world_time_id=world_time_id,
-                event_type_code="combat_damage_dealt",
-                name="Combat damage dealt",
-                details=event_details,
-                campaign_id=campaign_id,
-                session_id=session_id,
-                participants=(
-                    EventParticipant(entity_id=actor_entity_id, role_code="actor"),
-                    EventParticipant(entity_id=target_entity_id, role_code="victim"),
-                ),
-                cause_description=None,
-            )
-            connection.execute(
-                text("""
-                    INSERT INTO narrative.event_causes (event_id, cause_encounter_id)
-                    VALUES (:event, :encounter)
-                """),
-                {"event": event_id, "encounter": encounter_id},
-            )
-            connection.execute(
-                text("""
-                    UPDATE campaign.character_state
-                    SET current_hit_points = :hp, updated_at = now()
-                    WHERE timeline_id = :timeline AND character_id = :character
-                """),
-                {"hp": new_hit_points, "timeline": timeline_id, "character": target_entity_id},
-            )
-            connection.execute(
-                text("""
-                    INSERT INTO narrative.event_effects
-                        (event_id, target_entity_id, target_component, previous_value,
-                         new_value, effective_world_time_id)
-                    VALUES (:event, :character, 'current_hit_points', :previous, :new,
-                            :world_time)
-                """),
-                {
-                    "event": event_id,
-                    "character": target_entity_id,
-                    "previous": json.dumps(previous_hit_points),
-                    "new": json.dumps(new_hit_points),
-                    "world_time": world_time_id,
-                },
-            )
-
-    return ResolveCombatTurnResult(
-        encounter_turn_id=encounter_turn_id,
-        combat_action_id=combat_action_id,
-        event_id=event_id,
-        previous_hit_points=previous_hit_points,
-        new_hit_points=new_hit_points,
-    )
 
 
 def end_encounter(

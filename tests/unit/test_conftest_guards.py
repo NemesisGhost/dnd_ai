@@ -22,6 +22,7 @@ from tests.conftest import (
     UnsupportedPostgresVersionError,
     _check_server_major_version,
     _missing_database_configuration_error,
+    _test_engine_kwargs,
     postgres_engine,
 )
 
@@ -117,3 +118,29 @@ def test_unsupported_major_version_error_names_detected_and_required(major: int)
     assert str(major) in message
     assert str(REQUIRED_POSTGRES_MAJOR_VERSION) in message
     assert str(version_num) in message
+
+
+def test_test_engine_kwargs_enables_pre_ping() -> None:
+    # Regression for PR #21's CI run 31312847929 (an RDS connection gone
+    # stale between checkouts, surfaced as an unrelated test's SSL error
+    # ~40 minutes into the run, not a schema/constraint defect): both
+    # postgres_engine() code paths must pass pool_pre_ping so a dead
+    # pooled connection is detected — and transparently replaced — at
+    # checkout rather than surfacing as a random test's failure.
+    assert _test_engine_kwargs()["pool_pre_ping"] is True
+
+
+def test_test_engine_kwargs_recycles_before_a_typical_ci_run_completes() -> None:
+    # A positive recycle age, comfortably shorter than this project's CI
+    # runs typically take, so long-idle connections are proactively
+    # retired rather than relying on pre-ping alone to catch every case.
+    recycle_seconds = _test_engine_kwargs()["pool_recycle"]
+    assert isinstance(recycle_seconds, int)
+    assert 0 < recycle_seconds <= 3600
+
+
+def test_test_engine_kwargs_has_no_unexpected_keys() -> None:
+    # Pins the contract to exactly the two pool-resilience settings this
+    # correction pass added — a stray extra key here would silently
+    # change create_engine()'s behavior for every test engine.
+    assert set(_test_engine_kwargs()) == {"pool_pre_ping", "pool_recycle"}

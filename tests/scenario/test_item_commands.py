@@ -143,6 +143,60 @@ def test_transferring_an_already_placed_item_updates_the_same_row(
     )
 
 
+def test_a_second_transfer_records_the_real_previous_location_in_the_event_effect(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Regression: narrative.event_effects.previous_value for a transfer
+    must reflect the item's actual prior holder/container/location, not
+    always NULL. The first placement has no prior state (previous_value
+    NULL); the second transfer's previous_value must equal the first
+    transfer's new_value."""
+    first = transfer_item_possession(
+        postgres_engine,
+        item_instance_id=f.item_instance_id,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        holder_entity_id=f.holder_id,
+    )
+    second = transfer_item_possession(
+        postgres_engine,
+        item_instance_id=f.item_instance_id,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        location_id=f.location_id,
+    )
+
+    with postgres_engine.connect() as verify:
+        first_effect = verify.execute(
+            text(
+                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e"
+            ),
+            {"e": first.event_id},
+        ).one()
+        second_effect = verify.execute(
+            text(
+                "SELECT previous_value, new_value FROM narrative.event_effects WHERE event_id = :e"
+            ),
+            {"e": second.event_id},
+        ).one()
+
+    assert first_effect.previous_value is None, "a first placement has no prior location"
+    assert first_effect.new_value == {
+        "holder_entity_id": str(f.holder_id),
+        "container_id": None,
+        "location_id": None,
+    }
+    assert second_effect.previous_value == first_effect.new_value, (
+        "the second transfer's previous_value must be the first transfer's actual resulting "
+        "location, not NULL"
+    )
+    assert second_effect.new_value == {
+        "holder_entity_id": None,
+        "container_id": None,
+        "location_id": str(f.location_id),
+    }
+
+
 def test_an_event_advances_a_knowers_identification_of_an_item(
     postgres_engine: Engine, f: Fixture
 ) -> None:

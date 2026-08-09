@@ -2263,14 +2263,17 @@ def make_sync_job(
     payload: dict[str, object] | None = None,
     error_message: str | None = None,
     resulting_event_id: uuid.UUID | None = None,
+    resulting_encounter_turn_id: uuid.UUID | None = None,
+    external_operation_id: str | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO integration.sync_jobs
                 (external_system_id, direction, job_type, target_entity_id, target_encounter_id,
-                 status, payload_jsonb, error_message, resulting_event_id)
+                 status, payload_jsonb, error_message, resulting_event_id,
+                 resulting_encounter_turn_id, external_operation_id)
             VALUES (:system, :direction, :job_type, :entity, :encounter, :status, :payload,
-                    :error, :event)
+                    :error, :event, :turn, :operation)
             RETURNING sync_job_id
         """),
         {
@@ -2283,6 +2286,8 @@ def make_sync_job(
             "payload": json.dumps(payload) if payload is not None else None,
             "error": error_message,
             "event": resulting_event_id,
+            "turn": resulting_encounter_turn_id,
+            "operation": external_operation_id,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

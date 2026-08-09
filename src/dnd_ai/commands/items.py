@@ -13,6 +13,13 @@ Ownership (campaign.item_ownership) has no command yet — no exit criterion
 requires an ownership-transfer command this increment, and the shape would
 be identical to transfer_item_possession's, so it is deferred to a concrete
 caller rather than built speculatively (conventions §33.1).
+
+transfer_item_possession()'s narrative.event_effects.previous_value records
+the item's actual prior holder/container/location (added during Phase 9
+review, before this PR merged — docs/PHASE9_VERIFICATION.md's correction-
+pass note) — NULL only for a genuine first placement, and the real
+{holder_entity_id, container_id, location_id} snapshot (matching new_value's
+own shape) for every subsequent transfer.
 """
 
 import json
@@ -64,22 +71,34 @@ def _lock_item_instance(connection: Connection, item_instance_id: uuid.UUID) -> 
     )
 
 
+@dataclass(frozen=True)
+class _ExistingInventoryEntry:
+    inventory_entry_id: uuid.UUID
+    holder_entity_id: uuid.UUID | None
+    container_id: uuid.UUID | None
+    location_id: uuid.UUID | None
+
+
 def _lock_inventory_entry(
     connection: Connection, *, timeline_id: uuid.UUID, item_instance_id: uuid.UUID
-) -> uuid.UUID | None:
+) -> _ExistingInventoryEntry | None:
     row = connection.execute(
         text("""
-            SELECT inventory_entry_id
+            SELECT inventory_entry_id, holder_entity_id, container_id, location_id
             FROM campaign.inventory_entries
             WHERE timeline_id = :timeline AND item_instance_id = :item
             FOR UPDATE
         """),
         {"timeline": timeline_id, "item": item_instance_id},
-    ).scalar()
+    ).one_or_none()
     if row is None:
         return None
-    assert isinstance(row, uuid.UUID)
-    return row
+    return _ExistingInventoryEntry(
+        inventory_entry_id=row.inventory_entry_id,
+        holder_entity_id=row.holder_entity_id,
+        container_id=row.container_id,
+        location_id=row.location_id,
+    )
 
 
 def transfer_item_possession(
@@ -151,8 +170,16 @@ def transfer_item_possession(
                 },
             ).scalar()
             assert isinstance(inventory_entry_id, uuid.UUID)
+            previous_location = None
         else:
-            inventory_entry_id = existing
+            inventory_entry_id = existing.inventory_entry_id
+            previous_location = {
+                "holder_entity_id": str(existing.holder_entity_id)
+                if existing.holder_entity_id
+                else None,
+                "container_id": str(existing.container_id) if existing.container_id else None,
+                "location_id": str(existing.location_id) if existing.location_id else None,
+            }
             connection.execute(
                 text("""
                     UPDATE campaign.inventory_entries
@@ -179,7 +206,9 @@ def transfer_item_possession(
             {
                 "event": event_id,
                 "item": item_instance_id,
-                "previous": None,
+                "previous": json.dumps(previous_location)
+                if previous_location is not None
+                else None,
                 "new": json.dumps(
                     {
                         "holder_entity_id": str(holder_entity_id) if holder_entity_id else None,

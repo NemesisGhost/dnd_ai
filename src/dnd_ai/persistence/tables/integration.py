@@ -131,11 +131,16 @@ sync_jobs = Table(
         "payload_jsonb",
         JSONB(),
         comment=(
-            "Raw external payload snapshot — an explicitly acceptable JSONB "
-            "use (conventions §5.7). Never the sole record of a state change: "
-            "a job that mutates persistent state does so through the normal "
-            "command layer (rule 6), which records its own causal event; "
-            "resulting_event_id links back to that event when there was one."
+            "The request payload used for both replay and idempotency-conflict "
+            "comparison — an explicitly acceptable JSONB use (conventions "
+            "§5.7). For inbound jobs with an external_operation_id, this is "
+            "the canonicalized set of command arguments (not only the raw "
+            "external payload) so a replay with a different payload under the "
+            "same operation id can be detected. Never the sole record of a "
+            "state change: a job that mutates persistent state does so "
+            "through the normal command layer (rule 6), which records its own "
+            "causal event; resulting_event_id links back to that event when "
+            "there was one."
         ),
     ),
     Column("error_message", Text()),
@@ -143,6 +148,32 @@ sync_jobs = Table(
         "resulting_event_id",
         UUID(),
         ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "resulting_encounter_turn_id",
+        UUID(),
+        ForeignKey("narrative.encounter_turns.encounter_turn_id", ondelete="SET NULL"),
+        comment=(
+            "The narrative.encounter_turns row this job produced, when it "
+            "produced one — lets a replayed job (same external_system_id, "
+            "external_operation_id) reconstruct its original result "
+            "(combat_action_id via the turn, HP change via "
+            "narrative.event_effects keyed off resulting_event_id) without "
+            "re-executing the domain command."
+        ),
+    ),
+    Column(
+        "external_operation_id",
+        Text(),
+        comment=(
+            "A stable idempotency key the external system supplies for an "
+            "inbound job (e.g. a Foundry combat-turn operation id) — unique "
+            "per external_system_id (ux_sync_jobs_system_operation, below), so "
+            "redelivering the same operation is detected as a replay rather "
+            "than re-applied. NULL for job types with no external-supplied "
+            "operation identity (e.g. outbound jobs this platform itself "
+            "initiates)."
+        ),
     ),
     *_timestamps(),
     schema="integration",
@@ -173,6 +204,18 @@ Index(
     "ix_sync_jobs_resulting_event_id",
     sync_jobs.c.resulting_event_id,
     postgresql_where=sync_jobs.c.resulting_event_id.isnot(None),
+)
+Index(
+    "ix_sync_jobs_resulting_encounter_turn_id",
+    sync_jobs.c.resulting_encounter_turn_id,
+    postgresql_where=sync_jobs.c.resulting_encounter_turn_id.isnot(None),
+)
+Index(
+    "ux_sync_jobs_system_operation",
+    sync_jobs.c.external_system_id,
+    sync_jobs.c.external_operation_id,
+    unique=True,
+    postgresql_where=sync_jobs.c.external_operation_id.isnot(None),
 )
 
 sync_state = Table(

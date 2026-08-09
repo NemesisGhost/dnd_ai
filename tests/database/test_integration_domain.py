@@ -17,6 +17,9 @@ from tests.factories import (
     make_character,
     make_delivery_attempt,
     make_encounter,
+    make_encounter_participant,
+    make_encounter_round,
+    make_encounter_turn,
     make_external_identifier,
     make_external_system,
     make_sync_job,
@@ -39,6 +42,13 @@ class Fixture:
         self.character_id = make_character(connection, self.world_id, name="Rin")
         self.encounter_id = make_encounter(connection, self.timeline_id, self.t0)
         self.external_system_id = make_external_system(connection, self.world_id)
+        self.encounter_round_id = make_encounter_round(connection, self.encounter_id, 1)
+        self.participant_id = make_encounter_participant(
+            connection, self.encounter_id, self.character_id
+        )
+        self.encounter_turn_id = make_encounter_turn(
+            connection, self.encounter_round_id, self.participant_id, 0
+        )
 
 
 @pytest.fixture
@@ -145,6 +155,45 @@ def test_a_sync_jobs_target_encounter_must_share_the_systems_world(
     with pytest.raises(CONSTRAINT_ERRORS) as exc:
         make_sync_job(db_connection, f.external_system_id, target_encounter_id=foreign_encounter)
     assert "belongs to world" in str(exc.value)
+
+
+def test_a_sync_job_can_record_its_resulting_encounter_turn(
+    db_connection: Connection, f: Fixture
+) -> None:
+    job_id = make_sync_job(
+        db_connection,
+        f.external_system_id,
+        target_encounter_id=f.encounter_id,
+        status="completed",
+        resulting_encounter_turn_id=f.encounter_turn_id,
+    )
+    assert job_id is not None
+
+
+def test_an_external_operation_id_is_unique_per_external_system(
+    db_connection: Connection, f: Fixture
+) -> None:
+    make_sync_job(db_connection, f.external_system_id, external_operation_id="op-1")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_sync_job(db_connection, f.external_system_id, external_operation_id="op-1")
+    assert "ux_sync_jobs_system_operation" in str(exc.value)
+
+
+def test_the_same_external_operation_id_is_allowed_on_a_different_system(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_system_id = make_external_system(db_connection, f.world_id, display_name="Other System")
+    make_sync_job(db_connection, f.external_system_id, external_operation_id="op-1")
+    job_id = make_sync_job(db_connection, other_system_id, external_operation_id="op-1")
+    assert job_id is not None
+
+
+def test_multiple_sync_jobs_may_omit_an_external_operation_id(
+    db_connection: Connection, f: Fixture
+) -> None:
+    make_sync_job(db_connection, f.external_system_id)
+    job_id = make_sync_job(db_connection, f.external_system_id)
+    assert job_id is not None
 
 
 # ---------------------------------------------------------------------------

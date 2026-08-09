@@ -40,9 +40,62 @@ Purpose:
     integration.sync_state additionally requires exactly one (never zero) —
     unlike a job, a *current sync state* row must always be about something.
 
-    integration.sync_jobs.payload_jsonb holds the raw external payload
-    snapshot — an explicitly acceptable JSONB use per conventions §5.7
-    ("external API payload snapshot").
+    integration.sync_jobs.payload_jsonb holds the request payload used for
+    both replay and idempotency-conflict comparison — an explicitly
+    acceptable JSONB use per conventions §5.7 ("external API payload
+    snapshot").
+
+    integration.sync_jobs.external_operation_id (added in review, before
+    this PR merged — see docs/PHASE9_VERIFICATION.md's correction-pass
+    note) is a stable idempotency key an inbound job's external system
+    supplies, unique per external_system_id
+    (ux_sync_jobs_system_operation). The command layer
+    (dnd_ai.commands.integration.apply_foundry_combat_sync()) uses a
+    session-scoped Postgres advisory lock keyed on
+    (external_system_id, external_operation_id) to fully serialize
+    concurrent submissions of the same operation — by the time a second
+    concurrent caller acquires the lock, the first has already reached a
+    terminal sync_jobs.status and the second replays that result instead
+    of re-executing the domain command. The unique index is the database-
+    level backstop for that invariant, not the primary mechanism.
+    resulting_encounter_turn_id lets a replay reconstruct the original
+    ResolveCombatTurnResult (combat_action_id via the turn row, HP change
+    via narrative.event_effects keyed off resulting_event_id) without
+    re-running resolve_combat_turn().
+
+    Second correction, before this PR merged (docs/PHASE9_VERIFICATION.md's
+    "atomic completion" note): the two partial unique indexes on
+    integration.sync_state — one per target column — are designed to be
+    the target of an `INSERT ... ON CONFLICT (...) WHERE ... DO UPDATE`
+    upsert from the command layer, not a SELECT-then-INSERT. Two different
+    external_operation_ids racing to complete for the same target (the
+    advisory lock above only serializes same-operation-id callers, not
+    different ones) rely on Postgres serializing the two upserts at the
+    row level through these indexes — whichever conflicts, blocks on the
+    other's row lock, and applies its own update once free. This is why
+    both indexes stayed partial UNIQUE indexes rather than being merged
+    into one general-purpose index or loosened: the upsert's conflict
+    target must exactly match one specific index (columns and predicate)
+    per PostgreSQL's inference rules, and a target-scoped partial index is
+    exactly what makes that inference unambiguous per target type.
+
+    Third correction, before this PR merged (docs/PHASE9_VERIFICATION.md's
+    "single-connection" note): no schema change, but worth recording here
+    since it changes how the command layer's advisory lock interacts with
+    connection pooling. The second correction's claim/work/fail steps each
+    opened their own connection via engine.begin() while the advisory-lock
+    connection sat idle for the whole call — under a small connection pool,
+    a caller waiting on the lock could exhaust the pool's remaining
+    connections and leave the lock holder itself unable to obtain one for
+    its own steps, a self-inflicted deadlock. apply_foundry_combat_sync()
+    now runs all three steps as sequential transactions on the same
+    connection that holds the lock, so one call never needs more than a
+    single pooled connection for its entire duration. The same pass
+    hardened lock release: if pg_advisory_unlock()'s result can't confirm
+    the lock was actually released (or the unlock statement itself raises),
+    the connection is invalidated rather than returned to the pool, so a
+    still-held session-scoped lock can never be silently inherited by a
+    future caller.
 
 Forward migration:
     - integration.external_systems (world-scoped), with
@@ -51,7 +104,10 @@ Forward migration:
       symmetry-of-pattern; see deliberate scoping decisions
     - integration.external_identifiers, with
       integration.enforce_external_identifier_world()
-    - integration.sync_jobs, with integration.enforce_sync_job_world()
+    - integration.sync_jobs, with integration.enforce_sync_job_world();
+      external_operation_id + resulting_encounter_turn_id +
+      ux_sync_jobs_system_operation added in the same correction pass that
+      added the docstring paragraph above
     - integration.sync_state, with integration.enforce_sync_state_world()
     - integration.delivery_attempts (child of sync_jobs, no world check of
       its own needed — it has no reference beyond sync_job_id)
@@ -90,6 +146,24 @@ Deliberate scoping decisions:
       perspective_holder_entity_id dimension (revision 076), rather than a
       single expression index — partial indexes read more directly here
       given the CHECK already guarantees exactly one target is set.
+    - external_operation_id has no CHECK-constrained format (unlike
+      lookup codes elsewhere) — it is an opaque identifier the external
+      system chooses, not a code this platform defines.
+    - Replaying an operation id whose prior sync_jobs row is still
+      'failed' (or, in the crash-recovery case, stuck 'in_progress' with
+      no other transaction currently holding its advisory lock) is treated
+      as a retry of the same job row — a new integration.delivery_attempts
+      row with an incremented attempt_number, not a new sync_jobs row —
+      but only when the replay's canonical payload matches the payload
+      originally recorded for that operation id exactly. The payload-
+      equality check (dnd_ai.commands.integration.
+      ConflictingSyncPayloadError) runs unconditionally, before status is
+      even consulted, so it applies to a 'failed' row exactly as it does to
+      a 'completed' one: every payload mismatch under a reused operation id
+      is a conflict, full stop, never a silent retry with new arguments.
+      Only a same-payload retry of a job that never actually succeeded
+      reaches delivery_attempts's incremented attempt_number (its own
+      table comment already says so).
 
 See: docs/PLAN.md Phase 9 (items, inventory, encounters, Foundry integration
      contracts)
@@ -271,6 +345,10 @@ def upgrade() -> None:
             error_message                             TEXT,
             resulting_event_id                          UUID
                                    REFERENCES narrative.events(event_id) ON DELETE SET NULL,
+            resulting_encounter_turn_id                    UUID
+                                   REFERENCES narrative.encounter_turns(encounter_turn_id)
+                                   ON DELETE SET NULL,
+            external_operation_id                             TEXT,
             created_at                                    TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at                                      TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT ck_sync_jobs_direction CHECK (direction IN {SYNC_JOB_DIRECTIONS}),
@@ -278,6 +356,10 @@ def upgrade() -> None:
             CONSTRAINT ck_sync_jobs_job_type_length CHECK (char_length(job_type) BETWEEN 1 AND 100),
             CONSTRAINT ck_sync_jobs_at_most_one_target CHECK (
                 num_nonnulls(target_entity_id, target_encounter_id) <= 1
+            ),
+            CONSTRAINT ck_sync_jobs_external_operation_id_length CHECK (
+                external_operation_id IS NULL
+                OR char_length(external_operation_id) BETWEEN 1 AND 500
             )
         );
     """)
@@ -293,11 +375,35 @@ def upgrade() -> None:
     """)
     op.execute("""
         COMMENT ON COLUMN integration.sync_jobs.payload_jsonb IS
-        'Raw external payload snapshot — an explicitly acceptable JSONB '
-        'use (conventions §5.7). Never the sole record of a state change: '
-        'a job that mutates persistent state does so through the normal '
-        'command layer (rule 6), which records its own causal event; '
-        'resulting_event_id links back to that event when there was one.';
+        'The request payload used for both replay and idempotency-conflict '
+        'comparison — an explicitly acceptable JSONB use (conventions '
+        '§5.7). For inbound jobs with an external_operation_id, this is '
+        'the canonicalized set of command arguments (not only the raw '
+        'external payload) so a replay with a different payload under the '
+        'same operation id can be detected. Never the sole record of a '
+        'state change: a job that mutates persistent state does so '
+        'through the normal command layer (rule 6), which records its own '
+        'causal event; resulting_event_id links back to that event when '
+        'there was one.';
+    """)
+    op.execute("""
+        COMMENT ON COLUMN integration.sync_jobs.resulting_encounter_turn_id IS
+        'The narrative.encounter_turns row this job produced, when it '
+        'produced one — lets a replayed job (same external_system_id, '
+        'external_operation_id) reconstruct its original result '
+        '(combat_action_id via the turn, HP change via '
+        'narrative.event_effects keyed off resulting_event_id) without '
+        're-executing the domain command.';
+    """)
+    op.execute("""
+        COMMENT ON COLUMN integration.sync_jobs.external_operation_id IS
+        'A stable idempotency key the external system supplies for an '
+        'inbound job (e.g. a Foundry combat-turn operation id) — unique '
+        'per external_system_id (ux_sync_jobs_system_operation, below), so '
+        'redelivering the same operation is detected as a replay rather '
+        'than re-applied. NULL for job types with no external-supplied '
+        'operation identity (e.g. outbound jobs this platform itself '
+        'initiates).';
     """)
     op.execute("""
         CREATE TRIGGER tr_sync_jobs_set_updated_at
@@ -320,6 +426,16 @@ def upgrade() -> None:
         "CREATE INDEX ix_sync_jobs_resulting_event_id ON integration.sync_jobs (resulting_event_id) "
         "WHERE resulting_event_id IS NOT NULL;"
     )
+    op.execute(
+        "CREATE INDEX ix_sync_jobs_resulting_encounter_turn_id "
+        "ON integration.sync_jobs (resulting_encounter_turn_id) "
+        "WHERE resulting_encounter_turn_id IS NOT NULL;"
+    )
+    op.execute("""
+        CREATE UNIQUE INDEX ux_sync_jobs_system_operation
+        ON integration.sync_jobs (external_system_id, external_operation_id)
+        WHERE external_operation_id IS NOT NULL;
+    """)
 
     op.execute("""
         CREATE OR REPLACE FUNCTION integration.enforce_sync_job_world()

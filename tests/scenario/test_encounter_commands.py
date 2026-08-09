@@ -201,6 +201,60 @@ def test_a_miss_leaves_character_state_and_events_untouched(
     assert _character_hit_points(postgres_engine, f.timeline_id, f.defender_id) == 20
 
 
+def test_a_miss_with_a_submitted_damage_amount_still_never_applies_it(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Regression: hit=False must be authoritative over damage_amount — a
+    caller that reports both a miss and a rolled damage number (a
+    submitted-but-not-landed roll) must never have that damage applied or
+    an event recorded, even though damage_amount alone would previously
+    have triggered both. The submitted damage_amount is still preserved on
+    the combat_actions row as payload/result data."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+
+    result = resolve_combat_turn(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        action_kind="attack",
+        target_entity_id=f.defender_id,
+        hit=False,
+        damage_amount=7,
+    )
+
+    assert result.event_id is None
+    assert result.new_hit_points is None
+    assert result.previous_hit_points is None
+    assert _character_hit_points(postgres_engine, f.timeline_id, f.defender_id) == 20
+
+    with postgres_engine.connect() as verify:
+        combat_action_row = verify.execute(
+            text("""
+                SELECT ca.hit, ca.damage_amount
+                FROM narrative.encounter_turns et
+                JOIN interaction.combat_actions ca ON ca.combat_action_id = et.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.encounter_turn_id},
+        ).one()
+        assert combat_action_row.hit is False
+        assert combat_action_row.damage_amount == 7
+
+        event_count = verify.execute(
+            text("SELECT count(*) FROM narrative.events WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 0
+
+
 def test_ending_an_encounter_records_outcomes_and_completes_it(
     postgres_engine: Engine, f: Fixture
 ) -> None:
