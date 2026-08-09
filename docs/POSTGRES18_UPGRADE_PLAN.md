@@ -7,7 +7,7 @@ Two pieces of work left open by the 2026-08-07 verification pivot ([ADR 0011](ad
 - **Workstream A** — make the local-first loop real in code. The documentation describes it; `tests/conftest.py` and `scripts/verify.sh` still target AWS by default.
 - **Workstream B** — upgrade the deployed `dev` RDS instance from PostgreSQL 15.18 to 18.4, closing the local/`dev` major-version drift recorded as gap 0 in [INFRASTRUCTURE.md §11](INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) and the top item in [PLAN.md §29.8](PLAN.md#298-open-items).
 
-**Gate (closed): no further feature work is pushed to AWS until both workstreams are complete.** In practice that meant Phase 9 ([PLAN.md](PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization)) would not merge until this plan closed, because every push runs CI, and CI migrates the `dev` database. See [§5](#5-what-the-gate-permits) for what the gate did and did not block.
+**Gate (closed): no further feature work is pushed to AWS until both workstreams are complete.** In practice that meant Phase 9 ([PLAN.md](PLAN.md#phase-9-items-inventory-encounters-and-foundry-integration-contracts) — renamed 2026-08-09 from "...and Foundry synchronization" when the live sync exit criterion moved to Phase 11; this link and the gate history below predate that rename) would not merge until this plan closed, because every push runs CI, and CI migrates the `dev` database. See [§5](#5-what-the-gate-permits) for what the gate did and did not block.
 
 ---
 
