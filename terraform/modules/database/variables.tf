@@ -68,21 +68,24 @@ variable "master_username" {
 }
 
 variable "postgres_version" {
-  description = "PostgreSQL version"
-  type        = string
-  default     = "18.4"
-}
-
-variable "parameter_group_family" {
   description = <<-EOT
-    RDS parameter group family, e.g. "postgres18". Must match the major
-    version of postgres_version — parameter groups are family-scoped and do
-    not carry across a major version change. Kept as an explicit variable
-    rather than derived from postgres_version by string surgery, so the two
-    stay deliberately in sync at every call site.
+    PostgreSQL engine version, e.g. "18.4" or "18". The RDS parameter group
+    family (e.g. "postgres18") is derived from this automatically —
+    local.parameter_group_family in rds.tf — so the two can never disagree.
+    There is no separate parameter_group_family variable to keep in sync.
   EOT
   type        = string
-  default     = "postgres18"
+  default     = "18.4"
+
+  validation {
+    # Must be parseable as a major or major.minor version number for the
+    # local.postgres_major / local.parameter_group_family derivation in
+    # rds.tf to produce a sane family name (e.g. "postgres18") instead of
+    # silently building a garbage one AWS would only reject later, deep
+    # inside a ModifyDBParameterGroup/CreateDBInstance call.
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)?$", var.postgres_version))
+    error_message = "postgres_version must be a major or major.minor version number, e.g. \"18\" or \"18.4\"."
+  }
 }
 
 variable "auto_minor_version_upgrade" {

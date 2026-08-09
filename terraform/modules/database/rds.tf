@@ -2,6 +2,19 @@
 # RDS PostgreSQL Database Resources
 # =====================================================
 
+# Derived, not independently configurable: the parameter group family must
+# match postgres_version's major component or RDS rejects the parameter
+# group outright (a mismatch such as postgres_version = "19.x" with a
+# "postgres18" family fails at apply time, not silently). Deriving it here
+# makes that combination impossible to express in the first place, rather
+# than validating it after the fact — there is no parameter_group_family
+# variable to independently get out of sync. var.postgres_version's own
+# validation (variables.tf) guarantees this split produces a sane result.
+locals {
+  postgres_major         = split(".", var.postgres_version)[0]
+  parameter_group_family = "postgres${local.postgres_major}"
+}
+
 # Parameter group for PostgreSQL
 #
 # name_prefix + create_before_destroy: `family` forces replacement of this
@@ -11,7 +24,7 @@
 # the correct order — create the new group, point the instance at it, then
 # destroy the old one. See docs/POSTGRES18_UPGRADE_PLAN.md §B1.
 resource "aws_db_parameter_group" "main" {
-  family      = var.parameter_group_family
+  family      = local.parameter_group_family
   name_prefix = "${var.project_name}-${var.environment}-db-params-"
 
   lifecycle {

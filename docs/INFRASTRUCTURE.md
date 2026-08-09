@@ -161,7 +161,7 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `database_name` | `dnd_ai` | Not `dnd_ai_dev` |
 | `master_username` | `dnd_admin` | Not `postgres` |
-| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md) |
+| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md). The RDS parameter group family (e.g. `postgres18`) is derived from this automatically (`local.parameter_group_family` in `rds.tf`) — there is no separate variable for it, so the two can't be set inconsistently |
 | `instance_class` | `db.t3.micro` | |
 | `allocated_storage` / `max_allocated_storage` | `20` / `100` | GB, gp3, autoscaling |
 | `backup_retention_period` | `7` | Days |

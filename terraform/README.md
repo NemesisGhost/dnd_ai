@@ -28,4 +28,4 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 ./build.ps1 -Environment dev -Action plan
 ```
 
-Note: `terraform destroy` currently fails in `dev` because `deletion_protection` is never overridden — see [docs/INFRASTRUCTURE.md §11](../docs/INFRASTRUCTURE.md#11-known-gaps-and-discrepancies).
+`dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf` (per [docs/PLAN.md §29.3](../docs/PLAN.md#293-environments-dev-staging-prod)), so `terraform destroy` works directly — no extra step needed. Details: [docs/INFRASTRUCTURE.md §11](../docs/INFRASTRUCTURE.md#11-known-gaps-and-discrepancies) gap 1 (resolved) and [§8](../docs/INFRASTRUCTURE.md#8-teardown).

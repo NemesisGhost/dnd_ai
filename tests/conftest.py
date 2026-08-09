@@ -18,6 +18,13 @@ pytest run rather than creating a second one here — set
 DND_AI_TEST_DATABASE_URL to it and this fixture connects directly instead of
 provisioning its own.
 
+tests/database and tests/scenario are required verification, not optional
+coverage (docs/PLAN.md §23.0) — missing configuration and an unsupported
+PostgreSQL major version both FAIL the session (DatabaseConfigurationError /
+UnsupportedPostgresVersionError below), never pytest.skip(). A skip here
+previously let every PostgreSQL-backed test report "skipped" while pytest
+still exited 0 — a false-green that verified nothing.
+
 tests/unit must not depend on any fixture here — it runs with no database.
 Markers (unit, database, scenario) are registered in pyproject.toml, not here.
 """
@@ -35,7 +42,78 @@ from sqlalchemy import Connection, Engine, create_engine, make_url, text
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
 
+# docs/DATABASE_CONVENTIONS.md §2.1 pins one PostgreSQL major version across
+# local, dev/staging/prod, and CI.
+REQUIRED_POSTGRES_MAJOR_VERSION = 18
+
 load_dotenv()
+
+
+class DatabaseConfigurationError(RuntimeError):
+    """Neither DATABASE_URL nor DND_AI_TEST_DATABASE_URL is set.
+
+    Raised rather than pytest.skip()ped: tests/database and tests/scenario
+    are required verification, and a skip here used to let every
+    PostgreSQL-backed test report "skipped" while pytest still exited 0 — a
+    false-green that never actually verified anything.
+    """
+
+
+class UnsupportedPostgresVersionError(RuntimeError):
+    """The connected server's major version isn't REQUIRED_POSTGRES_MAJOR_VERSION.
+
+    docs/DATABASE_CONVENTIONS.md §2.1 pins one PostgreSQL major version
+    across local, dev/staging/prod, and CI. A mismatch here means the
+    developer's (or CI's) target has drifted from that pin — exactly the
+    class of problem ADR 0011's two-tier verification model exists to
+    catch — so it must fail the run rather than quietly test against the
+    wrong version.
+    """
+
+
+def _missing_database_configuration_error() -> DatabaseConfigurationError:
+    """Factored out of postgres_engine() so the missing-configuration path
+    can be unit-tested (tests/unit/test_conftest_guards.py) without a live
+    PostgreSQL server or invoking the real fixture."""
+    return DatabaseConfigurationError(
+        "Neither DATABASE_URL nor DND_AI_TEST_DATABASE_URL is set. "
+        "tests/database and tests/scenario require a real PostgreSQL server "
+        "and cannot be skipped — point DATABASE_URL at a local PostgreSQL "
+        f"{REQUIRED_POSTGRES_MAJOR_VERSION} server per docs/DEVELOPMENT.md §3, "
+        "or at the AWS dev endpoint per docs/DEVELOPMENT.md §3.5."
+    )
+
+
+def _check_server_major_version(version_num: int) -> None:
+    """Pure version-number check, split from _require_supported_postgres()
+    below so it can be unit-tested (tests/unit/test_conftest_guards.py)
+    without a live PostgreSQL server.
+
+    version_num is PostgreSQL's own server_version_num encoding — e.g.
+    180004 for 18.4. For PostgreSQL 10+ (every version this project
+    supports), the major version is the value floor-divided by 10000.
+    """
+    major = version_num // 10000
+    if major != REQUIRED_POSTGRES_MAJOR_VERSION:
+        raise UnsupportedPostgresVersionError(
+            f"Connected PostgreSQL server is major version {major} "
+            f"(server_version_num={version_num}); this project requires "
+            f"PostgreSQL {REQUIRED_POSTGRES_MAJOR_VERSION}.x — see "
+            "docs/DATABASE_CONVENTIONS.md §2.1."
+        )
+
+
+def _require_supported_postgres(engine: Engine) -> None:
+    """Connects and enforces REQUIRED_POSTGRES_MAJOR_VERSION before the
+    caller does anything else with `engine` — in particular, before
+    postgres_engine() provisions the ephemeral test database, so a version
+    mismatch fails immediately rather than after creating state that then
+    has to be cleaned up. Applied identically on both the DATABASE_URL and
+    DND_AI_TEST_DATABASE_URL paths, so local and CI can't diverge here.
+    """
+    with engine.connect() as conn:
+        version_num = int(conn.execute(text("SHOW server_version_num")).scalar_one())
+    _check_server_major_version(version_num)
 
 
 def _run_alembic_upgrade(database_url: str) -> None:
@@ -52,12 +130,16 @@ def postgres_engine() -> Iterator[Engine]:
     """
     Session-scoped engine pointed at a throwaway database migrated to head,
     provisioned on whatever DATABASE_URL names — a local PostgreSQL server by
-    default, or the AWS dev endpoint when that's what's configured.
+    default, or the AWS dev endpoint when that's what's configured. Fails
+    loudly (never skips) when nothing is configured or the connected server
+    is the wrong PostgreSQL major version — see DatabaseConfigurationError
+    and UnsupportedPostgresVersionError above.
     """
     preprovisioned_url = os.environ.get("DND_AI_TEST_DATABASE_URL")
     if preprovisioned_url:
         engine = create_engine(preprovisioned_url)
         try:
+            _require_supported_postgres(engine)
             yield engine
         finally:
             engine.dispose()
@@ -65,19 +147,19 @@ def postgres_engine() -> Iterator[Engine]:
 
     admin_url_raw = os.environ.get("DATABASE_URL")
     if not admin_url_raw:
-        pytest.skip(
-            "DATABASE_URL is not set — point it at a local PostgreSQL server "
-            "per docs/DEVELOPMENT.md §3 (or the AWS dev endpoint per §3.5)."
-        )
+        raise _missing_database_configuration_error()
 
     admin_url = make_url(admin_url_raw)
     db_name = f"dnd_ai_test_{uuid.uuid4().hex[:12]}"
     test_url = admin_url.set(database=db_name)
 
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-    with admin_engine.connect() as conn:
-        conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    admin_engine.dispose()
+    try:
+        _require_supported_postgres(admin_engine)
+        with admin_engine.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    finally:
+        admin_engine.dispose()
 
     # Everything from here must be inside try/finally: a failed migration
     # (which happened during development of this fixture) must not leave the
