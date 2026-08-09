@@ -1775,3 +1775,570 @@ def make_relationship_state(
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_item_category(connection: Connection, code: str = "wondrous_item") -> uuid.UUID:
+    value = connection.execute(
+        text("SELECT item_category_id FROM rules.item_categories WHERE code = :c"), {"c": code}
+    ).scalar()
+    assert isinstance(value, uuid.UUID), f"seeded rules.item_categories row {code!r} missing"
+    return value
+
+
+def make_item_definition(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    item_category_code: str = "wondrous_item",
+    code: str | None = None,
+    display_name: str = "Test Item",
+    rarity: str = "common",
+    requires_attunement: bool = False,
+    weight: float | None = None,
+    base_cost_gp: float | None = None,
+) -> uuid.UUID:
+    if code is None:
+        code = f"item_{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.item_definitions
+                (ruleset_version_id, item_category_id, code, display_name, rarity,
+                 requires_attunement, weight, base_cost_gp)
+            VALUES (:version, :category, :code, :name, :rarity, :attunement, :weight, :cost)
+            RETURNING item_definition_id
+        """),
+        {
+            "version": ruleset_version_id,
+            "category": make_item_category(connection, item_category_code),
+            "code": code,
+            "name": display_name,
+            "rarity": rarity,
+            "attunement": requires_attunement,
+            "weight": weight,
+            "cost": base_cost_gp,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_item_instance(
+    connection: Connection,
+    world_id: uuid.UUID,
+    item_definition_id: uuid.UUID,
+    *,
+    name: str = "Test Item Instance",
+    origin_notes: str | None = None,
+) -> uuid.UUID:
+    """A core.entities row plus its world.item_instances row. Returns the
+    shared UUID (the item_instance_id, same as the entity_id)."""
+    entity_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", "item_instance"
+    )
+    item_instance_id = make_entity(connection, world_id, entity_type_id, name=name)
+    connection.execute(
+        text("""
+            INSERT INTO world.item_instances (item_instance_id, item_definition_id, origin_notes)
+            VALUES (:id, :definition, :notes)
+        """),
+        {"id": item_instance_id, "definition": item_definition_id, "notes": origin_notes},
+    )
+    return item_instance_id
+
+
+def make_item_container(
+    connection: Connection,
+    item_instance_id: uuid.UUID,
+    *,
+    capacity_weight: float | None = None,
+    capacity_items: int | None = None,
+) -> uuid.UUID:
+    connection.execute(
+        text("""
+            INSERT INTO world.item_containers (container_id, capacity_weight, capacity_items)
+            VALUES (:id, :weight, :items)
+        """),
+        {"id": item_instance_id, "weight": capacity_weight, "items": capacity_items},
+    )
+    return item_instance_id
+
+
+def make_item_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    *,
+    quantity: int = 1,
+    condition_percentage: int | None = None,
+    charges_current: int | None = None,
+    charges_maximum: int | None = None,
+    is_equipped: bool = False,
+    is_destroyed: bool = False,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.item_state
+                (timeline_id, item_instance_id, quantity, condition_percentage,
+                 charges_current, charges_maximum, is_equipped, is_destroyed, last_event_id)
+            VALUES (:timeline, :item, :quantity, :condition, :charges_cur, :charges_max,
+                    :equipped, :destroyed, :event)
+            RETURNING item_state_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": item_instance_id,
+            "quantity": quantity,
+            "condition": condition_percentage,
+            "charges_cur": charges_current,
+            "charges_max": charges_maximum,
+            "equipped": is_equipped,
+            "destroyed": is_destroyed,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_item_ownership(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    *,
+    owner_entity_id: uuid.UUID | None = None,
+    acquired_world_time_id: uuid.UUID | None = None,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.item_ownership
+                (timeline_id, item_instance_id, owner_entity_id, acquired_world_time_id,
+                 last_event_id)
+            VALUES (:timeline, :item, :owner, :acquired, :event)
+            RETURNING item_ownership_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": item_instance_id,
+            "owner": owner_entity_id,
+            "acquired": acquired_world_time_id,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_inventory_entry(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    *,
+    holder_entity_id: uuid.UUID | None = None,
+    container_id: uuid.UUID | None = None,
+    location_id: uuid.UUID | None = None,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.inventory_entries
+                (timeline_id, item_instance_id, holder_entity_id, container_id, location_id,
+                 last_event_id)
+            VALUES (:timeline, :item, :holder, :container, :location, :event)
+            RETURNING inventory_entry_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": item_instance_id,
+            "holder": holder_entity_id,
+            "container": container_id,
+            "location": location_id,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_item_attunement(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    character_id: uuid.UUID,
+    *,
+    attuned_world_time_id: uuid.UUID | None = None,
+    broken_world_time_id: uuid.UUID | None = None,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.item_attunements
+                (timeline_id, item_instance_id, character_id, attuned_world_time_id,
+                 broken_world_time_id, last_event_id)
+            VALUES (:timeline, :item, :character, :attuned, :broken, :event)
+            RETURNING item_attunement_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": item_instance_id,
+            "character": character_id,
+            "attuned": attuned_world_time_id,
+            "broken": broken_world_time_id,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_item_identification(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    knower_entity_id: uuid.UUID,
+    *,
+    identification_level: str = "unidentified",
+    known_properties: dict[str, object] | None = None,
+    identified_at_world_time_id: uuid.UUID | None = None,
+    last_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.item_identification
+                (timeline_id, item_instance_id, knower_entity_id, identification_level,
+                 known_properties_jsonb, identified_at_world_time_id, last_event_id)
+            VALUES (:timeline, :item, :knower, :level, :properties, :identified_at, :event)
+            RETURNING item_identification_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": item_instance_id,
+            "knower": knower_entity_id,
+            "level": identification_level,
+            "properties": json.dumps(known_properties) if known_properties is not None else None,
+            "identified_at": identified_at_world_time_id,
+            "event": last_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_encounter(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    *,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    location_id: uuid.UUID | None = None,
+    status: str = "pending",
+    current_round: int = 0,
+    summary: str | None = None,
+    resulting_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.encounters
+                (timeline_id, campaign_id, session_id, location_id, world_time_id, status,
+                 current_round, summary, resulting_event_id)
+            VALUES (:timeline, :campaign, :session, :location, :world_time, :status, :round,
+                    :summary, :event)
+            RETURNING encounter_id
+        """),
+        {
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "location": location_id,
+            "world_time": world_time_id,
+            "status": status,
+            "round": current_round,
+            "summary": summary,
+            "event": resulting_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_encounter_participant(
+    connection: Connection,
+    encounter_id: uuid.UUID,
+    participant_entity_id: uuid.UUID,
+    *,
+    side: str = "party",
+    initiative: int | None = None,
+    outcome: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.encounter_participants
+                (encounter_id, participant_entity_id, side, initiative, outcome)
+            VALUES (:encounter, :participant, :side, :initiative, :outcome)
+            RETURNING encounter_participant_id
+        """),
+        {
+            "encounter": encounter_id,
+            "participant": participant_entity_id,
+            "side": side,
+            "initiative": initiative,
+            "outcome": outcome,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_encounter_round(
+    connection: Connection, encounter_id: uuid.UUID, round_number: int
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.encounter_rounds (encounter_id, round_number)
+            VALUES (:encounter, :round)
+            RETURNING encounter_round_id
+        """),
+        {"encounter": encounter_id, "round": round_number},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_combat_action(
+    connection: Connection,
+    action_id: uuid.UUID,
+    *,
+    target_id: uuid.UUID | None = None,
+    action_kind: str = "attack",
+    item_instance_id: uuid.UUID | None = None,
+    spell_id: uuid.UUID | None = None,
+    hit: bool | None = None,
+    damage_amount: int | None = None,
+    damage_type_id: uuid.UUID | None = None,
+    resulting_condition_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO interaction.combat_actions
+                (action_id, target_id, action_kind, item_instance_id, spell_id, hit,
+                 damage_amount, damage_type_id, resulting_condition_id)
+            VALUES (:action, :target, :kind, :item, :spell, :hit, :damage, :damage_type,
+                    :condition)
+            RETURNING combat_action_id
+        """),
+        {
+            "action": action_id,
+            "target": target_id,
+            "kind": action_kind,
+            "item": item_instance_id,
+            "spell": spell_id,
+            "hit": hit,
+            "damage": damage_amount,
+            "damage_type": damage_type_id,
+            "condition": resulting_condition_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_encounter_turn(
+    connection: Connection,
+    encounter_round_id: uuid.UUID,
+    participant_id: uuid.UUID,
+    turn_order: int,
+    *,
+    combat_action_id: uuid.UUID | None = None,
+    notes: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO narrative.encounter_turns
+                (encounter_round_id, participant_id, turn_order, combat_action_id, notes)
+            VALUES (:round, :participant, :order, :combat_action, :notes)
+            RETURNING encounter_turn_id
+        """),
+        {
+            "round": encounter_round_id,
+            "participant": participant_id,
+            "order": turn_order,
+            "combat_action": combat_action_id,
+            "notes": notes,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_state(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    *,
+    current_hit_points: int = 10,
+    maximum_hit_points: int = 10,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO campaign.character_state
+                (timeline_id, character_id, current_hit_points, maximum_hit_points)
+            VALUES (:timeline, :character, :current, :maximum)
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "current": current_hit_points,
+            "maximum": maximum_hit_points,
+        },
+    )
+
+
+def make_external_system(
+    connection: Connection,
+    world_id: uuid.UUID,
+    *,
+    system_type: str = "foundry",
+    display_name: str = "Test Foundry World",
+    external_reference: str | None = None,
+    is_active: bool = True,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.external_systems
+                (world_id, system_type, display_name, external_reference, is_active)
+            VALUES (:world, :type, :name, :reference, :active)
+            RETURNING external_system_id
+        """),
+        {
+            "world": world_id,
+            "type": system_type,
+            "name": display_name,
+            "reference": external_reference,
+            "active": is_active,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_external_identifier(
+    connection: Connection,
+    external_system_id: uuid.UUID,
+    entity_id: uuid.UUID,
+    *,
+    external_kind: str = "actor",
+    external_id: str = "test-external-id",
+    last_synced_at: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.external_identifiers
+                (external_system_id, entity_id, external_kind, external_id, last_synced_at)
+            VALUES (:system, :entity, :kind, :external, :synced)
+            RETURNING external_identifier_id
+        """),
+        {
+            "system": external_system_id,
+            "entity": entity_id,
+            "kind": external_kind,
+            "external": external_id,
+            "synced": last_synced_at,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_sync_job(
+    connection: Connection,
+    external_system_id: uuid.UUID,
+    *,
+    direction: str = "inbound",
+    job_type: str = "combat_turn",
+    target_entity_id: uuid.UUID | None = None,
+    target_encounter_id: uuid.UUID | None = None,
+    status: str = "pending",
+    payload: dict[str, object] | None = None,
+    error_message: str | None = None,
+    resulting_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.sync_jobs
+                (external_system_id, direction, job_type, target_entity_id, target_encounter_id,
+                 status, payload_jsonb, error_message, resulting_event_id)
+            VALUES (:system, :direction, :job_type, :entity, :encounter, :status, :payload,
+                    :error, :event)
+            RETURNING sync_job_id
+        """),
+        {
+            "system": external_system_id,
+            "direction": direction,
+            "job_type": job_type,
+            "entity": target_entity_id,
+            "encounter": target_encounter_id,
+            "status": status,
+            "payload": json.dumps(payload) if payload is not None else None,
+            "error": error_message,
+            "event": resulting_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_sync_state(
+    connection: Connection,
+    external_system_id: uuid.UUID,
+    *,
+    target_entity_id: uuid.UUID | None = None,
+    target_encounter_id: uuid.UUID | None = None,
+    last_sync_job_id: uuid.UUID | None = None,
+    sync_status: str = "unsynced",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.sync_state
+                (external_system_id, target_entity_id, target_encounter_id, last_sync_job_id,
+                 sync_status)
+            VALUES (:system, :entity, :encounter, :job, :status)
+            RETURNING sync_state_id
+        """),
+        {
+            "system": external_system_id,
+            "entity": target_entity_id,
+            "encounter": target_encounter_id,
+            "job": last_sync_job_id,
+            "status": sync_status,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_delivery_attempt(
+    connection: Connection,
+    sync_job_id: uuid.UUID,
+    *,
+    attempt_number: int = 1,
+    succeeded: bool = True,
+    response_summary: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.delivery_attempts
+                (sync_job_id, attempt_number, succeeded, response_summary)
+            VALUES (:job, :number, :succeeded, :summary)
+            RETURNING delivery_attempt_id
+        """),
+        {
+            "job": sync_job_id,
+            "number": attempt_number,
+            "succeeded": succeeded,
+            "summary": response_summary,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value

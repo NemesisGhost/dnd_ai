@@ -261,6 +261,17 @@ event_causes = Table(
         ),
     ),
     Column(
+        "cause_encounter_id",
+        UUID(),
+        ForeignKey("narrative.encounters.encounter_id", ondelete="SET NULL"),
+        comment=(
+            "The encounter that caused this event, e.g. a character killed "
+            "mid-combat — a fourth alternative alongside cause_event_id/"
+            "cause_interaction_id/cause_description (conventions §9.4), closing "
+            "this revision's own forward reference."
+        ),
+    ),
+    Column(
         "cause_description",
         Text(),
         comment=(
@@ -289,6 +300,11 @@ Index(
     "ix_event_causes_cause_interaction_id",
     event_causes.c.cause_interaction_id,
     postgresql_where=event_causes.c.cause_interaction_id.isnot(None),
+)
+Index(
+    "ix_event_causes_cause_encounter_id",
+    event_causes.c.cause_encounter_id,
+    postgresql_where=event_causes.c.cause_encounter_id.isnot(None),
 )
 
 event_effects = Table(

@@ -100,6 +100,20 @@ EXPECTED_TABLES = {
         "core.world_times",
         "core.worlds",
     ],
+    "encounters": [
+        "interaction.combat_actions",
+        "narrative.encounter_participants",
+        "narrative.encounter_rounds",
+        "narrative.encounter_turns",
+        "narrative.encounters",
+    ],
+    "integration": [
+        "integration.delivery_attempts",
+        "integration.external_identifiers",
+        "integration.external_systems",
+        "integration.sync_jobs",
+        "integration.sync_state",
+    ],
     "interaction": [
         "interaction.actions",
         "interaction.check_requests",
@@ -109,6 +123,17 @@ EXPECTED_TABLES = {
         "interaction.interaction_types",
         "interaction.interactions",
         "interaction.targets",
+    ],
+    "items": [
+        "campaign.inventory_entries",
+        "campaign.item_attunements",
+        "campaign.item_ownership",
+        "campaign.item_state",
+        "knowledge.item_identification",
+        "rules.item_categories",
+        "rules.item_definitions",
+        "world.item_containers",
+        "world.item_instances",
     ],
     "knowledge": [
         "knowledge.character_expertise",
