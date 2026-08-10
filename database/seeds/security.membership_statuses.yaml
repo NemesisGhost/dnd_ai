@@ -1,0 +1,36 @@
+# Lifecycle of a security.campaign_memberships row. See
+# docs/architecture/DATABASE_MODEL.md §19.2.
+#
+# "invited" is named in §19.2's own membership_status_id vocabulary even
+# though acceptance is what actually creates the membership row — kept for
+# fidelity to that vocabulary rather than assumed dead weight.
+
+- code: invited
+  display_name: Invited
+  description: Invitation sent but not yet accepted.
+  sort_order: 10
+  is_active: true
+
+- code: active
+  display_name: Active
+  description: Normal, authorizing membership.
+  sort_order: 20
+  is_active: true
+
+- code: suspended
+  display_name: Suspended
+  description: Open (ended_at IS NULL) but non-authorizing — temporarily blocked without ending the membership.
+  sort_order: 30
+  is_active: true
+
+- code: revoked
+  display_name: Revoked
+  description: Closed by a GM or owner action. ended_at is set.
+  sort_order: 40
+  is_active: true
+
+- code: departed
+  display_name: Departed
+  description: Closed by the member's own choice. ended_at is set.
+  sort_order: 50
+  is_active: true

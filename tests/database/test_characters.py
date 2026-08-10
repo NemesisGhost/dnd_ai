@@ -214,7 +214,7 @@ def test_size_category_must_be_a_recognized_value(
 def test_player_character_can_be_linked_to_a_user(
     db_connection: Connection, world_id: uuid.UUID
 ) -> None:
-    user_id = make_user(db_connection, username="a-player")
+    user_id = make_user(db_connection, "A Player")
     character_id = make_character(db_connection, world_id, entity_type_code="player_character")
     db_connection.execute(
         text(

@@ -1,0 +1,37 @@
+# Semantic relationship between a campaign membership and a character. See
+# docs/architecture/DATABASE_MODEL.md §19.4.
+
+- code: owner
+  display_name: Owner
+  sort_order: 10
+  is_active: true
+
+- code: primary_controller
+  display_name: Primary Controller
+  sort_order: 20
+  is_active: true
+
+- code: co_controller
+  display_name: Co-Controller
+  sort_order: 30
+  is_active: true
+
+- code: viewer
+  display_name: Viewer
+  sort_order: 40
+  is_active: true
+
+- code: portrayer
+  display_name: Portrayer / Assistant GM
+  sort_order: 50
+  is_active: true
+
+- code: former_controller
+  display_name: Former Controller
+  sort_order: 60
+  is_active: true
+
+- code: observer_approved_viewer
+  display_name: Observer-Approved Viewer
+  sort_order: 70
+  is_active: true
