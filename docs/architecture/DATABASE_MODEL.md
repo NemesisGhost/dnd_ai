@@ -22,13 +22,16 @@ This is a logical model rather than final migration SQL. Column details may evol
 10. AI-generated changes are proposals until validated and approved.
 11. Rules definitions are separate from world instances.
 12. Imports enter staging before becoming canonical records.
+13. Authentication identity, campaign responsibility, in-world knowledge, and resource authorization are separate concerns.
+14. Roles provide campaign-scoped capability defaults; individual access is many-to-many and may also derive from character, party, group, or direct resource relationships.
+15. Authorization is enforced before rows, fields, relationships, counts, search results, or AI context leave the application query layer.
 
 ## 3. PostgreSQL schema map
 
 | Schema | Primary responsibility |
 |---|---|
 | `core` | Worlds, entities, names, provenance, tags, calendars, fictional time, common statuses |
-| `security` | Users, roles, permissions, campaign access, service identities |
+| `security` | Users, external identities, campaign memberships, roles, capabilities, character relationships, resource grants, access groups and service identities |
 | `rules` | Rulesets and reusable mechanical definitions |
 | `character` | Shared character definitions, builds, NPC and PC extensions |
 | `world` | Locations, organizations, relationships, item instances, cultures and economies |
@@ -49,6 +52,20 @@ erDiagram
     CORE_WORLDS ||--o{ CAMPAIGN_TIMELINES : contains
     CORE_WORLDS ||--o{ CORE_CALENDARS : uses
     CORE_WORLDS ||--o{ RULES_WORLD_RULESETS : configures
+
+    SECURITY_USERS ||--o{ SECURITY_EXTERNAL_IDENTITIES : authenticates_as
+    SECURITY_USERS ||--o{ SECURITY_CAMPAIGN_MEMBERSHIPS : joins
+    CAMPAIGN_CAMPAIGNS ||--o{ SECURITY_CAMPAIGN_MEMBERSHIPS : authorizes
+    SECURITY_CAMPAIGN_MEMBERSHIPS ||--o{ SECURITY_MEMBERSHIP_ROLES : assigned
+    SECURITY_ROLES ||--o{ SECURITY_MEMBERSHIP_ROLES : grants
+    SECURITY_ROLES ||--o{ SECURITY_ROLE_CAPABILITIES : includes
+    SECURITY_CAPABILITIES ||--o{ SECURITY_ROLE_CAPABILITIES : defines
+    SECURITY_CAMPAIGN_MEMBERSHIPS ||--o{ SECURITY_MEMBERSHIP_CHARACTER_RELATIONSHIPS : relates
+    CHARACTER_CHARACTERS ||--o{ SECURITY_MEMBERSHIP_CHARACTER_RELATIONSHIPS : accessible_to
+    SECURITY_CAMPAIGN_MEMBERSHIPS ||--o{ SECURITY_ACCESS_GROUP_MEMBERSHIPS : grouped
+    SECURITY_ACCESS_GROUPS ||--o{ SECURITY_ACCESS_GROUP_MEMBERSHIPS : contains
+    SECURITY_CAMPAIGN_MEMBERSHIPS ||--o{ SECURITY_RESOURCE_GRANTS : receives
+    SECURITY_ACCESS_GROUPS ||--o{ SECURITY_RESOURCE_GRANTS : receives
 
     CORE_ENTITY_TYPES ||--o{ CORE_ENTITIES : classifies
     CORE_SOURCES ||--o{ CORE_ENTITIES : originates
@@ -358,9 +375,12 @@ The AI context service assembles prompts from the current portrayal profile and 
 
 - `character.player_characters`
 - `character.character_controllers`
-- `security.character_permissions`
+- `security.membership_character_relationships`
+- `security.character_relationship_type_capabilities`
 
-A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition. `character_controllers` supports player-controlled, GM-controlled, and AI-controlled NPCs, plus temporary control handoffs (a player temporarily running a companion); assignments are campaign- or timeline-aware.
+A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition. `character_controllers` records operational control by a human, service account, external VTT actor, or AI agent, including temporary control handoffs; assignments are campaign- or timeline-aware. It is not the human authorization source of truth.
+
+Human relationships to characters are modeled separately by `security.membership_character_relationships` (§19). A campaign membership may own, primarily control, co-control, portray, or view many characters, and a character may have each relationship with many memberships. Relationship types provide default capabilities through `security.character_relationship_type_capabilities`; direct grants may add or explicitly restrict a capability for a particular membership. In-world character knowledge remains in the knowledge model (§15) and is not created merely because a user can administer or view the character.
 
 ### 7.4 Character builds
 
@@ -644,6 +664,8 @@ Primary tables:
 
 A knowledge item represents a claim; truth status, awareness, belief, confidence, interpretation, and willingness to share are distinct fields. Entity knowledge stores what a knower believes, its confidence, interpretation, source, and willingness to share — a false belief is valid game data and must not be overwritten merely because the canonical truth is known to the GM. Discovery may be recorded for an individual character, a party, an organization, or the public within a location or region. Information transfers record source knower, recipient, transferred knowledge, modified interpretation, the causing interaction or event, and world time — this is what supports rumor propagation and misinformation.
 
+Authenticated-user visibility is a fourth, separate concern. A user may be allowed to inspect a claim because the user's selected character knows it, because the user's party knows it, because it is public, because a campaign role supplies a GM capability, or because an explicit resource grant allows it. None of those authorization paths inserts `knowledge.entity_knowledge`, `knowledge.party_discoveries`, or `campaign.party_knowledge`; those tables describe the fictional world's awareness, not what an administrator is permitted to inspect. Conversely, a fact known by a character is exposed to a user only when that user has the appropriate character relationship and capability for the requested perspective.
+
 **Phase 5 / Phase 7 boundary (closed).** Phase 5 pulled `knowledge_items`/`entity_knowledge`/`party_discoveries` forward (revision 041) and explicitly left temporal validity, `knowledge_versions`, `information_transfers`, `expertise_domains`/`character_expertise`, and `public_knowledge` for this phase — all delivered by revision 073 above. Discovery source/provenance was a free-text placeholder through Phase 5; real provenance (`learned_via_interaction_id`/`learned_via_event_id`, `discovered_via_interaction_id`/`discovered_via_event_id`) was closed by **Phase 6** revision 063, not this phase — see §27.
 
 ## 16. Interaction and resolution model
@@ -754,13 +776,220 @@ AI proposals never become canonical merely because they were generated. Agents d
 
 ### Security
 
-- `security.users`
-- `security.roles`
-- `security.user_roles`
-- `security.permissions`
-- `security.campaign_members`
-- `security.character_permissions`
-- `security.service_accounts`
+Security distinguishes identity, campaign membership, role-derived capability, semantic character relationships, in-world knowledge, and explicit resource access. A user may have multiple roles and characters in one campaign and different roles and characters in another. No character, fact, or other protected record has a single `owner_user_id` visibility shortcut.
+
+#### 19.1 Identity and login
+
+##### `security.users`
+
+Application identity independent of any login provider.
+
+Key columns:
+
+- `user_id UUID PK`
+- `display_name TEXT`
+- `email TEXT NULL` — informational and not the durable external identity key
+- `lifecycle_status_id UUID FK`
+- `created_at TIMESTAMPTZ`
+- `updated_at TIMESTAMPTZ`
+- `last_login_at TIMESTAMPTZ NULL`
+
+##### `security.external_identities`
+
+Maps one application user to one or more OIDC identities.
+
+Key columns:
+
+- `external_identity_id UUID PK`
+- `user_id UUID FK`
+- `issuer TEXT`
+- `subject TEXT`
+- `email_at_last_login TEXT NULL`
+- `claims_snapshot JSONB NULL` — minimal allow-listed claims needed for diagnostics; never raw tokens
+- `linked_at TIMESTAMPTZ`
+- `last_authenticated_at TIMESTAMPTZ NULL`
+- `revoked_at TIMESTAMPTZ NULL`
+
+The active identity key is unique on `(issuer, subject)`. Email is not an identity key because it may change or be reused. Password hashes and OIDC access/refresh tokens do not belong in this table when authentication is delegated to an external identity provider.
+
+##### `security.service_accounts`
+
+Non-human application principals. Service accounts never gain campaign access merely by existing; capabilities are assigned through explicit service-account grants or narrowly scoped application configuration, and all actions identify the service principal in audit records.
+
+#### 19.2 Campaign membership and invitations
+
+##### `security.campaign_invitations`
+
+Tracks invitations without pre-creating a durable membership for an unknown recipient.
+
+Key columns:
+
+- `campaign_invitation_id UUID PK`
+- `campaign_id UUID FK`
+- `invited_email TEXT NULL`
+- `invitation_token_hash TEXT`
+- `invited_by_membership_id UUID FK`
+- `expires_at TIMESTAMPTZ`
+- `accepted_by_user_id UUID FK NULL`
+- `accepted_at TIMESTAMPTZ NULL`
+- `revoked_at TIMESTAMPTZ NULL`
+- `created_at TIMESTAMPTZ`
+
+Only the token hash is retained. Acceptance creates or activates a campaign membership through an application command and is idempotent.
+
+##### `security.campaign_memberships`
+
+The many-to-many association between users and campaigns and the root of human authorization within a campaign.
+
+Key columns:
+
+- `campaign_membership_id UUID PK`
+- `campaign_id UUID FK`
+- `user_id UUID FK`
+- `membership_status_id UUID FK` — invited, active, suspended, revoked, departed
+- `joined_at TIMESTAMPTZ NULL`
+- `ended_at TIMESTAMPTZ NULL`
+- `ended_by_membership_id UUID FK NULL`
+- `created_at TIMESTAMPTZ`
+- `updated_at TIMESTAMPTZ`
+
+There is at most one open membership (`ended_at IS NULL`) per `(campaign_id, user_id)`. Revoked and departed memberships are closed rather than deleted and remain for auditability. Suspended is an open but non-authorizing status. A membership belongs to the campaign's timeline through `campaign.campaigns`; narrower timeline scope is placed on the particular relationship or grant that requires it rather than duplicating the campaign's normal timeline on every membership row.
+
+The earlier sketch names `security.campaign_members`; the target name is **`security.campaign_memberships`** because each row is an authorization relationship with lifecycle and roles, not a user record.
+
+#### 19.3 Roles and capabilities
+
+Primary tables:
+
+- `security.roles` — configurable campaign-role definitions such as campaign owner, GM, assistant GM, player, observer, import reviewer and rules curator
+- `security.capabilities` — stable operation codes such as `campaign.view`, `character.control`, `canon.edit`, `import.approve`, `access.manage` and `rules_source.manage`
+- `security.role_capabilities` — many-to-many role-to-capability defaults
+- `security.membership_roles` — many-to-many campaign-membership-to-role assignments
+
+Key constraints:
+
+- A role is either a system template or belongs to one campaign; a campaign membership may receive only roles usable by that campaign.
+- A membership may hold multiple roles concurrently.
+- Role and capability codes are stable identifiers; display names are not authorization keys.
+- Assignment and revocation record `granted_by_membership_id`, `granted_at`, optional `expires_at`, and `revoked_at`.
+- Campaign owner and access-management changes are application commands with audit records; the database prevents an active campaign from being left with no authorized owner.
+
+Application code authorizes capabilities, not hard-coded role names. Roles provide broad defaults but do not imply that a player or observer may inspect every resource in the campaign.
+
+The earlier `security.user_roles` and `security.permissions` sketches are superseded by `security.membership_roles` and `security.capabilities`/`security.role_capabilities`. Global administrative privileges, if later required, use a separate explicitly privileged mechanism and never masquerade as campaign roles.
+
+#### 19.4 Human-to-character relationships
+
+##### `security.character_relationship_types`
+
+Lookup for semantic relationships such as owner, primary controller, co-controller, viewer, portrayer/assistant GM, former controller and observer-approved viewer.
+
+##### `security.membership_character_relationships`
+
+Many-to-many relationship between an active campaign membership and a same-world character.
+
+Key columns:
+
+- `membership_character_relationship_id UUID PK`
+- `campaign_membership_id UUID FK`
+- `character_id UUID FK`
+- `character_relationship_type_id UUID FK`
+- `timeline_id UUID FK NULL`
+- `effective_from_world_time_id UUID FK NULL`
+- `effective_to_world_time_id UUID FK NULL`
+- `effective_period INT8RANGE NULL`
+- `granted_by_membership_id UUID FK`
+- `granted_at TIMESTAMPTZ`
+- `expires_at TIMESTAMPTZ NULL`
+- `revoked_at TIMESTAMPTZ NULL`
+- `notes TEXT NULL`
+
+The membership's campaign, the character's world, and an optional timeline must agree. Fictional-time bounds use the ADR 0010 shape when supplied; real-time `expires_at` separately supports temporary operational access. Active duplicate relationships of the same type are rejected. A transfer of ownership or control closes the prior relationship and creates a new row rather than overwriting history.
+
+##### `security.character_relationship_type_capabilities`
+
+Maps a relationship type to default character-scoped capabilities, including:
+
+- `discover`
+- `view_summary`
+- `view_full`
+- `view_private`
+- `view_character_knowledge`
+- `edit_narrative`
+- `edit_mechanical_state`
+- `interact`
+- `control`
+- `manage_access`
+
+The relationship records semantic meaning; this mapping supplies defaults. A direct typed resource grant (§19.6) may extend or restrict a specific membership without inventing another relationship type.
+
+The earlier `security.character_permissions` sketch is superseded by these semantic relationships plus typed resource grants. `character.character_controllers` remains the operational controller assignment described in §7.3 and may include AI, service, or external-system controllers; it is not interchangeable with a user's campaign authorization.
+
+#### 19.5 Access groups
+
+Primary tables:
+
+- `security.access_groups` — campaign-scoped named sets such as livestream observers, former players or a GM-curated lore audience
+- `security.access_group_memberships` — many-to-many association between campaign memberships and access groups
+
+Groups simplify repeated grants but do not represent in-world parties. Adding a user to an access group does not add a character to `campaign.party_memberships`, reveal knowledge in-world, or create an event. Group membership and revocation retain granting actor and timestamps.
+
+#### 19.6 Typed resource grants
+
+##### `security.resource_grants`
+
+Provides explicit many-to-many access to protected records without an unenforced `(resource_type, resource_id)` polymorphic reference.
+
+Key columns:
+
+- `resource_grant_id UUID PK`
+- `campaign_id UUID FK`
+- `timeline_id UUID FK NULL`
+- `grantee_campaign_membership_id UUID FK NULL`
+- `grantee_access_group_id UUID FK NULL`
+- `capability_id UUID FK`
+- `effect TEXT` — `allow` or `deny`
+- `character_id UUID FK NULL`
+- `entity_id UUID FK NULL`
+- `knowledge_item_id UUID FK NULL`
+- `quest_id UUID FK NULL`
+- `session_id UUID FK NULL`
+- `event_id UUID FK NULL`
+- `source_document_id UUID FK NULL`
+- `ai_proposed_change_id UUID FK NULL`
+- `import_job_id UUID FK NULL`
+- `granted_by_membership_id UUID FK`
+- `grant_source TEXT`
+- `reason TEXT NULL`
+- `granted_at TIMESTAMPTZ`
+- `expires_at TIMESTAMPTZ NULL`
+- `revoked_at TIMESTAMPTZ NULL`
+
+Exactly one grantee column and exactly one typed resource target column are non-null. Every target must belong to the grant's campaign world and, where relevant, its campaign or timeline. `character_id` exists separately from general `entity_id` so character-only capabilities can be constrained to actual characters; callers must not create two grants for the same logical target. Additional protected resource kinds add real nullable foreign-key columns and extend the one-target constraint in the migration that introduces them.
+
+Active grants are unique for the same grantee, target, timeline scope, capability and effect. Revocation closes the grant; it does not delete it. Expiration uses real time. Fictional-time visibility is derived from the target's knowledge/event validity or represented by an explicit timeline-scoped grant, not overloaded into `expires_at`.
+
+An explicit deny overrides an allow at the same or broader inherited path, except that the application must not permit a grant to remove the minimum capabilities required to preserve an active campaign owner. Denies are used sparingly for concrete exceptions; absence of an allow remains the default denial.
+
+The initial Phase 10 migration implements only the typed targets required by the playable vertical slice and portal queries. Later resource types extend the same constrained pattern as needed; Phase 10 does not need a universal ACL framework for every table in the database.
+
+#### 19.7 Effective access resolution
+
+For every human request, application services resolve access in this order:
+
+1. Authenticate the external identity to `security.users`.
+2. Require an active `security.campaign_memberships` row.
+3. Resolve the campaign and requested timeline.
+4. Collect capabilities from active membership roles.
+5. Resolve semantic character relationships and their default capabilities.
+6. Resolve party/public knowledge only for an authorized selected character perspective.
+7. Apply active direct and access-group resource grants, including explicit restrictions.
+8. Filter rows, sensitive fields, relationship edges, identifiers, counts, search results and AI context before returning or synthesizing an answer.
+9. Audit sensitive reads and all mutations.
+
+GM administrative visibility does not make a GM-controlled character an in-world knower. A user-character relationship does not expose all facts known by all of that user's characters simultaneously: the request identifies a viewing perspective, and the query layer evaluates that perspective. Inaccessible resources must be indistinguishable from nonexistent resources to unauthorized callers except where a deliberate, safe denial response is required.
+
+Clients—including the web portal, Foundry, imports and any future Discord integration—never determine their own authorization. PostgreSQL constraints preserve grant integrity, while the application query and command layers calculate and enforce effective access. Database row-level security may be added as defense in depth later, but it does not replace the application-level perspective and knowledge rules.
 
 ### Audit
 
@@ -770,6 +999,8 @@ AI proposals never become canonical merely because they were generated. Agents d
 - `audit.approval_history`
 - `audit.validation_failures`
 - `audit.agent_activity`
+
+Security-sensitive audit records identify the authenticated user or service account, campaign membership, selected character perspective when applicable, effective capability, authorization source (role, relationship, group, direct grant or owner rule), target resource, action, outcome, request correlation ID and timestamp. Grant, role, group, invitation, membership and identity-link changes are always audited. Read auditing may be limited to sensitive categories and summarized batches to avoid turning ordinary page loads into an unbounded log stream, but GM-only facts, access previews, exports and AI-context assembly remain traceable.
 
 ### Integration
 
@@ -832,10 +1063,17 @@ Promotion from staging must use the same entity creation and approval pathways a
 10. Knowledge discovery does not mutate objective truth.
 11. External integration records cannot become authoritative identity.
 12. Imported records cannot bypass review and promotion.
+13. A campaign membership joins exactly one user to one campaign and receives only roles valid for that campaign.
+14. Character relationships, access groups and resource grants cannot cross their campaign's world or applicable timeline.
+15. Every resource grant has exactly one grantee and one database-enforced typed resource target.
+16. Revoked, suspended or expired memberships, role assignments, group memberships, character relationships and grants confer no access.
+17. User authorization never creates or alters in-world knowledge, and in-world knowledge is exposed only through an authorized viewing perspective.
+18. Canonical queries, search, counts, relationship traversal and AI context exclude resources the requester is not allowed to discover.
+19. Every active campaign retains at least one membership authorized to manage campaign ownership and access.
 
 ## 23. Implementation order
 
-1. `core`, `security` and database conventions.
+1. `core`, the initial identity/security foundation and database conventions.
 2. Worlds, entity types, entities, sources, names and statuses.
 3. Timelines, campaigns, parties and sessions.
 4. Rulesets and shared characters.
@@ -844,8 +1082,9 @@ Promotion from staging must use the same entity creation and approval pathways a
 7. Quests, objectives and progression state.
 8. Knowledge and discovery.
 9. Organizations, relationships and items.
-10. AI proposals and approval flows.
-11. Integration, audit hardening and import staging.
+10. Phase 10 application security: external identities, campaign-scoped membership roles, capabilities, semantic user-character relationships, access groups, the typed resource-grant subset required by the vertical slice, and authorization audit support.
+11. AI proposals and approval flows.
+12. Portal/import resource targets, integration, audit hardening and import staging.
 
 This is the intended dependency order, not a strict phase-to-section mapping — `docs/PLAN.md` §23 is authoritative for what each numbered phase actually delivers and in what order; consult it before starting a phase.
 
@@ -863,6 +1102,12 @@ The database model is sufficient for the first vertical slice when it can repres
 - An NPC learns or reacts to the change.
 - Another campaign on the same timeline sees the changed dungeon.
 - A campaign on a branch created before the event sees the original state.
+- One authenticated user can be a GM in one campaign, a player controlling multiple characters in another, and an observer in a third.
+- Several users can share access to one character, while each user retains an independently revocable relationship and capability set.
+- Two users requesting the same fact receive different results when their selected characters, campaign roles or explicit grants differ.
+- A GM can inspect canon without causing any GM-controlled character to know it.
+- Revoking a membership, character relationship, group membership or direct grant removes its access path without deleting the user, character, fact or audit history.
+- An unauthorized user cannot infer a protected fact or record through identifiers, search matches, counts, relationship edges, summaries or AI-generated responses.
 
 ## 25. Reconciliation notes (2026-08-02)
 
@@ -1018,3 +1263,19 @@ Phase 6 ("Events and interactions") is being delivered as a sequence of independ
 **No `domain/` layer was added.** `docs/DEVELOPMENT.md` §2's "create each subpackage as the phase that needs it requires" applied literally here: every invariant these commands must respect (same-world agreement, ruleset allow-listing, the conditional-route decision itself) already lives in database triggers and `world.conditional_route_requirement_satisfied()`. A `domain/` layer re-deriving those rules in Python would be a second, driftable copy of validation the database already owns — the commands call the existing decision primitives instead.
 
 **The forced-failure atomicity test uses `monkeypatch`, not a naturally arising constraint violation.** `tests/scenario/test_resolve_conditional_route_check.py`'s docstring records why: by the time `resolve_check()` runs, `interaction.enforce_target_world()` (revision 061) has already guaranteed the check's target is same-world as the check, closing off the mismatched-world failure that increment 1's hand-written test could still use; and a duplicate check-result submission fails at the first statement, before any event or state work happens, proving nothing about a later-step rollback. The injected fault exercises the real `engine.begin()` rollback path around real, unmodified production code, standing in for any downstream failure a future validation step might introduce.
+
+## 28. Reconciliation notes (2026-08-10 portal identity and access design)
+
+The web-portal roadmap introduced authenticated player, GM, assistant-GM and observer views plus on-demand, audience-filtered summaries. The prior security section was only a table-name sketch and could not represent the required many-to-many or campaign-scoped behavior. Section 19 now defines the target access model.
+
+The principal naming and ownership decisions are:
+
+- `security.campaign_members` becomes `security.campaign_memberships` in the target model.
+- Global `security.user_roles` becomes campaign-scoped `security.membership_roles`.
+- `security.permissions` is clarified as reusable `security.capabilities`, assigned through `security.role_capabilities` and evaluated by application commands and queries.
+- `security.character_permissions` is superseded by semantic `security.membership_character_relationships`, relationship-type capability defaults and explicit typed resource grants.
+- `character.character_controllers` remains a distinct operational-control concept because it also supports AI, service and external-system control; it does not by itself authorize a human portal request.
+- Facts remain canonical claims and in-world beliefs in `knowledge.*`; user visibility derives through an authorized perspective or explicit administrative access and never rewrites fictional knowledge.
+- Explicit resource access uses real typed foreign keys in `security.resource_grants`, not an unenforced text resource type plus opaque UUID.
+
+This is a target-model documentation change, not a claim that the Phase 1–9 database already contains these tables. `docs/PLAN.md` owns delivery phasing: Phase 10 adds the identity and authorization subset required by the application API and playable vertical slice; the portal and import phases extend typed targets only when their acceptance scenarios need them. Completed domain migrations need not be rewritten merely to introduce the new access layer.
