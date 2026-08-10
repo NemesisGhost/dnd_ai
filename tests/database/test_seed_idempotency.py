@@ -46,6 +46,9 @@ SEEDED_LOOKUPS = [
     ("core", "name_types", "name_type_id"),
     ("core", "world_time_precisions", "world_time_precision_id"),
     ("audit", "change_actions", "change_action_id"),
+    ("security", "membership_statuses", "membership_status_id"),
+    ("security", "character_relationship_types", "character_relationship_type_id"),
+    ("security", "capabilities", "capability_id"),
 ]
 
 

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
-from tests.factories import make_entity, make_entity_type, make_world, status_id
+from tests.factories import make_entity, make_entity_type, make_user, make_world, status_id
 
 pytestmark = pytest.mark.database
 
@@ -117,12 +117,7 @@ def test_entity_can_be_created_with_full_provenance(db_connection: Connection) -
     """The Phase 2 exit criterion: a world and an entity, with provenance."""
     world = make_world(db_connection, slug="provenance-world")
     etype = make_entity_type(db_connection, "provenanced_type")
-    user = db_connection.execute(
-        text(
-            "INSERT INTO security.users (username, display_name) "
-            "VALUES ('author', 'Author') RETURNING user_id"
-        )
-    ).scalar()
+    user = make_user(db_connection, "Author")
     source = db_connection.execute(
         text("""
             INSERT INTO core.sources (world_id, source_type_id, title, created_by_user_id)

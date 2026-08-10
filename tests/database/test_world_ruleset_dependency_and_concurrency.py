@@ -584,7 +584,15 @@ def test_concurrent_campaign_creation_blocks_a_concurrent_removal(postgres_engin
             cw = ConcurrencyWorld(setup, slug)
 
         def create(conn: Connection) -> None:
-            make_campaign(conn, cw.timeline_id, ruleset_version_id=cw.version_id)
+            # Non-active: this test is about ruleset-version pinning, not
+            # campaign ownership, and an active campaign now needs a
+            # qualifying access-manager membership at commit (revision 080).
+            make_campaign(
+                conn,
+                cw.timeline_id,
+                ruleset_version_id=cw.version_id,
+                lifecycle_status_code="pending",
+            )
 
         _assert_delete_races_dependent_creation(
             engine, cw.world_id, cw.ruleset_id, create, "still pinned to a version of it"

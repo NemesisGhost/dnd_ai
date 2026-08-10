@@ -106,12 +106,325 @@ def make_entity(
     return value
 
 
-def make_user(connection: Connection, username: str = "tester") -> uuid.UUID:
+def make_user(connection: Connection, display_name: str = "Tester") -> uuid.UUID:
     value = connection.execute(
+        text("""
+            INSERT INTO security.users (display_name, lifecycle_status_id)
+            VALUES (:name, :status)
+            RETURNING user_id
+        """),
+        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", "active")},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_external_identity(
+    connection: Connection,
+    user_id: uuid.UUID,
+    *,
+    issuer: str = "https://test-idp.example",
+    subject: str | None = None,
+    revoked: bool = False,
+) -> uuid.UUID:
+    if subject is None:
+        subject = f"subject-{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO security.external_identities (user_id, issuer, subject, revoked_at)
+            VALUES (:user, :issuer, :subject, CASE WHEN :revoked THEN now() ELSE NULL END)
+            RETURNING external_identity_id
+        """),
+        {"user": user_id, "issuer": issuer, "subject": subject, "revoked": revoked},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_service_account(connection: Connection, code: str | None = None) -> uuid.UUID:
+    if code is None:
+        code = f"service_{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO security.service_accounts (code, display_name)
+            VALUES (:code, :code)
+            RETURNING service_account_id
+        """),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_campaign_membership(
+    connection: Connection,
+    campaign_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    status_code: str = "active",
+    ended: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.campaign_memberships
+                (campaign_id, user_id, membership_status_id, joined_at, ended_at)
+            VALUES (
+                :campaign, :user,
+                (SELECT membership_status_id FROM security.membership_statuses WHERE code = :status),
+                now(),
+                CASE WHEN :ended THEN now() ELSE NULL END
+            )
+            RETURNING campaign_membership_id
+        """),
+        {"campaign": campaign_id, "user": user_id, "status": status_code, "ended": ended},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_campaign_invitation(
+    connection: Connection,
+    campaign_id: uuid.UUID,
+    invited_by_membership_id: uuid.UUID,
+    *,
+    token_hash: str | None = None,
+) -> uuid.UUID:
+    if token_hash is None:
+        token_hash = uuid.uuid4().hex
+    value = connection.execute(
+        text("""
+            INSERT INTO security.campaign_invitations
+                (campaign_id, invitation_token_hash, invited_by_membership_id, expires_at)
+            VALUES (:campaign, :token, :invited_by, now() + interval '7 days')
+            RETURNING campaign_invitation_id
+        """),
+        {"campaign": campaign_id, "token": token_hash, "invited_by": invited_by_membership_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_role(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID | None = None,
+    code: str | None = None,
+) -> uuid.UUID:
+    if code is None:
+        code = f"role_{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO security.roles (campaign_id, code, display_name)
+            VALUES (:campaign, :code, :code)
+            RETURNING role_id
+        """),
+        {"campaign": campaign_id, "code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_capability(connection: Connection, code: str | None = None) -> uuid.UUID:
+    if code is None:
+        code = f"test.capability_{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO security.capabilities (code, display_name)
+            VALUES (:code, :code)
+            RETURNING capability_id
+        """),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_role_capability(
+    connection: Connection, role_id: uuid.UUID, capability_id: uuid.UUID
+) -> None:
+    connection.execute(
+        text("INSERT INTO security.role_capabilities (role_id, capability_id) VALUES (:r, :c)"),
+        {"r": role_id, "c": capability_id},
+    )
+
+
+def make_membership_role(
+    connection: Connection,
+    campaign_membership_id: uuid.UUID,
+    role_id: uuid.UUID,
+    *,
+    granted_by_membership_id: uuid.UUID | None = None,
+    revoked: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.membership_roles
+                (campaign_membership_id, role_id, granted_by_membership_id, revoked_at)
+            VALUES (:membership, :role, :granted_by, CASE WHEN :revoked THEN now() ELSE NULL END)
+            RETURNING membership_role_id
+        """),
+        {
+            "membership": campaign_membership_id,
+            "role": role_id,
+            "granted_by": granted_by_membership_id,
+            "revoked": revoked,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_relationship_type(connection: Connection, code: str | None = None) -> uuid.UUID:
+    if code is None:
+        code = f"relationship_type_{uuid.uuid4().hex[:8]}"
+    value = connection.execute(
+        text("""
+            INSERT INTO security.character_relationship_types (code, display_name)
+            VALUES (:code, :code)
+            RETURNING character_relationship_type_id
+        """),
+        {"code": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_membership_character_relationship(
+    connection: Connection,
+    campaign_membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_relationship_type_id: uuid.UUID,
+    *,
+    timeline_id: uuid.UUID | None = None,
+    effective_from_world_time_id: uuid.UUID | None = None,
+    effective_to_world_time_id: uuid.UUID | None = None,
+    granted_by_membership_id: uuid.UUID | None = None,
+    revoked: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.membership_character_relationships
+                (campaign_membership_id, character_id, character_relationship_type_id,
+                 timeline_id, effective_from_world_time_id, effective_to_world_time_id,
+                 granted_by_membership_id, revoked_at)
+            VALUES (
+                :membership, :character, :rtype, :timeline, :from_time, :to_time, :granted_by,
+                CASE WHEN :revoked THEN now() ELSE NULL END
+            )
+            RETURNING membership_character_relationship_id
+        """),
+        {
+            "membership": campaign_membership_id,
+            "character": character_id,
+            "rtype": character_relationship_type_id,
+            "timeline": timeline_id,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
+            "granted_by": granted_by_membership_id,
+            "revoked": revoked,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_relationship_type_capability(
+    connection: Connection, character_relationship_type_id: uuid.UUID, capability_id: uuid.UUID
+) -> None:
+    connection.execute(
         text(
-            "INSERT INTO security.users (username, display_name) VALUES (:u, :u) RETURNING user_id"
+            "INSERT INTO security.character_relationship_type_capabilities "
+            "(character_relationship_type_id, capability_id) VALUES (:rt, :c)"
         ),
-        {"u": username},
+        {"rt": character_relationship_type_id, "c": capability_id},
+    )
+
+
+def make_access_group(
+    connection: Connection, campaign_id: uuid.UUID, *, name: str = "Test Group"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.access_groups (campaign_id, name)
+            VALUES (:campaign, :name)
+            RETURNING access_group_id
+        """),
+        {"campaign": campaign_id, "name": name},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_access_group_membership(
+    connection: Connection,
+    access_group_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    *,
+    removed: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.access_group_memberships
+                (access_group_id, campaign_membership_id, removed_at)
+            VALUES (:group, :membership, CASE WHEN :removed THEN now() ELSE NULL END)
+            RETURNING access_group_membership_id
+        """),
+        {"group": access_group_id, "membership": campaign_membership_id, "removed": removed},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_resource_grant(
+    connection: Connection,
+    campaign_id: uuid.UUID,
+    capability_id: uuid.UUID,
+    *,
+    timeline_id: uuid.UUID | None = None,
+    grantee_campaign_membership_id: uuid.UUID | None = None,
+    grantee_access_group_id: uuid.UUID | None = None,
+    character_id: uuid.UUID | None = None,
+    entity_id: uuid.UUID | None = None,
+    knowledge_item_id: uuid.UUID | None = None,
+    quest_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    event_id: uuid.UUID | None = None,
+    effect: str = "allow",
+    grant_source: str = "test",
+    granted_by_membership_id: uuid.UUID | None = None,
+    revoked: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO security.resource_grants
+                (campaign_id, timeline_id, grantee_campaign_membership_id, grantee_access_group_id,
+                 capability_id, effect, character_id, entity_id, knowledge_item_id, quest_id,
+                 session_id, event_id, granted_by_membership_id, grant_source, revoked_at)
+            VALUES (
+                :campaign, :timeline, :grantee_membership, :grantee_group,
+                :capability, :effect, :character, :entity, :knowledge_item, :quest,
+                :session, :event, :granted_by, :grant_source,
+                CASE WHEN :revoked THEN now() ELSE NULL END
+            )
+            RETURNING resource_grant_id
+        """),
+        {
+            "campaign": campaign_id,
+            "timeline": timeline_id,
+            "grantee_membership": grantee_campaign_membership_id,
+            "grantee_group": grantee_access_group_id,
+            "capability": capability_id,
+            "effect": effect,
+            "character": character_id,
+            "entity": entity_id,
+            "knowledge_item": knowledge_item_id,
+            "quest": quest_id,
+            "session": session_id,
+            "event": event_id,
+            "granted_by": granted_by_membership_id,
+            "grant_source": grant_source,
+            "revoked": revoked,
+        },
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
@@ -434,6 +747,7 @@ def make_campaign(
     name: str = "The Campaign",
     *,
     ruleset_version_id: uuid.UUID | None = None,
+    lifecycle_status_code: str = "active",
 ) -> uuid.UUID:
     """A campaign on the given timeline.
 
@@ -442,6 +756,13 @@ def make_campaign(
     (pinning to its current version), otherwise creates one via
     make_ruleset_for_world. Callers testing ruleset-specific behavior should
     pass one explicitly.
+
+    lifecycle_status_code defaults to "active" (matching every caller's
+    prior expectation). Since revision 080, an active campaign must retain
+    a qualifying access-manager membership at commit — pass "pending" (or
+    similar) for a caller that doesn't set one up and doesn't care about
+    campaign lifecycle, or a real one for a caller that wants to exercise
+    the create-then-activate flow itself.
     """
     if ruleset_version_id is None:
         world_id = connection.execute(
@@ -472,7 +793,7 @@ def make_campaign(
         {
             "tl": timeline_id,
             "n": name,
-            "status": status_id(connection, "lifecycle_statuses", "active"),
+            "status": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
             "ruleset_version": ruleset_version_id,
         },
     ).scalar()

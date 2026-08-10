@@ -1,0 +1,77 @@
+# A stable, dot-namespaced operation code. One shared vocabulary reused by
+# both security.role_capabilities and
+# security.character_relationship_type_capabilities — see
+# docs/architecture/DATABASE_MODEL.md §19.3 (role-level codes) and §19.4
+# (character-relationship-scoped codes). character.control and access.manage
+# each collapse two informal names from those two sections into one code —
+# see revision 080's "Deliberate scoping decisions".
+
+- code: campaign.view
+  display_name: View Campaign
+  sort_order: 10
+  is_active: true
+
+- code: canon.edit
+  display_name: Edit Canon
+  sort_order: 20
+  is_active: true
+
+- code: import.approve
+  display_name: Approve Import
+  sort_order: 30
+  is_active: true
+
+- code: access.manage
+  display_name: Manage Access
+  sort_order: 40
+  is_active: true
+
+- code: rules_source.manage
+  display_name: Manage Rules Source
+  sort_order: 50
+  is_active: true
+
+- code: character.discover
+  display_name: Discover Character
+  sort_order: 60
+  is_active: true
+
+- code: character.view_summary
+  display_name: View Character Summary
+  sort_order: 70
+  is_active: true
+
+- code: character.view_full
+  display_name: View Character Full Detail
+  sort_order: 80
+  is_active: true
+
+- code: character.view_private
+  display_name: View Character Private Data
+  sort_order: 90
+  is_active: true
+
+- code: character.view_knowledge
+  display_name: View Character Knowledge
+  sort_order: 100
+  is_active: true
+
+- code: character.edit_narrative
+  display_name: Edit Character Narrative
+  sort_order: 110
+  is_active: true
+
+- code: character.edit_mechanical_state
+  display_name: Edit Character Mechanical State
+  sort_order: 120
+  is_active: true
+
+- code: character.interact
+  display_name: Interact With Character
+  sort_order: 130
+  is_active: true
+
+- code: character.control
+  display_name: Control Character
+  sort_order: 140
+  is_active: true

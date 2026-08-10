@@ -27,7 +27,6 @@ MANAGED_TABLES = [
     ("core", "source_types"),
     ("security", "users"),
     ("security", "roles"),
-    ("security", "user_roles"),
     ("core", "worlds"),
     ("core", "entity_types"),
     ("core", "sources"),
@@ -187,6 +186,21 @@ MANAGED_TABLES = [
     ("narrative", "encounter_rounds"),
     ("interaction", "combat_actions"),
     ("narrative", "encounter_turns"),
+    # Phase 10, workstream 1 — security, identity, and access
+    ("security", "membership_statuses"),
+    ("security", "character_relationship_types"),
+    ("security", "capabilities"),
+    ("security", "external_identities"),
+    ("security", "service_accounts"),
+    ("security", "campaign_memberships"),
+    ("security", "campaign_invitations"),
+    ("security", "role_capabilities"),
+    ("security", "membership_roles"),
+    ("security", "membership_character_relationships"),
+    ("security", "character_relationship_type_capabilities"),
+    ("security", "access_groups"),
+    ("security", "access_group_memberships"),
+    ("security", "resource_grants"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

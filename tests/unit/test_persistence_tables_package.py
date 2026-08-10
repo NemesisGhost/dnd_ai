@@ -18,7 +18,10 @@ correction pass) added campaign.party_knowledge, for 121 tables total.
 Revision 075 added the Phase 8 relationships/organizations domain (18
 new world.* tables in a new relationships domain module, 4 new
 campaign.* organization/relationship state tables, and 1 new
-character.* table), for 144 tables total.
+character.* table), for 144 tables total. Revisions 077-079 added the Phase 9
+item, encounter, and integration domains. Revision 080 reshaped security.users
+and replaced the old global security.roles/security.user_roles pair with the
+Phase 10 campaign-scoped security schema (13 new tables, 1 table dropped).
 """
 
 import importlib
@@ -218,7 +221,24 @@ EXPECTED_TABLES = {
         "rules.subclasses",
         "rules.world_rulesets",
     ],
-    "security": ["security.roles", "security.user_roles", "security.users"],
+    "security": [
+        "security.access_group_memberships",
+        "security.access_groups",
+        "security.campaign_invitations",
+        "security.campaign_memberships",
+        "security.capabilities",
+        "security.character_relationship_type_capabilities",
+        "security.character_relationship_types",
+        "security.external_identities",
+        "security.membership_character_relationships",
+        "security.membership_roles",
+        "security.membership_statuses",
+        "security.resource_grants",
+        "security.role_capabilities",
+        "security.roles",
+        "security.service_accounts",
+        "security.users",
+    ],
 }
 
 EXPECTED_ALL_NAMES = sorted(name for names in EXPECTED_TABLES.values() for name in names)
