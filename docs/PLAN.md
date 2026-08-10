@@ -1342,23 +1342,61 @@ Exit criteria:
 - NPC and faction reactions can evolve from events.
 - Shared and subjective relationship data are separate.
 
-### Phase 9: Items, inventory, encounters, and Foundry synchronization
+### Phase 9: Items, inventory, encounters, and Foundry integration contracts
 
 Phase 9 is the first phase developed under the local-first loop in [§23.0](#230-verification-policy) — its verification file is the first to record both a local result and a CI run ID. The [PostgreSQL 18 gate](POSTGRES18_UPGRADE_PLAN.md) that previously blocked this phase from merging closed 2026-08-08: `dev` now runs PostgreSQL 18.4, matching local.
+
+**Replan (2026-08-09).** Phase 9 was originally scoped to close with a *live* exit criterion — "Foundry combat can update persistent character and world state" — but [§30.8](#308-per-phase-deployment-expectations) requires that claim to be proven against a real deployable: an actual Foundry-facing surface reachable through the application API on ECS Fargate in `dev`. No FastAPI service, container image, or Fargate/ALB Terraform exists yet in this project; standing that up is a substantial infrastructure and cost decision distinct from the schema/domain-logic work this phase otherwise does, and doing it as a rider on the item/encounter domains would either rush the API layer or block on infrastructure unrelated to items and encounters. Phase 9 now stops at the database model, external identifiers, synchronization state, and command layer — the pieces provable locally and in CI without a live deployable — plus the *contract* an adapter will call once one exists. The live exit criterion moves to the phases built to prove it: [Phase 10](#phase-10-core-api-and-playable-vertical-slice) stands up the API deployable itself, and [Phase 11](#phase-11-foundry-mvp) is where it is actually exercised against Foundry. What was Phase 10 (AI and Discord integration) and Phase 11 (Import tools) are renumbered to [Phase 12](#phase-12-ai-and-discord-integration) and [Phase 13](#phase-13-import-tools); their own scope is unchanged.
 
 Deliver:
 
 - item definitions and instances
 - inventory and ownership
 - encounters
-- combat outcome synchronization
-- Foundry identifiers and sync records
+- encounter and combat commands (`start_encounter`, `resolve_combat_turn`, `end_encounter` — see [docs/PHASE9_VERIFICATION.md](PHASE9_VERIFICATION.md))
+- the database model for external identifiers and synchronization state (`integration.external_systems`/`.external_identifiers`/`.sync_jobs`/`.sync_state`/`.delivery_attempts`, [DATABASE_MODEL.md §19](architecture/DATABASE_MODEL.md#19-security-audit-and-integration))
+- adapter-facing contracts: the `dnd_ai.commands.*` surface an adapter (Foundry, Discord, or otherwise) calls once Phase 10's API exists to route to it — defined and tested now, exposed over HTTP later
 
 Exit criteria:
 
-- Foundry combat can update persistent character and world state.
+- Item ownership and possession are distinct and independently queryable.
+- Combat resolved through `resolve_combat_turn` updates persistent character state (`campaign.character_state`) through a causal event, entirely through the command layer — never a direct table write (rule 3) — proven by `tests/scenario`, locally and in CI against `dev`.
+- An external system's identifier for a world entity, and a synchronization job's lifecycle, are representable and round-trip through `integration.*` without any client writing PostgreSQL directly.
+- ~~Foundry combat can update persistent character and world state~~ — moved to [Phase 11](#phase-11-foundry-mvp), where it is provable against a live deployment; Phase 9 proves the same claim short of "live."
 
-### Phase 10: AI and Discord integration
+### Phase 10: Core API and playable vertical slice
+
+The first phase with an actual deployable ([§30.8](#308-per-phase-deployment-expectations)): a FastAPI application over the existing `dnd_ai.commands`/query layer, containerized and running on ECS Fargate behind the ALB in `dev` ([architecture/SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer), §17).
+
+Deliver:
+
+- the API layer: authentication, authorization, input validation, command/query routing, correlation/idempotency identifiers, response shaping (architecture/SYSTEM_ARCHITECTURE.md §5.2)
+- command endpoints wrapping `dnd_ai.commands.*` (`CreateWorld`, `CreateTimeline`, `CreateNpc`, `StartSession`, `PerformInteraction`, `ResolveCheck`, `ApplyEvent`, `AdvanceQuest`, `RevealKnowledge`, `CreateTimelineBranch`, plus the item/encounter commands Phase 9 built)
+- query endpoints over the effective-state read models ([architecture/SYSTEM_ARCHITECTURE.md §9](architecture/SYSTEM_ARCHITECTURE.md#9-effective-timeline-state))
+- the shared container image and ECS Fargate deployment for the API service ([architecture/SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology))
+
+Exit criteria:
+
+- The application API runs on ECS Fargate behind the ALB in `dev`, reachable and health-checked.
+- The [§24 vertical-slice acceptance scenario](#24-vertical-slice-acceptance-scenario) can be driven end-to-end through the API, not just through direct Python calls into the command layer.
+- No client path bypasses the command/query layer to write PostgreSQL directly (rule 3).
+
+### Phase 11: Foundry MVP
+
+Wires Phase 9's `integration.*` schema and adapter-facing command contracts through Phase 10's live API to an actual FoundryVTT module ([architecture/SYSTEM_ARCHITECTURE.md §15.1](architecture/SYSTEM_ARCHITECTURE.md#151-foundryvtt)) — the phase this project's original Phase 9 exit criterion was written for.
+
+Deliver:
+
+- a FoundryVTT module mapping actors, scenes, journals, and tokens to internal UUIDs via `integration.external_identifiers`
+- Foundry-submitted interactions and checks routed through the Phase 10 API into the existing command layer
+- state synchronization back to Foundry (selected character and scene fields), tolerant of offline/delayed reconnection
+
+Exit criteria:
+
+- Foundry combat can update persistent character and world state, end-to-end and live in `dev` (the criterion originally assigned to Phase 9).
+- A disconnect/reconnect during a sync job does not corrupt `integration.sync_state` or double-apply an already-delivered update.
+
+### Phase 12: AI and Discord integration
 
 Deliver:
 
@@ -1374,7 +1412,7 @@ Exit criteria:
 - An NPC agent receives only appropriate knowledge and state.
 - AI changes cannot bypass approval and validation rules.
 
-### Phase 11: Import tools
+### Phase 13: Import tools
 
 Deliver:
 
@@ -1791,17 +1829,17 @@ The telemetry requirements are in [SYSTEM_ARCHITECTURE.md §19](architecture/SYS
 
 ### 30.8 Per-phase deployment expectations
 
-Application services do not exist until there is application code to run. Phases 2–8 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-verification-policy): a green CI run against the deployed `dev` database on the phase's final head commit. Their development happens locally.
+Application services do not exist until there is application code to run. Phases 2–9 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-verification-policy): a green CI run against the deployed `dev` database on the phase's final head commit. Their development happens locally. Phase 9's item/encounter command layer is a deliberate exception to "no deployable yet" only in the sense that it is *adapter-ready*, not deployed — see the replan note under [Phase 9](#phase-9-items-inventory-encounters-and-foundry-integration-contracts).
 
 The additional obligations in this section begin when the corresponding deployable first exists:
 
 | From | Additionally deployed and verified in `dev` |
 |---|---|
-| The first phase that delivers a FastAPI endpoint | API service on Fargate behind the ALB, reachable and health-checked |
+| The first phase that delivers a FastAPI endpoint (Phase 10) | API service on Fargate behind the ALB, reachable and health-checked |
 | The first phase that delivers outbox processing | Background worker service |
-| Phase 9 (Foundry synchronization) | Whatever Foundry-facing surface that phase adds, through the API |
-| Phase 10 (AI and Discord) | Discord adapter service; AI provider credentials resolved from Secrets Manager at runtime |
-| Phase 11 (Import tools) | Import job as a one-off task |
+| Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
+| Phase 12 (AI and Discord) | Discord adapter service; AI provider credentials resolved from Secrets Manager at runtime |
+| Phase 13 (Import tools) | Import job as a one-off task |
 
 A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§23.0](#230-verification-policy)), but there is no local substitute for the deployment itself.
 

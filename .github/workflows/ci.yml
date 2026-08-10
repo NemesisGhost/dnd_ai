@@ -131,6 +131,26 @@ jobs:
       - name: Run full test suite (unit, database, scenario)
         run: uv run pytest -v --tb=short
 
+      # The full test suite's run-to-run duration against real AWS RDS
+      # varies enormously (observed anywhere from ~7.5 minutes to over an
+      # hour for the same test count — see docs/PHASE9_VERIFICATION.md's
+      # CI-anomaly notes), and the credentials from "Configure AWS
+      # credentials" above are only valid for the role's session duration
+      # (commonly capped at one hour). A slow run can therefore leave the
+      # revoke-ingress call below holding an already-expired session,
+      # failing with RequestExpired even though every substantive step
+      # (migrations, tests) already succeeded — observed on run 31343247142.
+      # Re-assuming fresh credentials immediately before cleanup, rather
+      # than raising role-duration-seconds and hoping it covers whatever a
+      # given run happens to take, keeps this step correct regardless of
+      # how long everything before it ran.
+      - name: Refresh AWS credentials before cleanup
+        if: always()
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
       - name: Clean up ephemeral database and revoke access
         if: always()
         env:

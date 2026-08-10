@@ -172,3 +172,6 @@ secrets.auto.tfvars
 terraform.tfstate*
 *.code-workspace
 *.terraform.lock.hcl
+
+# Local scratch/tooling output — never part of the deliverable.
+.tmp/

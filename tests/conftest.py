@@ -46,6 +46,41 @@ ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
 # local, dev/staging/prod, and CI.
 REQUIRED_POSTGRES_MAJOR_VERSION = 18
 
+# PR #21's CI run 31312847929 hit a 'psycopg.OperationalError: SSL error:
+# unexpected eof while reading' on a completely unrelated, simple lookup
+# (tests/database/test_phase7_reparent_guards.py::
+# test_a_story_arcs_status_can_still_be_updated) roughly 40 minutes into a
+# single pytest session, after 2,278 other tests had already passed
+# cleanly — no failed assertion, no schema, migration, or constraint
+# error. The evidence confirms the connection was interrupted; it does
+# NOT distinguish which of two mechanisms caused that interruption: (a)
+# the connection went stale while idle in the pool between checkouts and
+# was then handed back out, or (b) it was actively executing that lookup
+# when something (AWS RDS or a network path in front of it) dropped it
+# mid-statement. Both are consistent with the observed symptom. This
+# comment does not claim to know which one actually happened.
+#
+# pool_pre_ping=True (applied to both test engines below) makes
+# SQLAlchemy issue a lightweight liveness check on every checkout,
+# transparently discarding and replacing a connection that fails it —
+# mitigating mechanism (a) specifically, a well-documented and common
+# failure mode for long-lived pooled connections against RDS. It does
+# nothing for, and cannot prevent or replay, mechanism (b): a connection
+# that dies *mid-statement* while a test is actively using it has no safe
+# way to be resumed, so that failure mode, if it recurs, still surfaces
+# as a real test error rather than being silently retried or concealed.
+# Whether this setting actually prevents a recurrence of PR #21's failure
+# is unknown until a fresh CI run on the corrected head passes — this is
+# a narrow, well-justified resilience improvement for a plausible
+# mechanism, not a confirmed fix for a proven root cause.
+#
+# pool_recycle proactively retires any pooled connection older than this
+# many seconds rather than waiting for pre-ping to catch it reactively —
+# cheap insurance given RDS-side or network idle timeouts can be shorter
+# than a full CI run, and equally scoped to mechanism (a) above.
+_TEST_ENGINE_POOL_PRE_PING = True
+_TEST_ENGINE_POOL_RECYCLE_SECONDS = 1800
+
 load_dotenv()
 
 
@@ -116,6 +151,18 @@ def _require_supported_postgres(engine: Engine) -> None:
     _check_server_major_version(version_num)
 
 
+def _test_engine_kwargs() -> dict[str, object]:
+    """The pool-resilience kwargs applied to both create_engine() calls in
+    postgres_engine() below — factored out to a pure function, rather than
+    inlined at each call site, so the settings are unit-testable
+    (tests/unit/test_conftest_guards.py) as plain data without asserting
+    on SQLAlchemy's own (partly private) Pool/Engine internals."""
+    return {
+        "pool_pre_ping": _TEST_ENGINE_POOL_PRE_PING,
+        "pool_recycle": _TEST_ENGINE_POOL_RECYCLE_SECONDS,
+    }
+
+
 def _run_alembic_upgrade(database_url: str) -> None:
     subprocess.run(
         ["alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
@@ -137,7 +184,7 @@ def postgres_engine() -> Iterator[Engine]:
     """
     preprovisioned_url = os.environ.get("DND_AI_TEST_DATABASE_URL")
     if preprovisioned_url:
-        engine = create_engine(preprovisioned_url)
+        engine = create_engine(preprovisioned_url, **_test_engine_kwargs())
         try:
             _require_supported_postgres(engine)
             yield engine
@@ -153,6 +200,12 @@ def postgres_engine() -> Iterator[Engine]:
     db_name = f"dnd_ai_test_{uuid.uuid4().hex[:12]}"
     test_url = admin_url.set(database=db_name)
 
+    # Admin/cleanup engines below are deliberately left without pre-ping/
+    # recycle: each is created, used for one or two short-lived
+    # statements (CREATE DATABASE / DROP DATABASE), and disposed
+    # immediately — never held open long enough to go stale, so the
+    # protection above would add overhead without addressing a real risk
+    # here.
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
         _require_supported_postgres(admin_engine)
@@ -168,7 +221,7 @@ def postgres_engine() -> Iterator[Engine]:
     try:
         _run_alembic_upgrade(test_url.render_as_string(hide_password=False))
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, **_test_engine_kwargs())
         try:
             yield engine
         finally:

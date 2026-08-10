@@ -171,6 +171,22 @@ MANAGED_TABLES = [
     ("campaign", "organization_state"),
     ("campaign", "relationship_statuses"),
     ("campaign", "relationship_state"),
+    # Phase 9 — item domain
+    ("rules", "item_categories"),
+    ("rules", "item_definitions"),
+    ("world", "item_instances"),
+    ("world", "item_containers"),
+    ("campaign", "item_state"),
+    ("campaign", "item_ownership"),
+    ("campaign", "inventory_entries"),
+    ("campaign", "item_attunements"),
+    ("knowledge", "item_identification"),
+    # Phase 9 — encounter domain
+    ("narrative", "encounters"),
+    ("narrative", "encounter_participants"),
+    ("narrative", "encounter_rounds"),
+    ("interaction", "combat_actions"),
+    ("narrative", "encounter_turns"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is
