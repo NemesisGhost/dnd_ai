@@ -23,7 +23,7 @@
 - [19. Effective-state resolution](#19-effective-state-resolution)
 - [20. Transaction and command model](#20-transaction-and-command-model)
 - [21. Audit and validation implementation](#21-audit-and-validation-implementation)
-- [22. Future import implementation](#22-future-import-implementation)
+- [22. World/campaign-data import implementation](#22-worldcampaign-data-import-implementation)
 - [23. Delivery phases](#23-delivery-phases)
 - [24. Vertical-slice acceptance scenario](#24-vertical-slice-acceptance-scenario)
 - [25. Testing strategy](#25-testing-strategy)
@@ -47,9 +47,9 @@ The system must support:
 - Player characters and NPCs using the same mechanical character model.
 - Additional NPC-only information for portrayal, simulation, world management, and generative AI agents.
 - Detailed management of geography, dungeons, quests, organizations, relationships, knowledge, events, items, encounters, and world state.
-- Discord, FoundryVTT, API, import, and AI-agent integrations.
+- Discord, FoundryVTT, API, world/campaign-data import, reference-corpus ingestion, and AI-agent integrations.
 - Reliable provenance, approval, visibility, and audit tracking.
-- Future import of existing campaign documents and legacy material without weakening the canonical model.
+- Future world/campaign-data import of existing campaign documents and legacy material without weakening the canonical model.
 
 The implementation is intentionally structured around actual play. Every major subsystem must support the central gameplay loop:
 
@@ -140,9 +140,20 @@ The platform will not use pure event sourcing.
 
 ### 2.6 Structured data is authoritative; generated text is derived
 
-AI prompts, summaries, embeddings, and generated descriptions must be derived from structured world data whenever possible.
+AI prompts, summaries, embeddings, and generated descriptions must be derived from structured world data and authorized, cited rules/reference-corpus passages whenever possible.
 
 AI-generated changes begin as proposals unless an explicit policy permits automatic application.
+
+### 2.7 Reference-corpus ingestion and campaign import are separate systems
+
+Use qualified terminology because the two document paths have different destinations and authority:
+
+| System | Purpose | Destination | Canonical-state effect |
+|---|---|---|---|
+| Rules/reference corpus | Supply authorized rules and reference passages to AI requests | Searchable source-document and passage index | None |
+| World/campaign-data import | Establish or update world and campaign facts | Domain records created through approved application commands | Yes, after GM approval |
+
+They may share low-level file handling and text-extraction utilities, but never promotion behavior. Reference passages become retrievable, cited request context; campaign import staging contains untrusted proposals that may become canonical only after validation, GM review, and application commands. The rules/reference corpus does not use canonical promotion batches, and campaign import staging does not double as the AI rules corpus.
 
 ---
 
@@ -179,9 +190,9 @@ integration
 | `narrative` | Events, quests, objectives, encounters, story arcs |
 | `knowledge` | Facts, rumors, beliefs, discoveries, expertise, information transfer |
 | `interaction` | Player, GM, Foundry, Discord, and AI actions and resolutions |
-| `ai` | Agents, context assembly, prompt fragments, embeddings, proposals |
+| `ai` | Agents, context assembly, rules/reference-corpus sources and passages, generated output, proposals |
 | `audit` | Change history, approvals, validation errors, agent activity |
-| `import` | Staging and review for future campaign-data imports |
+| `import` | Staging, matching, review, and promotion records for world/campaign-data import |
 | `integration` | External-system identifiers, sync state, webhook or polling metadata |
 
 ---
@@ -205,7 +216,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 It is not a Phase 1 bootstrap dependency, but it is required before the party-membership exclusion constraint described in [§5.4](#54-parties) and [ADR 0010](adr/0010-use-sort-key-ranges-for-fictional-time-intervals.md).
 
-Enable `vector` when the embedding subsystem is implemented:
+Enable `vector` only if Phase 12 or later demonstrates that structured queries, relational retrieval, and PostgreSQL full-text search are insufficient:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -273,7 +284,7 @@ Source types include:
 
 - GM entry
 - Player entry
-- Imported document
+- World/campaign source document
 - Rulebook or SRD
 - FoundryVTT
 - Discord
@@ -281,6 +292,8 @@ Source types include:
 - AI-generated proposal
 - Migration or seed data
 - External API
+
+For rules/reference-corpus sources, provenance includes the immutable source/version and file hash plus chapter, section, page, and passage location needed for citation. It also records usage rights and whether the source may be indexed, quoted, summarized, exported, or considered for any separately authorized future training use. For accepted world/campaign-data proposals, provenance links each canonical effect to its source location, review decision, application command, and result.
 
 ---
 
@@ -401,9 +414,11 @@ Implement:
 
 All rule definitions must identify their ruleset and version.
 
+Rules/reference-corpus retrieval must likewise filter by the campaign's selected game system, edition, sourcebooks, ruleset, and permissions. A retrieved passage is reference context, not a `rules.*` definition or campaign fact; ingesting a book never creates abilities, classes, species, spells, feats, items, monsters, or other domain records automatically.
+
 ### 6.2 Homebrew support
 
-Homebrew definitions must be first-class records with provenance and canon status. They must not require changes to core tables.
+Homebrew definitions must be first-class records with provenance and canon status. They must not require changes to core tables. User-authored homebrew documents may also be registered in the rules/reference corpus, where campaign-specific house rules take retrieval precedence without silently changing canonical rule definitions.
 
 ### 6.3 Derived calculations
 
@@ -418,7 +433,7 @@ Implement calculation services for:
 - movement
 - maximum hit points
 
-Persist snapshots only when useful for performance, imports, or historical reconstruction. Store the calculation version with each snapshot.
+Persist snapshots only when useful for performance, world/campaign-data import, or historical reconstruction. Store the calculation version with each snapshot.
 
 ---
 
@@ -962,7 +977,7 @@ Implement:
 - `narrative.encounter_rounds`
 - `interaction.combat_actions`
 
-FoundryVTT may remain the detailed tactical authority during live combat. The database should capture synchronized state and meaningful outcomes.
+FoundryVTT may remain the detailed tactical authority during live combat. Phase 9 provides records and contracts capable of storing synchronized state and meaningful outcomes; live synchronization itself begins in Phase 11 through the application API.
 
 Persist enough detail to support:
 
@@ -978,7 +993,7 @@ Persist enough detail to support:
 
 ## 18. AI-agent implementation
 
-Implement:
+The following is a longer-term model, not the Phase 12 starting scope. Implement only the subset justified by the narrow NPC MVP:
 
 - `ai.agents`
 - `ai.agent_roles`
@@ -1028,6 +1043,47 @@ High-impact approval-required examples:
 - faction-control changes
 - permanent quest failure
 - creation of major new canon
+
+### 18.3 Rules/reference-corpus ingestion and retrieval
+
+The rules/reference corpus supplies retrieval-grounded context; it does not train or retrain the foundation model and has no canonical-state promotion path. It supports authorized SRDs; the Player's Handbook, Dungeon Master's Guide, Monster Manual, and setting books when the operator has usage rights; compatible third-party supplements; campaign-selected supplements; and user-authored homebrew references, including custom classes, species, backgrounds, spells, feats, items, and monsters.
+
+```text
+Authorized source
+  -> register and validate usage rights
+    -> retain immutable source and hash
+      -> extract text and document structure
+        -> preserve chapter/section/page provenance
+          -> create retrievable passages
+            -> index with PostgreSQL-native search
+              -> retrieve relevant passages
+                -> supply cited context to the AI request
+```
+
+Registered sources and passages record, as applicable:
+
+- game system, rules edition and version, title, publisher or author
+- official, third-party, SRD, or homebrew classification
+- license or usage-rights status
+- immutable file hash, source version, ingestion date, and supersession history
+- chapter, section, page, and passage location sufficient for citation
+- campaigns or rulesets permitted to retrieve the source
+- whether indexing, quotation, summarization, export, or any future training use is permitted
+- source-removal and index-rebuild status
+
+Storage owned by this subsystem covers registered reference sources, source versions and hashes, extracted sections/passages, citation locations, PostgreSQL search indexes, ruleset/edition/sourcebook applicability, usage rights and retrieval permissions, and ingestion/removal history. These are reference-corpus records under the AI/context boundary, not `import.*` campaign-staging rows and not canonical domain entities.
+
+Retrieval rules:
+
+- Ingest only material the operator is authorized to store and use.
+- Filter by campaign-selected game system, edition, sourcebooks, ruleset, and permissions; never silently mix D&D editions.
+- Apply precedence in this order: campaign-specific house rules; campaign-selected sourcebooks and edition; general references for the selected system and edition; model background knowledge only when no authoritative selected source is available and the use case permits it.
+- Surface conflicts instead of silently combining incompatible passages.
+- Never expose or redistribute full imported books through public application APIs.
+- Removing, disabling, or superseding a source makes its passages unavailable to later retrieval and triggers the required index update.
+- Every retrieved passage retains source and location provenance, and retrieval and downstream AI use are audited.
+
+The initial implementation uses structured metadata filters, PostgreSQL full-text search, deterministic passage selection where practical, citations, and retrieval auditing. Embeddings, if later justified, augment rather than replace metadata, edition and authorization filtering, citations, or deterministic precedence. Model training or fine-tuning requires a separate design, an explicitly authorized training dataset, appropriate licensing and privacy review, evaluation criteria, and demonstrated need; ingested material is never training data by default.
 
 ---
 
@@ -1128,9 +1184,9 @@ Use constraints and triggers for local invariants. Use service-layer validation 
 
 ---
 
-## 22. Future import implementation
+## 22. World/campaign-data import implementation
 
-Although the initial database is empty, build import boundaries before importing existing campaign material.
+World/campaign-data import is deferred until Phase 14, after canonical API commands and application services exist. It handles world-building and campaign-premise documents; locations, factions, organizations, religions, and lore; NPCs and relationships; character backgrounds; quests and rewards; session notes and transcripts; timelines and historical events; items, ownership, inventory, and treasure; discoveries, beliefs, secrets, knowledge, summaries, and current state. It is distinct from the Phase 12 rules/reference corpus.
 
 Implement later:
 
@@ -1142,22 +1198,46 @@ Implement later:
 - `import.staged_knowledge`
 - `import.entity_matches`
 - `import.validation_results`
+- review decisions
 - `import.promotion_batches`
 
-Import flow:
+World/campaign-data import flow:
 
 ```text
-Source documents
-    -> extraction
-    -> staged candidates
-    -> entity matching and deduplication
-    -> validation
-    -> GM review
-    -> approved commands
-    -> canonical world records
+Campaign source
+  -> retain source and provenance
+    -> extract candidate entities, facts, relationships, events, and knowledge
+      -> stage proposals
+        -> match and deduplicate
+          -> validate and detect conflicts
+            -> GM review, edit, approve, or reject
+              -> approved application commands
+                -> canonical domain records
 ```
 
-Imported text must not directly create canon without review.
+Required promotion behavior:
+
+- Handle entity matching, ambiguous matches, duplicates, and conflicts with existing canon explicitly.
+- Support per-proposal or appropriately grouped GM review, editing, approval, and rejection.
+- Require application-command coverage for every promoted proposal; missing commands are an implementation gap, never permission for direct database writes.
+- Apply the same validation, authorization, visibility, timeline-isolation, audit, idempotency, and transaction rules as normal operations.
+- Promote related changes atomically where partial application would be inconsistent.
+- Support idempotent reruns and resumable partial review and promotion.
+- Link every accepted record or event to the source location, reviewer, decision, application command, and result.
+- Never promote staged rows, extracted text, or AI output directly into arbitrary canonical tables.
+
+Historical session notes require explicit separation between described historical events, resulting state, character or party knowledge, quest and relationship changes, and corrections or initial-state assertions. Prefer to:
+
+1. Match or create the session, participants, locations, entities, and quests.
+2. Propose historical events with appropriate in-world and recorded timing.
+3. Apply resulting state changes through application commands.
+4. Propose supported quest, relationship, inventory, and knowledge changes.
+5. Preserve a source-note citation for every accepted proposal.
+6. Avoid duplicate events or repeated state effects when reprocessing the same source.
+
+When reliable causal history cannot be reconstructed, use an explicitly identified initial-state or reconciliation command with provenance. Do not fabricate an event merely to make history appear complete.
+
+Phase 14 starts with a small campaign packet containing one world-building document, one quest description, and one set of session notes. One input format is sufficient initially. AI-assisted and deterministic extraction are both allowed, but all extracted content remains untrusted until validation and approval. A general PDF, DOCX, spreadsheet, transcript, or OCR framework is outside the initial scope.
 
 ---
 
@@ -1177,7 +1257,7 @@ The local server must be the **same PostgreSQL major version the project deploys
 
 `tests/unit` is unaffected by either tier — it uses no database at all.
 
-The AWS obligation still applies to *running* code, not just schema: once a phase delivers a deployable — an API, the background worker, an adapter — that deployable runs on AWS in `dev` and is exercised there. There is no local deployment topology and none is planned ([SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology)). The compute platform, deployment flow, and the per-phase table of which deployable is expected from when are in [§30](#30-aws-deployment-plan-for-application-services).
+The AWS obligation still applies to *running* code, not just schema: once a phase delivers a deployable — an API or adapter — its selected cost-conscious AWS path runs in `dev` and is exercised there at a deliberate checkpoint. Local PostgreSQL remains the normal development and test loop. The compute and networking decisions and per-phase expectations are in [§30](#30-aws-deployment-plan-for-application-services).
 
 A phase's exit criteria below are therefore necessary but not sufficient. A phase is done when, additionally:
 
@@ -1296,7 +1376,7 @@ First-time obligations (per [§23.1](#231-phase-exit-review)):
 - **Close Phase 3's branch-history deferral.** Add `campaign.timelines.branch_event_id` with its foreign key and cross-row validation, then prove rule 7 with the effective-history scenario described in the exit criteria. Phase 3 verified branch structure only; do not treat that as evidence of isolation.
 - **Close Phase 5's interaction/event placeholders.** `knowledge.entity_knowledge.learned_source` and `knowledge.party_discoveries.discovery_method` are free-text placeholders (revision 041) for "how this was learned/discovered" — replace with real references to `interaction.interactions`/`narrative.events` once both exist, per [DATABASE_MODEL.md §26](architecture/DATABASE_MODEL.md#26-reconciliation-notes-phase-5). Also extend `campaign.location_state`/`.area_connection_state`/`.area_feature_state`/`.hazard_state`/`.interactable_state` with a `last_event_id` provenance column, the same pattern Phase 4's character-state tables are already expected to receive here — see [DATABASE_MODEL.md §17](architecture/DATABASE_MODEL.md#17-typed-timeline-state).
 - **Wire up conditional-route evaluation.** `world.area_connections.is_conditional`/`condition_description` (revision 047) record that a route is conditional and what the condition is, but nothing evaluates it — a party attempting to traverse a conditional route needs a check resolution against the interaction model this phase builds. Quest-gated conditions additionally need Phase 7's quest state; a route conditioned purely on interaction/check outcome (not quest progress) can be fully wired here.
-- **Likely the first deployable**, if outbox processing lands here — which brings [§30.8](#308-per-phase-deployment-expectations) into force for the first time (a service actually running on Fargate in `dev`, not just migrations). Not built: PLAN.md's own wording was conditional, no exit criterion named it, and no Phase 6 deliverable required post-commit async work. Deferred to whichever phase actually needs it.
+- **Potential first deployable, not realized.** No Phase 6 exit criterion required post-commit async work, so no outbox processor was built. The earlier assumption that this would imply a standing Fargate service is superseded by [§30.2](#302-compute-principles): intermittent background work should prefer triggered execution, and persistent compute requires demonstrated need.
 
 </details>
 
@@ -1346,7 +1426,7 @@ Exit criteria:
 
 Phase 9 is the first phase developed under the local-first loop in [§23.0](#230-verification-policy) — its verification file is the first to record both a local result and a CI run ID. The [PostgreSQL 18 gate](POSTGRES18_UPGRADE_PLAN.md) that previously blocked this phase from merging closed 2026-08-08: `dev` now runs PostgreSQL 18.4, matching local.
 
-**Replan (2026-08-09).** Phase 9 was originally scoped to close with a *live* exit criterion — "Foundry combat can update persistent character and world state" — but [§30.8](#308-per-phase-deployment-expectations) requires that claim to be proven against a real deployable: an actual Foundry-facing surface reachable through the application API on ECS Fargate in `dev`. No FastAPI service, container image, or Fargate/ALB Terraform exists yet in this project; standing that up is a substantial infrastructure and cost decision distinct from the schema/domain-logic work this phase otherwise does, and doing it as a rider on the item/encounter domains would either rush the API layer or block on infrastructure unrelated to items and encounters. Phase 9 now stops at the database model, external identifiers, synchronization state, and command layer — the pieces provable locally and in CI without a live deployable — plus the *contract* an adapter will call once one exists. The live exit criterion moves to the phases built to prove it: [Phase 10](#phase-10-core-api-and-playable-vertical-slice) stands up the API deployable itself, and [Phase 11](#phase-11-foundry-mvp) is where it is actually exercised against Foundry. What was Phase 10 (AI and Discord integration) and Phase 11 (Import tools) are renumbered to [Phase 12](#phase-12-ai-and-discord-integration) and [Phase 13](#phase-13-import-tools); their own scope is unchanged.
+**Boundary clarification (2026-08-09).** Phase 9 is the final database-foundation phase. It completes the items, inventory, ownership, treasure/economy, encounters, and Foundry-facing persistence and command contracts already underway. It may deliver database records and constraints required by Foundry integration, external identifiers and synchronization state, encounter commands and service-layer behavior, and adapter-facing persistence contracts. It does **not** deliver live Foundry-to-platform synchronization: no application API or Foundry adapter exists yet. Phase 10 creates the client-safe application boundary, and Phase 11 proves the concrete Foundry flow. External clients never write directly to PostgreSQL, and no temporary Foundry-to-database path is planned.
 
 Deliver:
 
@@ -1362,68 +1442,133 @@ Exit criteria:
 - Item ownership and possession are distinct and independently queryable.
 - Combat resolved through `resolve_combat_turn` updates persistent character state (`campaign.character_state`) through a causal event, entirely through the command layer — never a direct table write (rule 3) — proven by `tests/scenario`, locally and in CI against `dev`.
 - An external system's identifier for a world entity, and a synchronization job's lifecycle, are representable and round-trip through `integration.*` without any client writing PostgreSQL directly.
-- ~~Foundry combat can update persistent character and world state~~ — moved to [Phase 11](#phase-11-foundry-mvp), where it is provable against a live deployment; Phase 9 proves the same claim short of "live."
+- Live Foundry synchronization is explicitly excluded and moves to [Phase 11](#phase-11-foundry-mvp); Phase 9 proves only the persistence and application-service behavior that the later adapter will call.
 
 ### Phase 10: Core API and playable vertical slice
 
-The first phase with an actual deployable ([§30.8](#308-per-phase-deployment-expectations)): a FastAPI application over the existing `dnd_ai.commands`/query layer, containerized and running on ECS Fargate behind the ALB in `dev` ([architecture/SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer), §17).
+Phase 10 delivers the smallest usable application boundary over the existing domain and persistence layers. It owns the end-to-end vertical slice in [§24](#24-vertical-slice-acceptance-scenario) and is the first phase with an application deployable.
 
 Deliver:
 
-- the API layer: authentication, authorization, input validation, command/query routing, correlation/idempotency identifiers, response shaping (architecture/SYSTEM_ARCHITECTURE.md §5.2)
-- command endpoints wrapping `dnd_ai.commands.*` (`CreateWorld`, `CreateTimeline`, `CreateNpc`, `StartSession`, `PerformInteraction`, `ResolveCheck`, `ApplyEvent`, `AdvanceQuest`, `RevealKnowledge`, `CreateTimelineBranch`, plus the item/encounter commands Phase 9 built)
-- query endpoints over the effective-state read models ([architecture/SYSTEM_ARCHITECTURE.md §9](architecture/SYSTEM_ARCHITECTURE.md#9-effective-timeline-state))
-- the shared container image and ECS Fargate deployment for the API service ([architecture/SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology))
+- a FastAPI application entry point and a Lambda ASGI adapter
+- database transaction and session management with cross-domain transaction boundaries owned by the application layer
+- command endpoints over the existing command/application services
+- query services for the effective dungeon, character, quest, relationship, inventory, encounter, and knowledge state required by the vertical slice
+- stable request and response contracts usable by Foundry, Discord, and future clients
+- minimal development-stage authentication and authorization
+- correlation and idempotency identifiers and consistent error contracts
+- one cost-conscious AWS path: API Gateway HTTP API to one modular FastAPI Lambda handler, as defined in [§30](#30-aws-deployment-plan-for-application-services)
+- end-to-end execution of the existing vertical-slice acceptance scenario through the API
+
+Keep the endpoint surface limited to what that scenario needs:
+
+- establish or retrieve the required world, timeline, campaign, party, session, characters, NPC, dungeon, encounter, items, and quest
+- enter a location or dungeon area and retrieve party-visible context
+- search or interact with a feature and resolve a check
+- record the resulting event and interaction
+- atomically apply dungeon, character, inventory, encounter, knowledge, and quest changes where required
+- retrieve knowledge filtered for the requesting party or character
+- end a session
+- verify effective state in another campaign and a branched timeline
 
 Exit criteria:
 
-- The application API runs on ECS Fargate behind the ALB in `dev`, reachable and health-checked.
-- The [§24 vertical-slice acceptance scenario](#24-vertical-slice-acceptance-scenario) can be driven end-to-end through the API, not just through direct Python calls into the command layer.
-- No client path bypasses the command/query layer to write PostgreSQL directly (rule 3).
+> The complete vertical-slice scenario executes through the application API without direct client writes to PostgreSQL. Required cross-domain changes commit atomically, retries do not duplicate effects, knowledge visibility is enforced, and campaign/timeline isolation is preserved.
+
+Testing focuses on application behavior and this end-to-end scenario. Do not create another generalized test framework or duplicate database invariants already adequately tested in earlier phases.
 
 ### Phase 11: Foundry MVP
 
-Wires Phase 9's `integration.*` schema and adapter-facing command contracts through Phase 10's live API to an actual FoundryVTT module ([architecture/SYSTEM_ARCHITECTURE.md §15.1](architecture/SYSTEM_ARCHITECTURE.md#151-foundryvtt)) — the phase this project's original Phase 9 exit criterion was written for.
+Wires Phase 9's `integration.*` schema and adapter-facing contracts through Phase 10's API to the smallest playable Foundry integration. Build the concrete encounter flow before designing any general-purpose bidirectional synchronization framework.
 
 Deliver:
 
-- a FoundryVTT module mapping actors, scenes, journals, and tokens to internal UUIDs via `integration.external_identifiers`
-- Foundry-submitted interactions and checks routed through the Phase 10 API into the existing command layer
-- state synchronization back to Foundry (selected character and scene fields), tolerant of offline/delayed reconnection
+- associate Foundry worlds, scenes, actors, tokens, items, and encounters with canonical platform records
+- retrieve party-visible state for the current location or encounter
+- submit interactions, checks, combat outcomes, and meaningful state changes through the API
+- synchronize the minimum required character HP, conditions, resource use, inventory, and encounter results
+- handle duplicate delivery and retries safely
+- restore synchronized state after reopening or reconnecting
 
 Exit criteria:
 
-- Foundry combat can update persistent character and world state, end-to-end and live in `dev` (the criterion originally assigned to Phase 9).
-- A disconnect/reconnect during a sync job does not corrupt `integration.sync_state` or double-apply an already-delivered update.
+> A real Foundry encounter updates canonical state through the application API, and reopening or reconnecting retrieves the updated state without duplicate events or direct database access.
 
-### Phase 12: AI and Discord integration
+### Phase 12: Narrow AI/NPC MVP
+
+AI delivery is separate from Discord integration and world/campaign-data import. Start with one NPC portrayal/conversation use case, one provider, and one authorized representative rules source—preferably an applicable SRD or user-authored homebrew document—before broader AI infrastructure.
 
 Deliver:
 
-- AI agents
-- context assembly
-- proposals and approvals
-- embeddings
-- Discord interaction mapping
-- NPC dialogue context
+- deterministic context assembly using existing knowledge and visibility rules
+- the smallest useful rules/reference corpus described in [§18.3](#183-rulesreference-corpus-ingestion-and-retrieval): source registration and rights validation, immutable source/hash retention, structured extraction, passage provenance, PostgreSQL full-text indexing, filtered retrieval, citations, removal, and auditing
+- one NPC portrayal/conversation use case and one AI provider
+- structured generated output
+- proposed changes that require validation and the configured approval path before becoming canonical
+- auditing of AI requests, context selection, responses, proposals, and decisions
 
 Exit criteria:
 
-- An NPC agent receives only appropriate knowledge and state.
-- AI changes cannot bypass approval and validation rules.
+- The NPC receives only permitted knowledge; party-private and character-private knowledge do not leak.
+- Responses can reference current encounter, quest, and relationship state.
+- AI output cannot directly mutate canonical state.
+- Rejected or invalid proposals leave canonical state unchanged.
+- One authorized rules source can be registered, extracted, indexed, and retrieved.
+- A rules question retrieves cited passages from the campaign-selected edition and source, including section or page location.
+- A conflicting edition or unauthorized source is excluded, and a campaign house rule takes precedence over the general rule.
+- Registering or ingesting reference material does not create or mutate canonical campaign state.
+- Removing or disabling a source prevents later retrieval.
+- Corpus retrieval and downstream AI use are auditable.
+- Normal automated tests prove retrieval behavior without live AI-provider calls.
 
-### Phase 13: Import tools
+Do not create a general-purpose document-ingestion or vector-search framework for this scenario. Defer embeddings and broad retrieval-augmented-generation infrastructure until structured metadata, relational retrieval, and PostgreSQL full-text search have proved insufficient. Normal automated tests must not depend on live provider calls; real-provider testing is limited to deliberate smoke verification.
+
+### Phase 13: Discord integration
+
+Discord is a thin client over the same application API and application services.
 
 Deliver:
 
-- extraction staging
-- deduplication
-- review workflow
-- import commands
+- Discord user and campaign identity mapping
+- command and interaction mapping
+- NPC conversation through the Phase 12 AI service
+- knowledge-filtered responses
+- idempotency and retry behavior
+
+Evaluate slash commands and HTTP interactions first. Do not assume a continuously running gateway service is required. If demonstrated requirements later require a persistent Discord gateway connection, allow one minimum-sized persistent service, such as Fargate, for that specific workload.
 
 Exit criteria:
 
-- Existing campaign documents can be imported through a controlled review process.
+- Discord commands use the same authorization, command, query, visibility, and idempotency boundaries as other API clients.
+- NPC responses expose only knowledge permitted for the mapped campaign user.
+
+### Phase 14: World and campaign-data import
+
+World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
+
+Deliver:
+
+- source/hash retention and source-location provenance for one world-building document, one quest description, and one set of session notes
+- staged entity, relationship, event, knowledge, and resulting-state proposals
+- entity matching, ambiguity handling, deduplication, canon-conflict detection, and resumable GM review
+- editable individual or grouped approval and rejection decisions
+- atomic, idempotent promotion through approved application commands using normal validation and authorization
+- historical-event reconstruction or an explicitly identified initial-state reconciliation when causal history is impractical
+
+Exit criteria:
+
+- The representative packet is retained with hashes and source-location provenance, and extraction produces staged entities, relationships, events, knowledge, and state proposals.
+- Existing entities match without silent duplicates; ambiguous matches require GM resolution, and canon conflicts are presented for review.
+- The GM can edit, approve, and reject individual or grouped proposals; rejected proposals leave canonical state unchanged.
+- Approved proposals invoke application commands and create valid canonical records, atomically where required.
+- Partially reviewed work resumes safely, and reprocessing the same source does not duplicate canonical effects.
+- Session notes produce appropriate historical events and resulting state or an explicitly identified initial-state reconciliation without fabricated history.
+- Every accepted canonical effect is traceable to its source, review decision, application command, and result.
+- No client, extractor, campaign import staging process, or AI component writes directly to canonical domain tables.
+
+### Later phases: demonstrated-need expansion
+
+Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, and broader import automation follow only when demonstrated need exists. Until Phase 10 is usable, explicitly defer staging and production environments, three continuously running Fargate services, an Application Load Balancer, a NAT gateway, a continuously polling background worker, comprehensive embeddings or RAG, broad economy or NPC simulation, a full web administration UI, generalized reference-ingestion or world/campaign-data import frameworks, and premature performance optimization.
 
 ---
 
@@ -1446,7 +1591,7 @@ The first end-to-end vertical slice should implement the following scenario:
 13. Open a second campaign on the same timeline and verify that it sees altered dungeon state but not the first party's private knowledge.
 14. Branch a new timeline before the first campaign's dungeon entry and verify that the dungeon remains untouched there.
 
-This scenario is the primary architectural test. A design that cannot support it cleanly must be revised before broader implementation.
+Phase 10 owns this scenario as the primary architectural and application acceptance test. It must run through the application API without direct client database writes. A design that cannot support it cleanly must be revised before broader implementation.
 
 ---
 
@@ -1468,13 +1613,13 @@ Test:
 - quest transition rules
 - visibility rules
 
-### 25.2 Service tests
+### 25.2 Application-service and API tests
 
-Test commands as transactions, including rollback on partial failure.
+Test command and query behavior through the application boundary, including authorization, visibility, idempotent retry, consistent errors, and rollback on partial failure. Reuse earlier database-invariant coverage rather than duplicating it.
 
 ### 25.3 Scenario tests
 
-Use dungeon and quest scenarios to validate cross-domain behavior.
+Use dungeon and quest scenarios to validate cross-domain behavior. Phase 12 adds the narrow authorized rules-source retrieval scenario; Phase 14 adds the representative campaign-packet review and promotion scenario. Focus on their application behavior and acceptance criteria without building a generalized document-test harness or duplicating earlier database invariants.
 
 ### 25.4 Property-based tests
 
@@ -1534,12 +1679,11 @@ Migrations are executed three ways, all from the same revision files: directly a
 
 ### 26.2 Environments
 
-Maintain separate:
+Maintain the current two-tier workflow:
 
 - **local** — a PostgreSQL 18 server on each developer's own machine. The default development and test target per [§23.0](#230-verification-policy). Disposable by definition: it holds nothing that isn't reproducible from migrations plus seeds, it is not backed up, and it is not an environment anything deploys to.
 - `dev` — shared, always-on AWS RDS. CI verifies every commit against it; it is the merge gate, not the inner loop. Do not destroy or stop it as routine cost hygiene ([CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management)).
-- staging
-- production
+- `staging` and `production` — deferred until the Phase 10 vertical slice is usable and workload or delivery needs justify them
 
 Local and `dev` must stay in agreement on PostgreSQL major version, installed extensions, and the six bootstrap roles. Drift between them is the failure mode this two-tier model trades for a faster loop — see [§23.0](#230-verification-policy).
 
@@ -1562,7 +1706,8 @@ Track:
 - AI proposal approval rates
 - integration sync errors
 - slow effective-state queries
-- import validation failures
+- world/campaign-data import validation and promotion failures
+- rules/reference-corpus ingestion, removal, authorization, and retrieval failures
 
 ---
 
@@ -1581,6 +1726,13 @@ The following should remain deferred until their dedicated design documents:
 - weather simulation depth
 - procedural-content generation policy
 - multi-world campaigns
+- staging and production environments before the Phase 10 vertical slice is usable
+- three continuously running Fargate services, an Application Load Balancer, and a NAT gateway for the initial vertical slice
+- a continuously polling background worker as the default architecture
+- RDS Proxy or broad VPC endpoint expansion without measured need
+- comprehensive embeddings or RAG before structured metadata and PostgreSQL-native rules/reference retrieval prove insufficient
+- broad economy or NPC simulation, a full web administration UI, and generalized reference-ingestion or world/campaign-data import frameworks
+- premature performance optimization
 
 Deferred decisions must not be implemented implicitly through ad hoc columns.
 
@@ -1602,7 +1754,8 @@ The initial platform is successful when it can:
 - Preserve causality and audit history.
 - Provide safe, structured context to AI agents.
 - Prevent AI-generated content from silently becoming canon.
-- Accept future imported campaign material through a controlled staging and review process.
+- Retrieve authorized rules/reference passages with edition, permission, precedence, provenance, and citation controls without treating them as campaign canon or training data.
+- Accept future world/campaign material through controlled staging, GM review, and application commands.
 
 ---
 
@@ -1617,13 +1770,13 @@ This section is the **plan** — what the infrastructure should become. [INFRAST
 `terraform/modules/database` and `terraform/modules/secrets` already exist and provide:
 
 - An RDS PostgreSQL instance (version pinned via `postgres_version`, now `18.4`), encrypted at rest with a dedicated KMS key. Matches the project's pinned target ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)) and the local development server — `dev` was replaced onto this version 2026-08-08, see [POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md).
-- A VPC with two private subnets across two availability zones (or reuse of an existing VPC/subnets), a security group scoped to `allowed_cidr_blocks` / `allowed_security_group_ids`, and VPC interface endpoints for Secrets Manager and KMS so private subnets don't need a NAT Gateway by default.
+- A VPC with two private subnets across two availability zones (or reuse of an existing VPC/subnets), a security group scoped to `allowed_cidr_blocks` / `allowed_security_group_ids`, and the currently configured VPC endpoints. Phase 10 must review actual Lambda networking and egress needs; do not assume a VPC-attached Lambda gains internet access from a public subnet, and do not automatically expand or re-enable KMS or Secrets Manager endpoints across every subnet.
 - An AWS-managed master user secret (`manage_master_user_password = true`) — no master password is ever stored in Terraform state or code.
 - IAM database authentication enabled on the instance (`iam_database_authentication_enabled = true`), ready for use once application-level roles are created.
 - Automated backups, deletion protection, enhanced monitoring, and Performance Insights, all on by default.
 - A `secrets` module providing named (value-less) Secrets Manager entries for OpenAI/Discord credentials, sharing the same KMS key.
 
-The database bootstrap, Alembic execution from development/CI, temporary `dev` ingress, and ephemeral-per-run database isolation are implemented and verified. What this plan still needs to add, and what the rest of this section covers, is:
+The database bootstrap, Alembic execution from development/CI, temporary `dev` ingress, and ephemeral-per-run database isolation are implemented and verified. Potential later infrastructure includes the following, but staging and production remain deferred until the Phase 10 vertical slice is usable:
 
 - A remote Terraform state backend (currently local state only).
 - `staging` and `prod` environment directories (only `dev` exists today).
@@ -1655,7 +1808,7 @@ terraform {
 
 ### 29.3 Environments: dev, staging, prod
 
-`terraform/environments/dev/` already exists. `staging/` and `prod/` should be created by copying its structure, not by parameterizing a single environment with conditionals — per-environment tfvars keep blast radius explicit.
+`terraform/environments/dev/` already exists. Do not create `staging/` or `prod/` until the Phase 10 vertical slice is usable and a delivery need is demonstrated. When that happens, create each by copying the `dev` structure rather than parameterizing a single environment with conditionals — per-environment tfvars keep blast radius explicit.
 
 | Setting | dev | staging | prod |
 |---|---|---|---|
@@ -1674,7 +1827,7 @@ A `terraform apply` in a given environment builds, in dependency order:
 2. KMS key (`module.database`, `secrets.tf`).
 3. RDS instance with its AWS-managed master secret (`module.database`, `rds.tf`).
 4. Named Secrets Manager entries for external credentials (`module.secrets`).
-5. Migration runner infrastructure (`module.db_migration_runner`, new — see §29.6).
+5. A migration execution mechanism only if the selected environment cannot use the existing `dev` path; the standing runner in §29.6 is one conditional option, not a default provision.
 
 ### 29.5 Database role, schema, and extension bootstrap
 
@@ -1682,7 +1835,7 @@ The RDS instance boots with only the master role and an empty database. Terrafor
 
 The bootstrap must be idempotent and cover:
 
-- Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` (`btree_gist` is added by the Phase 3 revision that needs it, and `vector` is deferred until the embedding subsystem exists — see [§4.1](#41-postgresql-extensions)).
+- Extensions, per [DATABASE_CONVENTIONS.md §2.2](DATABASE_CONVENTIONS.md): `CREATE EXTENSION IF NOT EXISTS pgcrypto;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` (`btree_gist` is added by the Phase 3 revision that needs it, and `vector` is deferred until PostgreSQL-native rules/reference retrieval proves insufficient — see [§4.1](#41-postgresql-extensions)).
 - All thirteen schemas from [§3](#3-postgresql-schema-organization): `core`, `security`, `rules`, `character`, `world`, `campaign`, `narrative`, `knowledge`, `interaction`, `ai`, `audit`, `import`, `integration`.
 - `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` per [DATABASE_CONVENTIONS.md §3.1](DATABASE_CONVENTIONS.md).
 - The six database roles from [DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md), split into one owning role and five login roles:
@@ -1690,7 +1843,7 @@ The bootstrap must be idempotent and cover:
   - `migration_runner` — executes migrations as a member of `migration_owner`.
   - `app_read_write` — the application's runtime role; DML only, no DDL.
   - `app_read_only` — reporting and read-model queries.
-  - `integration_worker` — scoped grants for Foundry/Discord/import-facing services.
+  - `integration_worker` — scoped grants for Foundry, Discord, reference-corpus ingestion, and world/campaign-data import services.
   - `admin_maintenance` — break-glass, human use only.
 - Each of the five **login** roles created `WITH LOGIN` and `GRANT rds_iam TO <role>;` so applications authenticate with short-lived IAM tokens rather than static passwords — the instance already has `iam_database_authentication_enabled = true`, so no new Secrets Manager entries are needed for these roles (per rule 10 in [CLAUDE.md](../CLAUDE.md)).
 - `migration_owner` is **excluded** from that grant, and from IAM auth generally. `rds_iam` forces IAM authentication on every role that inherits it, so an owning role carrying it would disable password authentication for the RDS master user the moment the master user is granted the membership that ownership transfer requires. This is not theoretical — it locked a real instance out. See [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md).
@@ -1713,9 +1866,11 @@ Runtime behavior: `pip install -r requirements.txt && alembic upgrade head`, aut
 
 This was originally chosen as the lowest-setup-cost option for the project's pre-implementation stage, reusing AWS primitives (EC2, SSM, S3, IAM) already understood from the deleted `db_runner` and requiring no container registry or CI/CD platform decision.
 
-**That deferral is now resolved**: [§30](#30-aws-deployment-plan-for-application-services) commits the project to ECS Fargate, and migrations become a one-off task running the same image as every other service ([§30.2](#302-compute-ecs-fargate), [§30.6](#306-deployment-flow)). The standing EC2 runner described above is therefore a **transitional** mechanism — worth building only if `staging`/`prod` need migrating before the Fargate pipeline exists. If application deployment lands first, skip it entirely and go straight to the one-off task. Either way, `dev` does not need it: `dev` migrations run directly per [§29.9](#299-shared-dev-verification-mechanism-ci).
+**That deferral remains conditional.** Phase 10 uses Lambda for the initial API, not a standing Fargate service. The standing EC2 runner described above is worth building only if a private `staging` or `prod` environment needs migrations before a cheaper one-off mechanism is selected. Those environments are deferred until the vertical slice is usable. `dev` does not need the runner: `dev` migrations run directly per [§29.9](#299-shared-dev-verification-mechanism-ci). Fargate remains a later option for a genuine persistent or one-off workload, but is not the assumed migration path.
 
 ### 29.7 Deployment runbook
+
+The following is a later-environment runbook, not Phase 10 work:
 
 1. One-time per AWS account: apply `terraform/bootstrap/` to create the remote state bucket and lock table (§29.2).
 2. `terraform init` (pointed at the remote backend) and `terraform apply` in `terraform/environments/<env>/` — provisions the VPC, RDS instance, KMS key, secrets, and migration runner.
@@ -1768,85 +1923,91 @@ This reuses infrastructure that already exists rather than adding a new module. 
 
 ## 30. AWS deployment plan for application services
 
-### 30.1 Scope
+### 30.1 Scope and initial target
 
-[§29](#29-aws-terraform-deployment-plan-for-postgresql) covers the database. This section covers everything else that runs: the FastAPI application, the background worker that drains the outbox ([SYSTEM_ARCHITECTURE.md §10](architecture/SYSTEM_ARCHITECTURE.md#10-internal-event-dispatcher-and-outbox)), the Discord adapter, and one-off jobs including migrations.
+[§29](#29-aws-terraform-deployment-plan-for-postgresql) covers the database. This section defines the cost-conscious application deployment path beginning in Phase 10. Nothing here is built yet; [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state) remains the record of what exists.
 
-It exists because [§23.0](#230-verification-policy) requires every phase to be deployed and verified in AWS, and because the concrete deployment target was previously unrecorded — [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) named vendor-neutral deployables and [§29.6](#296-migration-execution-mechanism) explicitly deferred the container-registry and CI/CD decision. That decision is now made and recorded in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+The initial topology is:
 
-Nothing in this section is built yet. It is the plan; [INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state) is what exists.
+```text
+Clients
+  → API Gateway HTTP API
+    → one FastAPI Lambda handler
+      → application/domain services
+        → PostgreSQL
+```
 
-### 30.2 Compute: ECS Fargate
+This is one modular FastAPI application hosted through a Lambda ASGI adapter, not one Lambda function per endpoint. The initial vertical slice does not deploy an always-running API Fargate service, an Application Load Balancer, or three continuously running services.
 
-Application services run as ECS Fargate services in the same VPC and private subnets as the RDS instance. Rationale and the alternatives rejected (EC2 + systemd, App Runner) are in [ADR 0008](adr/0008-aws-first-deployment-and-verification.md).
+### 30.2 Compute principles
 
-| Deployable | ECS shape | Notes |
-|---|---|---|
-| Application API | Long-running service behind an ALB | The modular monolith from [SYSTEM_ARCHITECTURE.md §17](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology); the only deployable with ingress from outside the VPC |
-| Background worker | Long-running service, no load balancer | Outbox drain, integration delivery, AI proposal processing |
-| Discord adapter | Long-running service, no load balancer | Outbound gateway connection; no inbound ingress needed |
-| Migrations | One-off task, run to completion | Replaces the standing EC2 runner in [§29.6](#296-migration-execution-mechanism) — same image, different command |
-| Import / batch jobs | One-off task, run to completion | Phase 11 |
+- Keep local PostgreSQL as the normal development and test loop.
+- Use AWS verification only at the deliberate checkpoints in [§23.0](#230-verification-policy).
+- Bound Lambda concurrency so the application cannot exhaust the development RDS connection limit.
+- Start with direct database connections. Add RDS Proxy only if measured connection behavior demonstrates a need.
+- Reevaluate compute and networking when real workload evidence exists.
+- Fargate remains available for workloads that genuinely require persistent processes; it is not the initial API default.
+- Prefer SQS- or EventBridge-triggered Lambda execution for intermittent background work. Do not preserve a continuously polling worker without a demonstrated workload requirement.
 
-All of these share one container image. The entrypoint selects the role, so there is one artifact to build, scan, and promote.
+### 30.3 Packaging and release
 
-### 30.3 Image build and registry
+Phase 10 chooses the smallest supported Lambda packaging path during deployment design. Whether it uses a zip artifact or container image is an implementation decision, not a reason to provision ECR, ECS, or an ALB preemptively. Artifacts must be immutable and traceable to a Git commit, and deployment must preserve expand-and-contract migration compatibility.
 
-- One **ECR** repository per environment account (or one shared repository with immutable tags — decide when `staging` exists, per [§29.3](#293-environments-dev-staging-prod)).
-- Images are tagged with the Git commit SHA. Mutable tags like `latest` are not deployed; a task definition always references an immutable tag, so a rollback is a task-definition revision rather than a rebuild.
-- CI builds and pushes on merge; on pull requests it builds only to prove the image still builds.
-- Image scanning on push is enabled. A failing scan blocks promotion to `staging`/`prod`, not `dev`.
+### 30.4 Networking decisions for Phase 10
 
-### 30.4 Networking
+Resolve networking during Phase 10 deployment design from the actual Lambda, RDS, IAM-authentication, secrets, and external-egress requirements. Required principles:
 
-- Services run in the **private** subnets that already exist in `terraform/modules/database`. They reach AWS APIs through the existing Secrets Manager and KMS interface endpoints; ECR (plus S3, for image layers) endpoints have to be added, or a NAT Gateway accepted — this is the one place the current no-NAT design needs revisiting, and it is a cost tradeoff to measure rather than assume ([§30.9](#309-open-items)).
-- The API service sits behind an **Application Load Balancer** in the public subnets. It is the only public entry point; the database itself is never reachable from the internet in `staging`/`prod`.
-- Each service gets its own security group. Database ingress is granted by attaching those security groups to the RDS security group via `allowed_security_group_ids`, which `terraform/modules/database` already supports — not by widening any CIDR block.
+- API Gateway is the public application entry point; PostgreSQL is never a client-facing interface.
+- A VPC-attached Lambda in a public subnet does **not** thereby receive internet access.
+- Do not add a NAT gateway, broad VPC endpoint set, or automatic KMS/Secrets Manager endpoints across all subnets preemptively.
+- Grant database ingress narrowly from the Lambda security group rather than widening CIDR access.
+- If external egress is required, compare concrete secure options and recurring cost before choosing.
 
 ### 30.5 Identity and secrets
 
-- Each service gets its own **task role** (what the application may call) distinct from its **execution role** (what ECS may do to start the task).
-- Database access uses **IAM database authentication** with the login roles from [§29.5](#295-database-role-schema-and-extension-bootstrap): the API and worker task roles get `rds-db:connect` for `app_read_write`, read-model-only services get `app_read_only`, and the migration task gets `migration_runner`. No database password is stored for these roles. Scope each policy to the matching entry in the `rds_iam_connect_arns` Terraform output rather than a `dbuser:.../*` wildcard.
-- External credentials (OpenAI, Discord) come from the Secrets Manager entries the `secrets` module already creates, injected as ECS secrets rather than plaintext environment variables. Per rule 10 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules), no secret enters an image, a task definition, or source control.
+- The Lambda gets a least-privilege execution role; later persistent services get their own roles only if they exist.
+- Database access uses the appropriate login role from [§29.5](#295-database-role-schema-and-extension-bootstrap), with credentials and IAM policy scoped to the application rather than shared broadly.
+- External credentials remain outside artifacts and source control. Provision and retrieve only credentials required by the phase being delivered.
 
 ### 30.6 Deployment flow
 
-1. CI builds the image and pushes it to ECR tagged with the commit SHA.
-2. CI registers a new task-definition revision pointing at that tag.
-3. CI runs the migration task to completion and fails the deployment if it fails — schema changes land before the code that depends on them, which is what the expand-and-contract requirement in [DATABASE_CONVENTIONS.md §25.5](DATABASE_CONVENTIONS.md#255-backward-compatibility) exists for.
-4. CI updates the API, worker, and adapter services to the new revision; ECS rolls them with health checks.
-5. Rollback is redeploying the previous task-definition revision. Because migrations are expand-and-contract, the previous image is expected to run against the newer schema.
+1. Run the normal local PostgreSQL and application checks.
+2. Build an immutable Lambda artifact tied to the commit.
+3. Run the existing deliberate AWS database verification checkpoint.
+4. Apply any required compatible migration before application code that depends on it.
+5. Deploy API Gateway and the single FastAPI Lambda handler to `dev`.
+6. Exercise the Phase 10 API scenario and record the deployment evidence.
 
-For `dev`, steps 3–4 run automatically on merge to `main`. For `staging`/`prod`, promotion is deliberate — the same image, a manual trigger. The SSM-based migration runner in [§29.6](#296-migration-execution-mechanism) is retired once step 3 works, since a one-off Fargate task in the private subnets reaches the database the same way without a standing instance.
+Do not provision staging or production as part of the initial vertical slice. Their release and rollback design is deferred until the application is usable and an environment need is demonstrated.
 
 ### 30.7 Observability
 
 The telemetry requirements are in [SYSTEM_ARCHITECTURE.md §19](architecture/SYSTEM_ARCHITECTURE.md#19-observability); this is where they land:
 
-- Container logs to **CloudWatch Logs**, one log group per service, with retention set explicitly rather than left to never expire.
+- Lambda and API Gateway logs go to **CloudWatch Logs**, with retention set explicitly rather than left to never expire.
 - The correlation, causation, and identity fields from §19 are emitted as structured JSON so they are queryable, not free text.
-- Alarms on API 5xx rate and latency, task restart loops, outbox backlog depth, plus the database alarms still missing per [§29.8](#298-open-items).
+- Begin with focused visibility into API errors, latency, throttling/concurrency, and database connection pressure. Add broader alarms when the corresponding workloads exist.
 
 ### 30.8 Per-phase deployment expectations
 
-Application services do not exist until there is application code to run. Phases 2–9 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-verification-policy): a green CI run against the deployed `dev` database on the phase's final head commit. Their development happens locally. Phase 9's item/encounter command layer is a deliberate exception to "no deployable yet" only in the sense that it is *adapter-ready*, not deployed — see the replan note under [Phase 9](#phase-9-items-inventory-encounters-and-foundry-integration-contracts).
+Application services do not exist until there is application code to run. Phases 2–9 are predominantly schema and domain logic, so their AWS obligation is the one in [§23.0](#230-verification-policy): a green CI run against the deployed `dev` database on the phase's final head commit. Their development happens locally. Phase 9 is adapter-ready, not live-synchronized.
 
 The additional obligations in this section begin when the corresponding deployable first exists:
 
 | From | Additionally deployed and verified in `dev` |
 |---|---|
-| The first phase that delivers a FastAPI endpoint (Phase 10) | API service on Fargate behind the ALB, reachable and health-checked |
-| The first phase that delivers outbox processing | Background worker service |
+| Phase 10 (Core API and playable vertical slice) | API Gateway HTTP API and one FastAPI Lambda handler; the complete §24 scenario exercised through it |
 | Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
-| Phase 12 (AI and Discord) | Discord adapter service; AI provider credentials resolved from Secrets Manager at runtime |
-| Phase 13 (Import tools) | Import job as a one-off task |
+| Phase 12 (Narrow AI/NPC MVP) | Deliberate one-provider smoke verification only; normal automated tests use no live provider |
+| Phase 13 (Discord integration) | Slash-command/HTTP interaction path first; no persistent gateway service unless requirements prove it necessary |
+| Phase 14 (World and campaign-data import) | One representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
 
 A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§23.0](#230-verification-policy)), but there is no local substitute for the deployment itself.
 
 ### 30.9 Open items
 
-- **ECR/S3 VPC endpoints vs. NAT Gateway** ([§30.4](#304-networking)) — the current design deliberately avoids a NAT Gateway; pulling images into private subnets forces one or the other. Measure both before choosing.
-- **Terraform modules**: `ecr`, `ecs_cluster`, `ecs_service`, and `alb` do not exist. Follow the one-module-per-bounded-concern split already used by `database` and `secrets`.
+- **Lambda-to-RDS networking and egress** ([§30.4](#304-networking-decisions-for-phase-10)) — resolve from the Phase 10 flow without assuming public-subnet internet access, NAT, RDS Proxy, or a broad endpoint set.
+- **Terraform modules**: the API Gateway/Lambda deployment path does not exist. Add only the bounded infrastructure the Phase 10 vertical slice requires; ECS service and ALB modules remain deferred.
 - **CI/CD platform**: GitHub Actions is already used for CI ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)); deployment is assumed to extend it rather than introduce a second system, but the OIDC role and environment protection rules are unbuilt.
 - **`staging`/`prod` environments** remain unbuilt per [§29.3](#293-environments-dev-staging-prod); everything above is specified for `dev` first.
-- **Cost**: each always-on Fargate service adds to the ~$25–35/month database figure in [INFRASTRUCTURE.md §9](INFRASTRUCTURE.md#9-cost). Measure once the API service exists rather than guessing now.
+- **Cost and scaling**: set bounded Lambda concurrency from the development RDS connection budget, begin with direct connections, and measure before adding RDS Proxy, persistent compute, NAT, or performance infrastructure.
