@@ -6,18 +6,22 @@ command or query.
 
 import logging
 import uuid
+from typing import Annotated
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.correlation import _sanitize_client_correlation_id
 from dnd_ai.api.errors import (
     ApiError,
+    ConflictError,
     ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
     _route_template,
     _sanitize_validation_error_types,
 )
@@ -62,25 +66,71 @@ def test_method_not_allowed_returns_fixed_non_disclosing_message() -> None:
     assert body["error"]["message"] == "The HTTP method is not allowed for this route."
 
 
-def test_http_exception_detail_is_never_echoed_even_as_a_dict() -> None:
-    """finding 1: a directly raised HTTPException's `detail` — string, dict,
-    or list — is never trusted or echoed, regardless of who raised it."""
+def test_http_exception_explicit_supported_status_behaves_like_routing() -> None:
+    """finding 3: a directly raised HTTPException(status_code=404, ...) is
+    supported identically to FastAPI's own routing 404 — the same fixed
+    mapping applies regardless of how the status was produced — and its
+    `detail` is never echoed."""
+    app = create_app()
+
+    secret_looking_detail = "token=SUPER_SECRET_ABC123_DO_NOT_LEAK"
+
+    @app.get("/raise-explicit-404")
+    def _raise_explicit_404() -> None:
+        raise HTTPException(status_code=404, detail=secret_looking_detail)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-explicit-404")
+
+    assert response.status_code == 404
+    assert secret_looking_detail not in response.text
+    body = response.json()
+    assert body["error"]["code"] == "not_found"
+    assert body["error"]["message"] == (
+        "The requested resource does not exist or is not accessible."
+    )
+
+
+def test_http_exception_unknown_but_http_shaped_status_falls_back_to_internal_error() -> None:
+    """finding 3: exc.status_code is not trusted just because it's a
+    plausible HTTP status — 418 isn't in `_SUPPORTED_HTTP_EXCEPTION_STATUSES`,
+    so it must never reach the response; the fixed 500/internal_error
+    contract is returned instead, and the dict `detail` is never echoed."""
     app = create_app()
 
     secret_looking_detail = {"leak": "token=SUPER_SECRET_ABC123_DO_NOT_LEAK"}
 
-    @app.get("/raise-http-exception")
+    @app.get("/raise-http-exception-418")
     def _raise_http_exception() -> None:
-        raise HTTPException(status_code=400, detail=secret_looking_detail)
+        raise HTTPException(status_code=418, detail=secret_looking_detail)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/raise-http-exception")
+        response = client.get("/raise-http-exception-418")
 
-    assert response.status_code == 400
+    assert response.status_code == 500
     assert "SUPER_SECRET_ABC123_DO_NOT_LEAK" not in response.text
     body = response.json()
-    assert body["error"]["code"] == "http_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "An unexpected error occurred."
+
+
+def test_http_exception_out_of_range_status_falls_back_to_internal_error() -> None:
+    """finding 3: an out-of-range status (not a plausible HTTP status at
+    all) gets the identical fixed internal-error fallback — never
+    forwarded to JSONResponse verbatim."""
+    app = create_app()
+
+    @app.get("/raise-http-exception-out-of-range")
+    def _raise_http_exception() -> None:
+        raise HTTPException(status_code=999, detail="irrelevant")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-http-exception-out-of-range")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_correlation_id_is_generated_when_absent() -> None:
@@ -226,21 +276,59 @@ def test_unauthorized_timeline_error_response_omits_every_supplied_uuid() -> Non
     )
 
 
-def test_api_error_maps_to_its_declared_status_and_fixed_safe_message() -> None:
+@pytest.mark.parametrize(
+    ("error_class", "expected_status", "expected_code", "expected_message"),
+    [
+        (
+            UnauthorizedError,
+            401,
+            "unauthorized",
+            "Authentication is required.",
+        ),
+        (
+            ForbiddenError,
+            403,
+            "forbidden",
+            "You do not have permission to perform this action.",
+        ),
+        (
+            NotFoundError,
+            404,
+            "not_found",
+            "The requested resource does not exist or is not accessible.",
+        ),
+        (
+            ConflictError,
+            409,
+            "conflict",
+            "The request could not be completed due to a conflicting change.",
+        ),
+    ],
+)
+def test_every_supported_api_error_subclass_maps_to_its_registered_contract(
+    error_class: type[ApiError],
+    expected_status: int,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    """finding 1: each of the four recognized ApiError subclasses maps to
+    its exact registered `(status_code, error_code, safe_message)` triple
+    from `_API_ERROR_CONTRACTS` — not merely "a status in some known set
+    paired with an identifier-shaped code"."""
     app = create_app()
 
-    @app.get("/raise-forbidden")
-    def _raise_forbidden() -> None:
-        raise ForbiddenError("not allowed to do that")
+    @app.get(f"/raise-{error_class.__name__}")
+    def _raise() -> None:
+        raise error_class("irrelevant diagnostic detail")
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/raise-forbidden")
+        response = client.get(f"/raise-{error_class.__name__}")
 
-    assert response.status_code == 403
+    assert response.status_code == expected_status
     body = response.json()
     assert body["error"] == {
-        "code": "forbidden",
-        "message": "You do not have permission to perform this action.",
+        "code": expected_code,
+        "message": expected_message,
         "correlation_id": body["error"]["correlation_id"],
     }
 
@@ -280,18 +368,46 @@ def test_api_error_constructor_rejects_status_and_code_overrides() -> None:
         ApiError("detail", status_code=418)  # type: ignore[call-arg]
 
 
+def test_api_error_unknown_subclass_falls_back_to_internal_error() -> None:
+    """finding 1: `_API_ERROR_CONTRACTS` is keyed by *exact* recognized
+    type — a brand-new subclass is unrecognized regardless of how
+    well-formed its own status/code/message look, since only the four
+    subclasses this module explicitly registers are ever exposed. A
+    well-formed-looking contract proves this is about registration, not
+    about detecting obviously-broken values."""
+    app = create_app()
+
+    class _NewWellFormedSubclass(ApiError):
+        status_code = 409
+        error_code = "conflict"
+        safe_message = "A specific, plausible-looking message."
+
+    @app.get("/raise-new-subclass")
+    def _raise_new_subclass() -> None:
+        raise _NewWellFormedSubclass("raw diagnostic text a client never sees")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-new-subclass")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "The request could not be processed."
+
+
 def test_api_error_with_tampered_class_attributes_falls_back_to_internal_error() -> None:
-    """finding 2: even a subclass's own status_code/error_code aren't
-    trusted outright — `_validated_api_error_response` re-checks them
-    against a fixed, server-owned vocabulary. Simulates a class attribute
-    that doesn't match any real subclass (a stray typo, or some other way
-    a value outside the known vocabulary ends up on the class) and proves
+    """finding 1: even a subclass's own status_code/error_code/safe_message
+    aren't trusted outright — `_validated_api_error_response` re-checks
+    them against `_API_ERROR_CONTRACTS`, a small, fixed, server-owned
+    vocabulary. Simulates a class attribute that doesn't match any real
+    subclass's registered contract (a stray typo, or some other way a
+    value outside the known vocabulary ends up on the class) and proves
     the response and the log both fall back to the fixed internal-error
     contract rather than trusting it."""
     app = create_app()
 
     class _MistypedError(ApiError):
-        status_code = 599  # not in _KNOWN_API_ERROR_STATUS_CODES
+        status_code = 599  # not a status any registered contract uses
         error_code = "totally not a known code; DROP TABLE"
         safe_message = "this should never reach a client"
 
@@ -311,7 +427,7 @@ def test_api_error_with_tampered_class_attributes_falls_back_to_internal_error()
 def test_api_error_logged_error_code_is_also_validated(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """finding 2: the logged error_code comes from the same validated
+    """finding 1: the logged error_code comes from the same validated
     triple as the response — a class attribute outside the known
     vocabulary never reaches the log line either."""
     app = create_app()
@@ -333,26 +449,74 @@ def test_api_error_logged_error_code_is_also_validated(
     assert "status_code=500" in logged_text
 
 
-def test_api_error_subclass_may_expose_its_own_fixed_message() -> None:
-    """The opt-in path: a subclass defines its own fixed `safe_message`,
-    independent of whatever the constructor's `detail` argument was."""
+def test_api_error_identifier_shaped_unknown_code_with_valid_status_falls_back() -> None:
+    """finding 1: a *recognized* type (`ForbiddenError`) whose `error_code`
+    is mutated at the instance level to an unfamiliar-but-plausible-looking
+    value, while `status_code` stays a perfectly valid known status (403),
+    still doesn't match the registered contract exactly — proving this
+    module validates the whole triple together, not each field
+    independently against "is this status known" / "is this code
+    identifier-shaped"."""
     app = create_app()
 
-    class _KnownConflictError(ApiError):
-        status_code = 409
-        error_code = "conflict"
-        safe_message = "A specific, vetted, closed-vocabulary message."
-
-    @app.get("/raise-known-api-error")
-    def _raise_known_api_error() -> None:
-        raise _KnownConflictError("raw diagnostic text a client never sees")
+    @app.get("/raise-forbidden-with-unknown-code")
+    def _raise() -> None:
+        exc = ForbiddenError("diagnostic detail")
+        exc.error_code = "not_actually_forbidden"
+        raise exc
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/raise-known-api-error")
+        response = client.get("/raise-forbidden-with-unknown-code")
 
-    assert response.status_code == 409
+    assert response.status_code == 500
     body = response.json()
-    assert body["error"]["message"] == "A specific, vetted, closed-vocabulary message."
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "The request could not be processed."
+
+
+def test_api_error_known_code_paired_with_wrong_status_falls_back() -> None:
+    """finding 1: `ForbiddenError`'s own `error_code` ("forbidden") is
+    real, and 404 is a real status another registered contract uses — but
+    403/forbidden and 404 were never registered together, so this
+    mismatched pairing still falls back rather than being accepted because
+    each half looks individually legitimate."""
+    app = create_app()
+
+    @app.get("/raise-forbidden-with-wrong-status")
+    def _raise() -> None:
+        exc = ForbiddenError("diagnostic detail")
+        exc.status_code = 404
+        raise exc
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-forbidden-with-wrong-status")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "The request could not be processed."
+
+
+def test_api_error_altered_public_message_on_known_type_falls_back() -> None:
+    """finding 1: status_code and error_code both stay exactly as
+    registered for `ForbiddenError`, but `safe_message` is altered — the
+    complete triple no longer matches, so this still falls back rather
+    than exposing the altered message."""
+    app = create_app()
+
+    @app.get("/raise-forbidden-with-altered-message")
+    def _raise() -> None:
+        exc = ForbiddenError("diagnostic detail")
+        exc.safe_message = "a message this module never vetted for this type"
+        raise exc
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-forbidden-with-altered-message")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "The request could not be processed."
 
 
 def test_unexpected_exception_maps_to_500_internal_error() -> None:
@@ -392,7 +556,7 @@ def test_request_validation_error_never_echoes_the_rejected_value() -> None:
     body = response.json()
     assert body["error"]["code"] == "invalid_request"
     assert secret_looking_value not in body["error"]["message"]
-    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert body["error"]["error_codes"] == ["invalid_format"]
     assert "fields" not in body["error"]
 
 
@@ -447,7 +611,7 @@ def test_validation_error_never_echoes_an_identifier_shaped_secret_dict_key(
     assert response.status_code == 422
     assert secret_key not in response.text
     body = response.json()
-    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert body["error"]["error_codes"] == ["invalid_format"]
     assert "fields" not in body["error"]
     assert secret_key not in "\n".join(r.getMessage() for r in caplog.records)
 
@@ -475,7 +639,7 @@ def test_validation_error_never_echoes_a_short_token_like_dict_key() -> None:
 
     assert response.status_code == 422
     body = response.json()
-    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert body["error"]["error_codes"] == ["invalid_format"]
     assert "fields" not in body["error"]
 
 
@@ -498,7 +662,7 @@ def test_validation_error_never_echoes_an_ordinary_declared_model_field_location
 
     assert response.status_code == 422
     body = response.json()
-    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert body["error"]["error_codes"] == ["invalid_format"]
     assert "fields" not in body["error"]
     assert "count" not in response.text
 
@@ -564,26 +728,90 @@ def test_validation_error_logging_is_sanitized_and_fixed(
     assert "error_code=invalid_request" in logged_text
 
 
-def test_sanitize_validation_error_types_replaces_unsafe_or_oversized_codes() -> None:
-    """finding 4, direct sanitizer-level regression (the pinned pydantic
-    version's built-in validators only ever produce short, closed-
-    vocabulary type strings, so a custom-validator-shaped type string is
-    exercised directly here rather than through a real endpoint): a
-    well-formed pydantic type code is preserved; an oversized or
-    unsafe-shaped one — as a `PydanticCustomError` could produce — is
-    replaced with the fixed `invalid` fallback; the error list is capped
-    at `_MAX_VALIDATION_ERRORS`."""
-    ordinary = {"type": "int_parsing", "loc": ("body", "count")}
-    oversized_type = {"type": "x" * 200, "loc": ("body", "count")}
-    unsafe_shaped_type = {"type": "SUPER_SECRET; DROP TABLE users;--", "loc": ("body", "count")}
-    non_string_type = {"type": 12345, "loc": ("body", "count")}
+def test_validation_error_maps_representative_builtin_types_to_public_vocabulary() -> None:
+    """finding 2: real, distinct pydantic failures for missing/wrong-type/
+    out-of-range values through the actual validation pipeline map onto
+    the small, fixed public vocabulary this module owns."""
+    app = create_app()
 
-    assert _sanitize_validation_error_types([ordinary]) == ["int_parsing"]
+    class _Payload(BaseModel):
+        count: Annotated[int, Field(gt=0)]
+        label: str
+        wrong_type: int
+
+    @app.post("/validate-representative-types")
+    def _validate(payload: _Payload) -> dict[str, int]:
+        return {"count": payload.count}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/validate-representative-types",
+            json={"count": -5, "wrong_type": ["not", "an", "int"]},
+        )
+
+    assert response.status_code == 422
+    body = response.json()
+    # label missing -> "missing"; count=-5 violates gt=0 -> "out_of_range";
+    # wrong_type is a list, not coercible to int at all -> "invalid_type".
+    assert set(body["error"]["error_codes"]) == {"missing", "out_of_range", "invalid_type"}
+
+
+def test_validation_error_maps_unmapped_builtin_pydantic_code_to_invalid() -> None:
+    """finding 2: `extra_forbidden` is a real, ordinary, built-in pydantic
+    error type — but this module's vocabulary deliberately doesn't include
+    it, proving an unmapped *legitimate* pydantic code falls back to
+    `invalid` exactly like an unmapped custom one does; this module does
+    not attempt to mirror pydantic's entire internal vocabulary."""
+    app = create_app()
+
+    class _Payload(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        count: int
+
+    @app.post("/validate-unmapped-builtin-code")
+    def _validate(payload: _Payload) -> dict[str, int]:
+        return {"count": payload.count}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/validate-unmapped-builtin-code", json={"count": 1, "extra_field": "x"}
+        )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["error_codes"] == ["invalid"]
+
+
+def test_sanitize_validation_error_types_maps_by_exact_lookup_never_by_shape() -> None:
+    """finding 2, direct sanitizer-level regression: a well-formed,
+    *mapped* pydantic type code is translated to its public code; an
+    identifier-shaped custom code (`secret_token_abc123` — exactly what a
+    `PydanticCustomError` could produce) and an ordinary-looking but
+    unmapped real pydantic code (`value_error`) both fall back to
+    `invalid` — proving this is exact-membership lookup, never a
+    shape/regex check that a syntactically-clean secret could pass. The
+    error list is capped at `_MAX_VALIDATION_ERRORS`."""
+    mapped_missing = {"type": "missing"}
+    mapped_type = {"type": "int_type"}
+    mapped_parsing = {"type": "int_parsing"}
+    mapped_range = {"type": "greater_than"}
+    identifier_shaped_secret = {"type": "secret_token_abc123"}
+    unmapped_ordinary_code = {"type": "value_error"}
+    oversized_type = {"type": "x" * 200}
+    unsafe_shaped_type = {"type": "SUPER_SECRET; DROP TABLE users;--"}
+    non_string_type = {"type": 12345}
+
+    assert _sanitize_validation_error_types([mapped_missing]) == ["missing"]
+    assert _sanitize_validation_error_types([mapped_type]) == ["invalid_type"]
+    assert _sanitize_validation_error_types([mapped_parsing]) == ["invalid_format"]
+    assert _sanitize_validation_error_types([mapped_range]) == ["out_of_range"]
+    assert _sanitize_validation_error_types([identifier_shaped_secret]) == ["invalid"]
+    assert _sanitize_validation_error_types([unmapped_ordinary_code]) == ["invalid"]
     assert _sanitize_validation_error_types([oversized_type]) == ["invalid"]
     assert _sanitize_validation_error_types([unsafe_shaped_type]) == ["invalid"]
     assert _sanitize_validation_error_types([non_string_type]) == ["invalid"]
 
-    many_errors = [ordinary] * 25
+    many_errors = [mapped_missing] * 25
     assert len(_sanitize_validation_error_types(many_errors)) == 20
 
 

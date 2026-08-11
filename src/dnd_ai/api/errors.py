@@ -5,26 +5,30 @@ Every error response is one JSON envelope:
 
     {"error": {"code": "<stable_snake_case_code>", "message": "<human text>",
                 "correlation_id": "<uuid or client-supplied value>",
-                "error_codes": ["int_parsing", "missing"]}}
+                "error_codes": ["invalid_type", "missing"]}}
 
 `error_codes` is present only for request-validation failures (see
-`handle_validation_error` below) and never carries a field *location* —
-only pydantic's own error-*type* codes, each independently bounded and
-allowlisted by `_sanitize_validation_error_types` before being echoed
-(finding 4 of this pass). An earlier version of this module echoed a
-`loc`-derived "field" alongside each type code, on the theory that a
-*location* — as opposed to the rejected *value* — was safe because it
-described shape, not content. That was wrong: `loc` can itself be
-caller-controlled text verbatim — an `extra="forbid"` model's rejected
-extra key, a `dict[str, X]` body's own key, a discriminator value, an
-input-derived alias — and no amount of character-shape filtering
-("identifier-looking, under 60 characters") reliably tells a legitimate
-dynamic key apart from a secret-looking one of the same shape (finding 1
-of this pass: `SUPER_SECRET_TOKEN_ABC123` *is* identifier-shaped). Rather
-than keep guessing, this module now omits every field location from the
-generic validation response entirely; only the closed-vocabulary error
-*type* codes remain, capped in count and validated against a fixed
-identifier pattern.
+`handle_validation_error` below) and never carries a field *location* — a
+prior pass already established that no amount of character-shape
+filtering on `loc` reliably tells a legitimate dynamic key apart from a
+secret-looking one of the same shape, so a location is never echoed at
+all. Each entry is one of a small, fixed, public vocabulary this module
+owns (`missing`, `invalid_type`, `invalid_format`, `out_of_range`,
+`invalid`) — never pydantic's own internal `type` string echoed directly.
+An earlier version of this module accepted any lowercase, identifier-
+shaped pydantic `type` string as "safe enough" to echo, on the theory
+that pydantic's built-in error-type vocabulary was closed. That was
+wrong on two counts: a custom validator can raise `PydanticCustomError`
+with an arbitrary type string of exactly that shape (so
+`secret_token_abc123` passed the same character check a real pydantic
+type would), and even pydantic's own vocabulary is not something this
+module should commit to mirroring — it is internal to pydantic and can
+change between versions. `_sanitize_validation_error_types` now maps a
+fixed, closed set of real pydantic type strings this module has
+deliberately chosen to distinguish onto the five public codes above by
+exact dict lookup — never by regex/shape — and anything not in that set,
+built-in or custom, becomes `invalid`. The error list is still capped in
+count.
 
 `code` is a stable identifier a client can branch on; `message` is
 diagnostic text that may change wording between releases but never embeds
@@ -56,40 +60,59 @@ constructor keyword arguments for "ad hoc" cases; that let any raise site
 turn arbitrary runtime values into public response fields and log fields,
 exactly the discipline this contract exists to prevent, so both are gone —
 a real case gets its own narrowly scoped subclass (see `UnauthorizedError`/
-`ForbiddenError`/`NotFoundError`/`ConflictError` below) instead. As further
-defense in depth, `handle_api_error` below never trusts a subclass's
-`status_code`/`error_code` blindly either: `_validated_api_error_response`
-checks both against a small, fixed, server-owned vocabulary before they
-reach a response or a log line, and falls back to the base class's own
-fixed internal-error contract (500/`internal_error`) for anything that
-doesn't match — including `ApiError` raised bare, with no subclass at all.
+`ForbiddenError`/`NotFoundError`/`ConflictError` below) instead.
+
+`handle_api_error` never trusts even a recognized subclass's own
+`status_code`/`error_code`/`safe_message` attributes at face value either.
+A still-later version of this module tried to validate them independently
+— any identifier-shaped `error_code` paired with any status from a small
+set — which is not the same thing as the documented vocabulary and does
+not enforce that a *particular* status, code, and message actually go
+together as one of the contracts this module has deliberately defined.
+`_API_ERROR_CONTRACTS` now maps each *exact recognized exception type* to
+its one fixed `(status_code, error_code, safe_message)` triple;
+`_validated_api_error_response` looks up `type(exc)` and additionally
+checks that the exception's own current attributes still equal the
+recorded triple exactly, so a subclass this module doesn't recognize, or
+any mismatch — an unfamiliar `error_code`, a status paired with the wrong
+code, or an altered message on an otherwise-known type — all fall back to
+the fixed internal-error contract identically, in both the response and
+the log line.
 
 Framework-raised `StarletteHTTPException`s (FastAPI's own routing 404/405,
 or any `HTTPException(...)` a call site raises directly) are handled the
-same way: `exc.detail` is never trusted or echoed — it can be an arbitrary
-string, dict, or list, supplied by FastAPI's routing internals or by any
-future call site — only `exc.status_code` (an int the framework itself
-sets from routing/dispatch logic, not free text) selects a fixed,
-closed-vocabulary message from `_HTTP_EXCEPTION_MESSAGES`.
+same way, and for the same reason `exc.status_code` alone is not trusted
+either, not just `exc.detail`: `_SUPPORTED_HTTP_EXCEPTION_STATUSES` is an
+explicit, closed mapping of only the framework statuses this application
+deliberately supports (currently just FastAPI/Starlette's own routing 404
+and 405). Any other status — an unrecognized-but-HTTP-shaped code like 418
+or 499, an out-of-range value like 99 or 999, or anything else a call site
+might pass to `HTTPException(status_code=...)` — produces the fixed
+500/`internal_error` contract instead of forwarding that status to the
+response; `exc.detail` remains never trusted or echoed regardless of which
+branch is taken.
 
-Logging: every handler below — including `handle_validation_error`, since
-this pass's finding 3 closed the one handler that previously logged
-nothing at all rather than something unsafe — logs one fixed-shape, safe
-line through `_log_error()`: exception class, the response's own error
-code and status, the request's correlation ID, and the matched route
-*template* (never the concrete request path, which can itself embed a
-resource ID or arbitrary caller-supplied text). None of them ever logs
-`str(exc)`, a traceback, raw validation errors/locations/rejected input, a
-request body, or any other exception-specific text; that is deliberate,
-not an oversight, and applies even to `logger.exception`-style calls that
-would otherwise capture a traceback FastAPI/SQLAlchemy/psycopg routinely
-embed a DSN, credential, or query parameter inside.
+Logging: every handler below computes exactly one validated
+`(status_code, error_code, message)` triple and reuses the same
+`status_code`/`error_code` for both `_log_error()` and the response —
+never a second, independently derived classification for the log line, so
+an unknown `ApiError` or `HTTPException` always logs the identical fixed
+`internal_error`/500 it also returns, not something more specific it
+failed to validate as safe. `_log_error()` itself logs one fixed-shape,
+safe line: exception class, that status/error code, the request's
+correlation ID, and the matched route *template* (never the concrete
+request path, which can itself embed a resource ID or arbitrary
+caller-supplied text). None of them ever logs `str(exc)`, a traceback,
+raw validation errors/locations/rejected input, a request body, or any
+other exception-specific text; that is deliberate, not an oversight, and
+applies even to `logger.exception`-style calls that would otherwise
+capture a traceback FastAPI/SQLAlchemy/psycopg routinely embed a DSN,
+credential, or query parameter inside.
 """
 
 import logging
-import re
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -133,41 +156,75 @@ _INVALID_REQUEST_INTEGRITY_SQLSTATES = frozenset({"23502", "23503", "23514", "23
 # Standard routing statuses FastAPI/Starlette itself raises `HTTPException`
 # for, mapped to a fixed, closed-vocabulary (error_code, message) — never
 # `exc.detail`, which is free text/dict/list a call site (framework or
-# application) supplies and this module has no way to vet.
-_HTTP_EXCEPTION_MESSAGES: dict[int, tuple[str, str]] = {
+# application) supplies and this module has no way to vet. This is the
+# complete set of framework HTTP statuses this application supports; any
+# other status — including a well-formed-looking one like 418 or an
+# out-of-range one like 999 — is not forwarded to the response at all (see
+# `handle_http_exception`'s fallback to the fixed internal-error contract).
+_SUPPORTED_HTTP_EXCEPTION_STATUSES: dict[int, tuple[str, str]] = {
     404: ("not_found", "The requested resource does not exist or is not accessible."),
     405: ("method_not_allowed", "The HTTP method is not allowed for this route."),
 }
-_DEFAULT_HTTP_EXCEPTION_ERROR_CODE = "http_error"
-_DEFAULT_HTTP_EXCEPTION_MESSAGE = "The request could not be processed."
 
-# Request-validation error-type sanitization. `loc` (a field's *location*)
-# is never echoed at all — see this module's docstring for why character-
-# shape filtering on `loc` was not a reliable way to tell a legitimate
-# dynamic key from a secret-looking one. `type` (pydantic's own stable
-# error-type code, e.g. "int_parsing", "missing", "extra_forbidden") is a
-# closed vocabulary pydantic itself defines for its built-in validators,
-# but a custom validator can raise a `PydanticCustomError` with an
-# arbitrary type string, so this module still bounds and allowlists it
-# rather than trusting it outright: anything outside a short, lowercase,
-# identifier-shaped pattern is replaced with a fixed fallback code. The
-# error list itself is capped in count.
+# Request-validation public error-code vocabulary (finding 2). `loc` (a
+# field's *location*) is never echoed at all — see this module's docstring
+# for why character-shape filtering on `loc` was not a reliable way to
+# tell a legitimate dynamic key from a secret-looking one. `type`
+# (pydantic's own internal error-type string, e.g. "int_parsing",
+# "missing") is not echoed either, even when it looks like ordinary
+# pydantic vocabulary: a custom validator can raise `PydanticCustomError`
+# with an arbitrary type string of the same shape, and pydantic's own
+# vocabulary is internal to pydantic, not a contract this module should
+# commit to mirroring. Instead, only the fixed public codes below are ever
+# returned; `_VALIDATION_TYPE_TO_PUBLIC_CODE` maps a closed, explicit set
+# of real pydantic type strings this module has chosen to distinguish onto
+# them by exact dict lookup, and anything not a key in that dict — built-in
+# or custom — maps to `invalid`.
 _MAX_VALIDATION_ERRORS = 20
-_MAX_VALIDATION_ERROR_TYPE_LENGTH = 64
-_VALIDATION_ERROR_TYPE_PATTERN = re.compile(
-    rf"[a-z][a-z0-9_]{{0,{_MAX_VALIDATION_ERROR_TYPE_LENGTH - 1}}}"
-)
-_FALLBACK_VALIDATION_ERROR_TYPE = "invalid"
 
-# ApiError's server-owned status/code vocabulary (finding 2). Every real
-# ApiError subclass's (status_code, error_code) pair is listed here; a
-# status code or error code that doesn't match — a stray typo in a future
-# subclass, or a class attribute mutated at runtime some other way — is
-# treated the same as an unclassified failure: the fixed internal-error
-# contract, never trusted as-is. Kept in sync with `UnauthorizedError`/
-# `ForbiddenError`/`NotFoundError`/`ConflictError` below.
-_KNOWN_API_ERROR_STATUS_CODES = frozenset({401, 403, 404, 409})
-_API_ERROR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_PUBLIC_VALIDATION_MISSING = "missing"
+_PUBLIC_VALIDATION_INVALID_TYPE = "invalid_type"
+_PUBLIC_VALIDATION_INVALID_FORMAT = "invalid_format"
+_PUBLIC_VALIDATION_OUT_OF_RANGE = "out_of_range"
+_PUBLIC_VALIDATION_INVALID = "invalid"
+
+_VALIDATION_TYPE_TO_PUBLIC_CODE: dict[str, str] = {
+    "missing": _PUBLIC_VALIDATION_MISSING,
+    # The value's Python/JSON type is entirely wrong for the field (e.g. a
+    # list where an int was declared) — pydantic-core's own "*_type" codes.
+    "int_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "float_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "bool_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "string_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "bytes_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "list_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "dict_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "model_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "uuid_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "date_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    "datetime_type": _PUBLIC_VALIDATION_INVALID_TYPE,
+    # A string/number of roughly the right kind that still couldn't be
+    # parsed into the target shape — pydantic-core's own "*_parsing" codes.
+    "int_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "float_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "bool_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "uuid_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "date_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "datetime_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "json_invalid": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "string_pattern_mismatch": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    "url_parsing": _PUBLIC_VALIDATION_INVALID_FORMAT,
+    # Parsed fine but outside an allowed bound.
+    "greater_than": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "greater_than_equal": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "less_than": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "less_than_equal": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "multiple_of": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "too_short": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "too_long": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "string_too_short": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+    "string_too_long": _PUBLIC_VALIDATION_OUT_OF_RANGE,
+}
 
 
 class ApiError(Exception):
@@ -187,9 +244,9 @@ class ApiError(Exception):
     `ForbiddenError`/`NotFoundError`/`ConflictError` do below) rather than
     this module growing a generalized, dynamically-parameterized error
     registry. `handle_api_error` additionally never trusts even a
-    subclass's `status_code`/`error_code` outright — see
-    `_validated_api_error_response` and `_KNOWN_API_ERROR_STATUS_CODES`
-    above.
+    recognized subclass's own `status_code`/`error_code`/`safe_message`
+    outright — see `_API_ERROR_CONTRACTS` and `_validated_api_error_response`
+    below the subclasses.
     """
 
     status_code: int = 500
@@ -234,6 +291,45 @@ class ConflictError(ApiError):
     status_code = 409
     error_code = "conflict"
     safe_message = "The request could not be completed due to a conflicting change."
+
+
+class _ApiErrorContract(NamedTuple):
+    status_code: int
+    error_code: str
+    safe_message: str
+
+
+# The complete, fixed public contract for every ApiError type this module
+# recognizes (finding 1) — keyed by *exact* exception type, not by
+# independently checking whether a status "looks like" it could pair with
+# a code. `_UNKNOWN_API_ERROR_CONTRACT` doubles as both the internal-error
+# fallback and `ApiError`'s own registered contract, since a bare
+# `ApiError()` (no subclass) is itself the "nothing more specific is
+# known" case.
+_UNKNOWN_API_ERROR_CONTRACT = _ApiErrorContract(500, "internal_error", ApiError.safe_message)
+
+_API_ERROR_CONTRACTS: dict[type[ApiError], _ApiErrorContract] = {
+    ApiError: _UNKNOWN_API_ERROR_CONTRACT,
+    UnauthorizedError: _ApiErrorContract(401, "unauthorized", UnauthorizedError.safe_message),
+    ForbiddenError: _ApiErrorContract(403, "forbidden", ForbiddenError.safe_message),
+    NotFoundError: _ApiErrorContract(404, "not_found", NotFoundError.safe_message),
+    ConflictError: _ApiErrorContract(409, "conflict", ConflictError.safe_message),
+}
+
+
+def _validated_api_error_response(exc: ApiError) -> _ApiErrorContract:
+    """Finding 1: looks up `type(exc)` — never `isinstance`, so a subclass
+    of a recognized type that this module hasn't itself registered is
+    treated as unrecognized, not silently inherited — and additionally
+    requires the exception's own current `status_code`/`error_code`/
+    `safe_message` to equal the recorded triple exactly. Any mismatch (a
+    status paired with the wrong code, an altered message on an otherwise-
+    known type, a class attribute mutated some other way at runtime) and
+    any unrecognized type both fall back to the identical fixed
+    internal-error contract — never partial credit for "looks close"."""
+    contract = _API_ERROR_CONTRACTS.get(type(exc))
+    observed = _ApiErrorContract(exc.status_code, exc.error_code, exc.safe_message)
+    return contract if contract == observed else _UNKNOWN_API_ERROR_CONTRACT
 
 
 def _correlation_id(request: Request) -> str | None:
@@ -296,36 +392,22 @@ def _integrity_error_sqlstate(exc: IntegrityError) -> str | None:
 def _sanitize_validation_error_types(errors: Sequence[Any]) -> list[str]:
     """`error["type"]` only, never `error["loc"]` — see this module's
     docstring for why a field *location* is never echoed at all, no matter
-    how it's filtered. Each `type` is itself replaced with a fixed fallback
-    unless it matches a short, lowercase, identifier-shaped pattern (a
-    custom pydantic validator can raise `PydanticCustomError` with an
-    arbitrary type string, so even this closed-looking vocabulary isn't
-    trusted outright). The error list is capped in count — an oversized
+    how it's filtered. Each `type` is mapped onto the small, fixed public
+    vocabulary in `_VALIDATION_TYPE_TO_PUBLIC_CODE` by exact dict lookup —
+    never regex/shape — so a custom-validator-supplied type string of any
+    shape, including one that looks like ordinary pydantic vocabulary,
+    falls back to `_PUBLIC_VALIDATION_INVALID` exactly like any other
+    unrecognized value. The error list is capped in count — an oversized
     error collection is its own kind of unbounded response."""
     sanitized = []
     for error in errors[:_MAX_VALIDATION_ERRORS]:
         error_type = error["type"]
         sanitized.append(
-            error_type
-            if isinstance(error_type, str) and _VALIDATION_ERROR_TYPE_PATTERN.fullmatch(error_type)
-            else _FALLBACK_VALIDATION_ERROR_TYPE
+            _VALIDATION_TYPE_TO_PUBLIC_CODE.get(error_type, _PUBLIC_VALIDATION_INVALID)
+            if isinstance(error_type, str)
+            else _PUBLIC_VALIDATION_INVALID
         )
     return sanitized
-
-
-def _validated_api_error_response(exc: ApiError) -> tuple[int, str, str]:
-    """Finding 2: even a subclass's own class-attribute `status_code`/
-    `error_code` are checked against a small, fixed, server-owned
-    vocabulary before reaching a response or a log line, rather than
-    trusted outright — anything that doesn't match (a stray typo in a
-    future subclass, a class attribute mutated some other way at runtime)
-    falls back to `ApiError`'s own fixed internal-error contract, exactly
-    like any other unclassified failure."""
-    if exc.status_code in _KNOWN_API_ERROR_STATUS_CODES and _API_ERROR_CODE_PATTERN.fullmatch(
-        exc.error_code
-    ):
-        return exc.status_code, exc.error_code, exc.safe_message
-    return ApiError.status_code, ApiError.error_code, ApiError.safe_message
 
 
 def _envelope(
@@ -368,15 +450,28 @@ def install_error_handlers(app: FastAPI) -> None:
     async def handle_http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # exc.detail is framework/caller-influenced text — FastAPI's own routing
         # detail, or a raw string/dict/list any call site could pass to
-        # HTTPException(...) — never trusted or echoed. Only exc.status_code (an
-        # int FastAPI/Starlette sets from routing/dispatch logic, not free text)
-        # selects a fixed, closed-vocabulary message.
-        error_code, message = _HTTP_EXCEPTION_MESSAGES.get(
-            exc.status_code, (_DEFAULT_HTTP_EXCEPTION_ERROR_CODE, _DEFAULT_HTTP_EXCEPTION_MESSAGE)
-        )
-        _log_error(request, exc, status_code=exc.status_code, error_code=error_code)
+        # HTTPException(...) — never trusted or echoed. exc.status_code isn't
+        # trusted outright either (finding 3): only a status present in
+        # _SUPPORTED_HTTP_EXCEPTION_STATUSES is ever forwarded to the response;
+        # anything else — an unrecognized-but-HTTP-shaped code, an out-of-range
+        # value, or anything else a call site passed to HTTPException(...) — is
+        # exactly as unclassified as any other unexpected failure and gets the
+        # fixed internal-error contract instead.
+        contract = _SUPPORTED_HTTP_EXCEPTION_STATUSES.get(exc.status_code)
+        if contract is None:
+            status_code, error_code, message, level = (
+                500,
+                "internal_error",
+                "An unexpected error occurred.",
+                logging.ERROR,
+            )
+        else:
+            error_code, message = contract
+            status_code = exc.status_code
+            level = logging.INFO
+        _log_error(request, exc, status_code=status_code, error_code=error_code, level=level)
         return JSONResponse(
-            status_code=exc.status_code,
+            status_code=status_code,
             content=_envelope(request, code=error_code, message=message),
         )
 
@@ -389,10 +484,10 @@ def install_error_handlers(app: FastAPI) -> None:
         # itself be caller-supplied text (an extra="forbid" model's rejected extra
         # key, a dict[str, X] body's own key, a discriminator value, an
         # input-derived alias) — none of that is echoed or logged. Only
-        # `_sanitize_validation_error_types` — pydantic's own error-type codes,
-        # bounded and allowlisted, never a location — reaches the response; the
-        # log line carries only the fixed classification below, exactly like
-        # every other handler in this module.
+        # `_sanitize_validation_error_types` — a small, fixed public vocabulary
+        # this module owns, never a pydantic type string or a location — reaches
+        # the response; the log line carries only the fixed classification below,
+        # exactly like every other handler in this module.
         _log_error(request, exc, status_code=422, error_code="invalid_request")
         return JSONResponse(
             status_code=422,
