@@ -1665,13 +1665,22 @@ Exit criteria:
 Deliver:
 
 - Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration;
+- production multi-stage Dockerfiles and `.dockerignore` files that produce minimal, non-root runtime images, with dependencies pinned and images tagged immutably to a release and Git commit;
+- an explicitly recorded mini-PC CPU architecture and a build/release path that produces compatible images (including a multi-platform build when development/CI and production architectures differ);
+- a version-controlled `compose.yaml` with health checks, dependency readiness, persistent named volumes, external secret/configuration inputs, and a one-off migration service using the same application image as the API/worker where practical;
 - private networking with no public PostgreSQL port and no direct Uvicorn exposure;
 - preferred same-origin `world` UI plus `/api/*`, separate Foundry routing, No-IP updates, and automatic HTTPS;
 - secure cookies, CSRF, login/AI rate limits, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
-- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery; and
+- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery, including documented one-command deployment and application-image rollback procedures that preserve the prior image and account for schema compatibility; and
 - end-to-end local verification of Phase 10 authentication, authorization, and the vertical slice.
 
 Exact hostnames remain a deployment-time decision. Foundry and D&D AI retain separate data, authentication, configuration, lifecycle, and backups. The detailed acceptance gate is [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#production-readiness-gate).
+
+Exit criteria:
+
+- A clean checkout can build the production images and deploy the complete D&D AI stack on the recorded mini-PC architecture using the documented command without editing tracked files on the host.
+- The deployed containers run as non-root where the upstream service permits it, become healthy through Compose, retain database and uploaded data across container replacement, and run migrations as an explicit one-off deployment step rather than as an uncontrolled API-startup side effect.
+- An immutable prior application release can be selected and restored with the documented rollback command; the procedure is exercised against a compatible schema or, when a schema rollback is required, against the matching verified database restore point.
 
 ### Phase 15: World and campaign-data import
 
