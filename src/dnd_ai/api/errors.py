@@ -20,16 +20,23 @@ of them).
 
 `code` is a stable identifier a client can branch on; `message` is
 diagnostic text that may change wording between releases but never embeds
-caller-supplied input either. Domain layers raise plain `ValueError` (and
-its subclasses, such as `dnd_ai.commands._shared.LookupCodeNotFoundError`)
-for validation failures per docs/DEVELOPMENT.md §9 — they do not need to
-know about HTTP at all; this module is the only place that translates them
-into a status code. A domain `ValueError`'s own message *is* echoed back
-(`handle_value_error` below) since those are authored by this codebase as
-already-safe, non-input-echoing diagnostic text (see e.g.
-`dnd_ai.domain.access.UnauthorizedTimelineError`'s docstring) — unlike
-`RequestValidationError`, whose text FastAPI/pydantic generate directly
-from whatever the caller sent.
+caller-supplied input, and — as of the fix below — never embeds an
+unclassified domain exception's raw text either.
+
+Domain and command code raises plain `ValueError` for validation failures
+per docs/DEVELOPMENT.md §9; it does not need to know about HTTP at all.
+By default that gets a **fixed, non-disclosing message** here, not
+`str(exc)` — a bare `ValueError`'s text was authored for a developer
+reading a traceback, not vetted for what it's safe to hand an
+unauthenticated or unauthorized client, and nothing forces every future
+call site to get that vetting right. A domain error that *has* been
+deliberately vetted opts in by subclassing `dnd_ai.domain.errors.
+SafeMessageError` (whose own `str(self)` is safe to echo) or
+`DomainAuthorizationError` (whose `safe_message` is a fixed generic string
+instead, mapped to 404 by default — see that module's docstring for why).
+Both are handled below via one `SafeMessageError` handler, so any command
+or query raising one — now or in the future — gets the right response
+automatically; nothing about it is specific to any single error type.
 """
 
 import logging
@@ -40,6 +47,8 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
+
+from dnd_ai.domain.errors import SafeMessageError
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +166,32 @@ def install_error_handlers(app: FastAPI) -> None:
             ),
         )
 
+    @app.exception_handler(SafeMessageError)
+    async def handle_safe_message_error(request: Request, exc: SafeMessageError) -> JSONResponse:
+        # exc.safe_message is exactly str(exc) for a plain SafeMessageError (opted in
+        # as safe to echo) and a fixed generic string for a DomainAuthorizationError
+        # (str(exc) may name specific IDs — logged here for diagnosis, never returned).
+        logger.info("safe-message domain error: %s", exc)
+        return JSONResponse(
+            status_code=exc.safe_status_code,
+            content=_envelope(request, code=exc.safe_error_code, message=exc.safe_message),
+        )
+
     @app.exception_handler(ValueError)
     async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
-        # Domain validation failures (docs/DEVELOPMENT.md §9) surface as plain
-        # ValueError/subclasses — never partial writes, since the command's own
-        # transaction rolls back before this handler ever runs (see api/deps.py).
+        # An *unclassified* domain ValueError — never partial writes, since the
+        # command's own transaction rolls back before this handler ever runs (see
+        # api/deps.py) — but also never str(exc) verbatim: that text was written for
+        # a developer reading a traceback, not vetted for a client response. Logged
+        # here so the detail isn't lost, just not returned. A SafeMessageError
+        # (handled above, since FastAPI dispatches to the most specific registered
+        # handler) is how a call site opts into exposing something more specific.
+        logger.info("unclassified domain validation error: %s", exc)
         return JSONResponse(
             status_code=400,
-            content=_envelope(request, code="validation_failed", message=str(exc)),
+            content=_envelope(
+                request, code="validation_failed", message="The request could not be processed."
+            ),
         )
 
     @app.exception_handler(IntegrityError)

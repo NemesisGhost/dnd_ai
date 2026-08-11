@@ -1,43 +1,73 @@
 """Application configuration (docs/LOCAL_DEPLOYMENT.md, ADR 0012).
 
+Settings source precedence, by environment
+--------------------------------------------
+
+**local** (default) and **test**: `.env` (resolved as `<cwd>/.env` — an
+explicit path, never dotenv's own frame/search-based default, so behavior
+is the same whether this runs under pytest, `uvicorn`, or a container) is
+loaded into the process environment via `load_dotenv()` before `Settings()`
+runs — the same mechanism tests/conftest.py already uses. `database_url`
+then accepts, in priority order: (1) `DND_AI_DATABASE_URL`, whether set as
+a real environment variable or via a mounted secret file (see "Host-mounted
+secret files" below — pydantic-settings' own source order already prefers
+an environment variable over a secrets file for the same setting, so that
+precedence is inherited here, not reimplemented); (2) legacy unprefixed
+`DATABASE_URL`, the pre-existing convention Alembic/pytest/CI already use
+(docs/DEVELOPMENT.md §3, §8); (3) the hardcoded local-dev default.
+
+**production** (`DND_AI_ENVIRONMENT=production`, checked directly against
+`os.environ` *before* any `.env` loading decision is made — see
+`_production_requested()`): `.env` is never loaded, so nothing the
+repository's developer convenience file might contain can reach this
+process at all. Only `DND_AI_DATABASE_URL` — the real environment variable
+or the mounted secret file below — satisfies startup; both the legacy
+`DATABASE_URL` alias and the local-dev default are refused, and `Settings()`
+raises immediately rather than silently falling back. This is enforced by
+checking *which field/source populated the value*, never by inspecting the
+URL text for whether it "looks local" — a URL that happens to mention
+`localhost` is exactly as acceptable in production, if it arrived through
+`DND_AI_DATABASE_URL`, as one that doesn't.
+
 Every application-owned field is namespaced under the `DND_AI_`
 environment-variable prefix so this model never collides with, or silently
 absorbs, unrelated variables the host process carries for other tooling —
-the AWS CLI, Terraform, Docker Compose itself (`DND_AI_TEST_DATABASE_URL`
-already established this prefix for the test harness; see
-tests/conftest.py).
-
-`.env` is loaded through `python-dotenv`'s `load_dotenv()` into the process
-environment — the same mechanism tests/conftest.py already uses — rather
-than through pydantic-settings' own `env_file` file-parsing. That choice
-matters: pydantic-settings' dotenv source reads a file as one flat dict, so
-every key in it (prefixed or not) becomes a candidate field and an
-unprefixed shared key like `AWS_REGION` would trip `extra="forbid"`; its
-plain environment-variable source, by contrast, looks up only each field's
-own expected name and silently ignores everything else. Routing `.env`
-through `os.environ` gets namespacing for free without a second config
-file. `_reject_unrecognized_env_vars()` then closes the resulting gap —
-since ignoring extras silently is also what would let a genuine
-`DND_AI_DATABAWSE_URL` typo through unnoticed — by scanning `os.environ`
-itself for any `DND_AI_*` name that isn't a field this module knows about,
-covering both a typo added directly to `.env` and one exported into the
-shell or a container's `environment:` block.
+the AWS CLI, Terraform, Docker Compose itself. That namespace is shared,
+though: several other `DND_AI_*` variables are real, currently used, and
+owned by a *different* subsystem entirely — `DND_AI_TEST_DATABASE_URL`
+(tests/conftest.py, scripts/ci_ephemeral_database.py — the ephemeral
+per-test-run database pointer), `DND_AI_CI_DB_NAME` (the same CI scripts —
+that database's own name, for teardown), and `DND_AI_SEEDS_DIR`
+(src/dnd_ai/persistence/seeds.py — an override for the seed-data
+directory). None of those are `Settings` fields and none of them should
+ever be — rejecting them as "unrecognized" would break CI and local seed
+overrides outright. `_NON_APPLICATION_DND_AI_ENV_VARS` below is a closed,
+explicitly cited allowlist for exactly those three (and only those three);
+`_reject_unrecognized_env_vars()` still catches a typo of any of them, or
+of an actual `Settings` field — it does not fall back to "allow anything
+`DND_AI_*`".
 
 `database_url` is the one deliberate unprefixed exception: it additionally
-accepts the pervasive `DATABASE_URL` already used throughout this repo by
-Alembic, pytest, and CI (docs/DEVELOPMENT.md §3, §8) so a local developer's
-existing `.env` keeps working for the application too, without requiring
-the same value under two different names. Production is expected to supply
-`DND_AI_DATABASE_URL` explicitly (typically via a Compose secret/env file,
-docs/LOCAL_DEPLOYMENT.md "Compose responsibilities and network policy") —
-see `_require_explicit_database_url_outside_local_dev` for why there is no
-silent fallback once `environment` is not `local`/`test`.
+accepts `DATABASE_URL` so a local developer's existing `.env` keeps
+working for the application too, without requiring the same value under
+two different names — but, per the production rule above, only outside
+production.
 
-Host-mounted secret files (same LOCAL_DEPLOYMENT.md section — "credentials
-in host-readable environment/secret files or mounted secrets outside the
-repository") are read from `DND_AI_SECRETS_DIR` (default `/run/secrets`,
-the conventional Docker/Compose secrets mount) whenever that directory
-actually exists; one file per field, named for the field.
+Host-mounted secret files (docs/LOCAL_DEPLOYMENT.md "Compose
+responsibilities and network policy" — "credentials in host-readable
+environment/secret files or mounted secrets outside the repository") are
+read from `DND_AI_SECRETS_DIR` (default `/run/secrets`, the conventional
+Docker/Compose secrets mount) whenever that directory actually exists; one
+file per field, named for the field's environment-variable name in
+lowercase. For `database_url` that is the exact filename
+**`dnd_ai_database_url`** — mount the secret at
+`${DND_AI_SECRETS_DIR}/dnd_ai_database_url` (default
+`/run/secrets/dnd_ai_database_url`); see `tests/unit/test_config.py`'s
+mounted-secret test for a worked example. `DND_AI_SECRETS_DIR` itself is
+read directly from the real process environment only (never from `.env`,
+and evaluated before `Settings` is even defined) — it names *where other
+secrets live*, so it is exactly the kind of thing that must always be a
+real deployment-supplied variable, not a developer-convenience default.
 """
 
 import os
@@ -45,24 +75,21 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-# Fills in os.environ from .env for anything not already set there (the
-# default, non-overriding behavior) — matches tests/conftest.py's own
-# load_dotenv() call, which already runs this before any test imports this
-# module, so this is a no-op in that case rather than a second, conflicting
-# load.
-load_dotenv()
 
 _LOCAL_DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai"
 
 _SECRETS_DIR = os.environ.get("DND_AI_SECRETS_DIR", "/run/secrets")
 
-# Kept in sync with the fields below by tests/unit/test_config.py's
-# metadata-completeness check (docs/DEVELOPMENT.md §2.1's established
-# pattern), rather than derived at runtime from validation_alias internals.
-_KNOWN_APPLICATION_ENV_VARS = frozenset(
+_DATABASE_URL_SECRET_FILENAME = "dnd_ai_database_url"
+
+# Variables dnd_ai.config.Settings itself declares (kept in sync with the
+# fields below by tests/unit/test_config.py's metadata-completeness check,
+# docs/DEVELOPMENT.md §2.1's established pattern, rather than derived at
+# runtime from validation_alias internals) plus the one pre-Settings knob
+# (DND_AI_SECRETS_DIR) this module reads directly.
+_APPLICATION_SETTINGS_ENV_VARS = frozenset(
     {
         "DND_AI_ENVIRONMENT",
         "DND_AI_LOG_LEVEL",
@@ -71,32 +98,66 @@ _KNOWN_APPLICATION_ENV_VARS = frozenset(
         "DND_AI_FEATURE_AI_NPC_DIALOGUE",
         "DND_AI_FEATURE_DISCORD_INTEGRATION",
         "DND_AI_FEATURE_FOUNDRY_INTEGRATION",
-        # Not a Settings field — read directly, before the class body even
-        # runs, to decide secrets_dir below — but still an application-owned
-        # DND_AI_* knob, so it belongs in this list too.
         "DND_AI_SECRETS_DIR",
     }
 )
 
+# Real, currently used DND_AI_* variables owned by a different subsystem —
+# see the module docstring's "Every application-owned field..." paragraph
+# for what each one is and where it's actually read. Not Settings fields;
+# listed here only so the typo scan below doesn't reject them.
+_NON_APPLICATION_DND_AI_ENV_VARS = frozenset(
+    {
+        "DND_AI_TEST_DATABASE_URL",
+        "DND_AI_CI_DB_NAME",
+        "DND_AI_SEEDS_DIR",
+    }
+)
+
+_KNOWN_DND_AI_ENV_VARS = _APPLICATION_SETTINGS_ENV_VARS | _NON_APPLICATION_DND_AI_ENV_VARS
+
 
 def _reject_unrecognized_env_vars() -> None:
+    """pydantic-settings' own env-var source only looks up each field's
+    expected name in `os.environ` rather than enumerating it, so a
+    misspelled `DND_AI_*` variable would otherwise be silently ignored —
+    unlike a typo added to `.env` alone, which never even reaches
+    `os.environ` for this scan to see once `.env` isn't loaded (production)
+    or *is* caught here too once it is (local/test, since `load_dotenv()`
+    runs before this). Covers both this module's own settings and the
+    other subsystems' variables listed above; nothing else with the
+    `DND_AI_` prefix is assumed safe by default."""
     unrecognized = sorted(
         name
         for name in os.environ
-        if name.upper().startswith("DND_AI_") and name.upper() not in _KNOWN_APPLICATION_ENV_VARS
+        if name.upper().startswith("DND_AI_") and name.upper() not in _KNOWN_DND_AI_ENV_VARS
     )
     if unrecognized:
         raise RuntimeError(
-            "Unrecognized application environment variable(s): "
-            f"{', '.join(unrecognized)}. Check for a typo against the fields "
-            "declared in dnd_ai.config.Settings."
+            "Unrecognized DND_AI_* environment variable(s): "
+            f"{', '.join(unrecognized)}. Check for a typo against the fields declared in "
+            "dnd_ai.config.Settings, or against _NON_APPLICATION_DND_AI_ENV_VARS if this is "
+            "meant for a different subsystem (tests/CI/seeding)."
         )
+
+
+def _production_requested() -> bool:
+    """Read directly from the real process environment — never from
+    `.env`, and evaluated before any decision about loading `.env` is made
+    — so that decision cannot be influenced by the very file it's deciding
+    whether to load."""
+    return os.environ.get("DND_AI_ENVIRONMENT", "local").strip().lower() == "production"
+
+
+def _default_env_file() -> Path:
+    return Path.cwd() / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from `DND_AI_*` environment variables
-    (including those `.env` supplies via `load_dotenv()` above) and, in
-    production, host-mounted secret files."""
+    (including those `.env` supplies outside production — see
+    `_load_settings` below) and, in production, host-mounted secret
+    files."""
 
     model_config = SettingsConfigDict(
         env_prefix="DND_AI_",
@@ -108,32 +169,52 @@ class Settings(BaseSettings):
     environment: Literal["local", "test", "production"] = "local"
     log_level: str = "INFO"
 
-    database_url: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("DND_AI_DATABASE_URL", "DATABASE_URL"),
-    )
+    # DND_AI_DATABASE_URL (env var or the dnd_ai_database_url secret file) —
+    # the only source that satisfies production; see _resolve_database_url.
+    database_url: str | None = None
+
+    # The pre-existing unprefixed DATABASE_URL convention — local/test
+    # compatibility only, deliberately excluded from the production check.
+    legacy_database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     feature_ai_npc_dialogue: bool = False
     feature_discord_integration: bool = False
     feature_foundry_integration: bool = False
 
     @model_validator(mode="after")
-    def _require_explicit_database_url_outside_local_dev(self) -> "Settings":
+    def _resolve_database_url(self) -> "Settings":
         """No silent fallback to the local development database/credentials
-        once `environment` leaves `local`/`test` (finding 1: "Production
-        must not silently fall back to the default localhost database or
-        development credentials"). Convenience defaults stay convenient
-        only where they're safe."""
-        if self.database_url is None:
-            if self.environment == "production":
-                raise ValueError(
-                    "DND_AI_DATABASE_URL (or DATABASE_URL) is required when "
-                    "DND_AI_ENVIRONMENT=production — refusing to fall back to the "
-                    "local development database."
-                )
-            self.database_url = _LOCAL_DEV_DATABASE_URL
+        — or to the legacy `DATABASE_URL` alias — once `environment` is
+        `production` (finding: "production must not silently fall back").
+        Convenience defaults, and the legacy alias, stay available only
+        where they're safe."""
+        if self.database_url is not None:
+            return self
+        if self.environment == "production":
+            raise ValueError(
+                "DND_AI_DATABASE_URL (as an environment variable, or the mounted secret at "
+                f"${{DND_AI_SECRETS_DIR}}/{_DATABASE_URL_SECRET_FILENAME}) is required when "
+                "DND_AI_ENVIRONMENT=production — the legacy DATABASE_URL alias and the local "
+                "development database are not accepted in production."
+            )
+        self.database_url = (
+            self.legacy_database_url
+            if self.legacy_database_url is not None
+            else _LOCAL_DEV_DATABASE_URL
+        )
         return self
 
 
-_reject_unrecognized_env_vars()
-settings = Settings()
+def _load_settings(*, env_file: str | os.PathLike[str] | None = None) -> Settings:
+    """Build `Settings`, deciding first — from the real process
+    environment only — whether `.env` should be loaded at all (never in
+    production; see the module docstring). `env_file` lets tests point at
+    an isolated temporary dotenv without touching the repository's real
+    `.env` or relying on process-wide monkeypatching of `Path.cwd()`."""
+    if not _production_requested():
+        load_dotenv(dotenv_path=Path(env_file) if env_file is not None else _default_env_file())
+    _reject_unrecognized_env_vars()
+    return Settings()
+
+
+settings = _load_settings()

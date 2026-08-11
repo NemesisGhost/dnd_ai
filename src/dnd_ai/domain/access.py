@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
+from .errors import DomainAuthorizationError
+
 _TARGET_COLUMNS = (
     "character_id",
     "entity_id",
@@ -139,16 +141,17 @@ def resolve_user_by_external_identity(
     return _as_uuid(value) if value is not None else None
 
 
-class UnauthorizedTimelineError(ValueError):
+class UnauthorizedTimelineError(DomainAuthorizationError):
     """Raised by `resolve_access_context()` when a caller-supplied
     `timeline_id` is not the campaign's own pinned timeline. A domain
-    `ValueError` subclass, not an HTTP concern (docs/DEVELOPMENT.md §9) —
-    the API layer that eventually accepts a client-supplied timeline is
-    responsible for turning this into a non-disclosing response rather than
-    echoing the timeline IDs in this message back to an unauthorized
-    caller (finding 2's "non-disclosing failure at the eventual API
-    boundary" — see `dnd_ai.api.errors` for where that generic mapping
-    lives)."""
+    error, not an HTTP concern (docs/DEVELOPMENT.md §9) — but one that
+    carries the supplied, campaign, and canonical timeline IDs in its own
+    message (`str(self)`), which is exactly the kind of detail
+    `DomainAuthorizationError.safe_message` exists to withhold from an API
+    client while still leaving it available for server-side logs. Every
+    caller of `resolve_access_context()`, present and future, gets the same
+    non-disclosing 404 mapping automatically via `dnd_ai.api.errors`'
+    `SafeMessageError` handler — no per-endpoint try/except required."""
 
 
 def resolve_access_context(

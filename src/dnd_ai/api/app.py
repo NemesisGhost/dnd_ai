@@ -68,14 +68,23 @@ def create_app() -> FastAPI:
         `healthcheck:` hitting this over the private network
         (docs/LOCAL_DEPLOYMENT.md "Compose responsibilities and network
         policy") — never needs its own PostgreSQL or Uvicorn port exposed.
-        Failure returns 503 and a fixed, non-secret body; the underlying
-        exception (which could otherwise embed a connection string or host
-        detail) is logged server-side only, never returned to the caller."""
+        Failure returns 503 and a fixed, non-secret body. The underlying
+        exception is never logged as `str(exc)` or with its traceback
+        (`exc_info=True`) — a driver connection failure routinely embeds
+        the DSN, host, database name, or username in its message, and
+        SQLAlchemy/psycopg exceptions are not guaranteed to keep a
+        password out of that text either. Only the exception's class name
+        (e.g. `OperationalError`) is logged — enough to distinguish
+        "database unreachable" from "some other bug in this handler"
+        operationally, without risking a secret in the log stream."""
         try:
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
-        except Exception:
-            logger.warning("readiness check failed", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "readiness check failed: database round trip did not succeed (%s)",
+                type(exc).__name__,
+            )
             return JSONResponse(status_code=503, content={"status": "not_ready"})
         return JSONResponse(status_code=200, content={"status": "ready"})
 

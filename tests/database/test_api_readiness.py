@@ -4,6 +4,7 @@ engine/connection wiring every other endpoint uses, failing with a fixed,
 non-secret body when the database is unavailable.
 """
 
+import logging
 from collections.abc import Iterator
 
 import pytest
@@ -64,3 +65,36 @@ def test_healthz_does_not_depend_on_the_database(unavailable_engine: Engine) -> 
         response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_readyz_failure_logging_never_includes_the_underlying_secret(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """finding 4 regression: a simulated connection failure whose own
+    exception message embeds a DSN, host, and password must never have any
+    of that text end up in a captured log record — only a safe class name."""
+
+    secret_password = "SUPER_SECRET_PW_XYZ789"
+
+    class _FakeEngine:
+        def connect(self) -> None:
+            raise RuntimeError(
+                "connection to server failed: FATAL: password authentication failed for "
+                f'user "app" (dsn=postgresql://app:{secret_password}@dbhost.internal:5432/dnd_ai)'
+            )
+
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: _FakeEngine()
+    with caplog.at_level(logging.WARNING), TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+    assert secret_password not in response.text
+
+    captured_log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert secret_password not in captured_log_text
+    assert "dbhost.internal" not in captured_log_text
+    assert "postgresql://" not in captured_log_text
+    # The safe classification (the exception's class name) is still present.
+    assert "RuntimeError" in captured_log_text
