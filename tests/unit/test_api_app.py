@@ -6,12 +6,14 @@ command or query.
 
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Annotated
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 from starlette.requests import Request
 
 from dnd_ai.api.app import create_app
@@ -51,6 +53,9 @@ def test_unknown_route_returns_error_envelope() -> None:
 
 
 def test_method_not_allowed_returns_fixed_non_disclosing_message() -> None:
+    """A wrong-method request against a route declared GET-only returns the
+    fixed 405 envelope *and* a server-constructed `Allow` header naming
+    exactly the route's own declared methods."""
     app = create_app()
 
     @app.get("/get-only")
@@ -64,6 +69,55 @@ def test_method_not_allowed_returns_fixed_non_disclosing_message() -> None:
     body = response.json()
     assert body["error"]["code"] == "method_not_allowed"
     assert body["error"]["message"] == "The HTTP method is not allowed for this route."
+    assert response.headers["Allow"] == "GET"
+
+
+def test_method_not_allowed_allow_header_lists_multiple_methods_sorted() -> None:
+    """A route declared for more than one method reports all of them in
+    the `Allow` header, joined in a deterministic (sorted) order — unlike
+    Starlette/FastAPI's own raw `", ".join(route.methods)`, which iterates
+    a plain `set` and is not guaranteed to be ordered the same way twice."""
+    app = create_app()
+
+    @app.api_route("/multi-method", methods=["GET", "POST"])
+    def _multi_method() -> dict[str, str]:
+        return {"status": "ok"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.delete("/multi-method")
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET, POST"
+
+
+def test_http_exception_405_never_forwards_untrusted_headers_from_exc() -> None:
+    """Negative regression: a directly raised `HTTPException(status_code=
+    405, headers={...})` can carry any header a caller or a careless call
+    site chose — including a forged `Allow` value or an arbitrary secret
+    header. None of that is ever forwarded; the `Allow` header returned is
+    always recomputed from the matched route's own declared methods, and
+    no other header from `exc.headers` reaches the response at all."""
+    app = create_app()
+
+    @app.get("/raise-405-with-untrusted-headers")
+    def _raise_with_untrusted_headers() -> None:
+        raise HTTPException(
+            status_code=405,
+            detail="irrelevant",
+            headers={
+                "Allow": "EVIL_METHOD, HACKED",
+                "X-Secret-Header": "leak-me-please",
+            },
+        )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-405-with-untrusted-headers")
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET"
+    assert "X-Secret-Header" not in response.headers
+    assert "leak-me-please" not in response.text
+    assert "leak-me-please" not in response.headers.get("Allow", "")
 
 
 def test_http_exception_explicit_supported_status_behaves_like_routing() -> None:
@@ -352,7 +406,7 @@ def test_bare_api_error_never_echoes_constructor_detail_text() -> None:
     assert secret_looking_detail not in response.text
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_api_error_constructor_rejects_status_and_code_overrides() -> None:
@@ -392,7 +446,7 @@ def test_api_error_unknown_subclass_falls_back_to_internal_error() -> None:
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_api_error_with_tampered_class_attributes_falls_back_to_internal_error() -> None:
@@ -421,7 +475,7 @@ def test_api_error_with_tampered_class_attributes_falls_back_to_internal_error()
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_api_error_logged_error_code_is_also_validated(
@@ -471,7 +525,7 @@ def test_api_error_identifier_shaped_unknown_code_with_valid_status_falls_back()
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_api_error_known_code_paired_with_wrong_status_falls_back() -> None:
@@ -494,7 +548,7 @@ def test_api_error_known_code_paired_with_wrong_status_falls_back() -> None:
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_api_error_altered_public_message_on_known_type_falls_back() -> None:
@@ -516,7 +570,7 @@ def test_api_error_altered_public_message_on_known_type_falls_back() -> None:
     assert response.status_code == 500
     body = response.json()
     assert body["error"]["code"] == "internal_error"
-    assert body["error"]["message"] == "The request could not be processed."
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_unexpected_exception_maps_to_500_internal_error() -> None:
@@ -531,6 +585,66 @@ def test_unexpected_exception_maps_to_500_internal_error() -> None:
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
+
+
+def _raise_unregistered_api_error_subclass() -> None:
+    class _Unregistered(ApiError):
+        pass
+
+    raise _Unregistered("diagnostic detail a client never sees")
+
+
+def _raise_unsupported_http_exception_status() -> None:
+    raise HTTPException(status_code=418, detail="diagnostic detail a client never sees")
+
+
+def _raise_unclassified_integrity_error() -> None:
+    class _FakeOrigWithoutRecognizedSqlstate(Exception):
+        sqlstate = "99999"
+
+    raise IntegrityError(
+        "INSERT ...", {}, _FakeOrigWithoutRecognizedSqlstate("unrecognized failure")
+    )
+
+
+def _raise_genuinely_unexpected_exception() -> None:
+    raise RuntimeError("diagnostic detail a client never sees")
+
+
+@pytest.mark.parametrize(
+    "raise_fn",
+    [
+        _raise_unregistered_api_error_subclass,
+        _raise_unsupported_http_exception_status,
+        _raise_unclassified_integrity_error,
+        _raise_genuinely_unexpected_exception,
+    ],
+    ids=[
+        "unregistered_api_error_subclass",
+        "unsupported_http_exception_status",
+        "unclassified_integrity_error",
+        "genuinely_unexpected_exception",
+    ],
+)
+def test_every_unclassified_fallback_path_returns_the_canonical_internal_error_contract(
+    raise_fn: Callable[[], None],
+) -> None:
+    """Every kind of "nothing more specific is known" failure — an
+    unregistered `ApiError` subclass, an unsupported `HTTPException`
+    status, an `IntegrityError` with an unrecognized SQLSTATE, and a
+    genuinely unexpected `Exception` — must return the identical fixed
+    500/`internal_error` contract, word for word, regardless of which
+    handler happened to catch it."""
+    app = create_app()
+    app.get("/raise-fallback")(raise_fn)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-fallback")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "An unexpected error occurred."
 
 
 def test_request_validation_error_never_echoes_the_rejected_value() -> None:

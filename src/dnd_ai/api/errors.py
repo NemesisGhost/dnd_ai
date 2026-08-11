@@ -90,7 +90,26 @@ or 499, an out-of-range value like 99 or 999, or anything else a call site
 might pass to `HTTPException(status_code=...)` — produces the fixed
 500/`internal_error` contract instead of forwarding that status to the
 response; `exc.detail` remains never trusted or echoed regardless of which
-branch is taken.
+branch is taken. `exc.headers` is treated the same way: it is never
+forwarded, since a directly raised `HTTPException(status_code=405,
+headers={...})` could carry any header a caller or a careless call site
+chose. A 405 response instead carries an `Allow` header this module
+recomputes itself, from the matched route's own declared `methods` (see
+`_method_not_allowed_allow_header`) — trusted routing data, not anything
+read off `exc`.
+
+Every unclassified/fallback path in this module — a bare or unrecognized
+`ApiError`, an unsupported `HTTPException` status, an `IntegrityError`
+with a missing or unrecognized SQLSTATE, and any genuinely unexpected
+`Exception` — returns and logs the identical `_INTERNAL_ERROR_CONTRACT`
+(500/`internal_error`/"An unexpected error occurred."), one constant
+defined once near the top of this module. An earlier version of this
+module had each of those paths hardcode its own copy of that contract,
+and one of them (`ApiError`'s own base-class `safe_message`) had drifted
+to different wording ("The request could not be processed.") — the same
+*category* of failure described two different ways depending on which
+handler happened to catch it, even though nothing about "an unclassified
+failure occurred" differs between them.
 
 Logging: every handler below computes exactly one validated
 `(status_code, error_code, message)` triple and reuses the same
@@ -124,6 +143,32 @@ from starlette.routing import Route
 from dnd_ai.domain.errors import SafeMessageError
 
 logger = logging.getLogger(__name__)
+
+
+class _ErrorContract(NamedTuple):
+    """A complete, fixed `(status_code, error_code, safe_message)` triple —
+    the unit every handler below validates and returns as one piece,
+    never as independently-checked fields (see `ApiError`'s docstring for
+    why that independent-field checking was itself a prior gap)."""
+
+    status_code: int
+    error_code: str
+    safe_message: str
+
+
+# The one canonical, immutable 500/internal_error contract every
+# unclassified/fallback path in this module returns and logs — never a
+# handler-specific literal invented ad hoc. Before this constant existed,
+# an unknown/tampered ApiError used "The request could not be processed."
+# (ApiError's own base-class safe_message) while an unsupported
+# HTTPException status, an unclassified IntegrityError, and a genuinely
+# unexpected Exception each separately hardcoded "An unexpected error
+# occurred." — the same *category* of failure (nothing more specific is
+# known) described with two different wordings depending on which handler
+# happened to catch it. `ApiError`'s own class attributes are defined
+# *from* this constant below, so a bare `ApiError()` is itself exactly
+# this contract, not a fourth independently-maintained copy.
+_INTERNAL_ERROR_CONTRACT = _ErrorContract(500, "internal_error", "An unexpected error occurred.")
 
 # PostgreSQL SQLSTATE classes (docs/architecture/SYSTEM_ARCHITECTURE.md §20)
 # — see handle_integrity_error. Class 23 is "Integrity Constraint
@@ -249,9 +294,9 @@ class ApiError(Exception):
     below the subclasses.
     """
 
-    status_code: int = 500
-    error_code: str = "internal_error"
-    safe_message: str = "The request could not be processed."
+    status_code: int = _INTERNAL_ERROR_CONTRACT.status_code
+    error_code: str = _INTERNAL_ERROR_CONTRACT.error_code
+    safe_message: str = _INTERNAL_ERROR_CONTRACT.safe_message
 
     def __init__(self, detail: str | None = None) -> None:
         super().__init__(detail or self.safe_message)
@@ -293,31 +338,23 @@ class ConflictError(ApiError):
     safe_message = "The request could not be completed due to a conflicting change."
 
 
-class _ApiErrorContract(NamedTuple):
-    status_code: int
-    error_code: str
-    safe_message: str
-
-
 # The complete, fixed public contract for every ApiError type this module
 # recognizes (finding 1) — keyed by *exact* exception type, not by
 # independently checking whether a status "looks like" it could pair with
-# a code. `_UNKNOWN_API_ERROR_CONTRACT` doubles as both the internal-error
-# fallback and `ApiError`'s own registered contract, since a bare
-# `ApiError()` (no subclass) is itself the "nothing more specific is
-# known" case.
-_UNKNOWN_API_ERROR_CONTRACT = _ApiErrorContract(500, "internal_error", ApiError.safe_message)
-
-_API_ERROR_CONTRACTS: dict[type[ApiError], _ApiErrorContract] = {
-    ApiError: _UNKNOWN_API_ERROR_CONTRACT,
-    UnauthorizedError: _ApiErrorContract(401, "unauthorized", UnauthorizedError.safe_message),
-    ForbiddenError: _ApiErrorContract(403, "forbidden", ForbiddenError.safe_message),
-    NotFoundError: _ApiErrorContract(404, "not_found", NotFoundError.safe_message),
-    ConflictError: _ApiErrorContract(409, "conflict", ConflictError.safe_message),
+# a code. `ApiError`'s own registered contract is `_INTERNAL_ERROR_CONTRACT`
+# itself, since a bare `ApiError()` (no subclass) is itself the "nothing
+# more specific is known" case — the same single constant every other
+# unclassified/fallback path in this module also returns.
+_API_ERROR_CONTRACTS: dict[type[ApiError], _ErrorContract] = {
+    ApiError: _INTERNAL_ERROR_CONTRACT,
+    UnauthorizedError: _ErrorContract(401, "unauthorized", UnauthorizedError.safe_message),
+    ForbiddenError: _ErrorContract(403, "forbidden", ForbiddenError.safe_message),
+    NotFoundError: _ErrorContract(404, "not_found", NotFoundError.safe_message),
+    ConflictError: _ErrorContract(409, "conflict", ConflictError.safe_message),
 }
 
 
-def _validated_api_error_response(exc: ApiError) -> _ApiErrorContract:
+def _validated_api_error_response(exc: ApiError) -> _ErrorContract:
     """Finding 1: looks up `type(exc)` — never `isinstance`, so a subclass
     of a recognized type that this module hasn't itself registered is
     treated as unrecognized, not silently inherited — and additionally
@@ -325,11 +362,11 @@ def _validated_api_error_response(exc: ApiError) -> _ApiErrorContract:
     `safe_message` to equal the recorded triple exactly. Any mismatch (a
     status paired with the wrong code, an altered message on an otherwise-
     known type, a class attribute mutated some other way at runtime) and
-    any unrecognized type both fall back to the identical fixed
-    internal-error contract — never partial credit for "looks close"."""
+    any unrecognized type both fall back to the identical, canonical
+    `_INTERNAL_ERROR_CONTRACT` — never partial credit for "looks close"."""
     contract = _API_ERROR_CONTRACTS.get(type(exc))
-    observed = _ApiErrorContract(exc.status_code, exc.error_code, exc.safe_message)
-    return contract if contract == observed else _UNKNOWN_API_ERROR_CONTRACT
+    observed = _ErrorContract(exc.status_code, exc.error_code, exc.safe_message)
+    return contract if contract == observed else _INTERNAL_ERROR_CONTRACT
 
 
 def _correlation_id(request: Request) -> str | None:
@@ -347,6 +384,26 @@ def _route_template(request: Request) -> str:
     if isinstance(route, Route):
         return route.path
     return "<unmatched>"
+
+
+def _method_not_allowed_allow_header(request: Request) -> str | None:
+    """A server-owned `Allow` header for a 405 response, built from the
+    matched route's own declared `methods` — never from `exc.headers`.
+    FastAPI/Starlette set `request.scope["route"]` to the matched route
+    even on a method mismatch (a "partial" match — see `starlette.routing.
+    Router.app` and `fastapi.routing.APIRoute.matches`), so this is
+    available for both a routing-generated 405 and one an endpoint raises
+    directly against its own matched route. `exc.headers` is deliberately
+    never read here: a directly raised `HTTPException(status_code=405,
+    headers={...})` can carry any header a caller or a careless call site
+    chose, including one this module has no way to vet, so the value
+    returned is always recomputed from trusted routing data instead of
+    being taken from (or merged with) whatever the exception happened to
+    carry."""
+    route = request.scope.get("route")
+    if isinstance(route, Route) and route.methods:
+        return ", ".join(sorted(route.methods))
+    return None
 
 
 def _log_error(
@@ -456,23 +513,27 @@ def install_error_handlers(app: FastAPI) -> None:
         # anything else — an unrecognized-but-HTTP-shaped code, an out-of-range
         # value, or anything else a call site passed to HTTPException(...) — is
         # exactly as unclassified as any other unexpected failure and gets the
-        # fixed internal-error contract instead.
+        # canonical internal-error contract instead. exc.headers is likewise
+        # never forwarded — see _method_not_allowed_allow_header for the one
+        # header this handler does construct, from trusted routing data only.
         contract = _SUPPORTED_HTTP_EXCEPTION_STATUSES.get(exc.status_code)
+        response_headers: dict[str, str] | None = None
         if contract is None:
-            status_code, error_code, message, level = (
-                500,
-                "internal_error",
-                "An unexpected error occurred.",
-                logging.ERROR,
-            )
+            status_code, error_code, message = _INTERNAL_ERROR_CONTRACT
+            level = logging.ERROR
         else:
             error_code, message = contract
             status_code = exc.status_code
             level = logging.INFO
+            if status_code == 405:
+                allow = _method_not_allowed_allow_header(request)
+                if allow is not None:
+                    response_headers = {"Allow": allow}
         _log_error(request, exc, status_code=status_code, error_code=error_code, level=level)
         return JSONResponse(
             status_code=status_code,
             content=_envelope(request, code=error_code, message=message),
+            headers=response_headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -555,13 +616,9 @@ def install_error_handlers(app: FastAPI) -> None:
             # either of the above — that ambiguity is itself evidence of an
             # application/schema/runtime defect (an unanticipated constraint, a
             # driver this code doesn't know how to introspect), not something the
-            # caller could have asked for differently. Fixed 500, never a guess at
-            # 400 vs. 409 (finding 2).
-            status_code, error_code, message = (
-                500,
-                "internal_error",
-                "An unexpected error occurred.",
-            )
+            # caller could have asked for differently. The canonical internal-error
+            # contract, never a guess at 400 vs. 409 (finding 2).
+            status_code, error_code, message = _INTERNAL_ERROR_CONTRACT
             level = logging.ERROR
         _log_error(request, exc, status_code=status_code, error_code=error_code, level=level)
         return JSONResponse(
@@ -570,10 +627,11 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        _log_error(request, exc, status_code=500, error_code="internal_error", level=logging.ERROR)
+        status_code, error_code, message = _INTERNAL_ERROR_CONTRACT
+        _log_error(
+            request, exc, status_code=status_code, error_code=error_code, level=logging.ERROR
+        )
         return JSONResponse(
-            status_code=500,
-            content=_envelope(
-                request, code="internal_error", message="An unexpected error occurred."
-            ),
+            status_code=status_code,
+            content=_envelope(request, code=error_code, message=message),
         )
