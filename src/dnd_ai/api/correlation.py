@@ -7,16 +7,26 @@ way the same value is echoed back on the response and attached to
 every error envelope (and log line — see that module's `_log_error`) and,
 later, so commands can pass it through to audit records.
 
-A client-supplied value is validated and bounded before any of that,
-never trusted verbatim: an arbitrary header value could otherwise carry
-control characters or newlines into a log line (log injection), or simply
-be unbounded in length. `_MAX_CLIENT_CORRELATION_ID_LENGTH` and
-`_CLIENT_CORRELATION_ID_PATTERN` intentionally accept a plain UUID (the
-value this middleware itself generates) and similar bounded, printable
-identifier shapes; anything else falls back to a freshly generated one
-rather than rejecting the request outright — a malformed correlation ID is
-the client's tooling being unhelpful, not a reason to fail the request it's
-attached to.
+A client-supplied value is validated and normalized before any of that,
+never trusted verbatim. The accepted shape is deliberately narrow: a
+canonical UUID (the same shape this middleware itself generates, and the
+shape most client tracing/logging libraries already emit) — nothing else.
+Bounding *length and character set* alone (an earlier version of this
+module accepted `[A-Za-z0-9._-]{1,100}`) is not enough: that range still
+admits arbitrary token- or password-like text, which would then be echoed
+on the response and included in every log line for the request (finding
+5). Restricting to one closed, fixed-length identifier format removes that
+risk structurally rather than trying to distinguish "identifier-shaped"
+from "secret-shaped" text within a wide character class. Anything that
+doesn't parse as a canonical UUID — including a well-formed but
+non-UUID identifier, control characters, or an overlong value — falls back
+to a freshly generated one rather than rejecting the request outright: a
+malformed correlation ID is the client's tooling being unhelpful, not a
+reason to fail the request it's attached to. A matching value is
+normalized to lowercase (RFC 4122 case is not significant, and every
+value this middleware itself generates is already lowercase) so two
+clients that differ only in hex-digit case are not treated as carrying
+different correlation IDs downstream.
 """
 
 import re
@@ -29,18 +39,17 @@ from starlette.responses import Response
 
 CORRELATION_ID_HEADER = "X-Correlation-Id"
 
-_MAX_CLIENT_CORRELATION_ID_LENGTH = 100
-_CLIENT_CORRELATION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
+_CANONICAL_UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
 
 
 def _sanitize_client_correlation_id(value: str | None) -> str | None:
     if value is None:
         return None
-    if not 1 <= len(value) <= _MAX_CLIENT_CORRELATION_ID_LENGTH:
+    if not _CANONICAL_UUID_PATTERN.fullmatch(value):
         return None
-    if not _CLIENT_CORRELATION_ID_PATTERN.fullmatch(value):
-        return None
-    return value
+    return value.lower()
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):

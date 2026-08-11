@@ -386,7 +386,7 @@ uv run python scripts/wait_for_ci.py   # current HEAD's most recent run
 
 Layer placement is the thing reviewers check first. From [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering):
 
-- `api/` — authentication, authorization, input validation, routing, response shaping. **No domain rules.**
+- `api/` — authentication, authorization, input validation, routing, response shaping. **No domain rules.** Error responses and logs are non-disclosing by construction, not by convention: `dnd_ai.api.errors.ApiError` and the framework `HTTPException` handler both expose a fixed, type-level `safe_message`/closed status-code vocabulary rather than a constructor argument or `exc.detail`; an unrecognized/missing database integrity SQLSTATE is an internal error (500), not a guessed 400/409; a generic unique/exclusion conflict (409) never promises retrying will help — only a command's own exception type may say that, for a demonstrated optimistic-concurrency/idempotency case; request-validation field *locations* are bounded and character-restricted before being echoed, since a location can itself carry caller-supplied text (an `extra="forbid"` model's rejected key, a `dict[str, X]` body's own key); and an accepted client `X-Correlation-Id` must be a canonical UUID — anything else is replaced with a freshly generated one rather than trusted, echoed, or logged.
 - `commands/` — the only path that mutates state. Each handler owns its transaction boundary and follows the ten steps in [SYSTEM_ARCHITECTURE.md §6](architecture/SYSTEM_ARCHITECTURE.md#6-command-and-query-separation).
 - `queries/` — reads only. Never mutates.
 - `domain/` — invariants, allowed transitions, event construction, knowledge visibility. No HTTP or framework types.

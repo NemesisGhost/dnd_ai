@@ -550,7 +550,8 @@ Operational telemetry should include:
 ## 20. Failure handling
 
 - Domain validation failures return structured errors without partial writes.
-- Optimistic concurrency failures return a retriable conflict.
+- A unique/exclusion-constraint conflict returns a fixed, non-disclosing 409 — a genuine conflict, but not a claim that retrying the same request will succeed; only a command that recognizes a specific, demonstrated optimistic-concurrency or idempotency case may say retrying/re-reading is appropriate, through its own exception type.
+- An integrity failure the application layer cannot confidently classify (a missing or unrecognized SQLSTATE) is treated as an internal error (500), not guessed at as a 400 or 409 — that ambiguity itself is evidence of an application/schema/runtime defect.
 - External integration failures are retried through durable queues.
 - AI failures do not roll back already-committed world changes.
 - Failed outbox deliveries remain visible and retryable.
