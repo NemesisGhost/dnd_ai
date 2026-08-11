@@ -464,6 +464,8 @@ Optimistic updates are limited to low-risk presentation changes. Canonical mutat
 
 ## 12. Security and privacy requirements
 
+The production browser UI and `/api/*` should share the `world` origin. Use `Secure`, `HttpOnly`, narrowly scoped authentication cookies; do not store long-lived application secrets or bearer tokens in browser code. Protect every cookie-authenticated state-changing request with CSRF tokens and origin checks. Exact hostnames are chosen at deployment time from the custom-domain-plus-No-IP or No-IP-only arrangements in ADR 0012.
+
 - Use OIDC authorization-code flow with PKCE for the browser client.
 - Store no long-lived application secret in browser code.
 - Validate issuer, audience, signature, expiry, and revocation-relevant state at the API boundary.
@@ -513,9 +515,15 @@ The UI may use permitted-action hints to choose controls, but the API must indep
 - Home, World, Characters, Quests, Sessions, Knowledge, and Ask.
 - Observer view.
 - GM access management, audit view, and preview-as-user.
-- Static deployment and end-to-end role/access testing.
+- Same-origin static deployment behind the local reverse proxy and end-to-end role/access testing.
 
-### Phase 14: import review
+### Phase 14: local production hardening
+
+- No-IP and automatic HTTPS for the selected deployment-time hostname arrangement.
+- Secure-cookie and CSRF verification through the reverse proxy.
+- Login and Ask/AI endpoint rate limiting and non-disclosing operational error states.
+
+### Phase 15: import review
 
 - Source/proposal review, matching, conflict resolution, approval, rejection, and promotion status in the portal.
 
@@ -546,5 +554,5 @@ Defer until demonstrated need:
 - A player can request recaps, quest status, world details, character knowledge, and cited rules answers.
 - A GM can request a preparation brief and preview the portal as a selected user/character perspective.
 - A GM can manage memberships, roles, user-character relationships, and resource grants with an audit trail.
-- Phase 14 import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
+- Phase 15 import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
 - All critical flows are keyboard-accessible and usable on desktop and mobile layouts.

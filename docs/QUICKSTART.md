@@ -1,5 +1,7 @@
 # Quick Start
 
+> This guide is the quick start for the **transitional AWS development database**, not the production deployment. Production targets the existing Ubuntu mini-PC; use [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). Do not tear down AWS until the local readiness, restore, data-retention, and explicit-approval gates pass.
+
 The fast path to a deployed development database. Assumes AWS CLI and Terraform are already installed and configured — if not, start with [CONTRIBUTING.md](CONTRIBUTING.md#2-aws-access-optional).
 
 > **You probably don't need this.** Since [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), everyday development runs against a **local PostgreSQL 18 server** — set that up via [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) instead. This document deploys the shared AWS `dev` environment, which CI verifies every pull request against ([PLAN.md §23.0](PLAN.md#230-verification-policy)). Read on only if `dev` does not exist yet, or you are changing the infrastructure itself.

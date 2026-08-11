@@ -795,11 +795,15 @@ All design and process documentation lives under `docs/`; only `README.md` and `
 
 ## Getting Started
 
+Production now targets the existing Ubuntu mini-PC that hosts FoundryVTT. D&D AI runs as a separate Docker Compose-managed application (React, FastAPI/Uvicorn, PostgreSQL, and required workers) behind the shared reverse proxy and No-IP-managed public DNS. See [ADR 0012](docs/adr/0012-locally-host-production-on-existing-mini-pc.md) and [the local deployment runbook](docs/LOCAL_DEPLOYMENT.md). Existing AWS resources are transitional until local migration, end-to-end, authentication/authorization, backup/restore, data-retention, and explicit teardown-approval gates pass.
+
 New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing
 
-Development runs against a **local PostgreSQL 18 server** — migrations and the `tests/database`/`tests/scenario` suites need no AWS account, no credentials, and no network. CI then runs the identical suites against the deployed `dev` RDS instance, and that run is the merge gate. Application deployables will run on ECS Fargate when they are built; no application compute exists yet, and there is no local deployment topology. See [docs/PLAN.md §23.0](docs/PLAN.md#230-verification-policy), [§30](docs/PLAN.md#30-aws-deployment-plan-for-application-services), [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md), and [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md).
+Application code must remain portable. Phase 10 continues as the FastAPI/Uvicorn, command/query, transaction, validation, authentication/authorization, health/readiness, local-PostgreSQL, and container boundary. Lambda/API Gateway is not required; any cloud adapter is optional and isolated.
+
+Development runs against a **local PostgreSQL 18 server**. Transitional CI may still repeat the suites against the existing `dev` RDS instance while AWS resources remain, but production deployables target Docker Compose on the Ubuntu mini-PC and are verified through its reverse proxy. See [docs/PLAN.md §24](docs/PLAN.md#24-delivery-phases), [§31](docs/PLAN.md#31-local-production-deployment-plan), and [ADR 0012](docs/adr/0012-locally-host-production-on-existing-mini-pc.md).
 
 1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
 2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
@@ -810,6 +814,10 @@ Development runs against a **local PostgreSQL 18 server** — migrations and the
 Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase developed under the local-first loop. [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process, including the proportionality and stop-loss rules that keep test-harness hardening from displacing delivery work.
 
 ### If you are deploying infrastructure
+
+For the current production target, use [docs/LOCAL_DEPLOYMENT.md](docs/LOCAL_DEPLOYMENT.md). It covers Docker Compose responsibilities, private networking, reverse proxy/HTTPS, No-IP, secure cookies/CSRF, rate limiting, secrets, backups/restores, resource isolation from Foundry, and upgrade/rollback/disaster recovery.
+
+The AWS commands and links below are retained for operating transitional development resources only. Do not create a new AWS production environment or tear existing resources down as part of normal local deployment.
 
 Terraform provisions PostgreSQL RDS, VPC, KMS, and Secrets Manager on AWS.
 
@@ -866,6 +874,8 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 - [.github/copilot-instructions.md](.github/copilot-instructions.md) — condensed rules for GitHub Copilot
 
 ### Decision records
+
+- [ADR 0012](docs/adr/0012-locally-host-production-on-existing-mini-pc.md) — accepted local-production decision; supersedes the production-hosting portions of ADRs 0008 and 0011
 
 - [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally; ADRs 0008–0011 record the AWS deployment policy, the database ownership model, fictional-time interval representation, and the local-first development loop. Read [0008](docs/adr/0008-aws-first-deployment-and-verification.md) and [0011](docs/adr/0011-local-first-development-aws-verified-delivery.md) together — 0011 amends 0008's inner-loop clause and leaves the rest standing.
 

@@ -1,5 +1,7 @@
 # Pre-Deployment Checklist
 
+> This checklist applies to the existing **transitional AWS infrastructure** described below. The current production checklist is in [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md): private Compose networking, reverse-proxy-only ingress, No-IP, automatic HTTPS, secure cookies/CSRF, rate limits, external secrets, backups/restores, health/restart/log/disk controls, and Foundry resource isolation. AWS teardown requires separate explicit approval after local readiness.
+
 Run through this before `terraform apply`. Explanations live elsewhere — this file is deliberately just the checks.
 
 - Setting up for the first time? [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -126,6 +126,8 @@ New closeout tests go directly into the stable topic file. A temporary phase-nam
 
 ## 3. Local setup
 
+This local PostgreSQL path is also the foundation of the target mini-PC production deployment, though production runs it in a private Docker Compose network with no published database port. Existing AWS `dev` access in §3.5 is transitional troubleshooting/verification, not the production destination.
+
 Per [PLAN.md §23.0](PLAN.md#230-verification-policy) and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), development runs against a **local PostgreSQL 18 server**. No AWS account, no credentials, and no network are needed for schema or application work — CI verifies the same work against `dev` RDS when you push ([§8](#8-continuous-integration)).
 
 ### 3.1 PostgreSQL

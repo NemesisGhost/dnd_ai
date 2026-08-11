@@ -1,5 +1,9 @@
 # Infrastructure Guide
 
+> **Current production target:** the existing Ubuntu mini-PC described in [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md) and [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). The AWS material below documents existing transitional resources and their historical operation; it is not the production destination and is not an instruction to tear resources down now.
+
+AWS retirement is gated on successful local migrations/extensions/roles, the Phase 10 vertical slice, proxy authentication and authorization, tested onsite/offsite backup restoration, required data migration, and explicit approval. Retirement must inventory resources, take final snapshots or exports, verify local restoration, remove resources through the existing Terraform process, and confirm recurring charges stop.
+
 Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
 
 Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services is planned but unbuilt: [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) specifies ECS Fargate, and this document gains those sections when the modules exist.

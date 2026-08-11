@@ -471,9 +471,27 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 ## 17. Deployment topology
 
+Production is a modular monolith hosted on the existing Ubuntu mini-PC. Docker Compose runs the React UI, FastAPI under Uvicorn, PostgreSQL, and required worker or scheduled-job processes on private networks. A reverse proxy is the only inbound HTTP/HTTPS entry point, manages automatic TLS, and routes the preferred same-origin `world` UI and `/api/*`; FoundryVTT is a separately managed service on its own hostname. No-IP supplies dynamic DNS. Exact hostnames depend on whether deployment uses a custom domain delegated to No-IP or only No-IP-provided hostnames.
+
+```mermaid
+flowchart LR
+    Internet --> Router[Router/firewall: 80/443]
+    Router --> Proxy[Reverse proxy + HTTPS]
+    Proxy --> UI[React UI]
+    Proxy --> API[FastAPI / Uvicorn]
+    Proxy --> Foundry[FoundryVTT service]
+    API --> DB[(D&D AI PostgreSQL)]
+    API --> Worker[Workers / scheduled jobs]
+    NoIP[No-IP updater] --> Internet
+```
+
+PostgreSQL and Uvicorn are never directly exposed. Foundry and D&D AI share hardware and potentially the proxy, but not application data, authentication, configuration, lifecycle, or backup handling. Secrets are mounted or supplied from outside the repository. The portable API boundary permits a later VPS or AWS deployment without making either a current requirement. Operational controls are defined in [LOCAL_DEPLOYMENT.md](../LOCAL_DEPLOYMENT.md).
+
+### Historical AWS topology (superseded; retained for completed-work context)
+
 Initial deployment is a modular monolith with separate workers, deployed to AWS. A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving. Service boundaries can become process boundaries later when operational evidence justifies it.
 
-Everything runs in AWS — there is no supported local-deployment topology, and [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md) does not add one. That ADR moved *development and testing* onto a local PostgreSQL server; the deployables below still run only on ECS Fargate against RDS ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
+The table below is the superseded AWS proposal, retained to explain historical planning and transitional resources. It is not a current deployment requirement; [ADR 0012](../adr/0012-locally-host-production-on-existing-mini-pc.md) defines the supported production topology.
 
 | Deployable | AWS target | Notes |
 |---|---|---|
@@ -503,6 +521,9 @@ Required controls:
 - row-level security only where it provides clear value
 - audit logging for privileged changes
 - strict separation between model-provider credentials and client access
+- `Secure`, `HttpOnly`, narrowly scoped authentication cookies and CSRF protection for cookie-authenticated mutations
+- reverse-proxy and/or application rate limiting for login and expensive AI endpoints
+- no direct public access to PostgreSQL or Uvicorn
 
 ## 19. Observability
 

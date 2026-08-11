@@ -1,4 +1,4 @@
-# ADR 0008: Everything deploys to and is verified in AWS
+# ADR 0008: Everything deploys to and is verified in AWS (historical)
 
 - **Status**: Accepted, partially superseded by [ADR 0011](0011-local-first-development-aws-verified-delivery.md)
 - **Date**: 2026-07-31
@@ -6,6 +6,8 @@
 > **Amended 2026-08-07.** [ADR 0011](0011-local-first-development-aws-verified-delivery.md) supersedes this ADR's **inner-loop** clause: development and iteration now run against a local PostgreSQL 18 server by default, not against `dev` RDS. Everything else here stands — CI still verifies migrations and the `tests/database`/`tests/scenario` suites against the deployed `dev` instance as a merge gate, application services still deploy only to ECS Fargate, and "it passes locally" is still not a sufficient claim to close a phase. Read the two together: this ADR explains *why AWS verification exists*; ADR 0011 changes *when in the cycle it happens*.
 
 ## Context
+
+> **Superseded for current and future production hosting by [ADR 0012](0012-locally-host-production-on-existing-mini-pc.md).** This record is retained because it explains completed AWS work and the transitional RDS environment; its AWS production requirements are no longer active.
 
 The project originally treated AWS as optional for most work. [CONTRIBUTING.md](../CONTRIBUTING.md) told contributors that everything through Phase 7 ran against a local Docker PostgreSQL container and that "you do not need AWS to contribute"; [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) said local development needed no AWS resources; the test layers ran on testcontainers; and CI used a `postgres:15` service container. AWS entered the picture only for the final Phase 1 exit criterion.
 

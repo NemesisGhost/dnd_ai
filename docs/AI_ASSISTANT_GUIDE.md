@@ -202,6 +202,8 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 
 ### 11. Develop locally, verify in AWS
 
+**Hosting update:** [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md) supersedes the production and indefinite AWS-verification assumptions in this historical subsection. Production deployables run via Docker Compose on the existing Ubuntu mini-PC and are verified through its reverse proxy. RDS verification is transitional while those AWS resources remain. Do not add Lambda, API Gateway, ECS/Fargate, RDS, S3, or CloudFront as required production infrastructure; keep the application portable and treat any cloud adapter as optional.
+
 ✅ **Correct**:
 - Run migrations and database/scenario tests against a local PostgreSQL server whose **major version matches RDS** (currently 18.x)
 - Treat the CI run against the deployed `dev` RDS instance as the merge gate and the phase-exit evidence
@@ -219,6 +221,8 @@ See [PLAN.md §23.0](PLAN.md#230-verification-policy), [ADR 0008](adr/0008-aws-f
 ---
 
 ## Technology Stack Reference
+
+The current infrastructure/compute entries are: the existing Ubuntu mini-PC; Docker Compose; a Caddy- or Traefik-class reverse proxy; React; FastAPI under Uvicorn; local PostgreSQL 18.x; and only required worker/scheduled-job containers. No-IP provides dynamic DNS. Secrets are outside the repository. The older AWS/Fargate rows below are superseded historical guidance retained until a broader guide cleanup.
 
 | Layer | Technology | Notes |
 |-------|------------|-------|

@@ -1,4 +1,6 @@
-# Terraform
+# Terraform (transitional AWS infrastructure)
+
+The Terraform tree records and manages existing AWS resources created under the former AWS-first plan. Production now targets the existing Ubuntu mini-PC; see [ADR 0012](../docs/adr/0012-locally-host-production-on-existing-mini-pc.md). Do not destroy these resources until the local readiness and data-retention gates in [LOCAL_DEPLOYMENT.md](../docs/LOCAL_DEPLOYMENT.md) pass and teardown is explicitly approved. Any retirement must use this infrastructure-as-code path.
 
 Infrastructure code for the D&D AI World Platform.
 

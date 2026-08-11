@@ -1,10 +1,12 @@
-# ADR 0011: Local-first development, AWS-verified delivery
+# ADR 0011: Local-first development, AWS-verified delivery (historical verification policy)
 
 - **Status**: Accepted
 - **Date**: 2026-08-07
 - **Amends**: [ADR 0008](0008-aws-first-deployment-and-verification.md) — supersedes its inner-loop clause; leaves its deployment-target and merge-gate clauses intact
 
 ## Context
+
+> **Amended by [ADR 0012](0012-locally-host-production-on-existing-mini-pc.md).** Local PostgreSQL remains the development default. RDS and its CI path are transitional verification infrastructure, not the required production destination, and may be retired only after the local-production gate is satisfied.
 
 [ADR 0008](0008-aws-first-deployment-and-verification.md) made the deployed AWS `dev` RDS instance the default target for *all* database work: migrations, `tests/database`, and `tests/scenario` ran there, and a local container was a fallback for genuinely unreachable AWS. That decision fixed two real problems — what was verified was not what was deployed, and deployment was perpetually deferred — and both fixes are worth keeping.
 

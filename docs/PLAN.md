@@ -1325,7 +1325,7 @@ The MVP includes:
 - an on-demand assistant for campaign summaries, details, rules questions, and GM preparation using authorized structured queries and cited rules/reference passages
 - observer views built from explicitly published or granted resources
 - GM tools for canon browsing, preparation, visibility preview, user invitations, role assignment, user-character relationships, resource grants, and audit history
-- Phase 14 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
+- Phase 15 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
 
 The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience.
 
@@ -1342,6 +1342,8 @@ Every summary or answer records or returns its campaign, timeline, effective poi
 The active plan keeps only compact stubs for completed Phases 0–5. Their detailed deliverables, exit criteria, first-time obligations, and closeout narrative are preserved in [PLAN_PHASES_0_5_ARCHIVE.md](PLAN_PHASES_0_5_ARCHIVE.md) and should be loaded only for historical or regression work. Phase verification files remain the evidence of what actually ran.
 
 ### 24.0 Verification policy
+
+> **Current policy (ADR 0012):** Production targets the existing Ubuntu mini-PC, not AWS. Local PostgreSQL is the development default; deployables close their phases by running in Docker Compose and being exercised through the local reverse proxy. The RDS CI mechanism described below is retained transitional/historical evidence and may continue while AWS exists, but it is no longer the required production architecture or an indefinite phase gate. Before AWS retirement, failures in an enabled RDS job are still investigated honestly. After the local readiness gate and explicit teardown approval, the AWS-specific job may be removed with the other resources.
 
 Development is local; delivery is verified on AWS. These are two different steps, and conflating them is what [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) corrected in the original AWS-first policy ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md)).
 
@@ -1542,13 +1544,15 @@ Exit criteria:
 
 ### Phase 10: Core API and playable vertical slice
 
+> **Revised deployment boundary:** Phase 10 continues and delivers the portable application/API layer for local production. FastAPI runs under Uvicorn in a container and connects to local PostgreSQL through private Compose networking. Lambda, Mangum, API Gateway, Lambda IAM/deployment packaging, AWS-only networking/RDS access, and AWS-specific production telemetry are not required acceptance criteria. If a Lambda adapter exists or is later useful, it must remain isolated and optional.
+
 Phase 10 delivers the smallest usable application boundary over the existing domain and persistence layers. It owns the end-to-end vertical slice in [§25](#25-vertical-slice-acceptance-scenario), establishes the security boundary used by every client, and is the first phase with an application deployable.
 
-**Progress.** Workstream 1 (`080_security_identity_and_access`) delivered the `security.*` schema — see [docs/architecture/DATABASE_MODEL.md §19](architecture/DATABASE_MODEL.md#19-security-audit-and-integration). Workstream 2 (`src/dnd_ai/domain/access.py`) delivered §19.7's effective-access resolver (steps 1-5, 7) as a plain read-only domain service, with steps 6/8/9 deliberately deferred to the layers that actually have the context to do them — see that module's docstring and §19.7's own implementation note. Workstream 3 (`src/dnd_ai/api/`) delivered the FastAPI application skeleton this workstream's deliverables land on: `app.py` (app factory, `/healthz`), `errors.py` (the one JSON error envelope every response uses — `ApiError` subclasses, plain `ValueError`/domain errors, `IntegrityError`, framework routing/validation errors, and anything unanticipated all normalize to it), `correlation.py` (`X-Correlation-Id` generation/echo), and `deps.py` (`get_connection` — one PostgreSQL transaction per request, committing on success and rolling back on any raised error, per [§30 "Transaction boundary"](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary); `get_idempotency_key` — header passthrough only, dedup storage deferred until a concrete command needs more than its own unique constraints already give it). Still to come: OIDC token verification, command/query endpoints and their request/response contracts, the Lambda ASGI adapter, and the AWS deployment path (§31) — the last two are explicitly out of scope until a separate AWS/Terraform pass.
+**Progress.** Workstream 1 (`080_security_identity_and_access`) delivered the `security.*` schema and workstream 2 (`src/dnd_ai/domain/access.py`) delivered the effective-access resolver. Workstream 3 (`src/dnd_ai/api/`) delivered the FastAPI application skeleton, `/healthz`, normalized errors, correlation IDs, and one-transaction-per-request dependency. Still to come are authentication verification, readiness, command/query endpoints and contracts, Uvicorn/container execution, local PostgreSQL configuration, and Compose/reverse-proxy integration. A Lambda adapter is neither required nor part of the production path.
 
 Deliver:
 
-- a FastAPI application entry point and a Lambda ASGI adapter
+- a FastAPI application entry point executed by Uvicorn and containerized as a portable service
 - database transaction and session management with cross-domain transaction boundaries owned by the application layer
 - command endpoints over the existing command/application services
 - query services for the effective dungeon, character, quest, relationship, inventory, encounter, and knowledge state required by the vertical slice
@@ -1559,7 +1563,8 @@ Deliver:
 - centralized access resolution and server-side filtering for rows, fields, relationships, counts, search results, and summary inputs
 - audit records for login-linked identity changes, role/access changes, sensitive reads, and all writes
 - correlation and idempotency identifiers and consistent error contracts
-- one cost-conscious AWS path: API Gateway HTTP API to one modular FastAPI Lambda handler, as defined in [§31](#31-aws-deployment-plan-for-application-services)
+- health and readiness endpoints; environment-variable or mounted-secret configuration; local PostgreSQL connectivity; and Docker Compose integration appropriate to this phase
+- one local path through the reverse proxy, as defined in [§31](#31-local-production-deployment-plan)
 - end-to-end execution of the existing vertical-slice acceptance scenario through the API
 
 Keep the endpoint surface limited to what that scenario needs:
@@ -1579,6 +1584,8 @@ Exit criteria:
 > The complete vertical-slice scenario executes through the application API without direct client writes to PostgreSQL. Authenticated GM, player, and observer requests receive only their permitted rows, fields, relationships, search results, counts, and summaries; a user can relate to multiple characters and a character or fact can relate to multiple users. Required cross-domain changes commit atomically, retries do not duplicate effects, and campaign/timeline isolation is preserved.
 
 Testing focuses on application behavior and this end-to-end scenario. Do not create another generalized test framework or duplicate database invariants already adequately tested in earlier phases.
+
+Phase 10 also proves secure authentication cookies, CSRF protection, and player, GM, observer, and user-to-detail many-to-many access enforcement through the reverse proxy. Its application contracts, command/query services, transaction/session management, validation, authorization, audit, correlation, and idempotency behavior remain platform-neutral.
 
 ### Phase 11: Foundry MVP
 
@@ -1629,7 +1636,7 @@ Exit criteria:
 
 Do not create a general-purpose document-ingestion or vector-search framework for this scenario. Defer embeddings and broad retrieval-augmented-generation infrastructure until structured metadata, relational retrieval, and PostgreSQL full-text search have proved insufficient. Normal automated tests must not depend on live provider calls; real-provider testing is limited to deliberate smoke verification.
 
-### Phase 13: Web portal MVP
+### Phase 13: Web portal MVP and same-origin packaging
 
 The web portal becomes the primary out-of-session interface over the Phase 10 API and Phase 12 on-demand assistant. Implement the bounded experience in [§23](#23-identity-authorization-and-web-portal-implementation) and [UI_DESIGN.md](UI_DESIGN.md); do not turn this phase into an unrestricted content-management platform.
 
@@ -1653,7 +1660,20 @@ Exit criteria:
 - A GM can preview the portal as a selected user/character perspective before publishing or granting information.
 - Portal commands use the same authorization, command, query, audit, visibility, and idempotency boundaries as Foundry and other API clients.
 
-### Phase 14: World and campaign-data import
+### Phase 14: Local production deployment and hardening
+
+Deliver:
+
+- Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration;
+- private networking with no public PostgreSQL port and no direct Uvicorn exposure;
+- preferred same-origin `world` UI plus `/api/*`, separate Foundry routing, No-IP updates, and automatic HTTPS;
+- secure cookies, CSRF, login/AI rate limits, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
+- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery; and
+- end-to-end local verification of Phase 10 authentication, authorization, and the vertical slice.
+
+Exact hostnames remain a deployment-time decision. Foundry and D&D AI retain separate data, authentication, configuration, lifecycle, and backups. The detailed acceptance gate is [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#production-readiness-gate).
+
+### Phase 15: World and campaign-data import
 
 World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
 
@@ -1681,7 +1701,9 @@ Exit criteria:
 
 ### Later phases: demonstrated-need expansion
 
-Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, broader import automation, and Discord integration follow only when demonstrated need exists. Until Phase 10 is usable, explicitly defer staging and production environments, three continuously running Fargate services, an Application Load Balancer, a NAT gateway, a continuously polling background worker, comprehensive embeddings or RAG, broad economy or NPC simulation, administration features beyond the bounded Phase 13 portal and Phase 14 import review, generalized reference-ingestion or world/campaign-data import frameworks, and premature performance optimization.
+After revised Phase 14 passes, perform a bounded AWS-retirement workstream: inventory resources; take final snapshots/logical exports; migrate retained data; verify local restoration, extensions, roles, migrations, vertical slice, proxy authentication/authorization, and backups; obtain explicit teardown approval; remove resources through existing infrastructure as code; and confirm recurring charges stop. Until then RDS and other AWS assets are transitional infrastructure and must not be deleted. AWS-to-local replication and hybrid production are not normal architecture.
+
+Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, broader import automation, and Discord integration follow only when demonstrated need exists. Defer AWS application infrastructure, hybrid production, continuously polling workers without a workload, comprehensive embeddings/RAG, broad economy or NPC simulation, administration beyond the bounded portal/import review, generalized import frameworks, and premature performance optimization. A VPS or AWS move requires measured availability, bandwidth, capacity, security, recovery, or maintenance justification.
 
 ---
 
@@ -2044,7 +2066,17 @@ This reuses infrastructure that already exists rather than adding a new module. 
 
 ---
 
-## 31. AWS deployment plan for application services
+## 31. Local production deployment plan
+
+> **This section supersedes the AWS application-service proposal below.** The older Lambda/API Gateway/Fargate text is retained only as an obsolete proposal for historical traceability and is not a current requirement.
+
+Production runs on the existing Ubuntu mini-PC using Docker Compose. The application project contains React UI, FastAPI under Uvicorn, PostgreSQL, and only those worker/scheduled-job containers the delivered features require. A Caddy- or Traefik-class reverse proxy is the sole inbound HTTP/HTTPS service. PostgreSQL and Uvicorn publish no host ports. The preferred routes are `world.<domain>/` for UI, `world.<domain>/api/*` for API, and `foundry.<domain>/` for Foundry; [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md) records both supported DNS arrangements without inventing a domain.
+
+Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 13 packages React for the same `world` origin. Revised Phase 14 integrates Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
+
+Existing AWS resources follow the retirement gate in the roadmap. A VPS or AWS becomes a future option only when measured availability, bandwidth, capacity, security, recovery, or operator burden justifies it.
+
+### Historical appendix: obsolete AWS application-service proposal (never built)
 
 ### 31.1 Scope and initial target
 
@@ -2129,7 +2161,8 @@ The additional obligations in this section begin when the corresponding deployab
 | Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
 | Phase 12 (Narrow AI/NPC MVP) | Deliberate one-provider smoke verification for NPC and audience-aware assistant behavior only; normal automated tests use no live provider |
 | Phase 13 (Web portal MVP) | Versioned static React portal; GM, player, assistant-GM, and observer flows exercised against the live authenticated API |
-| Phase 14 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
+| Phase 14 (Local production hardening) | Compose, local PostgreSQL, reverse proxy, No-IP/HTTPS, backup/restore, security and operational controls verified end to end |
+| Phase 15 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
 
 A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§24.0](#240-verification-policy)), but there is no local substitute for the deployment itself.
 
