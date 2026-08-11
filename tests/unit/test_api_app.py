@@ -10,12 +10,17 @@ import uuid
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from starlette.requests import Request
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.correlation import _sanitize_client_correlation_id
-from dnd_ai.api.errors import ApiError, ForbiddenError, _route_template
+from dnd_ai.api.errors import (
+    ApiError,
+    ForbiddenError,
+    _route_template,
+    _sanitize_validation_error_types,
+)
 from dnd_ai.domain.access import UnauthorizedTimelineError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
@@ -262,23 +267,70 @@ def test_bare_api_error_never_echoes_constructor_detail_text() -> None:
     assert body["error"]["message"] == "The request could not be processed."
 
 
-def test_api_error_supports_ad_hoc_status_and_code_override() -> None:
+def test_api_error_constructor_rejects_status_and_code_overrides() -> None:
+    """finding 2: an earlier version of this module accepted
+    `error_code=`/`status_code=` constructor kwargs, letting a raise site
+    turn arbitrary runtime values into public response/log fields. Both are
+    gone — the constructor accepts only `detail`, so attempting either
+    override is a `TypeError` at the raise site, not a silently accepted
+    value."""
+    with pytest.raises(TypeError):
+        ApiError("detail", error_code="im_a_teapot")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        ApiError("detail", status_code=418)  # type: ignore[call-arg]
+
+
+def test_api_error_with_tampered_class_attributes_falls_back_to_internal_error() -> None:
+    """finding 2: even a subclass's own status_code/error_code aren't
+    trusted outright — `_validated_api_error_response` re-checks them
+    against a fixed, server-owned vocabulary. Simulates a class attribute
+    that doesn't match any real subclass (a stray typo, or some other way
+    a value outside the known vocabulary ends up on the class) and proves
+    the response and the log both fall back to the fixed internal-error
+    contract rather than trusting it."""
     app = create_app()
 
-    secret_looking_detail = "teapot detail: token=SUPER_SECRET_ABC123"
+    class _MistypedError(ApiError):
+        status_code = 599  # not in _KNOWN_API_ERROR_STATUS_CODES
+        error_code = "totally not a known code; DROP TABLE"
+        safe_message = "this should never reach a client"
 
-    @app.get("/raise-custom")
-    def _raise_custom() -> None:
-        raise ApiError(secret_looking_detail, error_code="im_a_teapot", status_code=418)
+    @app.get("/raise-mistyped-api-error")
+    def _raise_mistyped() -> None:
+        raise _MistypedError("diagnostic detail")
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/raise-custom")
+        response = client.get("/raise-mistyped-api-error")
 
-    assert response.status_code == 418
-    assert secret_looking_detail not in response.text
+    assert response.status_code == 500
     body = response.json()
-    assert body["error"]["code"] == "im_a_teapot"
+    assert body["error"]["code"] == "internal_error"
     assert body["error"]["message"] == "The request could not be processed."
+
+
+def test_api_error_logged_error_code_is_also_validated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """finding 2: the logged error_code comes from the same validated
+    triple as the response — a class attribute outside the known
+    vocabulary never reaches the log line either."""
+    app = create_app()
+
+    class _MistypedError(ApiError):
+        status_code = 599
+        error_code = "not_a_known_code"
+
+    @app.get("/raise-mistyped-api-error-logged")
+    def _raise_mistyped() -> None:
+        raise _MistypedError("diagnostic detail")
+
+    with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/raise-mistyped-api-error-logged")
+
+    logged_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "not_a_known_code" not in logged_text
+    assert "error_code=internal_error" in logged_text
+    assert "status_code=500" in logged_text
 
 
 def test_api_error_subclass_may_expose_its_own_fixed_message() -> None:
@@ -318,9 +370,9 @@ def test_unexpected_exception_maps_to_500_internal_error() -> None:
 
 
 def test_request_validation_error_never_echoes_the_rejected_value() -> None:
-    """Finding 4 regression: a deliberately secret-looking invalid value must
-    never appear anywhere in the 422 response — not in a field, not buried in
-    a message string."""
+    """A deliberately secret-looking invalid value must never appear
+    anywhere in the 422 response — not in a location, not in the message,
+    not buried anywhere else."""
     app = create_app()
 
     class _Payload(BaseModel):
@@ -340,10 +392,13 @@ def test_request_validation_error_never_echoes_the_rejected_value() -> None:
     body = response.json()
     assert body["error"]["code"] == "invalid_request"
     assert secret_looking_value not in body["error"]["message"]
-    assert body["error"]["fields"] == [{"field": "body.count", "code": "int_parsing"}]
+    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert "fields" not in body["error"]
 
 
 def test_request_validation_error_response_shape() -> None:
+    """finding 1: the generic validation response never carries a field
+    *location* at all — only the bounded, sanitized `error_codes` list."""
     app = create_app()
 
     class _Payload(BaseModel):
@@ -362,67 +417,174 @@ def test_request_validation_error_response_shape() -> None:
         "code": "invalid_request",
         "message": "The request did not pass validation.",
         "correlation_id": body["error"]["correlation_id"],
-        "fields": [{"field": "body.count", "code": "missing"}],
+        "error_codes": ["missing"],
     }
 
 
-def test_validation_error_redacts_a_secret_looking_extra_field_name(
+def test_validation_error_never_echoes_an_identifier_shaped_secret_dict_key(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """finding 4: a rejected `extra="forbid"` field is itself caller-
-    controlled text (the loc component is the client's own field name), so
-    a field name that isn't shaped like an ordinary identifier is replaced
-    wholesale rather than echoed — it appears in neither the response nor
-    any captured log line."""
+    """finding 1: a `dict[str, X]` body's own key becomes a `loc` entry
+    verbatim, and `SUPER_SECRET_TOKEN_ABC123` is exactly as
+    identifier-shaped as an ordinary field name — proving no amount of
+    character-shape filtering on the location can tell them apart is why
+    this module no longer echoes locations at all. Absent from both the
+    response and any captured log line."""
     app = create_app()
 
     class _Payload(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        count: int
+        counts: dict[str, int]
 
-    @app.post("/validate-extra-forbid")
+    @app.post("/validate-dict-body")
     def _validate(payload: _Payload) -> dict[str, int]:
-        return {"count": payload.count}
+        return payload.counts
 
-    secret_field_name = "token=SUPER_SECRET_ABC123_DO_NOT_LEAK"
+    secret_key = "SUPER_SECRET_TOKEN_ABC123"
 
     with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
-        response = client.post("/validate-extra-forbid", json={"count": 1, secret_field_name: "x"})
+        response = client.post("/validate-dict-body", json={"counts": {secret_key: "not-an-int"}})
 
     assert response.status_code == 422
-    assert secret_field_name not in response.text
+    assert secret_key not in response.text
     body = response.json()
-    extra_field_errors = [f for f in body["error"]["fields"] if f["code"] == "extra_forbidden"]
-    assert extra_field_errors == [{"field": "body.<redacted>", "code": "extra_forbidden"}]
-    assert secret_field_name not in "\n".join(r.getMessage() for r in caplog.records)
+    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert "fields" not in body["error"]
+    assert secret_key not in "\n".join(r.getMessage() for r in caplog.records)
 
 
-def test_validation_error_redacts_an_oversized_field_name() -> None:
-    """finding 4: even an identifier-shaped field name is redacted once it
-    exceeds the bounded length — a truncated name would still leak most of
-    an oversized/secret-looking value."""
+def test_validation_error_never_echoes_a_short_token_like_dict_key() -> None:
+    """finding 1: even a short, unremarkable-looking dynamic key — the
+    shape an ordinary field name could just as easily have — is never
+    echoed as a location, since this module can't reliably tell a
+    legitimate dynamic key from a short token/secret of the same shape."""
     app = create_app()
 
     class _Payload(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        count: int
+        counts: dict[str, int]
 
-    @app.post("/validate-extra-forbid-oversized")
+    @app.post("/validate-dict-body-short-key")
     def _validate(payload: _Payload) -> dict[str, int]:
-        return {"count": payload.count}
+        return payload.counts
 
-    oversized_field_name = "a" * 200
+    token_like_key = "ab12cd"
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(
-            "/validate-extra-forbid-oversized", json={"count": 1, oversized_field_name: "x"}
+            "/validate-dict-body-short-key", json={"counts": {token_like_key: "not-an-int"}}
         )
 
     assert response.status_code == 422
-    assert oversized_field_name not in response.text
     body = response.json()
-    extra_field_errors = [f for f in body["error"]["fields"] if f["code"] == "extra_forbidden"]
-    assert extra_field_errors == [{"field": "body.<redacted>", "code": "extra_forbidden"}]
+    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert "fields" not in body["error"]
+
+
+def test_validation_error_never_echoes_an_ordinary_declared_model_field_location() -> None:
+    """finding 1: even a field name declared on the endpoint's own request
+    schema — as unremarkable as a location gets — is never echoed either;
+    the generic validation response carries no location for any field,
+    declared or not."""
+    app = create_app()
+
+    class _Payload(BaseModel):
+        count: int
+
+    @app.post("/validate-declared-field")
+    def _validate(payload: _Payload) -> dict[str, int]:
+        return {"count": payload.count}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/validate-declared-field", json={"count": "not-an-int"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["error_codes"] == ["int_parsing"]
+    assert "fields" not in body["error"]
+    assert "count" not in response.text
+
+
+def test_validation_error_caps_an_oversized_error_collection() -> None:
+    """finding 1/4: an oversized error collection is its own kind of
+    unbounded response — capped at `_MAX_VALIDATION_ERRORS` (20) even when
+    the request produces many more individual validation failures."""
+    app = create_app()
+
+    class _Payload(BaseModel):
+        counts: dict[str, int]
+
+    @app.post("/validate-oversized-collection")
+    def _validate(payload: _Payload) -> dict[str, int]:
+        return payload.counts
+
+    oversized_body = {"counts": {f"key_{i}": "not-an-int" for i in range(30)}}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/validate-oversized-collection", json=oversized_body)
+
+    assert response.status_code == 422
+    body = response.json()
+    # 30 rejected keys produce 30 raw pydantic errors — proves the response is
+    # actually capped, not merely coincidentally under the limit.
+    assert len(body["error"]["error_codes"]) == 20
+
+
+def test_validation_error_logging_is_sanitized_and_fixed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """finding 3: `handle_validation_error` now logs through the same
+    sanitized `_log_error` path every other handler uses — only the fixed
+    classification (exception class, 422, invalid_request, correlation ID,
+    route template). Secret-bearing rejected input and a secret-looking
+    dynamic dict key must both be absent from every captured log line."""
+    app = create_app()
+
+    class _Payload(BaseModel):
+        count: int
+        extras: dict[str, int]
+
+    @app.post("/validate-logging")
+    def _validate(payload: _Payload) -> dict[str, int]:
+        return payload.extras
+
+    secret_value = "password=Sup3rSecretPW!"
+    secret_key = "token_SUPER_SECRET_ABC123_DO_NOT_LEAK"
+
+    with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
+        client.post(
+            "/validate-logging",
+            json={"count": secret_value, "extras": {secret_key: "not-an-int"}},
+        )
+
+    logged_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert secret_value not in logged_text
+    assert secret_key not in logged_text
+    assert "int_parsing" not in logged_text  # no raw per-error detail either
+    assert "RequestValidationError" in logged_text
+    assert "status_code=422" in logged_text
+    assert "error_code=invalid_request" in logged_text
+
+
+def test_sanitize_validation_error_types_replaces_unsafe_or_oversized_codes() -> None:
+    """finding 4, direct sanitizer-level regression (the pinned pydantic
+    version's built-in validators only ever produce short, closed-
+    vocabulary type strings, so a custom-validator-shaped type string is
+    exercised directly here rather than through a real endpoint): a
+    well-formed pydantic type code is preserved; an oversized or
+    unsafe-shaped one — as a `PydanticCustomError` could produce — is
+    replaced with the fixed `invalid` fallback; the error list is capped
+    at `_MAX_VALIDATION_ERRORS`."""
+    ordinary = {"type": "int_parsing", "loc": ("body", "count")}
+    oversized_type = {"type": "x" * 200, "loc": ("body", "count")}
+    unsafe_shaped_type = {"type": "SUPER_SECRET; DROP TABLE users;--", "loc": ("body", "count")}
+    non_string_type = {"type": 12345, "loc": ("body", "count")}
+
+    assert _sanitize_validation_error_types([ordinary]) == ["int_parsing"]
+    assert _sanitize_validation_error_types([oversized_type]) == ["invalid"]
+    assert _sanitize_validation_error_types([unsafe_shaped_type]) == ["invalid"]
+    assert _sanitize_validation_error_types([non_string_type]) == ["invalid"]
+
+    many_errors = [ordinary] * 25
+    assert len(_sanitize_validation_error_types(many_errors)) == 20
 
 
 # ---------------------------------------------------------------------------

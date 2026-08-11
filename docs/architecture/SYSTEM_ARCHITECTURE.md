@@ -550,6 +550,8 @@ Operational telemetry should include:
 ## 20. Failure handling
 
 - Domain validation failures return structured errors without partial writes.
+- A generic request-validation response never exposes a caller-controlled field *location* (a dynamic dictionary key, a rejected extra-field name, a discriminator value, an input-derived alias, an arbitrary index) — only a bounded, allowlisted list of pydantic's own error-*type* codes; validation failures are logged through the same sanitized, fixed-shape path as every other API error, never with raw errors, locations, or rejected input.
+- Every `ApiError`'s status code, public error code, and public message are fixed, type-level properties of an explicit subclass — never constructor-supplied, and re-validated against a small, server-owned vocabulary before reaching a response or a log line; an unrecognized combination falls back to the fixed internal-error contract.
 - A unique/exclusion-constraint conflict returns a fixed, non-disclosing 409 — a genuine conflict, but not a claim that retrying the same request will succeed; only a command that recognizes a specific, demonstrated optimistic-concurrency or idempotency case may say retrying/re-reading is appropriate, through its own exception type.
 - An integrity failure the application layer cannot confidently classify (a missing or unrecognized SQLSTATE) is treated as an internal error (500), not guessed at as a 400 or 409 — that ambiguity itself is evidence of an application/schema/runtime defect.
 - External integration failures are retried through durable queues.

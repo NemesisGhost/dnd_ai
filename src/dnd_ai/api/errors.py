@@ -5,24 +5,26 @@ Every error response is one JSON envelope:
 
     {"error": {"code": "<stable_snake_case_code>", "message": "<human text>",
                 "correlation_id": "<uuid or client-supplied value>",
-                "fields": [{"field": "body.count", "code": "int_parsing"}]}}
+                "error_codes": ["int_parsing", "missing"]}}
 
-`fields` is present only for request-validation failures (see
-`handle_validation_error` below) and is deliberately limited to a field's
-*location* and pydantic's own stable *error-type* code — never the message
-text FastAPI/pydantic generate, and never the rejected value itself
-(finding 4: a client-supplied field location and type code are safe to
-echo; the value that failed validation, and any framework-generated prose
-built from it, are not — a query, header, or body field can just as easily
-be a password, a token, or another secret-looking value as an ordinary
-one, and this module has no way to tell that apart, so it never echoes any
-of them). Even a *location* component can be caller-controlled — an
-`extra="forbid"` model's rejected extra key, or a `dict[str, X]` body's own
-key, becomes a `loc` entry verbatim — so `_sanitize_validation_fields`
-bounds how many field errors, how many location components each, and how
-long/what-shaped each component may be before it is ever echoed; anything
-outside that closed shape is replaced with a fixed placeholder rather than
-truncated (a truncated secret is still a partial secret).
+`error_codes` is present only for request-validation failures (see
+`handle_validation_error` below) and never carries a field *location* —
+only pydantic's own error-*type* codes, each independently bounded and
+allowlisted by `_sanitize_validation_error_types` before being echoed
+(finding 4 of this pass). An earlier version of this module echoed a
+`loc`-derived "field" alongside each type code, on the theory that a
+*location* — as opposed to the rejected *value* — was safe because it
+described shape, not content. That was wrong: `loc` can itself be
+caller-controlled text verbatim — an `extra="forbid"` model's rejected
+extra key, a `dict[str, X]` body's own key, a discriminator value, an
+input-derived alias — and no amount of character-shape filtering
+("identifier-looking, under 60 characters") reliably tells a legitimate
+dynamic key apart from a secret-looking one of the same shape (finding 1
+of this pass: `SUPER_SECRET_TOKEN_ABC123` *is* identifier-shaped). Rather
+than keep guessing, this module now omits every field location from the
+generic validation response entirely; only the closed-vocabulary error
+*type* codes remain, capped in count and validated against a fixed
+identifier pattern.
 
 `code` is a stable identifier a client can branch on; `message` is
 diagnostic text that may change wording between releases but never embeds
@@ -44,13 +46,23 @@ future — gets the right response automatically; nothing about it is
 specific to any single error type.
 
 `ApiError` (raised deliberately by endpoint code, as opposed to a domain
-`ValueError`) follows the identical discipline: `safe_message` is a fixed,
-type-level class attribute, never derived from the constructor argument.
-The constructor's `detail` argument remains available via `str(self)` for
-local/interactive debugging only — never returned in a response, never
-logged. A raise site cannot make arbitrary text client-visible just by
-choosing what string to pass; only a subclass that deliberately defines
-its own fixed `safe_message` can expose something specific.
+`ValueError`) follows the identical discipline: `status_code`, `error_code`,
+and `safe_message` are fixed, type-level class attributes, never derived
+from or overridable through the constructor. The constructor accepts only
+an optional `detail` string, available via `str(self)` for local/
+interactive debugging only — never returned in a response, never logged.
+An earlier version of this module also accepted `error_code=`/`status_code=`
+constructor keyword arguments for "ad hoc" cases; that let any raise site
+turn arbitrary runtime values into public response fields and log fields,
+exactly the discipline this contract exists to prevent, so both are gone —
+a real case gets its own narrowly scoped subclass (see `UnauthorizedError`/
+`ForbiddenError`/`NotFoundError`/`ConflictError` below) instead. As further
+defense in depth, `handle_api_error` below never trusts a subclass's
+`status_code`/`error_code` blindly either: `_validated_api_error_response`
+checks both against a small, fixed, server-owned vocabulary before they
+reach a response or a log line, and falls back to the base class's own
+fixed internal-error contract (500/`internal_error`) for anything that
+doesn't match — including `ApiError` raised bare, with no subclass at all.
 
 Framework-raised `StarletteHTTPException`s (FastAPI's own routing 404/405,
 or any `HTTPException(...)` a call site raises directly) are handled the
@@ -60,15 +72,18 @@ future call site — only `exc.status_code` (an int the framework itself
 sets from routing/dispatch logic, not free text) selects a fixed,
 closed-vocabulary message from `_HTTP_EXCEPTION_MESSAGES`.
 
-Logging (finding 2): every handler below logs one fixed-shape, safe line —
-exception class, the response's own error code and status, the request's
-correlation ID, and the matched route *template* (never the concrete
-request path, which can itself embed a resource ID or arbitrary
-caller-supplied text) — through `_log_error()`. None of them ever logs
-`str(exc)`, a traceback, or any other exception-specific text; that is
-deliberate, not an oversight, and applies even to `logger.exception`-style
-calls that would otherwise capture a traceback FastAPI/SQLAlchemy/psycopg
-routinely embed a DSN, credential, or query parameter inside.
+Logging: every handler below — including `handle_validation_error`, since
+this pass's finding 3 closed the one handler that previously logged
+nothing at all rather than something unsafe — logs one fixed-shape, safe
+line through `_log_error()`: exception class, the response's own error
+code and status, the request's correlation ID, and the matched route
+*template* (never the concrete request path, which can itself embed a
+resource ID or arbitrary caller-supplied text). None of them ever logs
+`str(exc)`, a traceback, raw validation errors/locations/rejected input, a
+request body, or any other exception-specific text; that is deliberate,
+not an oversight, and applies even to `logger.exception`-style calls that
+would otherwise capture a traceback FastAPI/SQLAlchemy/psycopg routinely
+embed a DSN, credential, or query parameter inside.
 """
 
 import logging
@@ -126,54 +141,63 @@ _HTTP_EXCEPTION_MESSAGES: dict[int, tuple[str, str]] = {
 _DEFAULT_HTTP_EXCEPTION_ERROR_CODE = "http_error"
 _DEFAULT_HTTP_EXCEPTION_MESSAGE = "The request could not be processed."
 
-# Request-validation field-location sanitization (finding 4). A pydantic
-# `loc` component is safe to echo only when it is short and shaped like an
-# ordinary field name or array index — never merely because it happened to
-# be under some byte limit, since a truncated secret is still a partial
-# secret. Anything outside that closed shape is replaced wholesale.
-_MAX_VALIDATION_FIELD_ERRORS = 20
-_MAX_VALIDATION_LOC_COMPONENTS = 10
-_MAX_VALIDATION_LOC_COMPONENT_LENGTH = 60
-_MAX_VALIDATION_LOC_INDEX = 100_000
-_VALIDATION_LOC_COMPONENT_PATTERN = re.compile(
-    rf"[A-Za-z0-9_]{{1,{_MAX_VALIDATION_LOC_COMPONENT_LENGTH}}}"
+# Request-validation error-type sanitization. `loc` (a field's *location*)
+# is never echoed at all — see this module's docstring for why character-
+# shape filtering on `loc` was not a reliable way to tell a legitimate
+# dynamic key from a secret-looking one. `type` (pydantic's own stable
+# error-type code, e.g. "int_parsing", "missing", "extra_forbidden") is a
+# closed vocabulary pydantic itself defines for its built-in validators,
+# but a custom validator can raise a `PydanticCustomError` with an
+# arbitrary type string, so this module still bounds and allowlists it
+# rather than trusting it outright: anything outside a short, lowercase,
+# identifier-shaped pattern is replaced with a fixed fallback code. The
+# error list itself is capped in count.
+_MAX_VALIDATION_ERRORS = 20
+_MAX_VALIDATION_ERROR_TYPE_LENGTH = 64
+_VALIDATION_ERROR_TYPE_PATTERN = re.compile(
+    rf"[a-z][a-z0-9_]{{0,{_MAX_VALIDATION_ERROR_TYPE_LENGTH - 1}}}"
 )
-_REDACTED_LOC_COMPONENT = "<redacted>"
+_FALLBACK_VALIDATION_ERROR_TYPE = "invalid"
+
+# ApiError's server-owned status/code vocabulary (finding 2). Every real
+# ApiError subclass's (status_code, error_code) pair is listed here; a
+# status code or error code that doesn't match — a stray typo in a future
+# subclass, or a class attribute mutated at runtime some other way — is
+# treated the same as an unclassified failure: the fixed internal-error
+# contract, never trusted as-is. Kept in sync with `UnauthorizedError`/
+# `ForbiddenError`/`NotFoundError`/`ConflictError` below.
+_KNOWN_API_ERROR_STATUS_CODES = frozenset({401, 403, 404, 409})
+_API_ERROR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 class ApiError(Exception):
     """Base for errors an endpoint raises deliberately, with a chosen
     status code and stable error code, rather than an unexpected failure.
 
-    `safe_message` is a fixed, type-level class attribute — the same
-    discipline `dnd_ai.domain.errors.SafeMessageError` uses, and for the
-    same reason: a raise site cannot make arbitrary text client-visible
-    just by choosing what string to pass to the constructor. The `detail`
-    constructor argument remains available via `str(self)`/`repr(self)`
-    purely for local, interactive debugging; `dnd_ai.api.errors` never
-    reads it for a response or a log line (see `_log_error`). A subclass
-    that has something genuinely safe and specific to say sets its own
-    fixed `safe_message` (as the subclasses below do), or overrides it as
-    a `@property` computed from a closed, server-owned vocabulary — never
-    from `detail` or other caller-influenced input.
+    `status_code`, `error_code`, and `safe_message` are fixed, type-level
+    class attributes — the same discipline `dnd_ai.domain.errors.
+    SafeMessageError` uses, and for the same reason: a raise site cannot
+    make arbitrary values client-visible (or logged) just by choosing what
+    to pass to the constructor. The constructor accepts only an optional
+    `detail` string, available via `str(self)`/`repr(self)` purely for
+    local, interactive debugging; `dnd_ai.api.errors` never reads it for a
+    response or a log line (see `_log_error`). There is deliberately no
+    `error_code=`/`status_code=` constructor override — a real case defines
+    its own narrowly scoped subclass (as `UnauthorizedError`/
+    `ForbiddenError`/`NotFoundError`/`ConflictError` do below) rather than
+    this module growing a generalized, dynamically-parameterized error
+    registry. `handle_api_error` additionally never trusts even a
+    subclass's `status_code`/`error_code` outright — see
+    `_validated_api_error_response` and `_KNOWN_API_ERROR_STATUS_CODES`
+    above.
     """
 
     status_code: int = 500
     error_code: str = "internal_error"
     safe_message: str = "The request could not be processed."
 
-    def __init__(
-        self,
-        detail: str | None = None,
-        *,
-        error_code: str | None = None,
-        status_code: int | None = None,
-    ) -> None:
+    def __init__(self, detail: str | None = None) -> None:
         super().__init__(detail or self.safe_message)
-        if error_code is not None:
-            self.error_code = error_code
-        if status_code is not None:
-            self.status_code = status_code
 
 
 class UnauthorizedError(ApiError):
@@ -239,14 +263,15 @@ def _log_error(
 ) -> None:
     """The one place any handler below logs anything about a failure —
     exception class, response status/code, correlation ID, and route
-    template only. Never `str(exc)`, `repr(exc)`, or a traceback: those
-    routinely embed exactly what finding 2 lists as unsafe (DSNs,
-    credentials, SQL parameters, resource IDs, arbitrary request content)
-    and there is no reliable way to scrub them generically. A domain error
-    that wants specific, safe-to-log context defines it explicitly (see
-    `dnd_ai.domain.errors.SafeMessageError`'s `safe_message` and
-    `docs/DEVELOPMENT.md`'s note on sanitized diagnostics) rather than this
-    function reaching into the exception's own text."""
+    template only. Never `str(exc)`, `repr(exc)`, a traceback, or (for
+    `handle_validation_error`) any raw validation error, field location,
+    rejected input, or request body: those routinely embed exactly what
+    finding 2 of the prior pass lists as unsafe (DSNs, credentials, SQL
+    parameters, resource IDs, arbitrary request content) and there is no
+    reliable way to scrub them generically. A domain error that wants
+    specific, safe-to-log context defines it explicitly (see
+    `dnd_ai.domain.errors.SafeMessageError`'s `safe_message`) rather than
+    this function reaching into the exception's own text."""
     logger.log(
         level,
         "api_error exception_class=%s status_code=%s error_code=%s correlation_id=%s route=%s",
@@ -268,36 +293,39 @@ def _integrity_error_sqlstate(exc: IntegrityError) -> str | None:
     return sqlstate if isinstance(sqlstate, str) else None
 
 
-def _sanitize_validation_loc_component(component: object) -> str:
-    """A single `loc` entry is safe to echo only when it is shaped like an
-    ordinary field name (identifier characters, bounded length) or a
-    bounded array index — never merely because it happened to fit under
-    some byte limit. `loc` can otherwise carry an `extra="forbid"` model's
-    rejected extra key, or a `dict[str, X]` body's own key, verbatim from
-    the request — either of which could as easily be a token or password
-    as an ordinary field name, and this function has no way to tell those
-    apart, so anything outside the closed shape below is replaced
-    wholesale rather than truncated."""
-    if isinstance(component, int) and not isinstance(component, bool):
-        return (
-            str(component)
-            if 0 <= component <= _MAX_VALIDATION_LOC_INDEX
-            else _REDACTED_LOC_COMPONENT
+def _sanitize_validation_error_types(errors: Sequence[Any]) -> list[str]:
+    """`error["type"]` only, never `error["loc"]` — see this module's
+    docstring for why a field *location* is never echoed at all, no matter
+    how it's filtered. Each `type` is itself replaced with a fixed fallback
+    unless it matches a short, lowercase, identifier-shaped pattern (a
+    custom pydantic validator can raise `PydanticCustomError` with an
+    arbitrary type string, so even this closed-looking vocabulary isn't
+    trusted outright). The error list is capped in count — an oversized
+    error collection is its own kind of unbounded response."""
+    sanitized = []
+    for error in errors[:_MAX_VALIDATION_ERRORS]:
+        error_type = error["type"]
+        sanitized.append(
+            error_type
+            if isinstance(error_type, str) and _VALIDATION_ERROR_TYPE_PATTERN.fullmatch(error_type)
+            else _FALLBACK_VALIDATION_ERROR_TYPE
         )
-    text = str(component)
-    return text if _VALIDATION_LOC_COMPONENT_PATTERN.fullmatch(text) else _REDACTED_LOC_COMPONENT
+    return sanitized
 
 
-def _sanitize_validation_fields(errors: Sequence[Any]) -> list[dict[str, str]]:
-    """See `_sanitize_validation_loc_component` and this module's docstring
-    (finding 4). Also bounds how many field errors are returned at all —
-    an oversized error list is its own kind of unbounded response."""
-    fields = []
-    for error in errors[:_MAX_VALIDATION_FIELD_ERRORS]:
-        loc = error["loc"][:_MAX_VALIDATION_LOC_COMPONENTS]
-        field = ".".join(_sanitize_validation_loc_component(part) for part in loc)
-        fields.append({"field": field, "code": error["type"]})
-    return fields
+def _validated_api_error_response(exc: ApiError) -> tuple[int, str, str]:
+    """Finding 2: even a subclass's own class-attribute `status_code`/
+    `error_code` are checked against a small, fixed, server-owned
+    vocabulary before reaching a response or a log line, rather than
+    trusted outright — anything that doesn't match (a stray typo in a
+    future subclass, a class attribute mutated some other way at runtime)
+    falls back to `ApiError`'s own fixed internal-error contract, exactly
+    like any other unclassified failure."""
+    if exc.status_code in _KNOWN_API_ERROR_STATUS_CODES and _API_ERROR_CODE_PATTERN.fullmatch(
+        exc.error_code
+    ):
+        return exc.status_code, exc.error_code, exc.safe_message
+    return ApiError.status_code, ApiError.error_code, ApiError.safe_message
 
 
 def _envelope(
@@ -305,15 +333,15 @@ def _envelope(
     *,
     code: str,
     message: str,
-    fields: list[dict[str, str]] | None = None,
+    error_codes: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     error: dict[str, Any] = {
         "code": code,
         "message": message,
         "correlation_id": _correlation_id(request),
     }
-    if fields is not None:
-        error["fields"] = fields
+    if error_codes is not None:
+        error["error_codes"] = error_codes
     return {"error": error}
 
 
@@ -325,13 +353,15 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-        # exc.safe_message is the only thing about exc this handler ever reads for
-        # the response or the log line; see this module's docstring and ApiError's
-        # own docstring for why the constructor's detail text never is.
-        _log_error(request, exc, status_code=exc.status_code, error_code=exc.error_code)
+        # _validated_api_error_response re-checks exc's own class attributes
+        # against a fixed vocabulary before anything about exc reaches the
+        # response or the log line; see this module's docstring and ApiError's
+        # own docstring for why the constructor's detail text never does.
+        status_code, error_code, message = _validated_api_error_response(exc)
+        _log_error(request, exc, status_code=status_code, error_code=error_code)
         return JSONResponse(
-            status_code=exc.status_code,
-            content=_envelope(request, code=exc.error_code, message=exc.safe_message),
+            status_code=status_code,
+            content=_envelope(request, code=error_code, message=message),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -355,20 +385,22 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         # exc.errors() carries an "input" entry with the raw rejected value (and a
-        # "msg"/"url" built from it) for every error — exactly what finding 4 says
-        # never to return. "type" is pydantic's own stable error-type code (e.g.
-        # int_parsing) — a closed vocabulary pydantic defines, never caller text —
-        # so it is always safe to echo. "loc" is a field *location*, but one or
-        # more of its components can themselves be caller-supplied (an
-        # extra="forbid" model's rejected extra key, a dict[str, X] body's own
-        # key) — see `_sanitize_validation_fields`.
+        # "msg"/"url" built from it) for every error, and a "loc" entry that can
+        # itself be caller-supplied text (an extra="forbid" model's rejected extra
+        # key, a dict[str, X] body's own key, a discriminator value, an
+        # input-derived alias) — none of that is echoed or logged. Only
+        # `_sanitize_validation_error_types` — pydantic's own error-type codes,
+        # bounded and allowlisted, never a location — reaches the response; the
+        # log line carries only the fixed classification below, exactly like
+        # every other handler in this module.
+        _log_error(request, exc, status_code=422, error_code="invalid_request")
         return JSONResponse(
             status_code=422,
             content=_envelope(
                 request,
                 code="invalid_request",
                 message="The request did not pass validation.",
-                fields=_sanitize_validation_fields(exc.errors()),
+                error_codes=_sanitize_validation_error_types(exc.errors()),
             ),
         )
 
