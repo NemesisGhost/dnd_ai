@@ -139,6 +139,18 @@ def resolve_user_by_external_identity(
     return _as_uuid(value) if value is not None else None
 
 
+class UnauthorizedTimelineError(ValueError):
+    """Raised by `resolve_access_context()` when a caller-supplied
+    `timeline_id` is not the campaign's own pinned timeline. A domain
+    `ValueError` subclass, not an HTTP concern (docs/DEVELOPMENT.md §9) —
+    the API layer that eventually accepts a client-supplied timeline is
+    responsible for turning this into a non-disclosing response rather than
+    echoing the timeline IDs in this message back to an unauthorized
+    caller (finding 2's "non-disclosing failure at the eventual API
+    boundary" — see `dnd_ai.api.errors` for where that generic mapping
+    lives)."""
+
+
 def resolve_access_context(
     connection: Connection,
     *,
@@ -149,7 +161,28 @@ def resolve_access_context(
     """Resolve §19.7 steps 2-7 into one `AccessContext`, or None if the user
     has no active, authorizing membership in the campaign (suspended,
     revoked, departed, or never-invited all resolve to None — a bare
-    membership existing is not enough)."""
+    membership existing is not enough).
+
+    Timeline scope rule: `campaign.campaigns.timeline_id` is a single
+    non-nullable column — "the timeline this campaign is played on"
+    (docs/architecture/DATABASE_MODEL.md's campaign.campaigns entry) — and
+    nothing in the domain model gives one campaign more than one active
+    timeline to resolve access against. §19.2 places any *narrower* timeline
+    scoping on the individual relationship/grant row that needs it ("the
+    membership belongs to the campaign's timeline through campaign.
+    campaigns; narrower timeline scope is placed on the particular
+    relationship or grant that requires it"), not on request-level
+    substitution of a different timeline entirely. So the only valid value
+    for `timeline_id` here is the campaign's own pinned timeline — not an
+    ancestor, not a branch/descendant, not a timeline from another world.
+    Passing `None` resolves it from the campaign automatically; passing the
+    campaign's own timeline explicitly is accepted as a caller's
+    self-check; passing anything else raises `UnauthorizedTimelineError`
+    rather than silently using it to select timeline-scoped character
+    capabilities or resource grants (finding 2) — a branch timeline is
+    rejected exactly like an unrelated same-world or different-world one,
+    since none of them are the campaign's own timeline.
+    """
     membership_id = connection.execute(
         text("""
             SELECT cm.campaign_membership_id
@@ -168,15 +201,20 @@ def resolve_access_context(
         return None
     membership_id = _as_uuid(membership_id)
 
-    resolved_timeline_id = timeline_id
-    if resolved_timeline_id is None:
-        campaign_timeline = connection.execute(
-            text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :campaign_id"),
-            {"campaign_id": campaign_id},
-        ).scalar()
-        if campaign_timeline is None:
-            raise ValueError(f"campaign {campaign_id} does not exist")
-        resolved_timeline_id = _as_uuid(campaign_timeline)
+    campaign_timeline = connection.execute(
+        text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :campaign_id"),
+        {"campaign_id": campaign_id},
+    ).scalar()
+    if campaign_timeline is None:
+        raise ValueError(f"campaign {campaign_id} does not exist")
+    campaign_timeline_id = _as_uuid(campaign_timeline)
+
+    if timeline_id is not None and timeline_id != campaign_timeline_id:
+        raise UnauthorizedTimelineError(
+            f"timeline {timeline_id} is not campaign {campaign_id}'s own timeline "
+            f"({campaign_timeline_id}) — resolve_access_context only resolves access "
+            "for a campaign's own pinned timeline; see its docstring for the rule."
+        )
 
     role_capabilities = frozenset(
         _as_str(code)
@@ -211,7 +249,7 @@ def resolve_access_context(
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
               AND cap.is_active
         """),
-        {"membership_id": membership_id, "timeline_id": resolved_timeline_id},
+        {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
     ).mappings():
         character_id = _as_uuid(row["character_id"])
         character_capabilities.setdefault(character_id, set()).add(_as_str(row["code"]))
@@ -240,7 +278,7 @@ def resolve_access_context(
         """),
         {
             "campaign_id": campaign_id,
-            "timeline_id": resolved_timeline_id,
+            "timeline_id": campaign_timeline_id,
             "membership_id": membership_id,
         },
     ).mappings():
@@ -256,7 +294,7 @@ def resolve_access_context(
         user_id=user_id,
         campaign_id=campaign_id,
         campaign_membership_id=membership_id,
-        timeline_id=resolved_timeline_id,
+        timeline_id=campaign_timeline_id,
         role_capabilities=role_capabilities,
         character_capabilities={
             character_id: frozenset(codes) for character_id, codes in character_capabilities.items()

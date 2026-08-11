@@ -6,6 +6,7 @@ command or query.
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.errors import ApiError, ForbiddenError
@@ -111,3 +112,52 @@ def test_unexpected_exception_maps_to_500_internal_error() -> None:
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
+
+
+def test_request_validation_error_never_echoes_the_rejected_value() -> None:
+    """Finding 4 regression: a deliberately secret-looking invalid value must
+    never appear anywhere in the 422 response — not in a field, not buried in
+    a message string."""
+    app = create_app()
+
+    class _Payload(BaseModel):
+        count: int
+
+    @app.post("/validate-test")
+    def _validate_test(payload: _Payload) -> dict[str, int]:
+        return {"count": payload.count}
+
+    secret_looking_value = "SECRET_TOKEN_ABC123_DO_NOT_LEAK"
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/validate-test", json={"count": secret_looking_value})
+
+    assert response.status_code == 422
+    assert secret_looking_value not in response.text
+    body = response.json()
+    assert body["error"]["code"] == "invalid_request"
+    assert secret_looking_value not in body["error"]["message"]
+    assert body["error"]["fields"] == [{"field": "body.count", "code": "int_parsing"}]
+
+
+def test_request_validation_error_response_shape() -> None:
+    app = create_app()
+
+    class _Payload(BaseModel):
+        count: int
+
+    @app.post("/validate-test")
+    def _validate_test(payload: _Payload) -> dict[str, int]:
+        return {"count": payload.count}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/validate-test", json={})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"] == {
+        "code": "invalid_request",
+        "message": "The request did not pass validation.",
+        "correlation_id": body["error"]["correlation_id"],
+        "fields": [{"field": "body.count", "code": "missing"}],
+    }

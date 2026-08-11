@@ -9,7 +9,11 @@ import uuid
 import pytest
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import resolve_access_context, resolve_user_by_external_identity
+from dnd_ai.domain.access import (
+    UnauthorizedTimelineError,
+    resolve_access_context,
+    resolve_user_by_external_identity,
+)
 from tests.factories import (
     make_access_group,
     make_access_group_membership,
@@ -121,6 +125,73 @@ def test_resolves_for_active_membership_with_no_grants(
 
 
 # ---------------------------------------------------------------------------
+# Timeline scope (§19.7 step 3, finding 2) — only a campaign's own pinned
+# timeline is a valid resolution scope; see resolve_access_context's
+# docstring for the rule and why. A same-world non-branch timeline, a
+# branch descended from the campaign's own timeline, and a timeline from a
+# different world are all rejected identically: none of them is the
+# campaign's own timeline.
+# ---------------------------------------------------------------------------
+
+
+def test_accepts_explicit_campaign_own_timeline(db_connection: Connection, f: Fixture) -> None:
+    ctx = resolve_access_context(
+        db_connection, user_id=f.user_id, campaign_id=f.campaign_id, timeline_id=f.timeline_id
+    )
+    assert ctx is not None
+    assert ctx.timeline_id == f.timeline_id
+
+
+def test_rejects_different_same_world_timeline(db_connection: Connection, f: Fixture) -> None:
+    # f.other_timeline_id is a second, unrelated root timeline in the same
+    # world as the campaign (not a branch of it, not the campaign's own).
+    with pytest.raises(UnauthorizedTimelineError):
+        resolve_access_context(
+            db_connection,
+            user_id=f.user_id,
+            campaign_id=f.campaign_id,
+            timeline_id=f.other_timeline_id,
+        )
+
+
+def test_rejects_branch_of_the_campaign_timeline(db_connection: Connection, f: Fixture) -> None:
+    """A branch descended from the campaign's own timeline is still not the
+    campaign's own timeline, so it is rejected exactly like any other
+    non-matching timeline — see resolve_access_context's docstring: the
+    domain model gives a campaign exactly one pinned timeline to resolve
+    access against, and does not extend that to descendant branches."""
+    branch_world_time_id = make_world_time(db_connection, f.world_id, 50)
+    branch_timeline_id = make_timeline(
+        db_connection,
+        f.world_id,
+        "Branch of campaign timeline",
+        parent_timeline_id=f.timeline_id,
+        branch_world_time_id=branch_world_time_id,
+    )
+    with pytest.raises(UnauthorizedTimelineError):
+        resolve_access_context(
+            db_connection,
+            user_id=f.user_id,
+            campaign_id=f.campaign_id,
+            timeline_id=branch_timeline_id,
+        )
+
+
+def test_rejects_different_world_timeline(db_connection: Connection, f: Fixture) -> None:
+    other_world_id = make_world(db_connection, slug="access-resolution-other-world")
+    other_world_timeline_id = make_timeline(
+        db_connection, other_world_id, "Other World Primary", is_primary=True
+    )
+    with pytest.raises(UnauthorizedTimelineError):
+        resolve_access_context(
+            db_connection,
+            user_id=f.user_id,
+            campaign_id=f.campaign_id,
+            timeline_id=other_world_timeline_id,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Role-derived capabilities (§19.7 step 4)
 # ---------------------------------------------------------------------------
 
@@ -205,9 +276,14 @@ def test_revoked_character_relationship_does_not_grant_capability(
     assert ctx.has_capability("test.relationship_capability", character_id=f.character_id) is False
 
 
-def test_character_relationship_scoped_to_other_timeline_does_not_apply(
+def test_character_relationship_scoped_to_a_different_timeline_does_not_apply(
     db_connection: Connection, f: Fixture
 ) -> None:
+    """A relationship row scoped to a timeline other than the campaign's own
+    is excluded from resolution against the campaign's own timeline — it is
+    not reachable at all otherwise, since resolve_access_context now only
+    ever resolves against the campaign's own timeline (see the timeline
+    scope tests above)."""
     make_membership_character_relationship(
         db_connection,
         f.membership_id,
@@ -215,20 +291,9 @@ def test_character_relationship_scoped_to_other_timeline_does_not_apply(
         f.relationship_type_id,
         timeline_id=f.other_timeline_id,
     )
-    ctx = resolve_access_context(
-        db_connection, user_id=f.user_id, campaign_id=f.campaign_id, timeline_id=f.timeline_id
-    )
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
     assert ctx is not None
     assert ctx.has_capability("test.relationship_capability", character_id=f.character_id) is False
-
-    ctx_other = resolve_access_context(
-        db_connection, user_id=f.user_id, campaign_id=f.campaign_id, timeline_id=f.other_timeline_id
-    )
-    assert ctx_other is not None
-    assert (
-        ctx_other.has_capability("test.relationship_capability", character_id=f.character_id)
-        is True
-    )
 
 
 # ---------------------------------------------------------------------------

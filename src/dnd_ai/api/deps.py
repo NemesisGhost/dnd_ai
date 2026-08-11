@@ -26,6 +26,10 @@ _engine: Engine | None = None
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
+        # Settings._require_explicit_database_url_outside_local_dev guarantees this
+        # is populated by the time Settings() finishes constructing (either an
+        # explicit value or the local-dev default) — never None here at runtime.
+        assert settings.database_url is not None
         _engine = create_engine(settings.database_url)
     return _engine
 

@@ -4,14 +4,32 @@
 Every error response is one JSON envelope:
 
     {"error": {"code": "<stable_snake_case_code>", "message": "<human text>",
-                "correlation_id": "<uuid or client-supplied value>"}}
+                "correlation_id": "<uuid or client-supplied value>",
+                "fields": [{"field": "body.count", "code": "int_parsing"}]}}
+
+`fields` is present only for request-validation failures (see
+`handle_validation_error` below) and is deliberately limited to a field's
+*location* and pydantic's own stable *error-type* code — never the message
+text FastAPI/pydantic generate, and never the rejected value itself
+(finding 4: a client-supplied field location and type code are safe to
+echo; the value that failed validation, and any framework-generated prose
+built from it, are not — a query, header, or body field can just as easily
+be a password, a token, or another secret-looking value as an ordinary
+one, and this module has no way to tell that apart, so it never echoes any
+of them).
 
 `code` is a stable identifier a client can branch on; `message` is
-diagnostic text that may change wording between releases. Domain layers
-raise plain `ValueError` (and its subclasses, such as
-`dnd_ai.commands._shared.LookupCodeNotFoundError`) for validation failures
-per docs/DEVELOPMENT.md §9 — they do not need to know about HTTP at all;
-this module is the only place that translates them into a status code.
+diagnostic text that may change wording between releases but never embeds
+caller-supplied input either. Domain layers raise plain `ValueError` (and
+its subclasses, such as `dnd_ai.commands._shared.LookupCodeNotFoundError`)
+for validation failures per docs/DEVELOPMENT.md §9 — they do not need to
+know about HTTP at all; this module is the only place that translates them
+into a status code. A domain `ValueError`'s own message *is* echoed back
+(`handle_value_error` below) since those are authored by this codebase as
+already-safe, non-input-echoing diagnostic text (see e.g.
+`dnd_ai.domain.access.UnauthorizedTimelineError`'s docstring) — unlike
+`RequestValidationError`, whose text FastAPI/pydantic generate directly
+from whatever the caller sent.
 """
 
 import logging
@@ -77,14 +95,21 @@ def _correlation_id(request: Request) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _envelope(request: Request, *, code: str, message: str) -> dict[str, dict[str, Any]]:
-    return {
-        "error": {
-            "code": code,
-            "message": message,
-            "correlation_id": _correlation_id(request),
-        }
+def _envelope(
+    request: Request,
+    *,
+    code: str,
+    message: str,
+    fields: list[dict[str, str]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    error: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "correlation_id": _correlation_id(request),
     }
+    if fields is not None:
+        error["fields"] = fields
+    return {"error": error}
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -111,9 +136,25 @@ def install_error_handlers(app: FastAPI) -> None:
     async def handle_validation_error(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # exc.errors() carries an "input" entry with the raw rejected value (and a
+        # "msg"/"url" built from it) for every error — exactly what finding 4 says
+        # never to return. Keep only "loc" (a field location, e.g. body.count) and
+        # "type" (pydantic's own stable error-type code, e.g. int_parsing): both are
+        # about *shape*, never the value itself, so they're safe to echo regardless
+        # of whether that field happened to hold a password, a token, or anything
+        # else secret-looking.
+        fields = [
+            {"field": ".".join(str(part) for part in error["loc"]), "code": error["type"]}
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content=_envelope(request, code="invalid_request", message=str(exc.errors())),
+            content=_envelope(
+                request,
+                code="invalid_request",
+                message="The request did not pass validation.",
+                fields=fields,
+            ),
         )
 
     @app.exception_handler(ValueError)
