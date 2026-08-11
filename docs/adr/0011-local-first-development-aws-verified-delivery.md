@@ -1,8 +1,10 @@
 # ADR 0011: Local-first development, AWS-verified delivery
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md)
 - **Date**: 2026-08-07
 - **Amends**: [ADR 0008](0008-aws-first-deployment-and-verification.md) — supersedes its inner-loop clause; leaves its deployment-target and merge-gate clauses intact
+
+> **Superseded 2026-08-11.** [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md) replaces this ADR's two-tier model entirely: self-hosted Docker Compose is now the deployment topology, and containerized PostgreSQL 18 is the CI merge gate, not AWS `dev` RDS. This document is kept as the historical record of the local-inner-loop decision and its reasoning; it no longer describes current policy. Read ADR 0012 for what's current.
 
 ## Context
 

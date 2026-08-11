@@ -15,15 +15,17 @@ Invoke `scripts/verify.sh <mode>` via Bash:
 - `quality` — `ruff format --check`, `ruff check`, `mypy src`. No AWS needed;
   use this for a fast pre-commit check.
 - `unit` — `pytest tests/unit`. No AWS needed.
-- `database` — `pytest tests/database`. Opens/closes the dev
-  security-group ingress automatically.
+- `database` — `pytest tests/database`. Against a local/self-hosted
+  PostgreSQL server (the default, per docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)
+  there is nothing AWS-related to open or close. The dev security-group
+  ingress handling only activates if `DATABASE_URL` happens to name an
+  optional AWS RDS endpoint.
 - `scenario` — `pytest tests/scenario` (skipped if the directory doesn't
-  exist). Opens/closes ingress automatically.
+  exist). Same ingress handling as `database`.
 - `full` — quality + unit + database + scenario + `alembic check` (schema
-  diff). The closest local equivalent to CI's "Migrations and Tests" job,
+  diff). The closest local equivalent to CI's `postgres-verification` job,
   minus the destructive full downgrade/upgrade round trip, which CI only
-  ever runs against its own disposable ephemeral database
-  (`scripts/ci_ephemeral_database.py`).
+  ever runs against its own disposable containerized PostgreSQL service.
 - `migration-round-trip --confirm-destructive` — `alembic downgrade base`
   then `upgrade head` against whatever `DATABASE_URL` currently points at.
   **Only run this if `DATABASE_URL` points at a database you know is

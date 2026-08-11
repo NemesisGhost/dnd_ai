@@ -1,8 +1,10 @@
-# Infrastructure Guide
+# Infrastructure Guide (optional AWS path)
+
+**This document describes the optional, no-longer-required AWS RDS path.** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology, and CI verifies against containerized PostgreSQL rather than AWS — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §3.6](DEVELOPMENT.md#36-self-hosted-docker-compose). Nothing here is needed for development, CI, or ordinary contribution; it remains accurate reference material for anyone who chooses to host on AWS RDS instead.
 
 Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
 
-Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services is planned but unbuilt: [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) specifies ECS Fargate, and this document gains those sections when the modules exist.
+Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31](PLAN.md#31-aws-deployment-plan-for-application-services) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
 
 **Which document do you want?**
 

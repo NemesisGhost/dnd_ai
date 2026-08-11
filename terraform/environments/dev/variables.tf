@@ -46,22 +46,3 @@ variable "private_subnet_ids" {
   type        = list(string)
   default     = []
 }
-
-# GitHub Actions CI (docs/PLAN.md §29.9)
-variable "github_org" {
-  description = "GitHub organization or user that owns the repository"
-  type        = string
-  default     = "NemesisGhost"
-}
-
-variable "github_repo" {
-  description = "GitHub repository name"
-  type        = string
-  default     = "dnd_ai"
-}
-
-variable "create_github_oidc_provider" {
-  description = "Whether to create the GitHub Actions OIDC provider (false if it already exists in this account)"
-  type        = bool
-  default     = true
-}

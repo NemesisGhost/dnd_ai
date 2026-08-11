@@ -109,25 +109,6 @@ module "secrets" {
 }
 
 # -----------------------------------------------------
-# Module: GitHub Actions CI (OIDC role for the aws-verification job)
-# -----------------------------------------------------
-module "github_actions_ci" {
-  source = "../../modules/github_actions_ci"
-
-  project_name = local.project_name
-  environment  = local.environment
-
-  github_org  = var.github_org
-  github_repo = var.github_repo
-
-  create_oidc_provider = var.create_github_oidc_provider
-
-  security_group_ids = [module.database.database_security_group_id]
-
-  additional_tags = var.additional_tags
-}
-
-# -----------------------------------------------------
 # Module: Lambda (Discord bot, AI query)
 # -----------------------------------------------------
 # Not yet implemented. The application API and any background workers

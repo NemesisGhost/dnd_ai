@@ -85,12 +85,11 @@ check_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# scripts/ has no __init__.py (it's one-off CI/ops scripts, not a package) and
-# its modules import each other as bare top-level names (e.g.
-# ci_cleanup.py's `from ci_ephemeral_database import ...`), matching how the
-# workflow invokes them directly (`uv run python scripts/ci_cleanup.py`) and
-# picks up scripts/ as sys.path[0]. Adding it here lets tests import the same
-# modules the same way, rather than testing a reshaped duplicate.
+# scripts/ has no __init__.py (it's one-off CI/ops scripts, not a package).
+# Its modules are invoked directly (e.g. `uv run python scripts/wait_for_ci.py`),
+# which picks up scripts/ as sys.path[0]. Adding it here lets a test import
+# such a module the same way, rather than testing a reshaped duplicate, if
+# one is ever added for a script in this directory.
 pythonpath = ["scripts"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

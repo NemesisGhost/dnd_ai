@@ -27,17 +27,18 @@ The goals are consistency, maintainability, predictable querying, safe evolution
 
 ### 2.1 Supported PostgreSQL version
 
-**PostgreSQL 18.x.** One major version, pinned in three places that must agree:
+**PostgreSQL 18.x.** One major version, pinned everywhere it runs:
 
 | Where | Pinned by |
 |---|---|
 | Local development server | Each developer's install — [DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql) |
-| AWS `dev` / `staging` / `prod` | `postgres_version` in `terraform/modules/database` |
-| CI | Whatever `dev` runs; CI creates an ephemeral database on it rather than standing up its own |
+| Self-hosted deployment (official) | `postgres:18.4` image in `compose.yaml` |
+| CI | `postgres:18.4` GitHub Actions service container ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)) |
+| AWS `dev` / `staging` / `prod` (optional, legacy) | `postgres_version` in `terraform/modules/database`, if deployed |
 
-The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)) and 18.x — available on RDS as 18.1 through 18.4 — became the version both targets could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)); all three rows above now agree.
+The major version was 15.x until 2026-08-07, when the development loop moved to a local server ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), later superseded by [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) and 18.x became the version every target could share. `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 to close that gap ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)); CI's containerized target and `compose.yaml` were both pinned to that same `18.4` when self-hosted Docker became the default deployment topology.
 
-**A local server on a different major version than the deployment target is a defect, not a preference.** It produces green local runs that fail CI, and it reintroduces the divergence between what is verified and what is deployed that [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) was written to eliminate. Match the version; do not use whatever is already installed.
+**A local server on a different major version than what CI runs is a defect, not a preference.** It produces green local runs that fail CI, and it reintroduces the divergence between what is verified and what is deployed that [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) was originally written to eliminate — now addressed by [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) verifying the same self-hosted target it deploys. Match the version; do not use whatever is already installed.
 
 Do not rely on behavior that differs across PostgreSQL major versions without an automated compatibility test.
 
@@ -1255,7 +1256,7 @@ Before production, use expand-and-contract migrations for breaking changes:
 
 ### 25.6 Migration testing
 
-CI must test, against the deployed `dev` RDS instance ([PLAN.md §23.0](PLAN.md#230-verification-policy)):
+CI must test, against a disposable containerized PostgreSQL 18 instance ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)):
 
 - migration from empty database
 - upgrade through all revisions
@@ -1263,7 +1264,7 @@ CI must test, against the deployed `dev` RDS instance ([PLAN.md §23.0](PLAN.md#
 - seed idempotency
 - downgrade for recent development migrations where supported
 
-All five also run locally, and should be run there first — they are cheap against a local server, where the full downgrade-to-base round trip costs seconds and destroys nothing shared. `scripts/verify.sh` wraps them. Local results are the expected first evidence; the CI run against `dev` is what closes a phase.
+All five also run locally, and should be run there first — they are cheap against a local/self-hosted server, where the full downgrade-to-base round trip costs seconds and destroys nothing shared. `scripts/verify.sh` wraps them. Local results are the expected first evidence; the CI run is what closes a phase.
 
 ---
 
@@ -1341,7 +1342,7 @@ Application roles should not own schemas or tables. Neither should the role that
 
 Do not store database passwords, API keys, or model credentials in source code or database seed files.
 
-Use AWS Secrets Manager or equivalent runtime secret injection.
+For the self-hosted deployment topology, credentials come from environment variables (`.env`, gitignored — see `.env.example`) or `compose.yaml`'s environment interpolation, never committed. For anyone using the optional AWS path, use AWS Secrets Manager or equivalent runtime secret injection.
 
 ### 27.4 Sensitive content
 

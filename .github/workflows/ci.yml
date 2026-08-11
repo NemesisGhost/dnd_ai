@@ -6,14 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  id-token: write # required for aws-actions/configure-aws-credentials via OIDC
   contents: read
 
 jobs:
   lint-and-type-check:
     name: Lint and Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,38 +44,42 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src
 
-  aws-verification:
-    name: Migrations and Tests (AWS dev)
+  postgres-verification:
+    name: Migrations and Tests (PostgreSQL 18)
     runs-on: ubuntu-latest
-    # Per docs/PLAN.md §23.0 and §29.9, migrations and tests/database /
-    # tests/scenario verify against the deployed AWS dev RDS instance rather
-    # than a service-container stand-in. The mechanism itself — ephemeral
-    # per-run database creation (scripts/ci_ephemeral_database.py) and
-    # scoped security-group ingress (scripts/aws-db-allow-my-ip.sh and the
-    # steps below) — is built and has run successfully in GitHub Actions,
-    # including run 30765722355 (create database, migrate to head, alembic
-    # check, seed idempotency, full test suite, drop database, revoke
-    # ingress). It depends on the following configured GitHub Actions
-    # secrets/variables:
-    #   - vars.AWS_REGION, vars.DEV_DB_SECURITY_GROUP_ID
-    #   - secrets.AWS_CI_ROLE_ARN — an IAM role trusting GitHub's OIDC
-    #     provider, scoped to ec2:AuthorizeSecurityGroupIngress /
-    #     RevokeSecurityGroupIngress on that one security group
-    #   - secrets.DEV_DB_ADMIN_URL — a full connection string (scheme
-    #     postgresql+psycopg://...) for a role with CREATEDB on the dev
-    #     instance. The bootstrap revision's six roles are still scoped to
-    #     schema-level DDL/DML with none holding CREATEDB (INFRASTRUCTURE.md
-    #     §11 item 8); today this points at the RDS master user, which does
-    #     have the necessary privilege — a dedicated, narrower CI role is
-    #     still worth creating before this runs unattended in prod-adjacent
-    #     environments.
-    # Each push-triggered run remains the authoritative verification of its
-    # own commit; repository tests cannot substitute for that external run.
+    timeout-minutes: 30
+    # Per docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md,
+    # containerized PostgreSQL 18 is the CI merge gate — the same major
+    # version pinned for local/self-hosted use (docs/DATABASE_CONVENTIONS.md
+    # §2.1). This replaced verification against AWS dev RDS: nothing here
+    # calls AWS or needs repository secrets.
     #
-    # One ephemeral database is created for the whole job (migration checks
-    # and pytest both use it), then dropped in the always-run cleanup step
-    # alongside the security-group rule — see tests/conftest.py for the same
-    # ephemeral-database pattern used outside CI.
+    # The service container is a fresh, disposable PostgreSQL 18 server —
+    # equivalent to what tests/conftest.py already expects locally. Steps
+    # below mirror scripts/verify.sh's `full` stage: migrate empty to head,
+    # confirm state, round-trip the downgrade, check seed idempotency,
+    # confirm autogenerate produces an empty diff, then run the complete
+    # test suite. tests/conftest.py provisions its own ephemeral database
+    # off DATABASE_URL for the pytest run, exactly as it does against a
+    # developer's local server.
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dnd_ai_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dnd_ai_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -88,26 +96,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Open dev access for this runner
-        run: |
-          RUNNER_CIDR="$(curl -s https://checkip.amazonaws.com)/32"
-          echo "RUNNER_CIDR=${RUNNER_CIDR}" >> "$GITHUB_ENV"
-          aws ec2 authorize-security-group-ingress \
-            --group-id "${{ vars.DEV_DB_SECURITY_GROUP_ID }}" \
-            --protocol tcp --port 5432 --cidr "${RUNNER_CIDR}"
-
-      - name: Create ephemeral test database
-        env:
-          DEV_DB_ADMIN_URL: ${{ secrets.DEV_DB_ADMIN_URL }}
-        run: uv run python scripts/ci_ephemeral_database.py create
-
-      - name: Run migrations (empty ephemeral database to head)
+      - name: Run migrations (empty database to head)
         run: uv run alembic -c database/alembic.ini upgrade head
 
       - name: Verify migration state
@@ -131,34 +120,31 @@ jobs:
       - name: Run full test suite (unit, database, scenario)
         run: uv run pytest -v --tb=short
 
-      # The full test suite's run-to-run duration against real AWS RDS
-      # varies enormously (observed anywhere from ~7.5 minutes to over an
-      # hour for the same test count — see docs/PHASE9_VERIFICATION.md's
-      # CI-anomaly notes), and the credentials from "Configure AWS
-      # credentials" above are only valid for the role's session duration
-      # (commonly capped at one hour). A slow run can therefore leave the
-      # revoke-ingress call below holding an already-expired session,
-      # failing with RequestExpired even though every substantive step
-      # (migrations, tests) already succeeded — observed on run 31343247142.
-      # Re-assuming fresh credentials immediately before cleanup, rather
-      # than raising role-duration-seconds and hoping it covers whatever a
-      # given run happens to take, keeps this step correct regardless of
-      # how long everything before it ran.
-      - name: Refresh AWS credentials before cleanup
-        if: always()
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+  docker-build:
+    name: Application image and compose smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Builds the image compose.yaml's services run from, validates the
+    # compose topology, and exercises it end to end: bring up disposable
+    # PostgreSQL, wait for it to report healthy, then run the one real
+    # containerized job that exists today (Alembic migrations — see
+    # Dockerfile and compose.yaml; src/dnd_ai/api has no committed source
+    # yet, so there is no API smoke test to run against it).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Clean up ephemeral database and revoke access
+      - name: Validate compose configuration
+        run: docker compose -f compose.yaml -f compose.ci.yaml config
+
+      - name: Build application image
+        run: docker compose -f compose.yaml -f compose.ci.yaml build
+
+      - name: Start disposable PostgreSQL and wait for health
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d --wait --wait-timeout 60 db
+
+      - name: Run migrations against the composed database (smoke test)
+        run: docker compose -f compose.yaml -f compose.ci.yaml run --rm migrate
+
+      - name: Tear down
         if: always()
-        env:
-          DEV_DB_ADMIN_URL: ${{ secrets.DEV_DB_ADMIN_URL }}
-          DEV_DB_SECURITY_GROUP_ID: ${{ vars.DEV_DB_SECURITY_GROUP_ID }}
-        # scripts/ci_cleanup.py always attempts both the database drop and
-        # the ingress revoke, even if the first fails, and exits nonzero if
-        # either failed — see that module's docstring and
-        # tests/unit/test_ci_cleanup.py for the failure-path proof (against
-        # fake operations, not real AWS calls).
-        run: uv run python scripts/ci_cleanup.py
+        run: docker compose -f compose.yaml -f compose.ci.yaml down -v

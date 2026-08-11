@@ -10,7 +10,7 @@ This document covers the **mechanics** — toolchain, layout, commands, workflow
 
 - [1. Toolchain](#1-toolchain)
 - [2. Repository layout](#2-repository-layout)
-- [3. Local setup](#3-local-setup)
+- [3. Local setup](#3-local-setup) (including [§3.6 Self-hosted Docker Compose](#36-self-hosted-docker-compose))
 - [4. Database and migrations](#4-database-and-migrations)
 - [5. Phase 1 walkthrough (complete)](#5-phase-1-walkthrough-complete)
 - [6. Testing](#6-testing)
@@ -34,13 +34,13 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Migrations | **Alembic** | Required by [DATABASE_CONVENTIONS.md §25.1](DATABASE_CONVENTIONS.md#251-migration-tool). Hand-written SQL inside revisions where a PostgreSQL feature is clearer than the DSL |
 | Validation / DTOs | **Pydantic v2** | Command and query payloads at the API boundary |
 | HTTP API | **FastAPI** | The API layer only ([SYSTEM_ARCHITECTURE.md §5.2](architecture/SYSTEM_ARCHITECTURE.md#52-api-layer)). The concrete REST shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) — this pins the framework, not the endpoint design |
-| Tests | **pytest** against a local PostgreSQL 18 server; CI repeats them against `dev` RDS | Per [PLAN.md §23.0](PLAN.md#230-verification-policy). Constraint and trigger behavior cannot be tested against SQLite or any other engine, so every layer below `tests/unit` needs a real PostgreSQL |
+| Tests | **pytest** against a local/self-hosted PostgreSQL 18 server; CI repeats them against a disposable containerized PostgreSQL 18 instance | Per [PLAN.md §24.0](PLAN.md#240-verification-policy). Constraint and trigger behavior cannot be tested against SQLite or any other engine, so every layer below `tests/unit` needs a real PostgreSQL |
 | Property tests | **Hypothesis** | For the cases in [PLAN.md §25.4](PLAN.md#254-property-based-tests) |
 | Lint + format | **ruff** | Both linting and formatting; no separate black/isort |
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
-| Development database | **PostgreSQL 18.x**, installed locally | The default development and test target ([PLAN.md §23.0](PLAN.md#230-verification-policy), [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)). The major version must match what RDS runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
-| AWS access | **AWS CLI v2** | Needed to change infrastructure, deploy, or reproduce a CI-only failure against `dev` — **not** for routine schema or application work. `curl` for IP lookup |
-| Compute | **ECS Fargate**, one image in **ECR** | API, worker, adapter, and one-off jobs share the image; see [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) and [ADR 0008](adr/0008-aws-first-deployment-and-verification.md). Unbuilt. There is no local deployment topology |
+| Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
+| Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The officially supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
+| AWS access (optional) | **AWS CLI v2** | Only needed if you choose to deploy the optional AWS RDS path under `terraform/`, or to change that Terraform — **not** for routine schema or application work, and not for CI. `curl` for IP lookup |
 | UI | **React** | Not yet started; no build tooling chosen |
 
 ---
@@ -53,13 +53,16 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 .
 ├── README.md                  # Project entry point
 ├── CLAUDE.md                  # AI assistant operating instructions
-├── build.ps1                  # Terraform orchestration wrapper
+├── build.ps1                  # Terraform orchestration wrapper (optional AWS path)
 ├── pyproject.toml             # Python project + tool config (ruff, mypy, pytest)
 ├── uv.lock
 ├── .env.example
-├── Dockerfile                 # The one image all services run from (PLAN.md §30.2)
+├── Dockerfile                 # The one image all services run from (PLAN.md §31.3)
+├── compose.yaml               # Self-hosted deployment topology (ADR 0012)
+├── compose.ci.yaml            # CI override: disposable storage
+├── .dockerignore
 ├── docs/                      # ALL documentation (see CLAUDE.md §4)
-├── terraform/                 # Infrastructure (see docs/INFRASTRUCTURE.md)
+├── terraform/                 # Optional AWS infrastructure (see docs/INFRASTRUCTURE.md)
 ├── scripts/
 ├── database/
 │   ├── alembic.ini
@@ -88,7 +91,7 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 
 The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering). Keep that mapping — it is how a reviewer checks that a handler didn't grow domain rules.
 
-There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints ([PLAN.md §30.2](PLAN.md#302-compute-ecs-fargate)). It does not exist yet — create it with the first deployable.
+There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints ([PLAN.md §31.3](PLAN.md#313-packaging-and-release)). It exists today and runs Alembic migrations by default (`compose.yaml`'s `migrate` job); `src/dnd_ai/api` has no committed source yet, so the API/worker/adapter entrypoints are added when those modules exist.
 
 ### 2.1 Keep source and tests bounded by domain
 
@@ -126,18 +129,18 @@ New closeout tests go directly into the stable topic file. A temporary phase-nam
 
 ## 3. Local setup
 
-Per [PLAN.md §23.0](PLAN.md#230-verification-policy) and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), development runs against a **local PostgreSQL 18 server**. No AWS account, no credentials, and no network are needed for schema or application work — CI verifies the same work against `dev` RDS when you push ([§8](#8-continuous-integration)).
+Per [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), development runs against a **local or self-hosted PostgreSQL 18 server**. No AWS account, no credentials, and no network are needed for schema or application work — CI verifies the same work against a disposable containerized PostgreSQL 18 instance when you push ([§8](#8-continuous-integration)).
 
 ### 3.1 PostgreSQL
 
-Install PostgreSQL **18.x** — the same major version RDS runs ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). A different major version is a setup defect: it produces green local runs that fail CI, which is precisely what this two-tier model is arranged to avoid.
+Install PostgreSQL **18.x** — the version this project pins everywhere ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). A different major version is a setup defect: it produces green local runs that fail CI.
 
-| Platform | Install |
+Two ways to get it, pick one:
+
+| Option | How |
 |---|---|
-| Windows | [EDB installer](https://www.postgresql.org/download/windows/), or `winget install PostgreSQL.PostgreSQL.18`. Installs as the `postgresql-x64-18` service, started automatically |
-| macOS | `brew install postgresql@18 && brew services start postgresql@18` |
-| Linux | [PGDG apt/yum repository](https://www.postgresql.org/download/), then `postgresql-18` |
-| Any (container) | `docker run -d --name dnd-ai-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18` |
+| `compose.yaml` (recommended) | `docker compose up -d db` — starts PostgreSQL 18.4 with persistent storage, no local install needed. See [§3.6](#36-self-hosted-docker-compose) |
+| Native install | Windows: [EDB installer](https://www.postgresql.org/download/windows/), or `winget install PostgreSQL.PostgreSQL.18` (installs as the `postgresql-x64-18` service, started automatically). macOS: `brew install postgresql@18 && brew services start postgresql@18`. Linux: [PGDG apt/yum repository](https://www.postgresql.org/download/), then `postgresql-18` |
 
 Confirm the server is up and on the right version before going further:
 
@@ -191,17 +194,56 @@ uv run pytest tests/database       # against your local server
 
 Your local server is **disposable** — it holds nothing that isn't reproducible from migrations plus seeds, and it is not backed up. Destructive reset tooling is allowed here and only here, per [DATABASE_CONVENTIONS.md §25.3](DATABASE_CONVENTIONS.md#253-no-destructive-initialization-scripts) — never write a `DROP ... CASCADE` reset script that could target a persistent environment.
 
-### 3.5 Connecting to AWS `dev` (occasional)
+### 3.5 Connecting to AWS `dev` (optional, no longer required)
 
-You need this only to reproduce a CI-only failure, inspect `dev` directly, or change infrastructure. Setup is [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-access-optional). `dev` is publicly reachable but gated by a security-group rule scoped to your current IP, opened and closed around your work rather than left standing ([PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)):
+AWS RDS is an optional, no-longer-CI-verified path ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) — you need this only if you have deployed the Terraform under `terraform/` yourself and want to reproduce a failure against it or inspect it directly. Setup is [CONTRIBUTING.md §2](CONTRIBUTING.md#2-aws-access-optional). `dev`, if deployed, is publicly reachable but gated by a security-group rule scoped to your current IP, opened and closed around your work rather than left standing ([PLAN.md §30.9](PLAN.md#309-shared-dev-verification-mechanism-ci)):
 
 ```bash
 scripts/aws-db-allow-my-ip.sh open    # authorizes your current IP on the dev security group
 # ... point DATABASE_URL at the dev endpoint (note sslmode=require) and work ...
-scripts/aws-db-allow-my-ip.sh close   # revokes it — not automatic outside CI
+scripts/aws-db-allow-my-ip.sh close   # revokes it — nothing does this automatically
 ```
 
 Leaving that rule open is the failure mode to watch for; close it in the same session you opened it.
+
+### 3.6 Self-hosted Docker Compose
+
+`compose.yaml` at the repository root is the officially supported way to run PostgreSQL for both everyday development and a real self-hosted deployment ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). It needs only Docker — no PostgreSQL install, no AWS account.
+
+**Start and stop:**
+
+```bash
+docker compose up -d db      # start PostgreSQL 18.4 in the background
+docker compose ps            # check status/health
+docker compose down          # stop; data persists in the dnd_ai_pgdata volume
+docker compose down -v       # stop and delete the data volume — destructive, confirm first
+```
+
+**Configuration** is environment-variable driven, with no committed secrets — copy `.env.example` to `.env` and adjust, or export the variables directly:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `POSTGRES_USER` | `postgres` | Superuser the migrations connect and `SET ROLE migration_owner` as |
+| `POSTGRES_PASSWORD` | `postgres` | Change this for anything beyond local experimentation |
+| `POSTGRES_DB` | `dnd_ai` | Database name |
+| `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on |
+
+**Running migrations** against the composed database:
+
+```bash
+docker compose --profile tools run --rm migrate
+```
+
+This builds the same `Dockerfile` image the future API/worker/adapter services will share and runs `alembic -c database/alembic.ini upgrade head` against `db`. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
+
+Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai` (adjusting for whatever you changed above) and follow [§3.4](#34-verify).
+
+**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically:
+
+- **Backups**: `docker compose exec db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump` (copy the file out with `docker cp`), on whatever schedule your deployment needs. There is no automated backup job — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)).
+- **Restoring**: `docker compose exec -T db pg_restore -U postgres -d dnd_ai -c` piped the dump back in, against a database at the same or a newer PostgreSQL major version.
+- **Upgrading the PostgreSQL minor version** (e.g. `18.4` → a later `18.x`): bump the tag in `compose.yaml`'s `db.image` and `docker compose up -d db` — PostgreSQL minor versions share an on-disk format, so this is a routine restart.
+- **Upgrading the PostgreSQL major version** (e.g. `18.x` → `19.x`): the on-disk format is not compatible across major versions. Take a backup first, then either `pg_dump`/`pg_restore` into a freshly initialized volume on the new major version, or use `pg_upgrade` if you need to avoid a full dump/restore for a large database. Do not just bump the image tag and restart — PostgreSQL will refuse to start against an incompatible data directory, which is the safe failure mode, but plan the upgrade deliberately rather than discovering this live.
 
 ---
 
@@ -241,13 +283,13 @@ uv run alembic -c database/alembic.ini history --verbose
 
 The downgrade round trip is cheap now that it runs locally, so run it every time rather than saving it for a phase close — Phase 1's downgrade was broken for weeks while looking fine. `scripts/verify.sh migration-round-trip --confirm-destructive` wraps the full `downgrade base` / `upgrade head` cycle ([§7](#7-code-quality)).
 
-Against `dev`, migrations run in CI on every push. To run them there by hand, use the session-scoped ingress workflow in [§3.5](#35-connecting-to-aws-dev-occasional). `staging` and `prod` remain private and will use the ECS one-off migration task described in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism); that runner is intentionally deferred until the first non-`dev` environment.
+Against a self-hosted `compose.yaml` database, run `docker compose --profile tools run --rm migrate` ([§3.6](#36-self-hosted-docker-compose)). Against the optional AWS `dev` path, migrations run against a disposable containerized database in CI on every push and are no longer routinely run against `dev` itself; to run them there by hand anyway, use the session-scoped ingress workflow in [§3.5](#35-connecting-to-aws-dev-optional-no-longer-required). `staging` and `prod`, if ever stood up, remain private and would use the one-off migration task described in [PLAN.md §30.6](PLAN.md#306-migration-execution-mechanism) — unbuilt, optional planning material.
 
 ---
 
 ## 5. Phase 1 walkthrough (complete)
 
-**Phases 1 through 8 are done.** Phase 9 is next. Follow [PLAN.md §23.1](PLAN.md#231-phase-exit-review) when each phase closes and [§25.6](PLAN.md#256-proportional-test-infrastructure-policy) before expanding test-only infrastructure. Phase 9 is the first phase developed under the local-first loop in [§3](#3-local-setup) ([ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)); Phases 1–8 were developed directly against `dev` RDS, so their verification files record only that target.
+**Phases 1 through 8 are done.** Phase 9 is next. Follow [PLAN.md §24.1](PLAN.md#241-phase-exit-review) when each phase closes and [§26.6](PLAN.md#266-proportional-test-infrastructure-policy) before expanding test-only infrastructure. Phase 9 was the first phase developed under the local-first loop in [§3](#3-local-setup) (originally [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), now [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)); Phases 1–8 were developed directly against `dev` RDS, so their verification files record only that target — historical evidence, not current policy.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 
@@ -266,12 +308,12 @@ Concretely, in order:
    It must be idempotent and re-runnable. Treat it as a revision, not an untracked script, so it is versioned like everything else.
 4. **Shared domains** — `core.rating_1_10`, `core.percentage_0_100`, `core.nonnegative_integer` per [PLAN.md §4.2](PLAN.md#42-shared-domains).
 5. **Seed infrastructure** — the mechanism for idempotent lookup seeding (§25.4), not yet the seed content.
-6. **CI workflow** — see §8 below, plus `terraform/modules/github_actions_ci` for the OIDC role it assumes.
-7. **`dev` deployed and reachable** — `terraform/environments/dev` applied, with migrations run against the live instance per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci).
+6. **CI workflow** — at the time, `.github/workflows/ci.yml`'s `aws-verification` job plus `terraform/modules/github_actions_ci` for the OIDC role it assumed. Both are historical: CI now verifies against containerized PostgreSQL (see §8 below), and that Terraform module was removed ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
+7. **`dev` deployed and reachable** — `terraform/environments/dev` applied, with migrations run against the live instance per [PLAN.md §30.9](PLAN.md#309-shared-dev-verification-mechanism-ci).
 
-Steps 1–6 need no AWS access at all, and under [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) neither does verifying them: migrations and the test suite run against a local PostgreSQL 18 server ([§3](#3-local-setup)), with CI proving the same against `dev`. Step 7 is the exception and is inherently an AWS task. *(When this walkthrough was written, every step's verification went directly against `dev` — see [PLAN.md §23.0](PLAN.md#230-verification-policy) for the current policy.)*
+Steps 1–6 needed no AWS access at all, and under [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) (in effect at the time) neither did verifying them: migrations and the test suite ran against a local PostgreSQL 18 server ([§3](#3-local-setup)), with CI proving the same against `dev`. Step 7 was the exception and was inherently an AWS task at the time. *(When this walkthrough was written, every step's verification went directly against `dev`; see [PLAN.md §24.0](PLAN.md#240-verification-policy) for current policy — CI no longer touches AWS at all, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).)*
 
-> **What actually closed the AWS exit criterion.** This step originally read "Migration runner — `terraform/modules/db_migration_runner/`". That module was never built and turned out not to be needed: `dev` is directly reachable via the session-scoped ingress mechanism in [§29.9](PLAN.md#299-shared-dev-verification-mechanism-ci), so migrations run against it the same way they run anywhere else, and CI does the same with an OIDC-assumed role. The SSM-based runner in [PLAN.md §29.6](PLAN.md#296-migration-execution-mechanism) remains the plan for `staging`/`prod`, where public access is never opened — it is deferred, not cancelled, and comes due with the first non-`dev` environment.
+> **What actually closed the AWS exit criterion (historical).** This step originally read "Migration runner — `terraform/modules/db_migration_runner/`". That module was never built and turned out not to be needed: `dev` was directly reachable via the session-scoped ingress mechanism in [§30.9](PLAN.md#309-shared-dev-verification-mechanism-ci), so migrations ran against it the same way they ran anywhere else, and CI did the same with an OIDC-assumed role. The SSM-based runner in [PLAN.md §30.6](PLAN.md#306-migration-execution-mechanism) remains documented, optional planning material for `staging`/`prod` on AWS, unbuilt and not on the critical path since self-hosted Docker Compose became the default deployment topology.
 
 ---
 
@@ -282,10 +324,10 @@ Three layers, matching [PLAN.md §25](PLAN.md#25-testing-strategy) and [DATABASE
 | Layer | Location | Database | Purpose |
 |---|---|---|---|
 | Unit | `tests/unit/` | none | Pure logic — rules calculations, policy decisions, validation |
-| Database | `tests/database/` | Local PostgreSQL 18 (ephemeral database per run); `dev` RDS in CI | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
-| Scenario | `tests/scenario/` | Local PostgreSQL 18 (ephemeral database per run); `dev` RDS in CI | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §24](PLAN.md#24-vertical-slice-acceptance-scenario) |
+| Database | `tests/database/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
+| Scenario | `tests/scenario/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §25](PLAN.md#25-vertical-slice-acceptance-scenario) |
 
-Database and scenario tests create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrate it to head, run, and drop it. That is the same mechanism against either target, which is what lets the identical suite run locally and in CI with nothing skipped or conditionally disabled on either ([PLAN.md §23.0](PLAN.md#230-verification-policy), [§29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)).
+Database and scenario tests create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrate it to head, run, and drop it. That is the same mechanism against either target, which is what lets the identical suite run locally and in CI with nothing skipped or conditionally disabled on either ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
 
 ```bash
 uv run pytest                    # everything, against your local server
@@ -293,9 +335,9 @@ uv run pytest tests/unit         # fast loop, no database at all
 uv run pytest tests/database -x  # local server, see §3
 ```
 
-**The two targets must stay in agreement.** Same PostgreSQL major version, same extensions, same six bootstrap roles. When they drift, the symptom is a green local run and a red CI run — and per [PLAN.md §23.0](PLAN.md#230-verification-policy), CI is right. Investigate rather than re-run.
+**Your local/self-hosted server and CI's container must stay in agreement.** Same PostgreSQL major version, same extensions, same six bootstrap roles. When they drift, the symptom is a green local run and a red CI run — and per [PLAN.md §24.0](PLAN.md#240-verification-policy), CI is right. Investigate rather than re-run.
 
-To run the suite against `dev` yourself — normally only to reproduce a CI-only failure — open the ingress rule per [§3.5](#35-connecting-to-aws-dev-occasional) and point `DATABASE_URL` at the `dev` endpoint (with `sslmode=require`). The fixture provisions its ephemeral database there exactly as it does locally.
+If you have deployed the optional AWS `dev` path and want to run the suite against it — normally only to reproduce a failure specific to that environment — open the ingress rule per [§3.5](#35-connecting-to-aws-dev-optional-no-longer-required) and point `DATABASE_URL` at the `dev` endpoint (with `sslmode=require`). The fixture provisions its ephemeral database there exactly as it does locally.
 
 ### 6.1 Keep test infrastructure proportional
 
@@ -344,29 +386,35 @@ your own local server, and the reason the downgrade round trip is now expected
 every phase rather than only at close ([§4](#4-database-and-migrations)).
 
 The script's `dev`-ingress handling applies only when `DATABASE_URL` points at
-the AWS `dev` endpoint. Against a local server there is nothing to open or
-revoke.
+the optional AWS `dev` endpoint. Against a local/self-hosted server —
+including `compose.yaml` — there is nothing to open or revoke.
 
 ---
 
 ## 8. Continuous integration
 
-CI is the project's **AWS verification tier** and, since [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md) moved the inner loop to a local server, the only thing that routinely exercises RDS. It is a merge gate, not advisory.
+CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) — it verifies the same self-hosted PostgreSQL 18 target the project deploys, not AWS RDS.
 
-`.github/workflows/ci.yml` covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§23.0](PLAN.md#230-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+`.github/workflows/ci.yml` has three jobs, none of which need AWS credentials or repository secrets:
 
-- `ruff format --check`, `ruff check`, `mypy src`
-- authenticate to AWS (a scoped IAM identity, credentials from repository secrets) and open a short-lived ingress rule on the `dev` security group for the runner's own egress IP, per [PLAN.md §29.9](PLAN.md#299-shared-dev-verification-mechanism-ci)
-- migration from an **empty** database (a fresh `dnd_ai_ci_<run-id>` database on the `dev` instance) through all revisions to head
-- schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
-- downgrade of recent development migrations where supported
+**`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
+
+**`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
+
+- migration from an **empty** database through all revisions to head
+- migration state confirmation (`alembic current --verbose`)
+- a full downgrade-to-base/upgrade-to-head round trip
 - seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
-- the full pytest suite against that same ephemeral database
-- drop the ephemeral database and revoke the ingress rule — in a step that always runs, including on job failure, so a broken run doesn't leave a stale allowlist entry or an orphaned database behind
+- schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
+- the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) — `tests/conftest.py` provisions its own ephemeral database off the service container exactly as it does against a local server
+
+**`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
 
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
-A pull request that changes schema without a green migration job should not merge. Local results do not substitute for it under any circumstances — the whole point of running locally is that CI still catches what only RDS can show ([PLAN.md §23.0](PLAN.md#230-verification-policy)).
+A pull request that changes schema without a green `postgres-verification` job should not merge. Local results do not substitute for it — CI runs on a clean, disposable environment every time, which a long-lived local server does not guarantee ([PLAN.md §24.0](PLAN.md#240-verification-policy)).
+
+AWS RDS is no longer part of CI. Anyone who deploys the optional Terraform under `terraform/` is responsible for verifying that path themselves — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for what that trades away.
 
 `scripts/wait_for_ci.py` polls a pushed commit's GitHub Actions run to
 completion and reports only pass/fail, fetching per-job/per-step detail only
@@ -404,15 +452,15 @@ Before opening a pull request:
 - [ ] The work matches the current phase in [PLAN.md](PLAN.md), or the deviation is stated explicitly
 - [ ] Schema changes follow [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), checked against the anti-patterns in §34
 - [ ] New tables and important columns carry comments (§31)
-- [ ] Migration runs up **and** down cleanly against a fresh database on your local PostgreSQL 18 server (§3, §4)
-- [ ] Your local server is on the same PostgreSQL major version as `dev` — a mismatch invalidates the local result ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version))
+- [ ] Migration runs up **and** down cleanly against a fresh database on your local/self-hosted PostgreSQL 18 server (§3, §4)
+- [ ] Your local/self-hosted server is PostgreSQL 18.x, matching what CI runs — a mismatch invalidates the local result ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version))
 - [ ] Constraints have positive and negative tests
-- [ ] Tests target production behavior or a credible regression; any new test-harness fault injection satisfies [PLAN.md §25.6](PLAN.md#256-proportional-test-infrastructure-policy)
+- [ ] Tests target production behavior or a credible regression; any new test-harness fault injection satisfies [PLAN.md §26.6](PLAN.md#266-proportional-test-infrastructure-policy)
 - [ ] Code sits in the layer [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) prescribes
 - [ ] `ruff format --check`, `ruff check`, `mypy src`, and `pytest` all pass locally
-- [ ] CI is green on the pushed commit — the AWS `dev` verification tier ([§8](#8-continuous-integration), [PLAN.md §23.0](PLAN.md#230-verification-policy)). A green local run is not a substitute; a red CI run after a green local one is an RDS-specific defect or local/`dev` drift, not flakiness to re-run away
-- [ ] If the change adds or alters a deployable, it runs in `dev` on ECS Fargate and was exercised there ([PLAN.md §30.8](PLAN.md#308-per-phase-deployment-expectations))
+- [ ] CI is green on the pushed commit — containerized PostgreSQL 18 verification ([§8](#8-continuous-integration), [PLAN.md §24.0](PLAN.md#240-verification-policy)). A green local run is not a substitute; a red CI run after a green local one is a real defect or local/CI drift, not flakiness to re-run away
+- [ ] If the change adds or alters a deployable, it runs via `compose.yaml` and was exercised there; an AWS deployable additionally needs the (optional, no longer required) AWS verification described in [PLAN.md §31.8](PLAN.md#318-per-phase-deployment-expectations)
 - [ ] No secret, credential, or connection string is committed
 - [ ] Any new cross-cutting concept is reflected in the relevant `docs/` file **in the same change** — these documents are meant to stay current, not be reconciled later
-- [ ] If this change completes a phase, the phase exit review in [PLAN.md §23.1](PLAN.md#231-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended
+- [ ] If this change completes a phase, the phase exit review in [PLAN.md §24.1](PLAN.md#241-phase-exit-review) is done: `docs/PHASEn_VERIFICATION.md` written, recurring obligations re-checked, next phase reviewed and amended
 - [ ] Phase closure is not blocked solely by theoretical failures of test-only cleanup primitives; lower-risk limitations are documented and delivery continues

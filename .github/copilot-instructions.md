@@ -18,7 +18,9 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 **Current implementation status**: Phases 1 through 8 are complete and CI-verified — foundation, core world platform, timelines/campaigns, rules and shared characters, locations and dungeon play, events and interactions, quests and knowledge, and relationships/organizations. Per-phase evidence is in `docs/PHASEn_VERIFICATION.md`; [Phase 9](../docs/PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization) (items, inventory, encounters, Foundry sync) is next. The first application-layer command handlers exist in `src/dnd_ai/commands`; no API or UI exists yet.
 
-**Verification pivot (2026-08-07)**: Phases 1–8 were developed directly against AWS `dev` RDS. From Phase 9, development runs against a **local PostgreSQL 18 server** with CI against `dev` as the merge gate ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md), [PLAN.md §23.0](../docs/PLAN.md#230-verification-policy)). The pinned PostgreSQL major version moved 15.x → 18.x, and `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 ([POSTGRES18_UPGRADE_PLAN.md](../docs/POSTGRES18_UPGRADE_PLAN.md)) — local and CI now agree.
+**Verification pivot (2026-08-07)**: Phases 1–8 were developed directly against AWS `dev` RDS. From Phase 9, development runs against a **local PostgreSQL 18 server**, originally with CI against `dev` as the merge gate ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md)). The pinned PostgreSQL major version moved 15.x → 18.x, and `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 ([POSTGRES18_UPGRADE_PLAN.md](../docs/POSTGRES18_UPGRADE_PLAN.md)).
+
+**Deployment pivot (2026-08-11)**: Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is now the officially supported deployment topology, and CI verifies against a disposable containerized PostgreSQL 18 instance instead of AWS `dev` RDS — see [ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) (supersedes ADR 0011 and ADR 0008's deployment/merge-gate clauses) and [PLAN.md §24.0](../docs/PLAN.md#240-verification-policy). AWS RDS remains an optional, no-longer-CI-verified path.
 
 ---
 
@@ -45,8 +47,8 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 7. **Timelines only inherit parent history up to branch point** (no leakage after branch)
 8. **Knowledge is per-knower, never global** (no `is_discovered` flags on entities)
 9. **Persistent entities are archived, not deleted** (set `archived_at`, keep row)
-10. **No secrets in code or seed files** (AWS Secrets Manager only)
-11. **Develop locally, verify in AWS** — database/scenario tests run against a local PostgreSQL 18 server (same major version as RDS); CI runs them against `dev` RDS and is the merge gate; deployables run on ECS Fargate. A green local run is never the last word ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md))
+10. **No secrets in code or seed files** (environment variables / `.env` for self-hosted; AWS Secrets Manager for the optional AWS path)
+11. **Develop and verify against PostgreSQL 18, self-hosted** — database/scenario tests run against a local/self-hosted PostgreSQL 18 server; CI runs them against a disposable containerized PostgreSQL 18 instance and is the merge gate; deployables run via `compose.yaml`/`Dockerfile`. AWS RDS/ECS Fargate remain an optional, no-longer-verified path. A green local run is never the last word ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md))
 
 **If a task requires breaking a rule: STOP and flag it.**
 
@@ -54,13 +56,13 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 ## Technology Stack
 
-- **Infrastructure**: AWS (RDS PostgreSQL, S3, Secrets Manager, KMS). Initial deployment target is a modular monolith — not Lambda-per-function
-- **IaC**: Terraform (modules under `terraform/modules/`, environments under `terraform/environments/`)
-- **Database**: PostgreSQL 18.x — local server for development, RDS for deployed environments; the major version must match across both. Migrations via Alembic
+- **Deployment**: Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) — the officially supported topology ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). AWS (RDS PostgreSQL, S3, Secrets Manager, KMS) remains an optional, no-longer-verified path
+- **IaC** (optional AWS path): Terraform (modules under `terraform/modules/`, environments under `terraform/environments/`)
+- **Database**: PostgreSQL 18.x — local/self-hosted for development and CI; AWS RDS optional for anyone who deploys there. The major version must match everywhere it runs. Migrations via Alembic
 - **Backend**: Python 3.12+, SQLAlchemy 2.x **Core** (not the ORM), psycopg 3, Pydantic v2
-- **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §27
+- **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §28, and `src/dnd_ai/api` has no committed source yet
 - **UI**: React (web/admin client)
-- **Tooling**: uv, pytest against a local PostgreSQL 18 server (CI repeats it against `dev` RDS), ruff, mypy
+- **Tooling**: uv, pytest against a local/self-hosted PostgreSQL 18 server (CI repeats it against a disposable containerized PostgreSQL 18 instance), ruff, mypy
 - **Integrations**: FoundryVTT module, Discord bot, MCP interface (all clients, all through API)
 
 Full rationale: [docs/DEVELOPMENT.md §1](../docs/DEVELOPMENT.md#1-toolchain). Do not introduce alternatives.
@@ -73,7 +75,7 @@ All docs live under `docs/`. Only `README.md` and `CLAUDE.md` belong in the repo
 
 Do not load the whole documentation set before every feature. Start with `CLAUDE.md`, identify the phase/domain/change type, search headings or keywords, then read only:
 
-1. **`docs/PLAN.md` §23.0–23.1 and the current phase entry** — deliverables and exit criteria.
+1. **`docs/PLAN.md` §24.0–24.1 and the current phase entry** — deliverables and exit criteria.
 2. **Affected sections of `docs/DOMAIN_MODEL.md` and `docs/architecture/DATABASE_MODEL.md`** — vocabulary and schema.
 3. **Mechanism-specific sections of `docs/DATABASE_CONVENTIONS.md`** — for example ranges, triggers, migrations, grants, or tests.
 4. **A matching workflow document only when applicable** — `ENTITY_LIFECYCLE.md` for entity operations, `SYSTEM_ARCHITECTURE.md` for application layers/transactions, `DUNGEON_FLOW.md` for cross-domain scenario work, and `DEVELOPMENT.md` for the relevant mechanics plus §10.
@@ -364,9 +366,9 @@ terraform apply tfplan
 - **Don't know code layer?** → `docs/architecture/SYSTEM_ARCHITECTURE.md` §5
 - **Don't know which library/tool?** → `docs/DEVELOPMENT.md` §1
 - **Don't know where a file goes?** → `docs/DEVELOPMENT.md` §2
-- **Setting up a dev database?** → `docs/DEVELOPMENT.md` §3 (local PostgreSQL 18, not AWS)
-- **Green locally, red in CI?** → `docs/PLAN.md` §23.0 — check PostgreSQL major version and extensions first
-- **Deploying or debugging AWS?** → `docs/INFRASTRUCTURE.md`
+- **Setting up a dev database?** → `docs/DEVELOPMENT.md` §3 (local or `docker compose up -d db`, not AWS)
+- **Green locally, red in CI?** → `docs/PLAN.md` §24.0 — check PostgreSQL major version and extensions first
+- **Deploying self-hosted?** → `docs/DEVELOPMENT.md` §3.6 (`compose.yaml`) — **Deploying or debugging the optional AWS path?** → `docs/INFRASTRUCTURE.md`
 - **User asks to extend legacy code?** → Explain restart, create new per current architecture
 - **About to break one of 11 rules?** → STOP, flag to user
 

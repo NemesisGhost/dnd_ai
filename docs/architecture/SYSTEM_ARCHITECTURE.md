@@ -471,24 +471,22 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 ## 17. Deployment topology
 
-Initial deployment is a modular monolith with separate workers, deployed to AWS. A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving. Service boundaries can become process boundaries later when operational evidence justifies it.
+**Self-hosted Docker Compose is the officially supported deployment topology** ([ADR 0012](../adr/0012-self-hosted-docker-deployment-and-ci-verification.md)), superseding the AWS-only model ADR 0008 originally described. A modular monolith is preferred initially because the domains require strong transactional consistency and are still evolving; service boundaries can become process boundaries later when operational evidence justifies it.
 
-Everything runs in AWS — there is no supported local-deployment topology, and [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md) does not add one. That ADR moved *development and testing* onto a local PostgreSQL server; the deployables below still run only on ECS Fargate against RDS ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md)).
-
-| Deployable | AWS target | Notes |
+| Deployable | Self-hosted target | Notes |
 |---|---|---|
-| Application API | ECS Fargate service behind an Application Load Balancer | The only deployable with ingress from outside the VPC |
-| Background worker | ECS Fargate service, no load balancer | Drains the outbox (§10), delivers integrations, processes AI proposals |
-| Discord adapter | ECS Fargate service, no load balancer | Outbound gateway connection; needs no inbound ingress |
-| Migrations and batch jobs | ECS Fargate one-off tasks | Same image as the services, different entrypoint |
-| PostgreSQL | RDS PostgreSQL, private subnets | Source of truth (§2); never publicly reachable in `staging`/`prod` |
-| Object storage | S3 | Import source documents, exports, image layers |
-| Secrets | Secrets Manager + IAM database authentication | No credential in an image, task definition, or source control |
+| PostgreSQL | `db` service in `compose.yaml`, PostgreSQL 18, persistent named volume | Source of truth (§2) |
+| Migrations and batch jobs | `migrate` service in `compose.yaml`, built from the shared `Dockerfile` | Runs today; the one role that exists, since `src/dnd_ai/api` has no committed source |
+| Application API | Not yet built | Will be a `compose.yaml` service, same `Dockerfile`, once `src/dnd_ai/api` exists |
+| Background worker | Not yet built | Drains the outbox (§10), delivers integrations, processes AI proposals, once built |
+| Discord adapter | Not yet built | Outbound gateway connection, once built |
+| Object storage | Not yet decided | Import source documents, exports, image layers |
+| Secrets | Environment variables / `.env` (gitignored) | No credential in an image, compose file, or source control |
 | FoundryVTT module | Runs in the user's Foundry instance | A client, not something this project deploys |
 
-The API, worker, and adapter share a single container image; the entrypoint selects the role, so there is one artifact to build, scan, and promote.
+The API, worker, and adapter will share a single container image; the entrypoint selects the role, so there is one artifact to build and promote — see [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout) and [§3.6](../DEVELOPMENT.md#36-self-hosted-docker-compose).
 
-Concrete networking, identity, deployment flow, and per-phase deployment expectations are in [PLAN.md §30](../PLAN.md#30-aws-deployment-plan-for-application-services). The database's own provisioning and migration path is [PLAN.md §29](../PLAN.md#29-aws-terraform-deployment-plan-for-postgresql).
+**AWS remains an optional, no-longer-continuously-verified deployment path.** `terraform/modules/database`/`secrets` and `terraform/environments/dev` are retained for anyone who chooses to host PostgreSQL on AWS RDS instead; an ECS Fargate/Lambda compute path for the application services remains documented, unbuilt planning material in [PLAN.md §30](../PLAN.md#30-aws-terraform-deployment-plan-for-postgresql)–[§31](../PLAN.md#31-aws-deployment-plan-for-application-services), not something any phase currently deploys to. Nothing in this project's supported, CI-verified path requires AWS.
 
 ## 18. Security model
 
@@ -563,7 +561,7 @@ Do not prematurely split domains into distributed microservices while core invar
 
 ### Integration tests
 
-Run against a local PostgreSQL 18 server during development and against the deployed AWS `dev` database in CI — never against SQLite or a mock ([PLAN.md §23.0](../PLAN.md#230-verification-policy)):
+Run against a local/self-hosted PostgreSQL 18 server during development and against a disposable containerized PostgreSQL 18 instance in CI — never against SQLite or a mock ([PLAN.md §24.0](../PLAN.md#240-verification-policy)):
 
 - PostgreSQL constraints and functions
 - transactional state/event updates
@@ -593,5 +591,5 @@ The primary end-to-end scenario is the dungeon/quest flow defined in `docs/archi
 7. Timeline resolution is centralized.
 8. Rules data is versioned and ruleset-scoped.
 9. Integrations retain internal UUID mappings.
-10. Everything is deployed to AWS and verified there before it ships. Development runs against a local PostgreSQL server of the same major version; CI against `dev` RDS is the merge gate. There is no local deployment topology ([ADR 0008](../adr/0008-aws-first-deployment-and-verification.md), [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md)).
+10. Self-hosted Docker Compose is the deployment topology, and CI verifies against containerized PostgreSQL 18 of the same major version development uses before anything ships. AWS remains an optional, no-longer-continuously-verified path ([ADR 0012](../adr/0012-self-hosted-docker-deployment-and-ci-verification.md), superseding [ADR 0008](../adr/0008-aws-first-deployment-and-verification.md) and [ADR 0011](../adr/0011-local-first-development-aws-verified-delivery.md)).
 11. The initial implementation should remain a modular monolith unless evidence supports decomposition.

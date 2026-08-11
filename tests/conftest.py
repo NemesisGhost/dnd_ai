@@ -1,20 +1,19 @@
 """Pytest configuration and shared fixtures.
 
-Per docs/PLAN.md §23.0 and ADR 0011: tests/database and tests/scenario run
-against a local PostgreSQL server by default — the same major version the
-project deploys (docs/DATABASE_CONVENTIONS.md §2.1). CI runs the identical
-suites against the deployed AWS dev RDS instance as the merge gate
-(docs/PLAN.md §29.9); this fixture does not distinguish between the two,
-because there is nothing target-specific left to distinguish. Whatever
-DATABASE_URL points at — local or dev — is treated as an admin/bootstrap
-connection with CREATEDB. Each test session creates its own throwaway
-database on it (dnd_ai_test_<random>), migrates it to head, and drops it
-afterward. Opening network access to a remote target (dev) is
-scripts/aws-db-allow-my-ip.sh's job, not this fixture's.
+Per docs/PLAN.md §24.0 and ADR 0012: tests/database and tests/scenario run
+against a PostgreSQL 18 server — a local or self-hosted install for
+development, a disposable containerized instance in CI
+(.github/workflows/ci.yml) — the same major version throughout
+(docs/DATABASE_CONVENTIONS.md §2.1). This fixture does not distinguish
+between the two, because there is nothing target-specific left to
+distinguish. Whatever DATABASE_URL points at is treated as an
+admin/bootstrap connection with CREATEDB. Each test session creates its own
+throwaway database on it (dnd_ai_test_<random>), migrates it to head, and
+drops it afterward. AWS RDS remains usable as an optional, no-longer-verified
+target for anyone who chooses it (docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md);
+scripts/aws-db-allow-my-ip.sh is the reachability mechanism for that path.
 
-If a caller has already created and migrated a database for this run — CI
-does, to share one ephemeral database across its migration checks and the
-pytest run rather than creating a second one here — set
+If a caller has already created and migrated a database for this run, set
 DND_AI_TEST_DATABASE_URL to it and this fixture connects directly instead of
 provisioning its own.
 
@@ -113,9 +112,10 @@ def _missing_database_configuration_error() -> DatabaseConfigurationError:
     return DatabaseConfigurationError(
         "Neither DATABASE_URL nor DND_AI_TEST_DATABASE_URL is set. "
         "tests/database and tests/scenario require a real PostgreSQL server "
-        "and cannot be skipped — point DATABASE_URL at a local PostgreSQL "
-        f"{REQUIRED_POSTGRES_MAJOR_VERSION} server per docs/DEVELOPMENT.md §3, "
-        "or at the AWS dev endpoint per docs/DEVELOPMENT.md §3.5."
+        "and cannot be skipped — point DATABASE_URL at a local/self-hosted "
+        f"PostgreSQL {REQUIRED_POSTGRES_MAJOR_VERSION} server per docs/DEVELOPMENT.md §3 "
+        "(compose.yaml provides one), or an optional AWS dev endpoint per "
+        "docs/DEVELOPMENT.md §3.5."
     )
 
 

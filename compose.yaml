@@ -1,0 +1,59 @@
+# Self-hosted deployment topology for the D&D AI World Platform.
+# See docs/DEVELOPMENT.md §3 (local/self-hosted setup) and
+# docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md.
+#
+# Usage:
+#   docker compose up -d db              # start PostgreSQL only (everyday development)
+#   docker compose --profile tools run --rm migrate   # apply migrations
+#   docker compose down                  # stop; add -v to also drop the data volume
+#
+# CI uses compose.ci.yaml as an override (disposable storage, no host port
+# publish) — see .github/workflows/ci.yml.
+#
+# There is no "api" service yet: src/dnd_ai/api has no committed source
+# (docs/DEVELOPMENT.md §2), so there is nothing runnable to containerize
+# beyond the database toolchain in the `migrate` service below. Add an
+# "api" service here, built from the same Dockerfile with a different
+# command, once that module exists (docs/PLAN.md §31.3).
+
+services:
+  db:
+    image: postgres:18.4
+    container_name: dnd-ai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-dnd_ai}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - dnd_ai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-dnd_ai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # One-off job, not started by `docker compose up`. Runs Alembic to head
+  # against the `db` service, using the same image the future API/worker/
+  # adapter services will share (docs/DEVELOPMENT.md §2).
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-dnd_ai}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "-c", "database/alembic.ini", "upgrade", "head"]
+
+volumes:
+  # Persistent by default — normal self-hosted use expects data to survive
+  # `docker compose down`/restarts. Backup and upgrade responsibilities for
+  # this volume: docs/DEVELOPMENT.md §3.6.
+  dnd_ai_pgdata:
+    name: dnd_ai_pgdata

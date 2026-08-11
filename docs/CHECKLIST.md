@@ -1,6 +1,6 @@
-# Pre-Deployment Checklist
+# Pre-Deployment Checklist (optional AWS path)
 
-Run through this before `terraform apply`. Explanations live elsewhere — this file is deliberately just the checks.
+**This checklist is for the optional AWS RDS path.** Self-hosted Docker Compose (`compose.yaml`) is the officially supported deployment topology and needs none of this — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md). Run through this before `terraform apply` only if you have chosen to deploy the AWS path. Explanations live elsewhere — this file is deliberately just the checks.
 
 - Setting up for the first time? [CONTRIBUTING.md](CONTRIBUTING.md)
 - Want the commands? [QUICKSTART.md](QUICKSTART.md)
@@ -10,8 +10,8 @@ Run through this before `terraform apply`. Explanations live elsewhere — this 
 
 ## Before you start
 
-- [ ] You actually need this. Everyday development runs against a **local PostgreSQL 18 server** ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)); this deploys the shared AWS environment CI verifies against ([PLAN.md §23.0](PLAN.md#230-verification-policy))
-- [ ] This is a one-time deploy of shared, always-on infrastructure — confirm `dev` isn't already deployed by someone else first (`terraform -chdir=terraform/environments/dev output`)
+- [ ] You actually need this. Everyday development runs against a **local/self-hosted PostgreSQL 18 server** ([DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup), `docker compose up -d db`); CI no longer verifies against AWS at all ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md))
+- [ ] Confirm `dev` isn't already deployed (by you, previously) first (`terraform -chdir=terraform/environments/dev output`)
 - [ ] You accept ~$25–35/month as an ongoing cost, not a per-session toggle ([CONTRIBUTING.md §6](CONTRIBUTING.md#6-cost-management))
 
 ## Tooling

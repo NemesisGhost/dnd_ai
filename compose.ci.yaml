@@ -1,0 +1,15 @@
+# CI override for compose.yaml: disposable storage, no host port publish.
+# Usage: docker compose -f compose.yaml -f compose.ci.yaml <command>
+#
+# `db`'s data directory is backed by tmpfs instead of the named
+# `dnd_ai_pgdata` volume — same mount target, so this replaces rather than
+# adds to the base definition, and nothing persists between CI runs by
+# construction. Not publishing a host port avoids depending on 5432 being
+# free on the runner.
+
+services:
+  db:
+    ports: []
+    volumes:
+      - type: tmpfs
+        target: /var/lib/postgresql/data
