@@ -94,9 +94,16 @@ branch is taken. `exc.headers` is treated the same way: it is never
 forwarded, since a directly raised `HTTPException(status_code=405,
 headers={...})` could carry any header a caller or a careless call site
 chose. A 405 response instead carries an `Allow` header this module
-recomputes itself, from the matched route's own declared `methods` (see
-`_method_not_allowed_allow_header`) — trusted routing data, not anything
-read off `exc`.
+recomputes itself (see `_method_not_allowed_allow_header`) as the union of
+`methods` across every application route whose own `.matches()` — the
+same framework logic Starlette's router uses internally, never custom
+path/regex matching — accepts the request's path, whether or not its
+method also matches; relying on `request.scope["route"]` alone would
+under-report `Allow` whenever the same path is registered as more than
+one route (e.g. separate `@app.get(...)`/`@app.post(...)` registrations
+for one path), since Starlette's router itself only remembers the first
+such route it finds. Either way, `Allow` is always trusted routing data,
+never anything read off `exc`.
 
 Every unclassified/fallback path in this module — a bare or unrecognized
 `ApiError`, an unsupported `HTTPException` status, an `IntegrityError`
@@ -138,7 +145,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Match, Route
 
 from dnd_ai.domain.errors import SafeMessageError
 
@@ -387,23 +394,41 @@ def _route_template(request: Request) -> str:
 
 
 def _method_not_allowed_allow_header(request: Request) -> str | None:
-    """A server-owned `Allow` header for a 405 response, built from the
-    matched route's own declared `methods` — never from `exc.headers`.
-    FastAPI/Starlette set `request.scope["route"]` to the matched route
-    even on a method mismatch (a "partial" match — see `starlette.routing.
-    Router.app` and `fastapi.routing.APIRoute.matches`), so this is
-    available for both a routing-generated 405 and one an endpoint raises
-    directly against its own matched route. `exc.headers` is deliberately
-    never read here: a directly raised `HTTPException(status_code=405,
+    """A server-owned `Allow` header for a 405 response — never from
+    `exc.headers`: a directly raised `HTTPException(status_code=405,
     headers={...})` can carry any header a caller or a careless call site
     chose, including one this module has no way to vet, so the value
     returned is always recomputed from trusted routing data instead of
     being taken from (or merged with) whatever the exception happened to
-    carry."""
-    route = request.scope.get("route")
-    if isinstance(route, Route) and route.methods:
-        return ", ".join(sorted(route.methods))
-    return None
+    carry.
+
+    `request.scope["route"]` alone is not enough: Starlette's router
+    remembers only the *first* route whose path matches but whose method
+    doesn't (a "partial" match — see `starlette.routing.Router.app`), so
+    when the same path is registered as separate routes per method (e.g.
+    `@app.get("/same")` and a separate `@app.post("/same")`), only the
+    first one's method(s) would ever be reported, silently omitting the
+    rest. Instead, this asks every route on the application — via each
+    route's own `.matches()`, the same framework logic Starlette's router
+    itself uses, never custom path/regex matching — whether it matches the
+    request's path at all (`Match.FULL`, method also matches, or
+    `Match.PARTIAL`, path matches but method doesn't) and unions every
+    matching route's declared `methods`. This also covers the route that
+    actually handled the request (a `Match.FULL` case) — so an endpoint
+    that explicitly raises the supported 405 contract itself still gets
+    its own methods represented — without needing `request.scope["route"]`
+    as a special case."""
+    app_routes = request.app.routes
+    methods: set[str] = set()
+    for candidate in app_routes:
+        if not isinstance(candidate, Route):
+            continue
+        match, _ = candidate.matches(request.scope)
+        if match is not Match.NONE and candidate.methods:
+            methods.update(candidate.methods)
+    if not methods:
+        return None
+    return ", ".join(sorted(methods))
 
 
 def _log_error(

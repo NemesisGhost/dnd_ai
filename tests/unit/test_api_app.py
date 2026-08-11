@@ -90,6 +90,53 @@ def test_method_not_allowed_allow_header_lists_multiple_methods_sorted() -> None
     assert response.headers["Allow"] == "GET, POST"
 
 
+def test_method_not_allowed_allow_header_unions_separately_registered_routes() -> None:
+    """The regression this pass fixes: Starlette's router remembers only
+    the *first* route whose path matches but whose method doesn't, so when
+    the same path is registered as two separate routes — one per method,
+    as `@app.get(...)`/`@app.post(...)` naturally do — `request.scope
+    ["route"]` alone would report only whichever one happened to be
+    registered first. The `Allow` header must union every route matching
+    the path, not just that one."""
+    app = create_app()
+
+    @app.get("/same")
+    def _get_same() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/same")
+    def _post_same() -> dict[str, str]:
+        return {"status": "ok"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put("/same")
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET, POST"
+
+
+def test_method_not_allowed_allow_header_excludes_unrelated_paths() -> None:
+    """A route registered at a different path must never contribute its
+    methods to another path's `Allow` header, even though both routes
+    exist on the same application and the union is computed across all of
+    them."""
+    app = create_app()
+
+    @app.get("/same")
+    def _get_same() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/unrelated")
+    def _post_unrelated() -> dict[str, str]:
+        return {"status": "ok"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put("/same")
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET"
+
+
 def test_http_exception_405_never_forwards_untrusted_headers_from_exc() -> None:
     """Negative regression: a directly raised `HTTPException(status_code=
     405, headers={...})` can carry any header a caller or a careless call
