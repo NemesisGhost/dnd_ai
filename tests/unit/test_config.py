@@ -326,3 +326,89 @@ def test_production_succeeds_with_mounted_secret_file(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["database_url"] == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
+
+
+# ---------------------------------------------------------------------------
+# The five scenarios finding 1 (correction pass) lists explicitly, all via
+# the real module-import path — this is exactly the bug that pass fixes: a
+# process whose real environment never asked for production could
+# previously be promoted into it by .env alone.
+# ---------------------------------------------------------------------------
+
+
+def test_process_environment_selects_production_env_file_is_ignored(tmp_path: Path) -> None:
+    """The real environment's own DND_AI_DATABASE_URL wins even when a
+    present .env sets a *different* one — proving the file is genuinely
+    never read in production, not merely that its absence is harmless."""
+    (tmp_path / ".env").write_text(
+        "DND_AI_DATABASE_URL=postgresql+psycopg://from-file:from-file@dbhost/dnd_ai\n",
+        encoding="utf-8",
+    )
+    result = _run_config_import(
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DND_AI_DATABASE_URL": "postgresql+psycopg://from-real-env:from-real-env@dbhost/dnd_ai",
+        },
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["database_url"] == (
+        "postgresql+psycopg://from-real-env:from-real-env@dbhost/dnd_ai"
+    )
+
+
+def test_env_file_alone_selecting_production_fails_startup(tmp_path: Path) -> None:
+    """The bug this correction pass fixes: a real process environment that
+    never mentions DND_AI_ENVIRONMENT at all must not end up in production
+    merely because .env says so. Startup must fail loudly, not start in
+    production sourced entirely from a developer convenience file."""
+    (tmp_path / ".env").write_text(
+        "DND_AI_ENVIRONMENT=production\n"
+        "DND_AI_DATABASE_URL=postgresql+psycopg://from-file:from-file@dbhost/dnd_ai\n",
+        encoding="utf-8",
+    )
+    result = _run_config_import({}, cwd=tmp_path)
+    assert result.returncode != 0
+    assert "production" in result.stderr.lower()
+    assert ".env" in result.stderr
+    # The failure must not itself leak the credential .env supplied.
+    assert "from-file" not in result.stderr
+
+
+def test_env_file_selecting_local_or_test_is_accepted(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("DND_AI_ENVIRONMENT=test\n", encoding="utf-8")
+    result = _run_config_import({}, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["environment"] == "test"
+
+
+def test_production_with_real_environment_plus_mounted_secret_is_accepted(
+    tmp_path: Path,
+) -> None:
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir()
+    (secrets_dir / "dnd_ai_database_url").write_text(
+        "postgresql+psycopg://prod:prod@dbhost/dnd_ai", encoding="utf-8"
+    )
+    result = _run_config_import(
+        {"DND_AI_ENVIRONMENT": "production", "DND_AI_SECRETS_DIR": str(secrets_dir)},
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["environment"] == "production"
+    assert payload["database_url"] == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
+
+
+def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) -> None:
+    result = _run_config_import(
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DATABASE_URL": "postgresql+psycopg://legacy:legacy@dbhost/dnd_ai",
+        },
+        cwd=tmp_path,
+    )
+    assert result.returncode != 0
+    assert "DND_AI_DATABASE_URL" in result.stderr

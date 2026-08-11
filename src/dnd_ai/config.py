@@ -29,6 +29,16 @@ URL text for whether it "looks local" — a URL that happens to mention
 `localhost` is exactly as acceptable in production, if it arrived through
 `DND_AI_DATABASE_URL`, as one that doesn't.
 
+Production is *selected*, not merely *satisfied*, by the real process
+environment only: `.env` cannot promote a process into production, even one
+that sets both `DND_AI_ENVIRONMENT=production` and a `DND_AI_DATABASE_URL`
+that would otherwise look completely valid. `_load_settings()` checks
+`DND_AI_ENVIRONMENT` again immediately after loading `.env` and treats a
+transition to `production` there as a configuration error (`.env` loading
+only ever *fills in* variables the real environment didn't already have —
+see that function's docstring) — it is a startup failure, not a value that
+gets silently ignored or silently honored.
+
 Every application-owned field is namespaced under the `DND_AI_`
 environment-variable prefix so this model never collides with, or silently
 absorbs, unrelated variables the host process carries for other tooling —
@@ -210,9 +220,34 @@ def _load_settings(*, env_file: str | os.PathLike[str] | None = None) -> Setting
     environment only — whether `.env` should be loaded at all (never in
     production; see the module docstring). `env_file` lets tests point at
     an isolated temporary dotenv without touching the repository's real
-    `.env` or relying on process-wide monkeypatching of `Path.cwd()`."""
-    if not _production_requested():
-        load_dotenv(dotenv_path=Path(env_file) if env_file is not None else _default_env_file())
+    `.env` or relying on process-wide monkeypatching of `Path.cwd()`.
+
+    `.env` cannot promote a non-production process into production either.
+    `load_dotenv()`'s default `override=False` means it only fills in
+    variables `os.environ` doesn't already have — so the *only* way
+    `DND_AI_ENVIRONMENT` can read back as `production` immediately after
+    loading `.env`, having read back as anything else just before, is that
+    `.env` itself supplied it. That is exactly the case
+    `_production_requested()`'s pre-load check exists to prevent (a
+    production process is selected by the real deployment environment, not
+    by a file this repository ships a `.env.example` for) — so it is
+    treated as a configuration error, not silently ignored or silently
+    honored.
+    """
+    if _production_requested():
+        _reject_unrecognized_env_vars()
+        return Settings()
+
+    load_dotenv(dotenv_path=Path(env_file) if env_file is not None else _default_env_file())
+
+    if _production_requested():
+        raise RuntimeError(
+            "DND_AI_ENVIRONMENT=production was found in .env, not in the real process "
+            "environment. Production must be selected by the real deployment environment — "
+            "remove DND_AI_ENVIRONMENT from .env, or set it there as an actual environment "
+            "variable instead."
+        )
+
     _reject_unrecognized_env_vars()
     return Settings()
 

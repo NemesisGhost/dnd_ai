@@ -4,14 +4,16 @@ these exercise only `dnd_ai.api.app`/`.errors`/`.correlation`, never a real
 command or query.
 """
 
+import logging
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from starlette.requests import Request
 
 from dnd_ai.api.app import create_app
-from dnd_ai.api.errors import ApiError, ForbiddenError
+from dnd_ai.api.errors import ApiError, ForbiddenError, _route_template
 from dnd_ai.domain.access import UnauthorizedTimelineError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
@@ -81,23 +83,48 @@ def test_unclassified_value_error_maps_to_fixed_non_disclosing_message() -> None
     }
 
 
-def test_safe_message_error_echoes_its_own_message() -> None:
-    """A domain error that opts into the explicit safe-message contract
-    (dnd_ai.domain.errors.SafeMessageError) gets its own text echoed, since
-    authoring it that way is exactly what the contract is for."""
+def test_bare_safe_message_error_never_echoes_constructor_text() -> None:
+    """finding 4: raising SafeMessageError does not, by itself, make the
+    constructor's text safe to return — only a subclass that explicitly
+    defines its own fixed `safe_message` can expose something specific."""
     app = create_app()
+
+    secret_looking_text = "token=SUPER_SECRET_ABC123_DO_NOT_LEAK"
 
     @app.get("/raise-safe-message-error")
     def _raise_safe_message_error() -> None:
-        raise SafeMessageError("no row with code 'bogus'")
+        raise SafeMessageError(secret_looking_text)
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/raise-safe-message-error")
 
     assert response.status_code == 400
+    assert secret_looking_text not in response.text
     body = response.json()
     assert body["error"]["code"] == "validation_failed"
-    assert body["error"]["message"] == "no row with code 'bogus'"
+    assert body["error"]["message"] == "The request could not be processed."
+
+
+def test_safe_message_error_subclass_may_expose_its_own_fixed_message() -> None:
+    """The opt-in path finding 4 describes: a subclass defines its own
+    fixed `safe_message`, independent of whatever the constructor argument
+    was — proving the contract still supports exposing something specific
+    when an author has deliberately vetted it."""
+    app = create_app()
+
+    class _KnownLookupCodeError(SafeMessageError):
+        safe_message = "no lookup row for the requested code"
+
+    @app.get("/raise-known-safe-message-error")
+    def _raise_known_safe_message_error() -> None:
+        raise _KnownLookupCodeError("raw diagnostic text a client never sees")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/raise-known-safe-message-error")
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["message"] == "no lookup row for the requested code"
 
 
 def test_domain_authorization_error_maps_to_404_non_disclosing() -> None:
@@ -245,3 +272,127 @@ def test_request_validation_error_response_shape() -> None:
         "correlation_id": body["error"]["correlation_id"],
         "fields": [{"field": "body.count", "code": "missing"}],
     }
+
+
+# ---------------------------------------------------------------------------
+# Correlation-ID validation (finding 2) — a client-supplied header is
+# bounded and character-restricted before it is ever trusted, echoed, or
+# logged.
+# ---------------------------------------------------------------------------
+
+
+def test_correlation_id_with_control_characters_is_replaced() -> None:
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz", headers={"X-Correlation-Id": "abc\r\ninjected: true"})
+    returned = response.headers["X-Correlation-Id"]
+    assert returned != "abc\r\ninjected: true"
+    assert "\r" not in returned
+    assert "\n" not in returned
+
+
+def test_correlation_id_exceeding_max_length_is_replaced() -> None:
+    too_long = "a" * 500
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz", headers={"X-Correlation-Id": too_long})
+    assert response.headers["X-Correlation-Id"] != too_long
+    assert len(response.headers["X-Correlation-Id"]) < 200
+
+
+def test_correlation_id_with_uuid_format_is_preserved() -> None:
+    valid_id = str(uuid.uuid4())
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz", headers={"X-Correlation-Id": valid_id})
+    assert response.headers["X-Correlation-Id"] == valid_id
+
+
+# ---------------------------------------------------------------------------
+# Logging (finding 2) — every handler's log line is safe by construction:
+# exception class, status/error code, correlation ID, and route template
+# only. A deliberately secret-bearing exception message must never appear
+# in any captured log record for any of these handlers.
+# ---------------------------------------------------------------------------
+
+_SECRET_BEARING_STRINGS = (
+    "password=Sup3rSecretPW!",
+    "postgresql://app:Sup3rSecretPW!@dbhost.internal:5432/dnd_ai",
+    "11111111-1111-1111-1111-111111111111",
+    "SET session_replication_role = 'origin'; -- token_value=abc123XYZ",
+)
+
+_COMBINED_SECRET_MESSAGE = " | ".join(_SECRET_BEARING_STRINGS)
+
+
+def _assert_no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> None:
+    captured_log_text = "\n".join(record.getMessage() for record in caplog.records)
+    for secret in _SECRET_BEARING_STRINGS:
+        assert secret not in captured_log_text
+
+
+def test_value_error_logging_omits_every_secret_bearing_string(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+
+    @app.get("/raise-value-error-with-secrets")
+    def _raise() -> None:
+        raise ValueError(_COMBINED_SECRET_MESSAGE)
+
+    with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/raise-value-error-with-secrets")
+
+    _assert_no_secrets_in_logs(caplog)
+    assert "ValueError" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_safe_message_error_logging_omits_every_secret_bearing_string(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+
+    @app.get("/raise-safe-message-error-with-secrets")
+    def _raise() -> None:
+        raise DomainAuthorizationError(_COMBINED_SECRET_MESSAGE)
+
+    with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/raise-safe-message-error-with-secrets")
+
+    _assert_no_secrets_in_logs(caplog)
+
+
+def test_unexpected_exception_logging_omits_every_secret_bearing_string(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+
+    @app.get("/raise-unexpected-with-secrets")
+    def _raise() -> None:
+        raise RuntimeError(_COMBINED_SECRET_MESSAGE)
+
+    with caplog.at_level(logging.DEBUG), TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/raise-unexpected-with-secrets")
+
+    _assert_no_secrets_in_logs(caplog)
+    captured_log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in captured_log_text
+    assert "Traceback" not in captured_log_text
+
+
+def test_route_template_uses_the_matched_pattern_not_the_concrete_path() -> None:
+    app = create_app()
+
+    @app.get("/campaigns/{campaign_id}/raise")
+    def _raise(campaign_id: str) -> None:
+        raise ValueError("boom")
+
+    matched_route = next(
+        route
+        for route in app.router.routes
+        if getattr(route, "path", None) == "/campaigns/{campaign_id}/raise"
+    )
+    scope = {"type": "http", "route": matched_route, "path": "/campaigns/some-real-id-123/raise"}
+    assert _route_template(Request(scope)) == "/campaigns/{campaign_id}/raise"
+
+
+def test_route_template_falls_back_when_no_route_matched() -> None:
+    scope = {"type": "http", "path": "/does-not-exist"}
+    assert _route_template(Request(scope)) == "<unmatched>"
