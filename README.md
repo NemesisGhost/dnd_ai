@@ -741,8 +741,9 @@ The database will use bounded PostgreSQL schemas:
 ├── README.md                       # This file — project entry point
 ├── CLAUDE.md                       # AI assistant operating instructions
 ├── Dockerfile                      # Shared image for migrations today; API/worker/adapter once they exist
-├── compose.yaml                    # Self-hosted deployment topology (ADR 0012)
-├── compose.ci.yaml                 # CI override: disposable storage, no host port publish
+├── compose.yaml                    # Self-hosted deployment topology (ADR 0012) — no default password, no default port
+├── compose.override.yaml           # Auto-loaded local-dev convenience: 127.0.0.1-only port
+├── compose.ci.yaml                 # CI override: disposable tmpfs storage
 ├── .dockerignore
 ├── build.ps1                       # Terraform orchestration wrapper (optional AWS path)
 ├── .env.example
@@ -820,6 +821,7 @@ Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase dev
 `compose.yaml` at the repository root is the officially supported deployment topology — PostgreSQL 18 with persistent storage, plus a `migrate` job built from the shared `Dockerfile`:
 
 ```bash
+cp .env.example .env   # then uncomment and set POSTGRES_PASSWORD — required, no default
 docker compose up -d db                          # start PostgreSQL
 docker compose --profile tools run --rm migrate   # apply migrations
 ```

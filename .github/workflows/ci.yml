@@ -130,11 +130,27 @@ jobs:
     # containerized job that exists today (Alembic migrations — see
     # Dockerfile and compose.yaml; src/dnd_ai/api has no committed source
     # yet, so there is no API smoke test to run against it).
+    #
+    # POSTGRES_PASSWORD has no fallback default in compose.yaml (see its
+    # header comment) — CI must supply one explicitly. This value is
+    # disposable: a fresh tmpfs-backed container per run, never reused,
+    # never exposed on a host port, not a real secret.
+    env:
+      POSTGRES_PASSWORD: ci_disposable_password
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate compose configuration
         run: docker compose -f compose.yaml -f compose.ci.yaml config
+
+      - name: Check CI compose config publishes no db port and mounts PostgreSQL 18 correctly
+        # Regression guard for issue-2/issue-1: asserts the *merged,
+        # interpolated* config, not just the source YAML (tests/unit/
+        # test_compose_files.py already covers the source files without
+        # Docker) — see scripts/check_compose_config.py.
+        run: |
+          docker compose -f compose.yaml -f compose.ci.yaml config --format json \
+            | python3 scripts/check_compose_config.py
 
       - name: Build application image
         run: docker compose -f compose.yaml -f compose.ci.yaml build
@@ -148,3 +164,55 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f compose.yaml -f compose.ci.yaml down -v
+
+  persistence-check:
+    name: Named volume survives container recreation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Proves the *production* self-hosted volume mechanism from
+    # compose.yaml directly — not compose.ci.yaml's disposable tmpfs
+    # override — so this deliberately does not pass -f compose.ci.yaml.
+    # Runs under a unique Compose project name (COMPOSE_PROJECT_NAME) so it
+    # can never collide with, inspect, or delete an unrelated deployment's
+    # containers or volumes on the same Docker host; that name also has no
+    # published host port (compose.yaml publishes none by design), so
+    # everything here goes through `docker compose exec`.
+    env:
+      COMPOSE_PROJECT_NAME: dnd-ai-persistence-check-${{ github.run_id }}
+      POSTGRES_PASSWORD: ci_disposable_password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start PostgreSQL and wait for health
+        run: docker compose -f compose.yaml up -d --wait --wait-timeout 60 db
+
+      - name: Write a marker row
+        run: |
+          docker compose -f compose.yaml exec -T db psql -U postgres -d dnd_ai -c \
+            "CREATE TABLE persistence_check (marker text); INSERT INTO persistence_check VALUES ('${{ github.run_id }}');"
+
+      - name: Recreate the container without touching the volume
+        run: docker compose -f compose.yaml up -d --force-recreate --wait --wait-timeout 60 db
+
+      - name: Confirm the marker survived recreation
+        run: |
+          RESULT=$(docker compose -f compose.yaml exec -T db psql -U postgres -d dnd_ai -tA -c "SELECT marker FROM persistence_check;" | tr -d '[:space:]')
+          echo "Marker after recreation: '$RESULT'"
+          if [ "$RESULT" != "${{ github.run_id }}" ]; then
+            echo "Marker did not survive container recreation — the named volume is not persisting data as expected"
+            exit 1
+          fi
+
+      - name: Tear down and remove the volume
+        if: always()
+        run: docker compose -f compose.yaml down -v
+
+      - name: Confirm the volume was actually removed by 'down -v'
+        if: always()
+        run: |
+          REMAINING=$(docker volume ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")
+          if [ -n "$REMAINING" ]; then
+            echo "Volume(s) left behind after 'down -v': $REMAINING"
+            exit 1
+          fi
+          echo "Confirmed: no volumes remain for project ${COMPOSE_PROJECT_NAME}"

@@ -58,8 +58,9 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 ├── uv.lock
 ├── .env.example
 ├── Dockerfile                 # The one image all services run from (PLAN.md §31.3)
-├── compose.yaml               # Self-hosted deployment topology (ADR 0012)
-├── compose.ci.yaml            # CI override: disposable storage
+├── compose.yaml               # Self-hosted deployment topology (ADR 0012) — no default password, no default port
+├── compose.override.yaml      # Auto-loaded local-dev convenience: 127.0.0.1-only port
+├── compose.ci.yaml            # CI override: disposable tmpfs storage
 ├── .dockerignore
 ├── docs/                      # ALL documentation (see CLAUDE.md §4)
 ├── terraform/                 # Optional AWS infrastructure (see docs/INFRASTRUCTURE.md)
@@ -210,6 +211,16 @@ Leaving that rule open is the failure mode to watch for; close it in the same se
 
 `compose.yaml` at the repository root is the officially supported way to run PostgreSQL for both everyday development and a real self-hosted deployment ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). It needs only Docker — no PostgreSQL install, no AWS account.
 
+**Required setup — `compose.yaml` will not start without it:**
+
+```bash
+cp .env.example .env
+# edit .env: uncomment POSTGRES_PASSWORD and set a real value, and update
+# DATABASE_URL's password segment to match it
+```
+
+There is deliberately **no fallback password** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one. `DATABASE_URL` (read by the application/tests) and `POSTGRES_PASSWORD` (read by `docker compose`) are two separate settings that must be kept in sync by hand.
+
 **Start and stop:**
 
 ```bash
@@ -219,14 +230,16 @@ docker compose down          # stop; data persists in the dnd_ai_pgdata volume
 docker compose down -v       # stop and delete the data volume — destructive, confirm first
 ```
 
+Plain `docker compose` commands with no `-f` flags auto-load `compose.override.yaml` alongside `compose.yaml`, which publishes PostgreSQL on `127.0.0.1:5432` — convenient for connecting a local `psql`/GUI client. **The base `compose.yaml` alone publishes no host port at all**, by design: a self-hosted deployment run explicitly as `docker compose -f compose.yaml up -d db` (bypassing the override) exposes nothing beyond the Docker network, which is what `compose.ci.yaml`'s CI usage and any real external-facing deployment should build from. If you need real external access to a self-hosted database, add your own deliberate, reviewed port mapping (and firewall rules) rather than reusing `compose.override.yaml`'s convenience default.
+
 **Configuration** is environment-variable driven, with no committed secrets — copy `.env.example` to `.env` and adjust, or export the variables directly:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `POSTGRES_USER` | `postgres` | Superuser the migrations connect and `SET ROLE migration_owner` as |
-| `POSTGRES_PASSWORD` | `postgres` | Change this for anything beyond local experimentation |
+| `POSTGRES_PASSWORD` | *(none — required)* | No fallback; `docker compose up` refuses to start without it. Must not contain URL-special characters (`@ : / ? # [ ] %`) — `migrate`'s `DATABASE_URL` is built by plain string interpolation, not URL-encoding |
 | `POSTGRES_DB` | `dnd_ai` | Database name |
-| `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on |
+| `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
 
 **Running migrations** against the composed database:
 
@@ -234,11 +247,11 @@ docker compose down -v       # stop and delete the data volume — destructive, 
 docker compose --profile tools run --rm migrate
 ```
 
-This builds the same `Dockerfile` image the future API/worker/adapter services will share and runs `alembic -c database/alembic.ini upgrade head` against `db`. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
+This builds the same `Dockerfile` image the future API/worker/adapter services will share and runs `alembic -c database/alembic.ini upgrade head` against `db` over the compose-internal network — it needs no published host port. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
 
-Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai` (adjusting for whatever you changed above) and follow [§3.4](#34-verify).
+Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:<your POSTGRES_PASSWORD>@localhost:5432/dnd_ai` (this needs `compose.override.yaml`'s port, i.e. plain `docker compose up -d db` with no `-f` flags) and follow [§3.4](#34-verify).
 
-**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically:
+**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically. Note also that PostgreSQL 18's official image stores data under `/var/lib/postgresql` inside the container (PGDATA defaults to `/var/lib/postgresql/18/docker`) — `compose.yaml` mounts the named volume there, not at the pre-18 `/var/lib/postgresql/data` path; the commands below run entirely inside the container via `docker compose exec`, so they're unaffected by that path either way:
 
 - **Backups**: `docker compose exec db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump` (copy the file out with `docker cp`), on whatever schedule your deployment needs. There is no automated backup job — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)).
 - **Restoring**: `docker compose exec -T db pg_restore -U postgres -d dnd_ai -c` piped the dump back in, against a database at the same or a newer PostgreSQL major version.
