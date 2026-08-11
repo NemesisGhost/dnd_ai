@@ -1003,6 +1003,8 @@ GM administrative visibility does not make a GM-controlled character an in-world
 
 Clients—including the web portal, Foundry, imports and any future Discord integration—never determine their own authorization. PostgreSQL constraints preserve grant integrity, while the application query and command layers calculate and enforce effective access. Database row-level security may be added as defense in depth later, but it does not replace the application-level perspective and knowledge rules.
 
+**Steps 1-5 and 7 delivered by Phase 10 workstream 2** (`src/dnd_ai/domain/access.py`, no migration — schema-only, built on revision 080). `resolve_user_by_external_identity()` resolves step 1; `resolve_access_context()` resolves steps 2-5 and 7 into one `AccessContext`, whose `has_capability()` combines role- and character-relationship-derived baseline capabilities with active direct/access-group resource grants, an explicit `deny` always overriding an `allow` at the same resource target (§19.6). Deliberately out of scope for this workstream, left for the query/command/API workstreams that actually have the context to do them correctly: step 6 (party/public knowledge-derived access — depends on the knowledge domain's own visibility rules, §14, and a selected character perspective the resolver itself doesn't have), step 8 (row/field/search/AI-context filtering — what callers do *with* an `AccessContext`, not part of resolving one), and step 9 (auditing sensitive reads — only the caller knows which read was sensitive; this module is called on every query and command, so it is the wrong layer to decide that). Covered by `tests/database/test_access_resolution.py` against the real `security.*` schema.
+
 ### Audit
 
 - `audit.change_log`

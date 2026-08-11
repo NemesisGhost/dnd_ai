@@ -13,6 +13,12 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # .env is shared with non-Python tooling (the AWS CLI, Terraform) that
+        # reads its own variables (AWS_REGION, AWS_PROFILE, ...) directly from
+        # the process environment rather than through this model — pydantic-
+        # settings' default extra="forbid" would otherwise fail Settings()
+        # entirely the first time any of those is present.
+        extra="ignore",
     )
 
     environment: str = "local"
