@@ -153,7 +153,14 @@ jobs:
             | python3 scripts/check_compose_config.py
 
       - name: Build application image
-        run: docker compose -f compose.yaml -f compose.ci.yaml build
+        # `migrate` carries `profiles: ["tools"]` (compose.yaml), which
+        # `docker compose build` — like `up`/`config` — filters out unless
+        # named explicitly or activated with `--profile`; a bare `build`
+        # here silently builds nothing ("No services to build") rather
+        # than failing, confirmed locally. Name the service so this step
+        # actually proves the image builds instead of relying on `run
+        # --rm migrate` below to build it implicitly on first use.
+        run: docker compose -f compose.yaml -f compose.ci.yaml build migrate
 
       - name: Start disposable PostgreSQL and wait for health
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d --wait --wait-timeout 60 db
