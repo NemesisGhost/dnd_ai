@@ -802,6 +802,8 @@ All design and process documentation lives under `docs/`; only `README.md` and `
 
 ## Getting Started
 
+Self-hosted Docker Compose ([ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) is the officially supported deployment topology. The planned production target is the existing Ubuntu mini-PC that hosts FoundryVTT, with D&D AI running as a separate Docker Compose-managed application (React, FastAPI/Uvicorn, PostgreSQL, and required workers) behind a shared reverse proxy and No-IP-managed public DNS — see [ADR 0013](docs/adr/0013-locally-host-production-on-existing-mini-pc.md) and [the local deployment runbook](docs/LOCAL_DEPLOYMENT.md) for that (not yet implemented) plan. AWS RDS remains available as an optional, no-longer-CI-verified path; no teardown is required or scheduled.
+
 New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing

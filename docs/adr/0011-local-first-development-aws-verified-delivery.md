@@ -1,4 +1,4 @@
-# ADR 0011: Local-first development, AWS-verified delivery
+# ADR 0011: Local-first development, AWS-verified delivery (historical verification policy)
 
 - **Status**: Superseded by [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md)
 - **Date**: 2026-08-07

@@ -172,7 +172,10 @@ def make_campaign_membership(
                 :campaign, :user,
                 (SELECT membership_status_id FROM security.membership_statuses WHERE code = :status),
                 now(),
-                CASE WHEN :ended THEN now() ELSE NULL END
+                -- +1 microsecond: now() is frozen for the whole test transaction, so a bare
+                -- now() here would tie joined_at exactly and trip
+                -- ck_campaign_memberships_ended_after_joined's strict ">".
+                CASE WHEN :ended THEN now() + interval '1 microsecond' ELSE NULL END
             )
             RETURNING campaign_membership_id
         """),

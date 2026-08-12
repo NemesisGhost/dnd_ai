@@ -501,6 +501,9 @@ Required controls:
 - row-level security only where it provides clear value
 - audit logging for privileged changes
 - strict separation between model-provider credentials and client access
+- `Secure`, `HttpOnly`, narrowly scoped authentication cookies and CSRF protection for cookie-authenticated mutations
+- reverse-proxy and/or application rate limiting for login and expensive AI endpoints
+- no direct public access to PostgreSQL or Uvicorn
 
 ## 19. Observability
 
@@ -527,7 +530,10 @@ Operational telemetry should include:
 ## 20. Failure handling
 
 - Domain validation failures return structured errors without partial writes.
-- Optimistic concurrency failures return a retriable conflict.
+- A generic request-validation response never exposes a caller-controlled field *location* (a dynamic dictionary key, a rejected extra-field name, a discriminator value, an input-derived alias, an arbitrary index), and never a pydantic error-*type* string either — only a small, fixed, public vocabulary the API layer owns (`missing`/`invalid_type`/`invalid_format`/`out_of_range`/`invalid`), matched by exact lookup against a closed set of real pydantic type strings, never by regex or character shape; every unmapped or custom type — built-in or `PydanticCustomError`-supplied, however identifier-shaped — falls back to `invalid`. Validation failures are logged through the same sanitized, fixed-shape path as every other API error, never with raw errors, locations, per-error codes, or rejected input.
+- Every `ApiError`'s status code, public error code, and public message are fixed, type-level properties of one of a small number of explicit, registered subclasses — never constructor-supplied. The complete `(status, code, message)` triple, not each field independently, is checked against that registry before reaching a response or a log line; an unrecognized subclass or any mismatched/altered field falls back to the fixed internal-error contract. A framework-raised `HTTPException`'s status code is bounded the same way: only a small, explicit set of supported statuses (at minimum routing 404/405) is ever forwarded to a response, and any other status — however HTTP-shaped — gets the identical fixed internal-error fallback rather than being forwarded verbatim. `HTTPException.headers` is never forwarded either — a directly raised instance can carry any header a caller or a careless call site chose — so a 405 response's `Allow` header is instead recomputed by the API layer itself, as the union of declared methods across every application route whose own framework-provided route-matching accepts the request's path (not merely the single route Starlette's router happens to remember on a method mismatch, which under-reports when the same path is registered as more than one route). Every unclassified/fallback path in the API layer (an unrecognized `ApiError`, an unsupported `HTTPException` status, an unclassified `IntegrityError`, an otherwise-unhandled exception) returns and logs the identical fixed 500/`internal_error` contract — one constant, not a separately worded copy per handler. Every handler computes exactly one validated classification and reuses it for both the response and the log line.
+- A unique/exclusion-constraint conflict returns a fixed, non-disclosing 409 — a genuine conflict, but not a claim that retrying the same request will succeed; only a command that recognizes a specific, demonstrated optimistic-concurrency or idempotency case may say retrying/re-reading is appropriate, through its own exception type.
+- An integrity failure the application layer cannot confidently classify (a missing or unrecognized SQLSTATE) is treated as an internal error (500), not guessed at as a 400 or 409 — that ambiguity itself is evidence of an application/schema/runtime defect.
 - External integration failures are retried through durable queues.
 - AI failures do not roll back already-committed world changes.
 - Failed outbox deliveries remain visible and retryable.

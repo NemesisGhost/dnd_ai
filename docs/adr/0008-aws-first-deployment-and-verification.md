@@ -1,4 +1,4 @@
-# ADR 0008: Everything deploys to and is verified in AWS
+# ADR 0008: Everything deploys to and is verified in AWS (historical)
 
 - **Status**: Superseded by [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md)
 - **Date**: 2026-07-31

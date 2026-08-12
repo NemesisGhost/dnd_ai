@@ -192,6 +192,13 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: dnd-ai-persistence-check-${{ github.run_id }}
       POSTGRES_PASSWORD: ci_disposable_password
+      # Never actually used — this job only starts `db` — but `docker
+      # compose` interpolates every service's environment block up front,
+      # regardless of which service is targeted, so `migrate`'s required
+      # MIGRATION_DATABASE_URL (no fallback default, by design) must still
+      # resolve or `up -d db` below fails at config-parsing time before it
+      # starts anything.
+      MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

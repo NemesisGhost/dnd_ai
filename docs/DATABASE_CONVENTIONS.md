@@ -1314,6 +1314,8 @@ External commands and integration messages should support idempotency keys.
 
 ## 27. Security conventions
 
+For local production, PostgreSQL runs on a private Docker network with no public host port. Application and migration roles remain separate and least-privileged; moving from RDS does not collapse bootstrap ownership, login-role, migration, extension, or backup responsibilities. Secrets are provided from outside the repository. Logical backups and uploaded-file backups must have an offsite copy and be restore-tested before AWS retirement.
+
 ### 27.1 Database roles
 
 Separate the role that **owns** objects from the roles that **log in**. One owning role, five login roles:

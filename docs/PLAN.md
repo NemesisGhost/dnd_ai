@@ -33,6 +33,7 @@
 - [29. Definition of implementation success](#29-definition-of-implementation-success)
 - [30. AWS Terraform deployment plan for PostgreSQL](#30-aws-terraform-deployment-plan-for-postgresql)
 - [31. AWS deployment plan for application services](#31-aws-deployment-plan-for-application-services)
+- [32. Local production deployment plan](#32-local-production-deployment-plan)
 
 ---
 
@@ -1325,7 +1326,7 @@ The MVP includes:
 - an on-demand assistant for campaign summaries, details, rules questions, and GM preparation using authorized structured queries and cited rules/reference passages
 - observer views built from explicitly published or granted resources
 - GM tools for canon browsing, preparation, visibility preview, user invitations, role assignment, user-character relationships, resource grants, and audit history
-- Phase 14 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
+- Phase 15 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
 
 The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience.
 
@@ -1542,11 +1543,15 @@ Exit criteria:
 
 ### Phase 10: Core API and playable vertical slice
 
+> **Revised deployment boundary:** Phase 10 continues and delivers the portable application/API layer for local production. FastAPI runs under Uvicorn in a container and connects to local PostgreSQL through private Compose networking. Lambda, Mangum, API Gateway, Lambda IAM/deployment packaging, AWS-only networking/RDS access, and AWS-specific production telemetry are not required acceptance criteria. If a Lambda adapter exists or is later useful, it must remain isolated and optional.
+
 Phase 10 delivers the smallest usable application boundary over the existing domain and persistence layers. It owns the end-to-end vertical slice in [§25](#25-vertical-slice-acceptance-scenario), establishes the security boundary used by every client, and is the first phase with an application deployable.
+
+**Progress.** Workstream 1 (`080_security_identity_and_access`) delivered the `security.*` schema. Workstream 2 (`src/dnd_ai/domain/access.py`) delivered the effective-access resolver, including the rule that a campaign resolves access only against its own pinned timeline — never an unrelated timeline, branch, or a different world's — documented in that module and in [DATABASE_MODEL.md §19.7](architecture/DATABASE_MODEL.md#197-effective-access-resolution); a mismatch raises `UnauthorizedTimelineError`, mapped at the API boundary to a fixed, non-disclosing 404 rather than echoing the timeline/campaign IDs involved. Workstream 3 (`src/dnd_ai/api/`) delivered the FastAPI application skeleton: `/healthz` (process liveness) and `/readyz` (a real database round trip through the normal engine wiring, failing closed with a fixed, non-secret body), correlation IDs (a client-supplied `X-Correlation-Id` is length- and character-validated before being trusted, echoed, or logged — never passed through verbatim), and one-transaction-per-request dependency. `src/dnd_ai/domain/errors.py`'s `SafeMessageError`/`DomainAuthorizationError` give a domain error explicit, type-level control over its client-facing message: `safe_message` is a fixed string owned by the exception *type*, never derived from the constructor argument (`str(self)`), so raising `SafeMessageError` with some text does not, by itself, make that text safe to expose — only a subclass that deliberately defines its own `safe_message` can. Every API error handler logs one fixed-shape, safe line — exception class, response status/error code, correlation ID, and the matched route *template* — and never `str(exc)`, a traceback, or any other exception-specific text, for any handler, including the ones that previously used `logger.exception`/`exc_info=`. `IntegrityError` is classified by PostgreSQL SQLSTATE: unique/exclusion-constraint violations map to a fixed 409 that describes the conflict but makes no retry promise (a unique violation is not, by itself, a demonstrated case where retrying the same request would succeed — only a command that recognizes a specific optimistic-concurrency/idempotency case should say that, through its own exception type); not-null/foreign-key/check violations map to a conservative, non-disclosing 400; and a missing or unrecognized SQLSTATE — evidence of an application/schema/runtime defect, not a request the caller could have made differently — maps to a fixed 500, never guessed at as 400 or 409. A follow-up correction pass closed four further deployable-boundary gaps once the first Phase 10 cut was reviewed against ADR 0012: `ApiError` and framework-raised `StarletteHTTPException`s (FastAPI's own routing 404/405, or any `HTTPException(...)` a call site raises) now carry the identical fixed, type-level `safe_message` discipline `SafeMessageError` already had — `ApiError.safe_message` is a class attribute, never the constructor's `detail` argument, and `exc.detail` on a framework `HTTPException` is never trusted or echoed, only its `status_code` selecting a fixed message from a closed vocabulary; request-validation field *locations* (`fields[].field`) are bounded and character-restricted before being echoed, since a `loc` entry can itself carry an `extra="forbid"` model's rejected extra key or a `dict[str, X]` body's own key verbatim from the request, not just an ordinary field name; and the accepted `X-Correlation-Id` shape was narrowed from a loosely bounded `[A-Za-z0-9._-]{1,100}` character class (which still admitted token/password-like text that would then be echoed and logged) to exactly a canonical UUID, normalized to lowercase, with anything else replaced by a freshly generated server UUID. A second correction pass found that character-shape filtering on a validation field *location* was itself the wrong tool — an identifier-shaped secret (`SUPER_SECRET_TOKEN_ABC123`) is indistinguishable by shape from a legitimate dynamic key — so `fields[].field` is gone entirely: the generic 422 response now carries only `error_codes`, a bounded, allowlisted list of pydantic's own error-*type* codes with no location of any kind, and `handle_validation_error` logs through the same sanitized `_log_error` path every other handler uses instead of logging nothing. The same pass also closed `ApiError`'s remaining ad hoc path: the `error_code=`/`status_code=` constructor overrides (added in the first Phase 10 cut for "ad hoc" cases) let a raise site turn arbitrary runtime values into public response/log fields, so they're gone — `status_code`, `error_code`, and `safe_message` are now exclusively fixed, type-level class attributes on `ApiError` and its four narrowly scoped subclasses (`UnauthorizedError`/`ForbiddenError`/`NotFoundError`/`ConflictError`), and `handle_api_error` additionally re-validates even a subclass's own attributes against a small, fixed, server-owned vocabulary before trusting them, falling back to the base class's fixed internal-error contract for anything unrecognized. A third correction pass found that second pass's "small, fixed, server-owned vocabulary" was still too permissive — it checked `status_code` and `error_code` independently (any identifier-shaped code paired with any status from a small set), which doesn't enforce that a *particular* triple was ever actually registered. `dnd_ai.api.errors._API_ERROR_CONTRACTS` now maps each exact recognized `ApiError` subclass to its one fixed `(status_code, error_code, safe_message)` triple, and `_validated_api_error_response` requires the exception's current attributes to equal that triple exactly — an unrecognized subclass, a status paired with the wrong code, or an altered message on an otherwise-known type all fall back identically. The same pass closed two further gaps: `_sanitize_validation_error_types` no longer echoes pydantic's own `type` string at all, even syntax-checked — an identifier-shaped custom-validator type (`secret_token_abc123`) passed the same character check a real pydantic type would, and pydantic's internal vocabulary isn't a contract this module should mirror anyway — so validation responses now carry only a small, fixed public vocabulary (`missing`/`invalid_type`/`invalid_format`/`out_of_range`/`invalid`) mapped by exact dict lookup against a closed set of real pydantic type strings, with every unmapped type (built-in or custom) falling back to `invalid`; and `handle_http_exception` no longer forwards `exc.status_code` to the response verbatim for an unrecognized value — `_SUPPORTED_HTTP_EXCEPTION_STATUSES` is now the complete, explicit set of framework statuses this application forwards (currently just routing 404/405), and anything else, however HTTP-shaped, gets the fixed 500/internal-error contract instead. A fourth correction pass closed two remaining gaps found after that third pass: `handle_http_exception` returned a 405 with no `Allow` header at all, and separately, unrecognized/unclassified failures across different handlers described the identical 500/`internal_error` category with two different wordings ("The request could not be processed." from `ApiError`'s own base-class default versus "An unexpected error occurred." everywhere else). `dnd_ai.api.errors._INTERNAL_ERROR_CONTRACT` is now the one canonical, immutable `(500, "internal_error", "An unexpected error occurred.")` triple every unclassified/fallback path returns and logs — `ApiError`'s own class attributes are defined from it, so a bare or unrecognized `ApiError` is exactly this contract rather than a fourth independently-maintained copy. A 405 response now carries a server-constructed `Allow` header (`_method_not_allowed_allow_header`), never from `exc.headers` — a directly raised `HTTPException(status_code=405, headers={...})` could otherwise carry a forged `Allow` value or an arbitrary sensitive header a caller or careless call site chose. A fifth correction pass found that fourth pass's `Allow` construction was itself incomplete: it read only `request.scope["route"]`, but Starlette's router remembers just the *first* route whose path matches but whose method doesn't, so when the same path is registered as separate routes per method (e.g. `@app.get("/same")` and a separate `@app.post("/same")`), the header reported only the first one's method, silently omitting the rest. `_method_not_allowed_allow_header` now unions `methods` across every application route whose own `.matches()` — the same framework logic Starlette's router uses internally, never custom path/regex matching — accepts the request's path, whether by a full or partial match; an endpoint that explicitly raises the supported 405 contract is covered by the same general union rather than a special case, and an unrelated path never contributes methods to another path's header. Application configuration (`src/dnd_ai/config.py`) is namespaced under `DND_AI_*` with an explicit allowlist for the test/CI/seed variables that share the namespace but belong to other subsystems (`DND_AI_TEST_DATABASE_URL`, `DND_AI_CI_DB_NAME`, `DND_AI_SEEDS_DIR`), and is genuinely fail-closed in production: `DND_AI_ENVIRONMENT=production` is selected only by the real process/deployment environment (checked before `.env` is even considered for loading), skips loading `.env` entirely once selected, and requires `DND_AI_DATABASE_URL` (a real environment variable or a mounted secret file named `dnd_ai_database_url`) — the legacy unprefixed `DATABASE_URL` alias and the local-dev default both remain local/test-only, and `.env` cannot promote a process into production either: if the real environment doesn't already request it, `.env` is loaded, but if `.env` itself then sets `DND_AI_ENVIRONMENT=production`, that fails startup outright rather than silently taking effect. Still to come are authentication verification, command/query endpoints and contracts, Uvicorn/container execution, and Compose/reverse-proxy integration. A Lambda adapter is neither required nor part of the production path; see ADR 0012.
 
 Deliver:
 
-- a FastAPI application entry point and a Lambda ASGI adapter
+- a FastAPI application entry point executed by Uvicorn and containerized as a portable service
 - database transaction and session management with cross-domain transaction boundaries owned by the application layer
 - command endpoints over the existing command/application services
 - query services for the effective dungeon, character, quest, relationship, inventory, encounter, and knowledge state required by the vertical slice
@@ -1557,7 +1562,8 @@ Deliver:
 - centralized access resolution and server-side filtering for rows, fields, relationships, counts, search results, and summary inputs
 - audit records for login-linked identity changes, role/access changes, sensitive reads, and all writes
 - correlation and idempotency identifiers and consistent error contracts
-- one cost-conscious AWS path: API Gateway HTTP API to one modular FastAPI Lambda handler, as defined in [§31](#31-aws-deployment-plan-for-application-services)
+- health and readiness endpoints; environment-variable or mounted-secret configuration; local PostgreSQL connectivity; and Docker Compose integration appropriate to this phase
+- one local path through the reverse proxy, as defined in [§32](#32-local-production-deployment-plan)
 - end-to-end execution of the existing vertical-slice acceptance scenario through the API
 
 Keep the endpoint surface limited to what that scenario needs:
@@ -1577,6 +1583,8 @@ Exit criteria:
 > The complete vertical-slice scenario executes through the application API without direct client writes to PostgreSQL. Authenticated GM, player, and observer requests receive only their permitted rows, fields, relationships, search results, counts, and summaries; a user can relate to multiple characters and a character or fact can relate to multiple users. Required cross-domain changes commit atomically, retries do not duplicate effects, and campaign/timeline isolation is preserved.
 
 Testing focuses on application behavior and this end-to-end scenario. Do not create another generalized test framework or duplicate database invariants already adequately tested in earlier phases.
+
+Phase 10 also proves secure authentication cookies, CSRF protection, and player, GM, observer, and user-to-detail many-to-many access enforcement through the reverse proxy. Its application contracts, command/query services, transaction/session management, validation, authorization, audit, correlation, and idempotency behavior remain platform-neutral.
 
 ### Phase 11: Foundry MVP
 
@@ -1627,7 +1635,7 @@ Exit criteria:
 
 Do not create a general-purpose document-ingestion or vector-search framework for this scenario. Defer embeddings and broad retrieval-augmented-generation infrastructure until structured metadata, relational retrieval, and PostgreSQL full-text search have proved insufficient. Normal automated tests must not depend on live provider calls; real-provider testing is limited to deliberate smoke verification.
 
-### Phase 13: Web portal MVP
+### Phase 13: Web portal MVP and same-origin packaging
 
 The web portal becomes the primary out-of-session interface over the Phase 10 API and Phase 12 on-demand assistant. Implement the bounded experience in [§23](#23-identity-authorization-and-web-portal-implementation) and [UI_DESIGN.md](UI_DESIGN.md); do not turn this phase into an unrestricted content-management platform.
 
@@ -1651,7 +1659,29 @@ Exit criteria:
 - A GM can preview the portal as a selected user/character perspective before publishing or granting information.
 - Portal commands use the same authorization, command, query, audit, visibility, and idempotency boundaries as Foundry and other API clients.
 
-### Phase 14: World and campaign-data import
+### Phase 14: Local production deployment and hardening
+
+Deliver:
+
+- Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration;
+- production multi-stage Dockerfiles and `.dockerignore` files that produce minimal, non-root runtime images, with dependencies pinned and images tagged immutably to a release and Git commit;
+- an explicitly recorded mini-PC CPU architecture and a build/release path that produces compatible images (including a multi-platform build when development/CI and production architectures differ);
+- a version-controlled `compose.yaml` with health checks, dependency readiness, persistent named volumes, external secret/configuration inputs, and a one-off migration service using the same application image as the API/worker where practical;
+- private networking with no public PostgreSQL port and no direct Uvicorn exposure;
+- preferred same-origin `world` UI plus `/api/*`, separate Foundry routing, No-IP updates, and automatic HTTPS;
+- secure cookies, CSRF, login/AI rate limits, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
+- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery, including documented one-command deployment and application-image rollback procedures that preserve the prior image and account for schema compatibility; and
+- end-to-end local verification of Phase 10 authentication, authorization, and the vertical slice.
+
+Exact hostnames remain a deployment-time decision. Foundry and D&D AI retain separate data, authentication, configuration, lifecycle, and backups. The detailed acceptance gate is [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#production-readiness-gate).
+
+Exit criteria:
+
+- A clean checkout can build the production images and deploy the complete D&D AI stack on the recorded mini-PC architecture using the documented command without editing tracked files on the host.
+- The deployed containers run as non-root where the upstream service permits it, become healthy through Compose, retain database and uploaded data across container replacement, and run migrations as an explicit one-off deployment step rather than as an uncontrolled API-startup side effect.
+- An immutable prior application release can be selected and restored with the documented rollback command; the procedure is exercised against a compatible schema or, when a schema rollback is required, against the matching verified database restore point.
+
+### Phase 15: World and campaign-data import
 
 World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
 
@@ -1679,7 +1709,9 @@ Exit criteria:
 
 ### Later phases: demonstrated-need expansion
 
-Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, broader import automation, and Discord integration follow only when demonstrated need exists. Until Phase 10 is usable, explicitly defer staging and production environments, three continuously running Fargate services, an Application Load Balancer, a NAT gateway, a continuously polling background worker, comprehensive embeddings or RAG, broad economy or NPC simulation, administration features beyond the bounded Phase 13 portal and Phase 14 import review, generalized reference-ingestion or world/campaign-data import frameworks, and premature performance optimization.
+After revised Phase 14 passes, perform a bounded AWS-retirement workstream: inventory resources; take final snapshots/logical exports; migrate retained data; verify local restoration, extensions, roles, migrations, vertical slice, proxy authentication/authorization, and backups; obtain explicit teardown approval; remove resources through existing infrastructure as code; and confirm recurring charges stop. Until then RDS and other AWS assets are transitional infrastructure and must not be deleted. AWS-to-local replication and hybrid production are not normal architecture.
+
+Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, broader import automation, and Discord integration follow only when demonstrated need exists. Defer AWS application infrastructure, hybrid production, continuously polling workers without a workload, comprehensive embeddings/RAG, broad economy or NPC simulation, administration beyond the bounded portal/import review, generalized import frameworks, and premature performance optimization. A VPS or AWS move requires measured availability, bandwidth, capacity, security, recovery, or maintenance justification.
 
 ---
 
@@ -2048,7 +2080,7 @@ This reuses infrastructure that already exists rather than adding a new module. 
 
 ## 31. AWS deployment plan for application services
 
-> **Optional, no longer the default path (2026-08-11).** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology for whatever application services eventually exist — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §2](DEVELOPMENT.md#2-repository-layout). Everything below remains documented, unbuilt planning material for anyone who chooses AWS instead; it is not a current delivery obligation, and no phase has deployed anything under this section yet.
+> **Optional, no longer the default path (2026-08-11).** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology for whatever application services eventually exist — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §2](DEVELOPMENT.md#2-repository-layout). Everything below remains documented, unbuilt planning material for anyone who chooses AWS instead; it is not a current delivery obligation, and no phase has deployed anything under this section yet. [§32](#32-local-production-deployment-plan) covers the officially supported self-hosted path.
 
 ### 31.1 Scope and initial target
 
@@ -2133,7 +2165,8 @@ The additional obligations in this section begin when the corresponding deployab
 | Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
 | Phase 12 (Narrow AI/NPC MVP) | Deliberate one-provider smoke verification for NPC and audience-aware assistant behavior only; normal automated tests use no live provider |
 | Phase 13 (Web portal MVP) | Versioned static React portal; GM, player, assistant-GM, and observer flows exercised against the live authenticated API |
-| Phase 14 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
+| Phase 14 (Local production hardening) | Compose, local PostgreSQL, reverse proxy, No-IP/HTTPS, backup/restore, security and operational controls verified end to end |
+| Phase 15 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
 
 A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§24.0](#240-verification-policy)), but there is no local substitute for the deployment itself.
 
@@ -2144,3 +2177,15 @@ A phase is not done when its code merges; it is done when its deployables are ru
 - **CI/CD platform**: GitHub Actions is already used for CI ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)); deployment is assumed to extend it rather than introduce a second system, but the OIDC role and environment protection rules are unbuilt.
 - **`staging`/`prod` environments** remain unbuilt per [§30.3](#303-environments-dev-staging-prod); everything above is specified for `dev` first.
 - **Cost and scaling**: set bounded Lambda concurrency from the development RDS connection budget, begin with direct connections, and measure before adding RDS Proxy, persistent compute, NAT, or performance infrastructure.
+
+---
+
+## 32. Local production deployment plan
+
+Production is planned to run on the existing Ubuntu mini-PC using Docker Compose, per [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md), which builds on [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)'s self-hosted Docker Compose decision. Nothing in this section is built yet.
+
+The application project would contain the React UI, FastAPI under Uvicorn, PostgreSQL, and only those worker/scheduled-job containers the delivered features require. A Caddy- or Traefik-class reverse proxy would be the sole inbound HTTP/HTTPS service; PostgreSQL and Uvicorn would publish no host ports. The preferred routes are `world.<domain>/` for UI, `world.<domain>/api/*` for API, and `foundry.<domain>/` for Foundry; ADR 0013 records both supported DNS arrangements without inventing a domain.
+
+Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 13 packages React for the same `world` origin. Phase 14 would integrate Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
+
+AWS RDS remains available as an optional, no-longer-CI-verified path regardless of whether this plan is ever built ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)); nothing here requires tearing it down.
