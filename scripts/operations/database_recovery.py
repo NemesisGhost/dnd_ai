@@ -1,36 +1,55 @@
 """Production database recovery operations for the self-hosted Docker Compose topology.
 
 Consolidates the destructive Compose/psql sequences documented in
-docs/DEVELOPMENT.md §3.6 (backup, role bootstrap, restore, verification,
-teardown) into one auditable, cross-platform tool, so the exact flags,
-environment file, project name, and database identity used are identical
-regardless of which shell invokes it.
+docs/operations/DATABASE_RECOVERY.md (backup, role bootstrap, restore,
+verification, teardown) into one auditable, cross-platform tool, so the
+exact flags, environment file, project name, and database identity used are
+identical regardless of which shell invokes it.
 
-Every mutating command (`restore`, `bootstrap-roles`) is split into two
-strict phases:
+Safety model — three levels, not a single "read-only" claim:
 
-  Phase A — preflight. Read-only. Validates arguments, files, Compose
-  configuration, server reachability, required confirmation flags, dump
-  archives, and (via an active connection, not just a flag) the actual
-  database a migration run would target. Nothing is created, dropped, or
-  modified in this phase, and it ends with a printed
-  "PREFLIGHT PASSED — beginning destructive recovery" boundary.
+  static           Argument/placeholder/path validation and Compose
+                    configuration rendering. No container needs to be
+                    running; nothing is created.
 
-  Phase B — mutation. Only entered once every Phase A check has passed.
+  docker-ephemeral  May run `docker compose exec`/`cp` against an ALREADY
+                    RUNNING `db` container (no new container created), and
+                    may create a genuinely new one-off container via
+                    `docker compose run --rm` for the migration-target
+                    check (which requires the `migrate` image to already
+                    exist — see `check_migrate_image_present`; this script
+                    never lets that check silently trigger a build). None
+                    of this creates, drops, or alters any PostgreSQL
+                    database, role, or volume.
 
-`preflight` and `validate-archive` expose Phase A's checks as their own
-read-only commands, callable independently of any mutation.
+  destructive       Force-drops/recreates a database, runs real migrations,
+                    restores a dump, or `down -v`s a project. Always gated
+                    behind an explicit `--confirm-*` flag, checked before
+                    any subprocess — Docker-ephemeral or otherwise — runs.
+
+`restore` and `bootstrap-roles` run their static and docker-ephemeral
+checks (their "preflight") before doing anything destructive, and refuse to
+continue — without touching the target application database, role, or
+volume — if any of those checks fails. That is the guarantee this script
+makes: not "nothing happens," but "no PostgreSQL state changes, and no
+destructive step runs, until every preflight check has passed." The
+standalone `preflight` command exposes the same static/docker-ephemeral
+checks on their own, for inspection independent of any mutation — see its
+own docstring/help for exactly which checks run at which `--level`.
 
 This script never reads or prints POSTGRES_PASSWORD, MIGRATION_DATABASE_URL,
 or any other credential — it only ever passes `--env-file <path>` through to
 `docker compose`, which resolves secrets itself, and the one place it reads
 a database connection's identity (`verify_migration_target`) prints only the
-resulting database/user names, never the URL. Every subprocess is invoked as
-an argument list (never `shell=True`, never a string re-parsed by a shell),
-and every configurable SQL identifier this script builds itself (database
-names) is passed through psql's `-v`/`:'var'`/`\\gexec` safe-substitution
-mechanism rather than string-interpolated into SQL text — see
-`_grant_create_on_database`'s docstring for why.
+resulting database/user names, never the URL. `docker compose config`'s
+JSON output is parsed in memory and never printed in full — callers only
+ever extract and display non-secret structural fields (service names, port
+bindings). Every subprocess is invoked as an argument list (never
+`shell=True`, never a string re-parsed by a shell), and every configurable
+SQL identifier this script builds itself (database names) is passed through
+psql's `-v`/`:'var'`/`\\gexec` safe-substitution mechanism rather than
+string-interpolated into SQL text — see `_grant_create_on_database`'s
+docstring for why.
 """
 
 from __future__ import annotations
@@ -79,14 +98,34 @@ DEFAULT_LIKE_PROJECT_NAMES = frozenset({"default", "compose", "docker-compose"})
 
 MAINTENANCE_DATABASE = "postgres"
 
-# Runs a small psycopg-based check inside the `migrate` service's own
-# container/environment, so the database it actually connects to is proven
-# by a live connection through the exact configuration a real migration run
-# would use — never by re-parsing the dotenv file (which this script never
-# opens) and never by printing the connection URL. Only the resulting
-# database and user names are printed, tab-separated on their own line, so
-# the caller can find them even alongside `docker compose run`'s own
-# container-lifecycle chatter.
+# Host addresses that mean "every interface," not "this machine only" — a
+# published port bound to one of these is reachable from other machines on
+# the network, not just localhost.
+ALL_INTERFACES_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
+
+# compose.yaml's `migrate` service has no explicit top-level `image:` — only
+# `build:` — so Compose derives its image tag as `<project>-migrate:latest`
+# (confirmed against installed Compose v5.3.1: `docker compose config
+# --images` and the "naming to docker.io/library/<project>-migrate:latest"
+# line printed by an actual build both match this pattern). Computing it
+# directly, rather than parsing it out of rendered JSON (which does not
+# include a synthesized `image` key when only `build:` is set), is simpler
+# and does not depend on that JSON-shape assumption holding across versions.
+def _migrate_image_ref(project: str) -> str:
+    return f"{project}-migrate:latest"
+
+
+# Runs a small psycopg-based check inside a one-off `migrate` service
+# container, so the database it actually connects to is proven by a live
+# connection through the exact configuration a real migration run would use
+# — never by re-parsing the dotenv file (which this script never opens) and
+# never by printing the connection URL. Only the resulting database and
+# user names are printed, tab-separated on their own line, so the caller
+# can find them even alongside `docker compose run`'s own
+# container-lifecycle chatter. This creates a genuinely new, one-off
+# container (`run --rm`) — see `check_migrate_image_present`, always called
+# first, for why that never silently triggers a build.
 _TARGET_CHECK_SCRIPT = """\
 import os
 import psycopg
@@ -130,49 +169,50 @@ def _validate_file_exists(label: str, path: Path) -> None:
         raise OperationError(f"{label} {path} does not exist or is not a regular file.")
 
 
+def _validate_compose_selection(
+    project: str, env_file: Path, compose_files: tuple[Path, ...]
+) -> None:
+    _reject_placeholder("--project", project)
+    _reject_placeholder("--env-file", str(env_file))
+    for f in compose_files:
+        _reject_placeholder("--compose-file", str(f))
+    if not compose_files:
+        raise OperationError("at least one --compose-file is required.")
+    if not PROJECT_NAME_RE.match(project):
+        raise OperationError(
+            f"--project {project!r} is not a valid Compose project name — must start with "
+            "a lowercase letter or digit and contain only lowercase letters, digits, '-', "
+            "and '_'."
+        )
+
+
 # ---------------------------------------------------------------------------
-# ComposeTarget — the complete, closed-over configuration tuple
+# Compose selection / target — the closed-over configuration tuples
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class ComposeTarget:
-    """The complete, closed-over configuration tuple every command uses.
+class ComposeSelection:
+    """Project/env-file/Compose-files only — no database identity.
 
-    Every operation in this module builds its `docker compose` invocation
-    from this object alone — never from a default `.env`, default project
-    discovery, or a Compose file list assembled anywhere else — so a
-    drill/major-upgrade/production invocation can never silently share
-    state with another one. Validation here is pure (no I/O beyond
-    filesystem existence checks) and raises immediately, before any
-    subprocess runs.
+    Used by commands that never connect to a specific application database
+    (`validate-archive`, `teardown`, and `verify-roles`'s Compose identity —
+    which supplies its own `--connect-user` separately rather than through
+    a `db_user` field here). Every operation in this module builds its
+    `docker compose` invocation from an instance of this (or the subclass
+    below) alone — never from a default `.env`, default project discovery,
+    or a Compose file list assembled anywhere else — so a drill/major-
+    upgrade/production invocation can never silently share state with
+    another one. Validation here is pure (no I/O beyond filesystem
+    existence checks) and raises immediately, before any subprocess runs.
     """
 
     project: str
     env_file: Path
     compose_files: tuple[Path, ...]
-    db_user: str
-    db_name: str
 
     def __post_init__(self) -> None:
-        _reject_placeholder("--project", self.project)
-        _reject_placeholder("--env-file", str(self.env_file))
-        for f in self.compose_files:
-            _reject_placeholder("--compose-file", str(f))
-        _reject_placeholder("--db-user", self.db_user)
-        _reject_placeholder("--db-name", self.db_name)
-        if not self.compose_files:
-            raise OperationError("at least one --compose-file is required.")
-        if not PROJECT_NAME_RE.match(self.project):
-            raise OperationError(
-                f"--project {self.project!r} is not a valid Compose project name — must "
-                "start with a lowercase letter or digit and contain only lowercase "
-                "letters, digits, '-', and '_'."
-            )
-        if not self.db_user.strip():
-            raise OperationError("--db-user must not be empty.")
-        if not self.db_name.strip():
-            raise OperationError("--db-name must not be empty.")
+        _validate_compose_selection(self.project, self.env_file, self.compose_files)
 
     def validate_files_exist(self) -> None:
         """Filesystem-only checks, run before any subprocess call."""
@@ -192,12 +232,34 @@ class ComposeTarget:
             f"    project:       {self.project}\n"
             f"    env file:      {self.env_file}\n"
             f"    compose files: {files}\n"
-            f"    db user:       {self.db_user}\n"
-            f"    db name:       {self.db_name}\n"
         )
 
 
-def announce(operation: str, target: ComposeTarget, **extra: str) -> None:
+@dataclass(frozen=True)
+class ComposeTarget(ComposeSelection):
+    """A `ComposeSelection` plus a real database user/name this command connects to or mutates."""
+
+    db_user: str
+    db_name: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _reject_placeholder("--db-user", self.db_user)
+        _reject_placeholder("--db-name", self.db_name)
+        if not self.db_user.strip():
+            raise OperationError("--db-user must not be empty.")
+        if not self.db_name.strip():
+            raise OperationError("--db-name must not be empty.")
+
+    def describe(self) -> str:
+        return (
+            super().describe()
+            + f"    db user:       {self.db_user}\n"
+            + f"    db name:       {self.db_name}\n"
+        )
+
+
+def announce(operation: str, target: ComposeSelection, **extra: str) -> None:
     """Print exactly what is about to run, before any destructive work."""
     print(f"== {operation} ==")
     print(target.describe(), end="")
@@ -228,7 +290,7 @@ def run(
 
 
 def compose_run(
-    target: ComposeTarget, *extra_args: str, input_text: str | None = None, capture: bool = False
+    target: ComposeSelection, *extra_args: str, input_text: str | None = None, capture: bool = False
 ) -> subprocess.CompletedProcess[str]:
     return run(target.base_args() + list(extra_args), input_text=input_text, capture=capture)
 
@@ -268,17 +330,146 @@ class Report:
 
 
 # ---------------------------------------------------------------------------
-# Read-only checks reusable across commands
+# static checks — no running container required
 # ---------------------------------------------------------------------------
 
 
-def check_roles(target: ComposeTarget, connect_user: str) -> tuple[Report, dict[str, bool]]:
+def render_compose_config(target: ComposeSelection) -> tuple[bool, dict[str, Any] | None, str]:
+    """Render the merged Compose config as JSON, without ever printing it.
+
+    Static: renders configuration text, does not start or require a running
+    container. `docker compose config` interpolates and can echo back
+    secret-bearing environment values (POSTGRES_PASSWORD,
+    MIGRATION_DATABASE_URL). This function parses the JSON into memory and
+    returns it to the caller, which must only ever extract non-secret
+    structural fields (service names, port lists, volume mounts) from it —
+    never print the `environment` map or the raw JSON itself. A nonzero
+    exit here (e.g. a missing required variable) surfaces only
+    compose.yaml's own diagnostic message text (never a secret value, since
+    Compose never echoes back an unset variable) via stderr.
+    """
+    # `docker compose config` omits services gated behind a non-active
+    # profile by default — `migrate` carries `profiles: ["tools"]`
+    # (compose.yaml), so without `--profile tools` here it never appears in
+    # the rendered output at all, making a real "migrate exists" check
+    # report a false "MISSING". Always requesting the profile is harmless
+    # for callers that don't need `migrate`: it only adds to what's
+    # rendered, never removes `db`.
+    result = compose_run(target, "--profile", "tools", "config", "--format", "json", capture=True)
+    if result.returncode != 0:
+        return False, None, result.stderr.strip()
+    try:
+        config: dict[str, Any] = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        return False, None, f"could not parse compose config output: {exc}"
+    return True, config, ""
+
+
+def check_compose_config(
+    report: Report,
+    target: ComposeSelection,
+    *,
+    require_migrate: bool,
+    allow_published_db_port: bool,
+) -> dict[str, Any] | None:
+    """Static: render config and check structural fields. No container required."""
+    ok, config, error = render_compose_config(target)
+    if not ok or config is None:
+        report.add("compose configuration renders", False, error or "unknown error")
+        return None
+    services = set(config.get("services", {}).keys())
+    report.add(
+        "compose configuration renders",
+        True,
+        f"services: {', '.join(sorted(services)) or '(none)'}",
+    )
+    report.add(
+        "'db' service defined", "db" in services, "present" if "db" in services else "MISSING"
+    )
+    if require_migrate:
+        report.add(
+            "'migrate' service defined",
+            "migrate" in services,
+            "present" if "migrate" in services else "MISSING",
+        )
+
+    db_service = config.get("services", {}).get("db", {})
+    ports = db_service.get("ports") or []
+    if not ports:
+        report.add("db publishes no host port", True, "none published")
+    else:
+        bindings = []
+        publicly_bound = False
+        for p in ports:
+            host_ip = p.get("host_ip") or "0.0.0.0"
+            bindings.append(f"{host_ip}:{p.get('published', '?')}->{p.get('target', '?')}")
+            if host_ip in ALL_INTERFACES_HOSTS:
+                publicly_bound = True
+        detail = ", ".join(bindings)
+        if allow_published_db_port:
+            note = (
+                " — WARNING: bound to all interfaces, not loopback-only" if publicly_bound else ""
+            )
+            report.add(
+                "db publishes no host port",
+                True,
+                f"{len(ports)} port(s) published, acknowledged via --allow-published-db-port: {detail}{note}",
+                hard=False,
+            )
+            print(f"    [port exposure acknowledged] {detail}{note}")
+        else:
+            report.add(
+                "db publishes no host port",
+                False,
+                f"{len(ports)} port(s) published on 'db' ({detail}) — refusing by default; "
+                "pass --allow-published-db-port to acknowledge this deliberately",
+            )
+    return config
+
+
+def check_migrate_image_present(report: Report, project: str) -> bool:
+    """Static-adjacent: `docker image inspect` a locally cached image tag by name.
+
+    Does not start, create, or remove any container — it only asks the
+    local Docker daemon whether an image reference already exists in its
+    cache. `docker compose run --rm migrate ...` builds the `migrate`
+    image implicitly if it is missing (confirmed live against installed
+    Compose v5.3.1: no `--no-build`/equivalent flag exists in this version
+    to suppress that), so this check exists specifically to let this
+    script refuse to trigger that build rather than let it happen as a
+    side effect of a migration-target check.
+    """
+    image = _migrate_image_ref(project)
+    result = run(["docker", "image", "inspect", image, "--format", "{{.Id}}"], capture=True)
+    present = result.returncode == 0
+    report.add(
+        "migrate image already built",
+        present,
+        f"{image} present locally"
+        if present
+        else f"{image} not found locally — build it deliberately first, e.g. "
+        f"`docker compose --env-file <env-file> -p {project} -f <compose files> "
+        "--profile tools build migrate` — this script will not trigger that build for you.",
+    )
+    return present
+
+
+# ---------------------------------------------------------------------------
+# docker-ephemeral checks — require an already-running `db` container
+# (`exec`/`cp`), or create a new one-off container (`run --rm`, migration-
+# target check only, always gated by check_migrate_image_present above)
+# ---------------------------------------------------------------------------
+
+
+def check_roles(target: ComposeSelection, connect_user: str) -> tuple[Report, dict[str, bool]]:
     """Verify the six cluster-wide roles against the `postgres` maintenance database.
 
-    Connects to `postgres`, never the application database — role
-    definitions and membership are cluster-wide, and on an existing cluster
-    with a damaged or missing application database, this must succeed
-    without ever touching it. Purely read-only.
+    Docker-ephemeral: runs `exec` against the already-running `db`
+    container (creates no new container). Connects to `postgres`, never
+    the application database — role definitions and membership are
+    cluster-wide, and on an existing cluster with a damaged or missing
+    application database, this must succeed without ever touching it. Only
+    issues SQL `SELECT`s — no PostgreSQL state is modified.
     """
     report = Report()
 
@@ -360,8 +551,10 @@ def check_roles(target: ComposeTarget, connect_user: str) -> tuple[Report, dict[
 def check_server_reachable(target: ComposeTarget) -> tuple[bool, str]:
     """pg_isready against the always-present `postgres` maintenance database.
 
-    Never touches the application database — this must return a meaningful
-    answer even when the application database is missing or corrupt.
+    Docker-ephemeral: `exec` against the already-running `db` container.
+    Never touches the application database — this must return a
+    meaningful answer even when the application database is missing or
+    corrupt.
     """
     result = compose_run(
         target,
@@ -382,6 +575,7 @@ def check_server_reachable(target: ComposeTarget) -> tuple[bool, str]:
 def check_database_exists(target: ComposeTarget, db_name: str) -> tuple[bool, str]:
     """Whether db_name exists, checked via the postgres maintenance database.
 
+    Docker-ephemeral: `exec` against the already-running `db` container.
     db_name is passed as a psql variable and substituted with the safe
     `:'dbname'` form (stdin, not `-c` — see `_grant_create_on_database`),
     never interpolated directly into SQL text.
@@ -410,71 +604,6 @@ def check_database_exists(target: ComposeTarget, db_name: str) -> tuple[bool, st
     return exists, ("exists" if exists else "does not exist")
 
 
-def render_compose_config(target: ComposeTarget) -> tuple[bool, dict[str, Any] | None, str]:
-    """Render the merged Compose config as JSON, without ever printing it.
-
-    `docker compose config` interpolates and can echo back secret-bearing
-    environment values (POSTGRES_PASSWORD, MIGRATION_DATABASE_URL). This
-    function parses the JSON into memory and returns it to the caller, which
-    must only ever extract non-secret structural fields (service names,
-    port lists, volume mounts) from it — never print the `environment` map
-    or the raw JSON itself. A nonzero exit here (e.g. a missing required
-    variable) surfaces only compose.yaml's own diagnostic message text
-    (never a secret value, since Compose never echoes back an unset
-    variable) via stderr.
-    """
-    # `docker compose config` omits services gated behind a non-active
-    # profile by default — `migrate` carries `profiles: ["tools"]`
-    # (compose.yaml), so without `--profile tools` here it never appears in
-    # the rendered output at all, making a real "migrate exists" check
-    # report a false "MISSING". Always requesting the profile is harmless
-    # for callers that don't need `migrate`: it only adds to what's
-    # rendered, never removes `db`.
-    result = compose_run(target, "--profile", "tools", "config", "--format", "json", capture=True)
-    if result.returncode != 0:
-        return False, None, result.stderr.strip()
-    try:
-        config: dict[str, Any] = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        return False, None, f"could not parse compose config output: {exc}"
-    return True, config, ""
-
-
-def check_compose_config(
-    report: Report, target: ComposeTarget, *, require_migrate: bool
-) -> dict[str, Any] | None:
-    ok, config, error = render_compose_config(target)
-    if not ok or config is None:
-        report.add("compose configuration renders", False, error or "unknown error")
-        return None
-    services = set(config.get("services", {}).keys())
-    report.add(
-        "compose configuration renders",
-        True,
-        f"services: {', '.join(sorted(services)) or '(none)'}",
-    )
-    report.add(
-        "'db' service defined", "db" in services, "present" if "db" in services else "MISSING"
-    )
-    if require_migrate:
-        report.add(
-            "'migrate' service defined",
-            "migrate" in services,
-            "present" if "migrate" in services else "MISSING",
-        )
-    db_service = config.get("services", {}).get("db", {})
-    ports = db_service.get("ports") or []
-    report.add(
-        "db publishes no host port",
-        not ports,
-        "none published"
-        if not ports
-        else f"{len(ports)} port(s) published — confirm this is deliberate",
-        hard=False,
-    )
-    return config
-
-
 def verify_migration_target(
     target: ComposeTarget, expected_db: str, expected_user: str | None
 ) -> tuple[bool, str]:
@@ -482,6 +611,12 @@ def verify_migration_target(
     DATABASE_URL actually connects as — not by parsing the dotenv file (this
     script never opens it), but by running a live connection through the
     exact service configuration a real migration invocation would use.
+
+    Docker-ephemeral: creates a genuinely new, one-off container
+    (`run --rm`) — unlike every other check in this section, which reuses
+    the already-running `db` container via `exec`. Callers MUST call
+    `check_migrate_image_present` first and skip this call if that fails,
+    so a missing image is reported clearly rather than silently built.
     Prints neither the URL nor any password; only the resulting database
     and user names, which are not secrets.
     """
@@ -530,26 +665,34 @@ class ArchiveCheck:
     detail: str
 
 
-def validate_archive(target: ComposeTarget, dump_path: Path) -> ArchiveCheck:
+def validate_archive(target: ComposeSelection, dump_path: Path) -> ArchiveCheck:
     """Validate a pg_dump -Fc archive is readable, via `pg_restore --list`.
 
-    This proves the archive is a well-formed, readable custom-format dump
-    with inspectable contents — it does NOT prove semantic compatibility
-    with any particular application/schema version. Copies the archive to a
-    uniquely named temporary path inside the `db` container (pg_restore
-    needs to run somewhere with the PostgreSQL toolchain installed), lists
-    it, and always attempts to remove the temporary copy — if that removal
+    Docker-ephemeral, not database-connecting: requires the `db` container
+    to already be running (this only ever needs the PostgreSQL toolchain
+    installed there, not a live database), and temporarily modifies that
+    container's filesystem — it copies the archive to a uniquely named
+    temporary path inside it, lists it, and always attempts to remove the
+    temporary copy afterward. It never connects to PostgreSQL and never
+    creates, drops, or restores into any database. This proves the archive
+    is a well-formed, readable custom-format dump with inspectable
+    contents — it does NOT prove semantic compatibility with any
+    particular application/schema version. If removing the temporary copy
     fails, the check is reported as failed (not just a warning) and the
-    file is left in place for inspection, per the "stop before database
-    mutation if archive-preflight cleanup fails" contract. Never touches
-    any actual database. Truncates listing/error output so this never turns
+    file is left in place for inspection, so a caller stops before any
+    database mutation rather than proceeding with a stray, uninspected
+    file left behind. Truncates listing/error output so this never turns
     into a bulk dump of archive contents.
     """
     container_tmp = f"/tmp/archive-check-{os.getpid()}-{uuid.uuid4().hex[:8]}.dump"
     cp = compose_run(target, "cp", str(dump_path), f"db:{container_tmp}")
     if cp.returncode != 0:
         return ArchiveCheck(
-            False, True, None, "failed to copy the archive into the container for validation"
+            False,
+            True,
+            None,
+            "failed to copy the archive into the container for validation (is the 'db' "
+            "container running?)",
         )
 
     listing = compose_run(
@@ -566,8 +709,8 @@ def validate_archive(target: ComposeTarget, dump_path: Path) -> ArchiveCheck:
             valid,
             False,
             has_alembic,
-            f"temporary copy at {container_tmp} could not be removed — preserved for "
-            "inspection; remove it by hand before proceeding"
+            f"temporary copy at {container_tmp} inside the 'db' container could not be "
+            "removed — preserved for inspection; remove it by hand before proceeding"
             + ("" if valid else " (archive was also invalid)"),
         )
     if not valid:
@@ -583,7 +726,7 @@ def validate_archive(target: ComposeTarget, dump_path: Path) -> ArchiveCheck:
     )
 
 
-def add_archive_checks(report: Report, target: ComposeTarget, dump_path: Path) -> bool:
+def add_archive_checks(report: Report, target: ComposeSelection, dump_path: Path) -> bool:
     result = validate_archive(target, dump_path)
     report.add("dump archive validation", result.valid and result.cleanup_ok, result.detail)
     if result.valid:
@@ -653,15 +796,13 @@ def _psql_scalar_readonly(target: ComposeTarget, sql: str) -> tuple[bool, str]:
 
 
 def cmd_verify_roles(args: argparse.Namespace) -> int:
-    target = ComposeTarget(
+    target = ComposeSelection(
         project=args.project,
         env_file=Path(args.env_file),
         compose_files=tuple(Path(f) for f in args.compose_file),
-        db_user=args.connect_user,
-        db_name="(cluster-wide check — no application database used)",
     )
     target.validate_files_exist()
-    announce("verify-roles", target)
+    announce("verify-roles (docker-ephemeral: exec against the running 'db' container)", target)
     report, _ = check_roles(target, args.connect_user)
     return 0 if report.print_summary() else 1
 
@@ -672,17 +813,20 @@ def cmd_verify_roles(args: argparse.Namespace) -> int:
 
 
 def cmd_validate_archive(args: argparse.Namespace) -> int:
-    target = ComposeTarget(
+    target = ComposeSelection(
         project=args.project,
         env_file=Path(args.env_file),
         compose_files=tuple(Path(f) for f in args.compose_file),
-        db_user="postgres",
-        db_name="(not applicable — archive validation does not connect to a database)",
     )
     target.validate_files_exist()
     dump_path = Path(args.dump_file)
     _validate_file_exists("--dump-file", dump_path)
-    announce("validate-archive (read-only)", target, dump_file=str(dump_path))
+    announce(
+        "validate-archive (docker-ephemeral: requires the running 'db' container; does not "
+        "connect to PostgreSQL; temporarily copies the archive into that container's filesystem)",
+        target,
+        dump_file=str(dump_path),
+    )
     report = Report()
     ok = add_archive_checks(report, target, dump_path)
     report.print_summary()
@@ -690,7 +834,7 @@ def cmd_validate_archive(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# preflight — standalone, read-only
+# preflight — standalone static/docker-ephemeral checks
 # ---------------------------------------------------------------------------
 
 
@@ -706,16 +850,57 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     dump_path = Path(args.dump_file) if args.dump_file else None
     if dump_path is not None:
         _validate_file_exists("--dump-file", dump_path)
+    if args.for_ == "bootstrap-roles" and args.temp_db_name:
+        _reject_reserved_db_name("--temp-db-name", args.temp_db_name)
 
-    announce("preflight — no changes will be made", target, **{"for": args.for_})
+    announce(
+        f"preflight — level={args.level} (static config/file checks"
+        + (
+            "; PostgreSQL/Docker state is unaffected either way"
+            if args.level == "static"
+            else ", plus docker-ephemeral checks against the running 'db' container/a one-off "
+            "migrate container — no PostgreSQL database/role/volume is created, dropped, or "
+            "modified by any of them"
+        )
+        + ")",
+        target,
+        **{"for": args.for_},
+    )
+
     report = Report()
-
     require_migrate = args.for_ in ("restore-fresh", "bootstrap-roles")
-    config = check_compose_config(report, target, require_migrate=require_migrate)
+    config = check_compose_config(
+        report,
+        target,
+        require_migrate=require_migrate,
+        allow_published_db_port=args.allow_published_db_port,
+    )
     if config is None:
-        report.print_summary()
+        report.print_summary(header=f"{args.level} preflight")
         print("\nStopping: compose configuration could not be rendered.")
         return 1
+
+    if args.level == "static":
+        print(
+            "\n--level static requested: stopping after configuration checks. No container "
+            "was required to be running and none was inspected. Run --level docker (the "
+            "default) to also check server reachability, roles, migration target, and "
+            "archive readability against a running 'db' container."
+        )
+        return 0 if report.print_summary(header="static preflight") else 1
+
+    print(
+        "\nProceeding to docker-ephemeral checks (require the 'db' container to already be "
+        "running; create no PostgreSQL database/role/volume): server reachability, target "
+        "database existence, "
+        + {
+            "restore-existing": "role verification",
+            "restore-fresh": "an active migration-target connection check",
+            "bootstrap-roles": "temporary-database-name availability",
+        }[args.for_]
+        + (", and archive validation" if dump_path is not None else "")
+        + ".\n"
+    )
 
     reachable, detail = check_server_reachable(target)
     report.add("server reachable (postgres maintenance db)", reachable, detail)
@@ -728,13 +913,13 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             role_report, _ = check_roles(target, target.db_user)
             report.results.extend(role_report.results)
         elif args.for_ == "restore-fresh":
-            ok, detail = verify_migration_target(target, target.db_name, target.db_user)
-            report.add("migration URL targets expected database", ok, detail)
+            if check_migrate_image_present(report, target.project):
+                ok, detail = verify_migration_target(target, target.db_name, target.db_user)
+                report.add("migration URL targets expected database", ok, detail)
         elif args.for_ == "bootstrap-roles":
             if not args.temp_db_name:
                 report.add("--temp-db-name provided", False, "required when --for bootstrap-roles")
             else:
-                _reject_reserved_db_name("--temp-db-name", args.temp_db_name)
                 temp_exists, detail = check_database_exists(target, args.temp_db_name)
                 report.add(
                     f"temporary database {args.temp_db_name!r} exists yet",
@@ -743,6 +928,14 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                     if not temp_exists
                     else "already exists — bootstrap-roles will refuse to reuse it",
                     hard=False,
+                )
+                print(
+                    "    Note: bootstrap-roles' ACTIVE migration-target verification "
+                    "(confirming MIGRATION_DATABASE_URL really points at the temporary "
+                    "database) can only run after bootstrap-roles itself creates that "
+                    "database — it does not exist yet, so this command cannot perform that "
+                    "check. This is a deliberately incomplete subset of what bootstrap-roles "
+                    "itself checks, not the same battery run early."
                 )
 
     if dump_path is not None:
@@ -758,14 +951,20 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             f"{target.db_name!r}, without ever connecting to it first"
         ),
         "bootstrap-roles": (
-            f"create {args.temp_db_name!r}, verify its migration target, run migrations "
-            "against it, verify roles, then drop it again"
+            f"create {args.temp_db_name!r}, ACTIVELY verify its migration target only once it "
+            "exists (not performed by this command), run migrations against it, verify roles, "
+            "then drop it again"
         ),
     }.get(args.for_, "(unspecified)")
-    print(f"\nPlanned mutation sequence (not performed by this command): {planned}")
-    print("No changes were made — `preflight` is strictly read-only.")
+    print(f"\nPlanned destructive sequence (not performed by this command): {planned}")
+    print(
+        "This command performed no PostgreSQL database/role/volume mutation. It did run "
+        "Docker-side checks above (exec against the running 'db' container, and, for "
+        "restore-fresh, a one-off migrate container) — see the safety model in this script's "
+        "module docstring / --help for exactly what that does and does not mean."
+    )
 
-    return 0 if report.print_summary() else 1
+    return 0 if report.print_summary(header="docker preflight") else 1
 
 
 # ---------------------------------------------------------------------------
@@ -779,16 +978,17 @@ def _grant_create_on_database(
     """Reissue GRANT CREATE ON DATABASE ... TO migration_owner.
 
     dropdb/createdb discards the database-level ACL 001_bootstrap set up
-    (docs/DEVELOPMENT.md §3.6, "What dropping and recreating the database
-    loses"). db_name is passed as a psql variable and substituted with the
-    safe-quoting `:'dbname'` form, then run through `format('%I', ...)`
-    server-side to produce a properly quoted identifier and re-executed via
-    `\\gexec` — this is safe regardless of what characters db_name contains,
-    unlike interpolating it directly into a GRANT statement string. The SQL
-    is piped on stdin rather than passed via `-c`, because `:'var'`
-    substitution is a feature of psql's query-scanning input stream, not of
-    `-c` arguments (confirmed: `-c` sends the text close to verbatim and
-    `:'dbname'` reaches the server as a literal syntax error).
+    (docs/operations/DATABASE_RECOVERY.md, "What dropping and recreating
+    the database loses"). db_name is passed as a psql variable and
+    substituted with the safe-quoting `:'dbname'` form, then run through
+    `format('%I', ...)` server-side to produce a properly quoted identifier
+    and re-executed via `\\gexec` — this is safe regardless of what
+    characters db_name contains, unlike interpolating it directly into a
+    GRANT statement string. The SQL is piped on stdin rather than passed
+    via `-c`, because `:'var'` substitution is a feature of psql's
+    query-scanning input stream, not of `-c` arguments (confirmed: `-c`
+    sends the text close to verbatim and `:'dbname'` reaches the server as
+    a literal syntax error).
     """
     sql = "SELECT format('GRANT CREATE ON DATABASE %I TO migration_owner', :'dbname') \\gexec"
     return compose_run(
@@ -823,21 +1023,23 @@ def cmd_bootstrap_roles(args: argparse.Namespace) -> int:
             "for a database that is not the real recovery target."
         )
 
-    # ---- Phase A: preflight (no mutation) ----
+    # ---- preflight: static + docker-ephemeral checks, no PostgreSQL mutation ----
     if not args.confirm_env_targets_temp_db:
         raise OperationError(
             "refusing to continue: pass --confirm-env-targets-temp-db to acknowledge that "
             f"--env-file {args.env_file}'s MIGRATION_DATABASE_URL is intended to point at "
             f"the temporary database {args.temp_db_name!r}. This is checked ACTIVELY below, "
-            "not just acknowledged — this flag alone does not skip that check."
+            "once that database exists — this flag alone does not skip that check."
         )
 
     announce("bootstrap-roles", target, protect_db_name=args.protect_db_name)
 
     report = Report()
-    config = check_compose_config(report, target, require_migrate=True)
+    config = check_compose_config(
+        report, target, require_migrate=True, allow_published_db_port=args.allow_published_db_port
+    )
     if config is None:
-        report.print_summary()
+        report.print_summary(header="preflight")
         return 1
     reachable, detail = check_server_reachable(target)
     report.add("server reachable (postgres maintenance db)", reachable, detail)
@@ -847,13 +1049,19 @@ def cmd_bootstrap_roles(args: argparse.Namespace) -> int:
         not temp_exists,
         "confirmed absent" if not temp_exists else "already exists — refusing to reuse it",
     )
+    image_present = check_migrate_image_present(report, target.project)
     if not report.print_summary(header="preflight"):
-        print("\nPreflight failed — nothing was created or migrated.", file=sys.stderr)
+        print(
+            "\nPreflight failed — no database, role, or file was created or migrated (the "
+            "docker-ephemeral checks above did run against the already-running 'db' container, "
+            "but none of them mutate PostgreSQL state).",
+            file=sys.stderr,
+        )
         return 1
 
     print("\nPREFLIGHT PASSED — beginning bootstrap of the temporary database.\n")
 
-    # ---- Phase B: mutation ----
+    # ---- destructive: creates and later drops a temporary database ----
     print(f"-- creating temporary bootstrap database {args.temp_db_name!r} --")
     create = compose_run(
         target,
@@ -875,6 +1083,32 @@ def cmd_bootstrap_roles(args: argparse.Namespace) -> int:
         return 1
 
     print("-- actively verifying the migration URL targets the temporary database --")
+    if not image_present:
+        print(
+            f"\nThe migrate image was not present at preflight time — refusing to let the "
+            f"migration-target check trigger an implicit build. Removing the temporary "
+            f"database {args.temp_db_name!r} we just created:",
+            file=sys.stderr,
+        )
+        drop = compose_run(
+            target,
+            "exec",
+            "-T",
+            "db",
+            "dropdb",
+            "-U",
+            args.connect_user,
+            "--if-exists",
+            "--force",
+            args.temp_db_name,
+        )
+        if drop.returncode != 0:
+            print(
+                f"    cleanup of {args.temp_db_name!r} also failed — remove it by hand.",
+                file=sys.stderr,
+            )
+        return 1
+
     target_ok, detail = verify_migration_target(target, args.temp_db_name, args.connect_user)
     print(f"    {detail}")
     if not target_ok:
@@ -969,17 +1203,20 @@ def cmd_restore(args: argparse.Namespace) -> int:
     dump_path = Path(args.dump_file)
     _validate_file_exists("--dump-file", dump_path)
 
-    # ---- Phase A, step 0: confirmation flags, before ANY docker invocation ----
+    # ---- confirmation flags, before ANY docker invocation ----
     # Checked first and unconditionally — if either is absent, this function
     # returns before a single subprocess has run, so no database, role,
-    # container, volume, or file can have changed.
+    # container, volume, or file can have changed, and no ephemeral Docker
+    # resource (not even a config render) has been created either.
     if not args.confirm_drop:
         raise OperationError(
-            "refusing to continue: --confirm-drop is required. Nothing has been touched."
+            "refusing to continue: --confirm-drop is required. No subprocess has run — "
+            "nothing has been touched."
         )
     if not args.confirm_restore:
         raise OperationError(
-            "refusing to continue: --confirm-restore is required. Nothing has been touched."
+            "refusing to continue: --confirm-restore is required. No subprocess has run — "
+            "nothing has been touched."
         )
 
     announce("restore", target, mode=args.mode, dump_file=str(dump_path))
@@ -994,10 +1231,15 @@ def cmd_restore(args: argparse.Namespace) -> int:
         "deliberately.\n"
     )
 
-    # ---- Phase A: preflight (no mutation) ----
+    # ---- preflight: static + docker-ephemeral checks, no PostgreSQL mutation ----
     report = Report()
     require_migrate = args.mode == "fresh"
-    config = check_compose_config(report, target, require_migrate=require_migrate)
+    config = check_compose_config(
+        report,
+        target,
+        require_migrate=require_migrate,
+        allow_published_db_port=args.allow_published_db_port,
+    )
     if config is None:
         report.print_summary(header="preflight")
         return 1
@@ -1006,7 +1248,11 @@ def cmd_restore(args: argparse.Namespace) -> int:
     report.add("server reachable (postgres maintenance db)", reachable, detail)
     if not reachable:
         report.print_summary(header="preflight")
-        print("\nPreflight failed — server unreachable. Nothing was touched.", file=sys.stderr)
+        print(
+            "\nPreflight failed — server unreachable. The target application database was "
+            "not touched.",
+            file=sys.stderr,
+        )
         return 1
 
     archive_ok = add_archive_checks(report, target, dump_path)
@@ -1021,23 +1267,29 @@ def cmd_restore(args: argparse.Namespace) -> int:
         # Fresh-cluster mode: the target database is the one PostgreSQL's
         # own container init already created from POSTGRES_DB — not the
         # possibly-corrupt "existing" case — so actively confirming the
-        # migration URL targets it is safe and required before Phase B's
-        # migration bootstrap runs against it.
-        target_ok, detail = verify_migration_target(target, target.db_name, target.db_user)
-        report.add("migration URL targets expected database", target_ok, detail)
+        # migration URL targets it is safe and required before the
+        # destructive phase's migration bootstrap runs against it.
+        if check_migrate_image_present(report, target.project):
+            target_ok, detail = verify_migration_target(target, target.db_name, target.db_user)
+            report.add("migration URL targets expected database", target_ok, detail)
 
     if not report.print_summary(header="preflight"):
-        print("\nPreflight failed — the target database was NOT touched.", file=sys.stderr)
+        print(
+            "\nPreflight failed — the target application database was NOT touched (the "
+            "docker-ephemeral checks above did run against the running 'db' container, but "
+            "none of them create, drop, or modify a PostgreSQL database).",
+            file=sys.stderr,
+        )
         return 1
     if not archive_ok:
         # Belt and suspenders: hard_ok() above already covers this, but the
-        # explicit branch keeps the "archive failure blocks mutation"
-        # contract obvious to a future reader.
+        # explicit branch keeps the "archive failure blocks the destructive
+        # phase" contract obvious to a future reader.
         return 1
 
     print("\nPREFLIGHT PASSED — beginning destructive recovery.\n")
 
-    # ---- Phase B: mutation ----
+    # ---- destructive: drop/recreate/restore, and (fresh mode) an actual migration run ----
     if args.mode == "fresh":
         print(
             "-- fresh-cluster mode: running migrations against the freshly created application database --"
@@ -1422,7 +1674,10 @@ def cmd_backup(args: argparse.Namespace) -> int:
 
     reachable, detail = check_server_reachable(target)
     if not reachable:
-        print(f"Server unreachable — nothing was touched. ({detail})", file=sys.stderr)
+        print(
+            f"Server unreachable — no dump was taken, nothing was mutated. ({detail})",
+            file=sys.stderr,
+        )
         return 1
 
     container_tmp = f"/tmp/{target.db_name}-{os.getpid()}-{uuid.uuid4().hex[:8]}.dump"
@@ -1466,7 +1721,8 @@ def cmd_backup(args: argparse.Namespace) -> int:
 
     print(
         "Reminder: this file is a database-only artifact — it does not include cluster-wide "
-        'roles. See docs/DEVELOPMENT.md §3.6, "What a pg_dump backup does not cover."'
+        "roles. See docs/operations/DATABASE_RECOVERY.md, "
+        '"What a pg_dump backup does not cover."'
     )
     return 0
 
@@ -1482,12 +1738,10 @@ def cmd_teardown(args: argparse.Namespace) -> int:
             f"--project {args.project!r} looks like a default/generic placeholder, not a "
             "specific disposable project — refusing to tear it down."
         )
-    target = ComposeTarget(
+    target = ComposeSelection(
         project=args.project,
         env_file=Path(args.env_file),
         compose_files=tuple(Path(f) for f in args.compose_file),
-        db_user="(not applicable)",
-        db_name="(not applicable)",
     )
     target.validate_files_exist()
     if not args.confirm_teardown:
@@ -1525,6 +1779,18 @@ def _add_target_args(sub: argparse.ArgumentParser, *, with_db: bool = True) -> N
         sub.add_argument("--db-name", default="dnd_ai", help="Database name (default: dnd_ai).")
 
 
+def _add_port_flag(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument(
+        "--allow-published-db-port",
+        action="store_true",
+        help="Acknowledge that the rendered Compose configuration publishes a host port for "
+        "'db' (e.g. via compose.override.yaml). Without this flag, any published port fails "
+        "preflight by default — the base self-hosted topology (compose.yaml alone) publishes "
+        "none. A binding to all interfaces (0.0.0.0/::), not just loopback, is still reported "
+        "loudly even when acknowledged.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="database_recovery.py",
@@ -1543,7 +1809,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_roles = sub.add_parser(
         "verify-roles",
-        help="Check the six cluster-wide roles via the postgres maintenance database.",
+        help="Check the six cluster-wide roles via the postgres maintenance database "
+        "(docker-ephemeral: exec against the running 'db' container).",
     )
     _add_target_args(p_roles, with_db=False)
     p_roles.add_argument(
@@ -1553,7 +1820,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_validate = sub.add_parser(
         "validate-archive",
-        help="Validate a pg_dump -Fc archive is readable, without restoring it (read-only).",
+        help="Validate a pg_dump -Fc archive is readable, without restoring it "
+        "(docker-ephemeral: requires the running 'db' container; never connects to PostgreSQL).",
     )
     _add_target_args(p_validate, with_db=False)
     p_validate.add_argument(
@@ -1563,15 +1831,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_preflight = sub.add_parser(
         "preflight",
-        help="Run the same read-only checks `restore`/`bootstrap-roles` run before mutating, standalone.",
+        help="Run the static and docker-ephemeral checks restore/bootstrap-roles run before "
+        "their destructive phase, standalone. For --for bootstrap-roles this is necessarily "
+        "an incomplete subset (its active migration-target check needs a database that "
+        "doesn't exist until bootstrap-roles itself creates it) — not the same checks run early.",
     )
     _add_target_args(p_preflight)
+    _add_port_flag(p_preflight)
     p_preflight.add_argument(
         "--for",
         dest="for_",
         required=True,
         choices=["restore-fresh", "restore-existing", "bootstrap-roles"],
         help="Which workflow's preflight checks to run.",
+    )
+    p_preflight.add_argument(
+        "--level",
+        choices=["static", "docker"],
+        default="docker",
+        help="static: argument/file/Compose-config checks only, no container needs to be "
+        "running. docker (default): also runs docker-ephemeral checks against the running "
+        "'db' container (and, for restore-fresh, a one-off migrate container) — reachability, "
+        "roles/migration-target, archive readability. Neither level creates, drops, or "
+        "modifies a PostgreSQL database, role, or volume.",
     )
     p_preflight.add_argument(
         "--dump-file", default=None, help="If supplied, also validates this archive."
@@ -1586,6 +1868,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create the six roles via a deliberately named temporary database, then remove it.",
     )
     _add_target_args(p_bootstrap, with_db=False)
+    _add_port_flag(p_bootstrap)
     p_bootstrap.add_argument(
         "--connect-user", default="postgres", help="Superuser to connect as (default: postgres)."
     )
@@ -1605,8 +1888,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-env-targets-temp-db",
         action="store_true",
         help="Required acknowledgment that --env-file's MIGRATION_DATABASE_URL is intended "
-        "to point at --temp-db-name. This is checked ACTIVELY before migrations run — this "
-        "flag records operator intent, it does not replace that check.",
+        "to point at --temp-db-name. This is checked ACTIVELY once that database exists — "
+        "this flag records operator intent, it does not replace that check.",
     )
     p_bootstrap.set_defaults(func=cmd_bootstrap_roles)
 
@@ -1614,6 +1897,7 @@ def build_parser() -> argparse.ArgumentParser:
         "restore", help="Force-drop/recreate the target database and restore a dump."
     )
     _add_target_args(p_restore)
+    _add_port_flag(p_restore)
     p_restore.add_argument(
         "--dump-file", required=True, help="Host path to the pg_dump -Fc file to restore."
     )
@@ -1647,10 +1931,10 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("QUERY", "EXPECTED"),
         action="append",
-        help="An additional read-only SELECT check and its expected scalar result, executed "
-        "under database-enforced read-only mode (default_transaction_read_only=on) — "
-        "PostgreSQL itself rejects any side-effecting statement, not just this script's "
-        "lexical SELECT-prefix check. Repeatable. "
+        help="An additional SELECT check and its expected scalar result, executed under "
+        "database-enforced read-only mode (default_transaction_read_only=on for that one "
+        "psql process) — PostgreSQL itself rejects any side-effecting statement, not just "
+        "this script's lexical SELECT-prefix check. Repeatable. "
         'Example: --check "SELECT count(*) FROM core.worlds" "0"',
     )
     p_verify.set_defaults(func=cmd_verify)
