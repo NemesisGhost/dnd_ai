@@ -83,26 +83,52 @@ hasn't moved.
 
 #### B. Preserve the live resources but stop managing them
 
-This leaves the role (and, if present, the OIDC provider) exactly as they
-are in AWS — **live, unretired, unmanaged** — with Terraform simply no
-longer tracking them. It does not delete or retire anything:
+This leaves everything the module created exactly as it is in AWS — **live,
+unretired, unmanaged** — with Terraform simply no longer tracking any of it.
+`state rm` does not delete or retire anything; it only removes an entry from
+Terraform's state file. But state and reality have to be dropped *together*:
+if some of the module's resources stay in state while others don't, a future
+plan reconciles state against configuration for whatever's left, and with the
+module gone from configuration, anything still tracked is proposed for
+*destruction* — silently turning a "stop managing" choice into a "delete"
+outcome for whichever resource you forgot. Removing the entire module
+address from state, in one operation, is generally the coherent way to
+abandon management of it, rather than removing resources one at a time.
+
+Start by finding out what's actually still tracked — don't assume; the OIDC
+provider resource's `count` depended on configuration (`create_github_oidc_provider`/
+`create_oidc_provider`), so whether it's in state at all depends on how `dev`
+was applied:
 
 ```powershell
-terraform -chdir=terraform/environments/dev state rm module.github_actions_ci.aws_iam_role.github_actions_ci
-terraform -chdir=terraform/environments/dev state rm module.github_actions_ci.aws_iam_role_policy.github_actions_permissions
+terraform -chdir=terraform/environments/dev state list
 ```
 
-or, for the whole module (only include the provider if you've confirmed via
-the check above that nothing else depends on it, or if `create_oidc_provider`
-was `false`):
+Look for `module.github_actions_ci` and everything nested under it in the
+output. If the module doesn't appear at all, there's nothing to remove —
+skip straight to whichever of A/B/C you actually need for other resources.
+If it does appear, remove the whole module in one command:
 
 ```powershell
 terraform -chdir=terraform/environments/dev state rm module.github_actions_ci
 ```
 
+This is deliberately the module-wide form, not per-resource `state rm`
+calls, because it can't leave a partial result: whatever the `state list`
+output actually showed under `module.github_actions_ci` — role, inline
+policy, and OIDC provider alike, if `state list` showed the provider as
+present — comes out of state together. **The shared OIDC provider is
+exactly the resource this matters most for**: it's one-per-AWS-account, not
+scoped to this repository (see the dependency check above), so if it's in
+state and gets left behind while the rest of the module is removed, the next
+`plan` proposes destroying a resource other GitHub Actions workflows in the
+same account may depend on. Leaving it tracked under absent configuration is
+not a safe way to "preserve" it — removing it from state, so Terraform stops
+proposing to touch it at all, is what actually preserves it here.
+
 On Terraform 1.7+, a declarative alternative that leaves a reviewable record
-of this same choice is a `removed` block (add temporarily, apply once, then
-delete):
+of this same choice is a `removed` block scoped to the whole module (add
+temporarily, apply once, then delete):
 
 ```hcl
 removed {
@@ -113,10 +139,11 @@ removed {
 }
 ```
 
-Either form stops here: the IAM role, its policy, and (if targeted) the
-OIDC provider keep existing in AWS, accruing no Terraform drift warnings
-but also receiving no further review from anyone, until a human deletes
-them directly or brings them back under management via option A.
+Either form stops here: the IAM role, its inline policy, and the OIDC
+provider (if it was ever in state) keep existing in AWS, accruing no
+Terraform drift warnings but also receiving no further review from anyone,
+until a human deletes them directly or brings them back under management via
+option A.
 
 #### C. Actually retire the resources (delete them)
 
@@ -139,10 +166,10 @@ trusts the OIDC provider (if it's in scope at all), pick one:
    last step you've independently decided to take — never as a
    side effect of cleaning up this repository's role.
 
-Whichever path, if the role was still tracked in Terraform state when you
-delete it out-of-band, run the applicable `state rm` from option B
-afterward so state doesn't keep referencing a resource that no longer
-exists.
+Whichever path, if anything was still tracked in Terraform state when you
+delete it out-of-band, run the module-wide `state rm` from option B
+afterward (after re-checking with `state list`) so state doesn't keep
+referencing a resource that no longer exists.
 
 **Documentation lives under [`docs/`](../docs/), not here:**
 
