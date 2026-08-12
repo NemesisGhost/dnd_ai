@@ -27,6 +27,14 @@ Safety model — three levels, not a single "read-only" claim:
                     behind an explicit `--confirm-*` flag, checked before
                     any subprocess — Docker-ephemeral or otherwise — runs.
 
+`verify` performs no PostgreSQL state mutation by default: every one of its
+checks, including the Alembic-revision check (`alembic current`, which only
+reads `core.alembic_version`), is non-mutating. Its one destructive
+exception — an actual `alembic upgrade head` run — only executes when
+`--confirm-migrate` is explicitly passed, checked immediately before that
+one subprocess; without it, `verify` never runs migrations, and nothing in
+its output claims otherwise.
+
 `restore` and `bootstrap-roles` run their static and docker-ephemeral
 checks (their "preflight") before doing anything destructive, and refuse to
 continue — without touching the target application database, role, or
@@ -572,13 +580,19 @@ def check_server_reachable(target: ComposeTarget) -> tuple[bool, str]:
     return result.returncode == 0, detail
 
 
-def check_database_exists(target: ComposeTarget, db_name: str) -> tuple[bool, str]:
+def check_database_exists(target: ComposeTarget, db_name: str) -> tuple[bool | None, str]:
     """Whether db_name exists, checked via the postgres maintenance database.
 
     Docker-ephemeral: `exec` against the already-running `db` container.
     db_name is passed as a psql variable and substituted with the safe
     `:'dbname'` form (stdin, not `-c` — see `_grant_create_on_database`),
     never interpolated directly into SQL text.
+
+    Returns a tri-state: `(True, "exists")`, `(False, "does not exist")`, or
+    `(None, "query failed: ...")`. Callers MUST treat `None` as a distinct,
+    unknown outcome — a failed existence query is not evidence the database
+    is absent, and collapsing it into `False` previously let a caller in
+    this script interpret "the query failed" as "safe to proceed."
     """
     sql = "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = :'dbname');"
     result = compose_run(
@@ -599,7 +613,7 @@ def check_database_exists(target: ComposeTarget, db_name: str) -> tuple[bool, st
         capture=True,
     )
     if result.returncode != 0:
-        return False, f"query failed: {result.stderr.strip()}"
+        return None, f"query failed: {result.stderr.strip()}"
     exists = result.stdout.strip() == "t"
     return exists, ("exists" if exists else "does not exist")
 
@@ -657,6 +671,26 @@ def verify_migration_target(
     return True, f"confirmed: connects to {actual_db!r} as {actual_user!r}"
 
 
+# pg_dump's custom format (`-Fc`) begins with the 5-byte magic string
+# "PGDMP" (PostgreSQL's pg_backup_archiver.c WriteHead), followed by a
+# version byte triple and flags. Plain-text (`-Fp`) dumps are SQL text and
+# don't start this way; tar-format (`-Ft`) dumps are POSIX tar archives
+# whose outer file starts with a filename field, not this signature —
+# `pg_restore --list` can read both of those too, so it alone cannot prove
+# custom format. Reading these bytes locally, before any Compose/Docker
+# call, is a reliable, host-side way to confirm the format this tool
+# claims to require.
+_PG_CUSTOM_FORMAT_MAGIC = b"PGDMP"
+
+
+def _is_pg_custom_format_archive(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return f.read(len(_PG_CUSTOM_FORMAT_MAGIC)) == _PG_CUSTOM_FORMAT_MAGIC
+    except OSError:
+        return False
+
+
 @dataclass
 class ArchiveCheck:
     valid: bool
@@ -666,24 +700,48 @@ class ArchiveCheck:
 
 
 def validate_archive(target: ComposeSelection, dump_path: Path) -> ArchiveCheck:
-    """Validate a pg_dump -Fc archive is readable, via `pg_restore --list`.
+    """Confirm dump_path is a readable PostgreSQL custom-format (`pg_dump -Fc`) archive.
 
-    Docker-ephemeral, not database-connecting: requires the `db` container
-    to already be running (this only ever needs the PostgreSQL toolchain
-    installed there, not a live database), and temporarily modifies that
-    container's filesystem — it copies the archive to a uniquely named
-    temporary path inside it, lists it, and always attempts to remove the
-    temporary copy afterward. It never connects to PostgreSQL and never
-    creates, drops, or restores into any database. This proves the archive
-    is a well-formed, readable custom-format dump with inspectable
-    contents — it does NOT prove semantic compatibility with any
-    particular application/schema version. If removing the temporary copy
-    fails, the check is reported as failed (not just a warning) and the
-    file is left in place for inspection, so a caller stops before any
-    database mutation rather than proceeding with a stray, uninspected
-    file left behind. Truncates listing/error output so this never turns
-    into a bulk dump of archive contents.
+    Two checks, in order:
+
+    1. **Static, local, host-side**: the file must begin with the 5-byte
+       `PGDMP` signature (`_is_pg_custom_format_archive`) that `pg_dump -Fc`
+       always writes. `pg_restore --list` succeeding is NOT by itself proof
+       of custom format — it can also read tar-format (`-Ft`) archives — so
+       this script checks the signature itself rather than inferring format
+       from what pg_restore happens to accept. No Docker operation runs for
+       this step; a file that fails it is rejected immediately.
+    2. **Docker-ephemeral, not database-connecting**: requires the `db`
+       container to already be running (this only ever needs the PostgreSQL
+       toolchain installed there, not a live database), and temporarily
+       modifies that container's filesystem — it copies the archive to a
+       uniquely named temporary path inside it, lists it with
+       `pg_restore --list`, and always attempts to remove the temporary
+       copy afterward. It never connects to PostgreSQL and never creates,
+       drops, or restores into any database.
+
+    Together these prove the archive is specifically a well-formed,
+    readable custom-format dump with inspectable contents — not merely
+    something pg_restore happens to be able to read — and still NOT
+    semantic compatibility with any particular application/schema version.
+    If removing the temporary copy fails, the check is reported as failed
+    (not just a warning) and the file is left in place for inspection, so a
+    caller stops before any database mutation rather than proceeding with a
+    stray, uninspected file left behind. Truncates listing/error output so
+    this never turns into a bulk dump of archive contents.
     """
+    if not _is_pg_custom_format_archive(dump_path):
+        return ArchiveCheck(
+            False,
+            True,
+            None,
+            f"{dump_path} does not begin with the PostgreSQL custom-format signature "
+            "('PGDMP') — this tool accepts only pg_dump -Fc (custom-format) archives, the "
+            "format 'backup' always produces. Plain-text (-Fp) and tar-format (-Ft) dumps "
+            "are rejected even though pg_restore --list can read some of them. No Docker "
+            "operation was performed for this check.",
+        )
+
     container_tmp = f"/tmp/archive-check-{os.getpid()}-{uuid.uuid4().hex[:8]}.dump"
     cp = compose_run(target, "cp", str(dump_path), f"db:{container_tmp}")
     if cp.returncode != 0:
@@ -721,8 +779,10 @@ def validate_archive(target: ComposeSelection, dump_path: Path) -> ArchiveCheck:
         True,
         True,
         has_alembic,
-        "archive is a readable custom-format dump (pg_restore --list succeeded) — this "
-        "proves readability, not compatibility with any particular schema/application version",
+        "archive begins with the PostgreSQL custom-format signature ('PGDMP') and "
+        "pg_restore --list succeeded — this proves the archive is a well-formed, readable "
+        "custom-format dump with inspectable contents, not compatibility with any "
+        "particular schema/application version",
     )
 
 
@@ -822,8 +882,10 @@ def cmd_validate_archive(args: argparse.Namespace) -> int:
     dump_path = Path(args.dump_file)
     _validate_file_exists("--dump-file", dump_path)
     announce(
-        "validate-archive (docker-ephemeral: requires the running 'db' container; does not "
-        "connect to PostgreSQL; temporarily copies the archive into that container's filesystem)",
+        "validate-archive (static: confirms the PostgreSQL custom-format 'PGDMP' signature "
+        "locally first, rejecting anything else; then docker-ephemeral: requires the running "
+        "'db' container, does not connect to PostgreSQL, temporarily copies the archive into "
+        "that container's filesystem)",
         target,
         dump_file=str(dump_path),
     )
@@ -907,7 +969,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
     if reachable:
         exists, detail = check_database_exists(target, target.db_name)
-        report.add(f"database {target.db_name!r} exists", exists, detail, hard=False)
+        report.add(f"database {target.db_name!r} exists", bool(exists), detail, hard=False)
 
         if args.for_ == "restore-existing":
             role_report, _ = check_roles(target, target.db_user)
@@ -920,15 +982,25 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             if not args.temp_db_name:
                 report.add("--temp-db-name provided", False, "required when --for bootstrap-roles")
             else:
-                temp_exists, detail = check_database_exists(target, args.temp_db_name)
-                report.add(
-                    f"temporary database {args.temp_db_name!r} exists yet",
-                    not temp_exists,
-                    "does not exist yet (expected before bootstrap-roles creates it)"
-                    if not temp_exists
-                    else "already exists — bootstrap-roles will refuse to reuse it",
-                    hard=False,
-                )
+                temp_exists, temp_detail = check_database_exists(target, args.temp_db_name)
+                if temp_exists is None:
+                    # Query failure is not evidence of absence — a hard
+                    # failure here, distinct from "already exists", so a
+                    # caller never mistakes "we couldn't tell" for "safe to
+                    # proceed."
+                    report.add(
+                        f"temporary database {args.temp_db_name!r} does not already exist",
+                        False,
+                        f"could not determine — {temp_detail}",
+                    )
+                else:
+                    report.add(
+                        f"temporary database {args.temp_db_name!r} does not already exist",
+                        not temp_exists,
+                        "confirmed absent (expected before bootstrap-roles creates it)"
+                        if not temp_exists
+                        else "already exists — bootstrap-roles will refuse to reuse it",
+                    )
                 print(
                     "    Note: bootstrap-roles' ACTIVE migration-target verification "
                     "(confirming MIGRATION_DATABASE_URL really points at the temporary "
@@ -1043,12 +1115,22 @@ def cmd_bootstrap_roles(args: argparse.Namespace) -> int:
         return 1
     reachable, detail = check_server_reachable(target)
     report.add("server reachable (postgres maintenance db)", reachable, detail)
-    temp_exists, detail = check_database_exists(target, args.temp_db_name)
-    report.add(
-        f"temporary database {args.temp_db_name!r} does not already exist",
-        not temp_exists,
-        "confirmed absent" if not temp_exists else "already exists — refusing to reuse it",
-    )
+    temp_exists, temp_detail = check_database_exists(target, args.temp_db_name)
+    if temp_exists is None:
+        # Query failure is not evidence of absence — report it as its own
+        # hard failure rather than letting "not temp_exists" evaluate True
+        # on a failed query and wrongly let bootstrap proceed.
+        report.add(
+            f"temporary database {args.temp_db_name!r} does not already exist",
+            False,
+            f"could not determine — {temp_detail}",
+        )
+    else:
+        report.add(
+            f"temporary database {args.temp_db_name!r} does not already exist",
+            not temp_exists,
+            "confirmed absent" if not temp_exists else "already exists — refusing to reuse it",
+        )
     image_present = check_migrate_image_present(report, target.project)
     if not report.print_summary(header="preflight"):
         print(
@@ -1569,7 +1651,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
             hard=False,
         )
 
-    print("-- Alembic revision --")
+    print(
+        "-- Alembic revision (non-mutating: `alembic current` only reads core.alembic_version) --"
+    )
     current = compose_run(
         target,
         "--profile",
@@ -1589,14 +1673,33 @@ def cmd_verify(args: argparse.Namespace) -> int:
         current.stdout.strip() or current.stderr.strip(),
     )
 
-    print("-- migration machinery (clean upgrade to head) --")
-    migrate = compose_run(target, "--profile", "tools", "run", "--rm", "migrate")
-    report.add(
-        "alembic upgrade head",
-        migrate.returncode == 0,
-        "ran cleanly (this proves migration machinery works end-to-end; it does not by "
-        "itself prove CREATE ON DATABASE — the privilege check above already did that directly)",
-    )
+    # Real migration execution is DESTRUCTIVE — it can change schema/data —
+    # so, unlike the rest of this non-mutating acceptance battery, it never
+    # runs unless explicitly confirmed. Checked immediately before the one
+    # subprocess it gates, consistent with every other --confirm-* flag in
+    # this script.
+    if args.confirm_migrate:
+        print(
+            "-- migration machinery (DESTRUCTIVE: --confirm-migrate passed — running a real "
+            "`alembic upgrade head` against this database) --"
+        )
+        migrate = compose_run(target, "--profile", "tools", "run", "--rm", "migrate")
+        report.add(
+            "alembic upgrade head (--confirm-migrate)",
+            migrate.returncode == 0,
+            "ran cleanly (this proves migration machinery works end-to-end; it does not by "
+            "itself prove CREATE ON DATABASE — the privilege check above already did that "
+            "directly)"
+            if migrate.returncode == 0
+            else "failed — this was a real migration attempt against this database, not a "
+            "dry run; inspect its output above before retrying",
+        )
+    else:
+        print(
+            "-- migration machinery: skipped (verify never runs migrations by default; pass "
+            "--confirm-migrate to also run a real, DESTRUCTIVE `alembic upgrade head` as an "
+            "end-to-end smoke test) --"
+        )
 
     print("-- structural table counts --")
     ok, rows = _psql_rows(
@@ -1820,8 +1923,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_validate = sub.add_parser(
         "validate-archive",
-        help="Validate a pg_dump -Fc archive is readable, without restoring it "
-        "(docker-ephemeral: requires the running 'db' container; never connects to PostgreSQL).",
+        help="Confirm a file is a readable pg_dump -Fc (custom-format) archive, without "
+        "restoring it — rejects plain-text/tar-format archives even though pg_restore --list "
+        "can read some of those too (static: local 'PGDMP' signature check first; "
+        "docker-ephemeral: requires the running 'db' container; never connects to PostgreSQL).",
     )
     _add_target_args(p_validate, with_db=False)
     p_validate.add_argument(
@@ -1919,7 +2024,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_restore.set_defaults(func=cmd_restore)
 
-    p_verify = sub.add_parser("verify", help="Run the full post-recovery acceptance battery.")
+    p_verify = sub.add_parser(
+        "verify",
+        help="Run the post-recovery acceptance battery. Non-mutating by default — no "
+        "PostgreSQL state changes; pass --confirm-migrate to also run a real, DESTRUCTIVE "
+        "`alembic upgrade head` smoke test.",
+    )
     _add_target_args(p_verify)
     p_verify.add_argument(
         "--connect-role",
@@ -1936,6 +2046,15 @@ def build_parser() -> argparse.ArgumentParser:
         "psql process) — PostgreSQL itself rejects any side-effecting statement, not just "
         "this script's lexical SELECT-prefix check. Repeatable. "
         'Example: --check "SELECT count(*) FROM core.worlds" "0"',
+    )
+    p_verify.add_argument(
+        "--confirm-migrate",
+        action="store_true",
+        help="DESTRUCTIVE, opt-in only: also run a real `alembic upgrade head` against this "
+        "database, in addition to the non-mutating `alembic current` check that always runs. "
+        "Without this flag (the default), verify never runs migrations and performs no "
+        "PostgreSQL state mutation. Passing this can make real schema/data changes if the "
+        "database is not already at head. Checked immediately before that one subprocess.",
     )
     p_verify.set_defaults(func=cmd_verify)
 
