@@ -43,11 +43,14 @@ Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the
 The full walkthrough is [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup). The short version, with Docker:
 
 ```bash
+cp .env.example .env
+# edit .env: set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and DATABASE_URL's
+# password segments to match — required, no working defaults ship in this repo;
+# see docs/DEVELOPMENT.md §3.6
+
 docker compose up -d db           # PostgreSQL 18.4, no local install needed
 
 uv sync
-cp .env.example .env              # defaults already point at the compose database
-
 uv run alembic -c database/alembic.ini upgrade head
 uv run pytest
 ```

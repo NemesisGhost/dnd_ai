@@ -131,12 +131,17 @@ jobs:
     # Dockerfile and compose.yaml; src/dnd_ai/api has no committed source
     # yet, so there is no API smoke test to run against it).
     #
-    # POSTGRES_PASSWORD has no fallback default in compose.yaml (see its
-    # header comment) — CI must supply one explicitly. This value is
-    # disposable: a fresh tmpfs-backed container per run, never reused,
-    # never exposed on a host port, not a real secret.
+    # POSTGRES_PASSWORD and MIGRATION_DATABASE_URL have no fallback default
+    # in compose.yaml (see its header comment) — CI must supply both
+    # explicitly, and they must agree on the same password. Both values
+    # are disposable: a fresh tmpfs-backed container per run, never reused,
+    # never exposed on a host port, not a real secret. MIGRATION_DATABASE_URL
+    # addresses `db` (the compose service name), not `localhost` — the
+    # migrate service reaches it over the compose-internal network, not a
+    # published host port.
     env:
       POSTGRES_PASSWORD: ci_disposable_password
+      MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

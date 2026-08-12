@@ -821,7 +821,7 @@ Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase dev
 `compose.yaml` at the repository root is the officially supported deployment topology — PostgreSQL 18 with persistent storage, plus a `migrate` job built from the shared `Dockerfile`:
 
 ```bash
-cp .env.example .env   # then uncomment and set POSTGRES_PASSWORD — required, no default
+cp .env.example .env   # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required, no defaults
 docker compose up -d db                          # start PostgreSQL
 docker compose --profile tools run --rm migrate   # apply migrations
 ```

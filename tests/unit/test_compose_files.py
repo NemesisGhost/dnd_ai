@@ -66,12 +66,33 @@ def test_dev_override_binds_the_published_port_to_localhost_only() -> None:
 def test_postgres_password_has_no_fallback_default() -> None:
     # Guards against regressing to `${POSTGRES_PASSWORD:-postgres}` (or any
     # other silent default) — the required-variable form (`:?...`) must be
-    # what both services interpolate.
+    # what the db service interpolates. POSTGRES_PASSWORD itself is not
+    # embedded in a URL anywhere in this file (see
+    # test_migrate_service_requires_an_explicit_database_url below), so it
+    # carries no URL-character restriction.
     content = (REPO_ROOT / "compose.yaml").read_text()
     assert "POSTGRES_PASSWORD:-" not in content, (
         "compose.yaml must not give POSTGRES_PASSWORD a fallback default — "
         "it is required, per docs/DEVELOPMENT.md §3.6."
     )
-    assert content.count("POSTGRES_PASSWORD:?") >= 2, (
-        "Both the db and migrate services must require POSTGRES_PASSWORD explicitly."
+    assert content.count("POSTGRES_PASSWORD:?") >= 1, (
+        "The db service must require POSTGRES_PASSWORD explicitly."
     )
+
+
+def test_migrate_service_requires_an_explicit_database_url() -> None:
+    # The migrate service must take a complete, pre-built connection URL
+    # (MIGRATION_DATABASE_URL) rather than Compose assembling one from
+    # POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB by string interpolation —
+    # that would silently break for a password containing URL-special
+    # characters (@ : / ? # [ ] %), since interpolation is not a URL
+    # encoder. No fallback default, same as POSTGRES_PASSWORD.
+    migrate = _load("compose.yaml")["services"]["migrate"]
+    database_url = migrate["environment"]["DATABASE_URL"]
+    assert "MIGRATION_DATABASE_URL" in database_url
+    assert ":?" in database_url, "MIGRATION_DATABASE_URL must be required, not defaulted"
+    assert ":-" not in database_url, "MIGRATION_DATABASE_URL must not have a fallback default"
+    # And it must not still be building the URL from the three POSTGRES_*
+    # variables directly — that's the exact pattern this fix replaced.
+    assert "POSTGRES_PASSWORD" not in database_url
+    assert "POSTGRES_USER" not in database_url

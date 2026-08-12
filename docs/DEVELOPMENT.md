@@ -211,15 +211,21 @@ Leaving that rule open is the failure mode to watch for; close it in the same se
 
 `compose.yaml` at the repository root is the officially supported way to run PostgreSQL for both everyday development and a real self-hosted deployment ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). It needs only Docker — no PostgreSQL install, no AWS account.
 
-**Required setup — `compose.yaml` will not start without it:**
+**Required setup — `compose.yaml` will not start (`up`) or run migrations without it:**
 
 ```bash
 cp .env.example .env
-# edit .env: uncomment POSTGRES_PASSWORD and set a real value, and update
-# DATABASE_URL's password segment to match it
+# edit .env: uncomment POSTGRES_PASSWORD and set a real value, then set
+# MIGRATION_DATABASE_URL and DATABASE_URL's password segments to match it
 ```
 
-There is deliberately **no fallback password** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one. `DATABASE_URL` (read by the application/tests) and `POSTGRES_PASSWORD` (read by `docker compose`) are two separate settings that must be kept in sync by hand.
+There is deliberately **no fallback password** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` likewise refuses to run without `MIGRATION_DATABASE_URL`. Three separate settings must be kept in sync by hand — nothing derives one from another:
+
+- `POSTGRES_PASSWORD` — read by `docker compose` to initialize PostgreSQL.
+- `MIGRATION_DATABASE_URL` — the complete SQLAlchemy URL the `migrate` service connects with, addressing `db` (the compose service name) over the compose-internal network.
+- `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below).
+
+`MIGRATION_DATABASE_URL` and `DATABASE_URL` are not assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` by Compose interpolation — that would be plain string substitution, not a URL encoder, and would silently break for a password containing characters that are special in a URL (`@ : / ? # [ ] %` and similar). Build each URL yourself and percent-encode the password segment if it needs one (Python: `urllib.parse.quote(password, safe="")`) — see `.env.example` for a worked example.
 
 **Start and stop:**
 
@@ -237,9 +243,10 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 | Variable | Default | Purpose |
 |---|---|---|
 | `POSTGRES_USER` | `postgres` | Superuser the migrations connect and `SET ROLE migration_owner` as |
-| `POSTGRES_PASSWORD` | *(none — required)* | No fallback; `docker compose up` refuses to start without it. Must not contain URL-special characters (`@ : / ? # [ ] %`) — `migrate`'s `DATABASE_URL` is built by plain string interpolation, not URL-encoding |
+| `POSTGRES_PASSWORD` | *(none — required)* | No fallback; `docker compose up` refuses to start without it. Any value is fine, including one containing URL-special characters — Compose passes it to PostgreSQL directly, it is not embedded in a URL here |
 | `POSTGRES_DB` | `dnd_ai` | Database name |
 | `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
+| `MIGRATION_DATABASE_URL` | *(none — required for `migrate`)* | The complete SQLAlchemy URL the `migrate` service connects with (host `db`, not `localhost`) — see the required-setup note above for why this is a separate variable, not derived from the three above |
 
 **Running migrations** against the composed database:
 
@@ -251,12 +258,40 @@ This builds the same `Dockerfile` image the future API/worker/adapter services w
 
 Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:<your POSTGRES_PASSWORD>@localhost:5432/dnd_ai` (this needs `compose.override.yaml`'s port, i.e. plain `docker compose up -d db` with no `-f` flags) and follow [§3.4](#34-verify).
 
-**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically. Note also that PostgreSQL 18's official image stores data under `/var/lib/postgresql` inside the container (PGDATA defaults to `/var/lib/postgresql/18/docker`) — `compose.yaml` mounts the named volume there, not at the pre-18 `/var/lib/postgresql/data` path; the commands below run entirely inside the container via `docker compose exec`, so they're unaffected by that path either way:
+**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)). The commands below assume the default `POSTGRES_USER=postgres`/`POSTGRES_DB=dnd_ai`; substitute your own if you changed them in `.env`. They use `docker compose exec`/`docker compose cp` with the *service* name (`db`), which Compose resolves to whatever container is actually running under the current project — deliberately not a hard-coded container name, since `compose.yaml` doesn't pin one (a fixed name would break the isolated-project-name pattern [§3.6 above](#36-self-hosted-docker-compose) and CI both rely on).
 
-- **Backups**: `docker compose exec db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump` (copy the file out with `docker cp`), on whatever schedule your deployment needs. There is no automated backup job — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)).
-- **Restoring**: `docker compose exec -T db pg_restore -U postgres -d dnd_ai -c` piped the dump back in, against a database at the same or a newer PostgreSQL major version.
+**Backup** — dump to a file inside the container, then copy it to the host:
+
+```bash
+docker compose exec -T db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump
+docker compose cp db:/tmp/dnd_ai.dump ./dnd_ai-$(date +%Y%m%d).dump
+docker compose exec -T db rm /tmp/dnd_ai.dump
+```
+
+`-Fc` produces `pg_dump`'s custom format — compressed, and the only format the `pg_restore` commands below accept. The result, `./dnd_ai-<date>.dump`, is an ordinary host file: back it up like any other file (off-host copy, versioned storage, whatever your deployment needs). **An untested backup is not a recovery plan** — periodically restore a real dump into a throwaway database and confirm the data is actually there (e.g. `docker compose exec -T db createdb -U postgres dnd_ai_restore_test`, restore into that with the fresh-database form below, then `dropdb` it), on whatever schedule matches how much data loss you can tolerate.
+
+**Restore into a fresh, empty database** — the normal case, for a new deployment or recovering after data loss:
+
+```bash
+docker compose exec -T db dropdb -U postgres --if-exists dnd_ai
+docker compose exec -T db createdb -U postgres dnd_ai
+docker compose cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+docker compose exec -T db pg_restore -U postgres -d dnd_ai /tmp/restore.dump
+docker compose exec -T db rm /tmp/restore.dump
+```
+
+**Restore over an existing, populated database** — recovering in place without recreating it first — needs `pg_restore --clean --if-exists` instead of the plain form above:
+
+```bash
+docker compose cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+docker compose exec -T db pg_restore -U postgres -d dnd_ai --clean --if-exists /tmp/restore.dump
+docker compose exec -T db rm /tmp/restore.dump
+```
+
+**`--clean`/`-c` is destructive**: it drops every object the dump contains, in the target database, immediately before recreating each from the dump — anything in that database that isn't in the dump (any change made since the backup was taken) is gone once this completes. Prefer the fresh-database form above whenever you can afford the brief downtime of recreating the database; reach for `--clean` only when you specifically need to restore in place.
+
 - **Upgrading the PostgreSQL minor version** (e.g. `18.4` → a later `18.x`): bump the tag in `compose.yaml`'s `db.image` and `docker compose up -d db` — PostgreSQL minor versions share an on-disk format, so this is a routine restart.
-- **Upgrading the PostgreSQL major version** (e.g. `18.x` → `19.x`): the on-disk format is not compatible across major versions. Take a backup first, then either `pg_dump`/`pg_restore` into a freshly initialized volume on the new major version, or use `pg_upgrade` if you need to avoid a full dump/restore for a large database. Do not just bump the image tag and restart — PostgreSQL will refuse to start against an incompatible data directory, which is the safe failure mode, but plan the upgrade deliberately rather than discovering this live.
+- **Upgrading the PostgreSQL major version** (e.g. `18.x` → `19.x`): the on-disk format is not compatible across major versions, and restoring a dump into the *existing* database once the image tag is bumped is not what a major-version upgrade is (PostgreSQL will refuse to even start against the old data directory — see below). The restore target must be a **freshly initialized data directory on the new major version**: a new named volume (or a separate Compose project pointed at one), never the existing `dnd_ai_pgdata` volume reused in place. Concretely: take a backup first (above); bring up a `db` service on the new major version's image against a brand-new, empty volume; restore into it with the plain (non-`--clean`) fresh-database form above; verify the restored data; and only then repoint the deployment at the new volume/instance and retire the old one. `pg_upgrade` is a documented alternative that avoids a full dump/restore for a large database, at the cost of more manual steps than this repository's `compose.yaml` currently automates — not covered here. Do not just bump the image tag and restart against the old volume: PostgreSQL refuses to start against an incompatible data directory, which is the safe failure mode, but plan the upgrade deliberately rather than discovering this live.
 
 ---
 

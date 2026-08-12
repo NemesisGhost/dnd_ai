@@ -12,9 +12,14 @@
 #   - POSTGRES_PASSWORD has no fallback default — `docker compose up` fails
 #     immediately if it isn't set, rather than silently starting with a
 #     guessable password. Set it in .env (see .env.example).
+#   - MIGRATION_DATABASE_URL has no fallback default either — a complete
+#     SQLAlchemy URL you supply yourself, kept in sync with
+#     POSTGRES_PASSWORD by hand, so a password containing URL-special
+#     characters can be percent-encoded correctly instead of being
+#     restricted to a "safe" subset. See .env.example.
 #
 # Usage:
-#   cp .env.example .env              # then set POSTGRES_PASSWORD — required
+#   cp .env.example .env              # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required
 #   docker compose up -d db           # start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
 #   docker compose --profile tools run --rm migrate   # apply migrations
 #   docker compose down               # stop; add -v to also drop the data volume
@@ -68,13 +73,17 @@ services:
       dockerfile: Dockerfile
     profiles: ["tools"]
     environment:
-      # Compose variable interpolation is plain string substitution, not a
-      # URL encoder: POSTGRES_PASSWORD must not contain characters that are
-      # special in a URL (@ : / ? # [ ] % and similar) or this connection
-      # string breaks silently. Stick to alphanumeric/hyphen/underscore, or
-      # set DATABASE_URL directly yourself with the password
-      # percent-encoded if you need a password containing one of those.
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — see .env.example}@db:5432/${POSTGRES_DB:-dnd_ai}
+      # MIGRATION_DATABASE_URL is a complete SQLAlchemy URL you supply
+      # yourself (see .env.example) — deliberately NOT assembled from
+      # POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB above by Compose
+      # interpolation, because interpolation is plain string substitution,
+      # not a URL encoder: a password containing characters that are
+      # special in a URL (@ : / ? # [ ] % and similar) would silently
+      # produce a broken connection string. Percent-encode the password
+      # segment yourself if it needs one, and keep this in sync with
+      # POSTGRES_PASSWORD above by hand — Compose cannot derive one from
+      # the other safely.
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required — copy .env.example to .env and set it before running the migrate service}
     depends_on:
       db:
         condition: service_healthy
