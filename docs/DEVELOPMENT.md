@@ -258,111 +258,194 @@ This builds the same `Dockerfile` image the future API/worker/adapter services w
 
 Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:<your POSTGRES_PASSWORD>@localhost:5432/dnd_ai` (this needs `compose.override.yaml`'s port, i.e. plain `docker compose up -d db` with no `-f` flags) and follow [§3.4](#34-verify).
 
-**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)). The commands below assume the default `POSTGRES_USER=postgres`/`POSTGRES_DB=dnd_ai`; substitute your own throughout if you changed them in `.env`. They use `docker compose exec`/`docker compose cp` with the *service* name (`db`), which Compose resolves to whatever container is actually running under the current project — deliberately not a hard-coded container name, since `compose.yaml` doesn't pin one (a fixed name would break the isolated-project-name pattern [§3.6 above](#36-self-hosted-docker-compose) and CI both rely on). Both Bash and PowerShell forms are given where they differ; the `docker compose exec`/`docker compose cp` arguments themselves run inside the container and are identical either way.
+**Backup and upgrade responsibilities.** Unlike the disposable local server described in [§3.4](#34-verify), a self-hosted deployment's `dnd_ai_pgdata` volume is expected to hold real, non-reproducible data, and nothing here backs it up automatically — that is the self-hosting operator's responsibility, unlike the AWS RDS path's automated backups ([INFRASTRUCTURE.md §1](INFRASTRUCTURE.md#1-current-state)).
+
+Every command below is **explicitly scoped** with `-p <project>` and `-f compose.yaml` — never a shell-local `COMPOSE_PROJECT_NAME` assignment and never plain `docker compose` with no `-f` flags. A forgotten environment variable or a copy-pasted command from an earlier shell session is exactly how a "just testing" command ends up pointed at a real deployment; explicit flags on every line remove that failure mode. `-f compose.yaml` alone (no other `-f`, and no auto-loaded `compose.override.yaml`) also means none of these commands ever publish a host port, matching how a self-hosted deployment normally runs. Two separate procedures follow — **[recovering an actual deployment](#recovering-an-actual-deployment)** and **[testing a backup in an isolated throwaway project](#testing-a-backup-isolated-throwaway-drill)** — do not mix commands between them.
 
 #### What a `pg_dump` backup does *not* cover
 
 `pg_dump` captures exactly one database's schemas, tables, data, and the grants recorded inside that database — nothing that lives outside it. PostgreSQL roles (`CREATE ROLE ...`) are **cluster-wide**, not database-local: they live in the cluster's shared catalog rather than inside any one database, so `pg_dump -d dnd_ai` never includes them. That matters here because this project's six roles — `migration_owner`, `migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, `admin_maintenance` — are created once, cluster-wide, by the `001_bootstrap` Alembic revision ([DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles)), and every schema object and default privilege throughout the database is owned by, or granted to, one of them. **A `dnd_ai.dump` file by itself is not a complete recovery artifact for a brand-new PostgreSQL cluster** — restoring it onto a fresh server with no roles yet created fails as soon as `pg_restore` reaches the first statement referencing `migration_owner` or any of the other five.
 
-The repository-native fix is to let Alembic recreate the roles before restoring data — the same `001_bootstrap` revision that created them on the original server, applied to the fresh one. That's the recommended recovery procedure below. (`pg_dumpall --globals-only` is a built-in alternative for capturing roles; it's discussed, and why it isn't the default recommendation here, further down.)
+The repository-native fix is to let Alembic recreate the roles before restoring data — the same `001_bootstrap` revision that created them on the original server, applied to the fresh one. That's what the recovery procedure below does. (`pg_dumpall --globals-only` is a built-in alternative for capturing roles; it's discussed, and why it isn't the default recommendation here, further down.)
+
+**What that role bootstrap does *not* recover.** Running `001_bootstrap` on a fresh cluster recreates the six *role definitions* the repository's migrations expect, and the grants/ownership those migrations assign to them — that is not the same as reproducing everything about the roles' live state on the server you backed up from:
+
+- **`pg_dump` never includes cluster roles at all** — not their existence, not their passwords, not their attributes (see above).
+- **Alembic recreates the repository-defined roles and grants**, exactly as `001_bootstrap` defines them — `CREATE ROLE ... WITH LOGIN`, membership in `migration_owner`, and the `ALTER DEFAULT PRIVILEGES` grants its section 5 sets up. That's schema-level structure, not credentials.
+- **Not recovered by either the dump or the migration**: any password set on a login role after `001_bootstrap` created it, credentials issued by an external identity system (IAM database auth, an operator's own `ALTER ROLE ... PASSWORD`), role memberships added by hand after bootstrap, `ALTER ROLE ... SET` session defaults, or any other post-deployment role change. None of that is repository-managed, so nothing in the procedure below reproduces it.
+- **After restoring onto a new cluster, rotate or reapply runtime credentials yourself**, as a deliberate step — set passwords on `migration_runner`/`app_read_write`/`app_read_only`/`integration_worker`/`admin_maintenance` (or wire up whatever externally managed authentication your deployment uses), the same way you would when standing up any new server. **Secrets belong to your deployment's own secret-management process** — never the dump file, this documentation, or the repository. `.env` (gitignored) for a small self-hosted setup, or AWS Secrets Manager for the optional AWS path (rule 10 in [CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules)).
+- If your deployment currently connects to PostgreSQL as the bootstrap superuser (`POSTGRES_USER`, `postgres` by default) rather than one of the five login roles, that is acceptable only because today's topology runs nothing but `alembic upgrade head` against the database. It is not the intended eventual model: once `src/dnd_ai/api` exists, the running application should connect as `app_read_write`/`app_read_only`, not as the PostgreSQL superuser ([DATABASE_CONVENTIONS.md §27.1](DATABASE_CONVENTIONS.md#271-database-roles)).
+
+Do not "solve" any of the above by indiscriminately restoring a `pg_dumpall --globals-only` capture — see why, further down.
+
+#### Shell variables used below
+
+The commands below name the database user, database name, and Compose project once and reuse them, instead of repeating literal values throughout. Bash and PowerShell are not interchangeable syntax — pick the block matching your shell and use it consistently for every command in this subsection:
+
+Bash:
+
+```bash
+DND_DB_USER=postgres
+DND_DB_NAME=dnd_ai
+DND_PROJECT=dnd-ai   # set to YOUR real deployment's Compose project — never guess this
+```
+
+PowerShell:
+
+```powershell
+$DndDbUser = "postgres"
+$DndDbName = "dnd_ai"
+$DndProject = "dnd-ai"   # set to YOUR real deployment's Compose project — never guess this
+```
+
+`dnd-ai` above is a placeholder, not a recommended default — `$DND_PROJECT`/`$DndProject` must name the Compose project your real deployment actually runs under (Compose defaults this to the containing directory's name unless you've set it explicitly yourself). Confirm it before running anything destructive:
+
+```bash
+docker compose -p "$DND_PROJECT" -f compose.yaml ps
+```
+
+If that doesn't show the deployment you intend to act on, stop — fix `$DND_PROJECT` before continuing.
 
 #### Backup — dump to a file inside the container, then copy it to the host
 
 Bash:
 
 ```bash
-docker compose exec -T db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump
-docker compose cp db:/tmp/dnd_ai.dump "./dnd_ai-$(date +%Y%m%d).dump"
-docker compose exec -T db rm /tmp/dnd_ai.dump
+docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db pg_dump -U "$DND_DB_USER" -d "$DND_DB_NAME" -Fc -f /tmp/dnd_ai.dump
+docker compose -p "$DND_PROJECT" -f compose.yaml cp db:/tmp/dnd_ai.dump "./${DND_DB_NAME}-$(date +%Y%m%d).dump"
+docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db rm /tmp/dnd_ai.dump
 ```
 
 PowerShell:
 
 ```powershell
-docker compose exec -T db pg_dump -U postgres -d dnd_ai -Fc -f /tmp/dnd_ai.dump
-docker compose cp db:/tmp/dnd_ai.dump "./dnd_ai-$(Get-Date -Format 'yyyyMMdd').dump"
-docker compose exec -T db rm /tmp/dnd_ai.dump
+docker compose -p $DndProject -f compose.yaml exec -T db pg_dump -U $DndDbUser -d $DndDbName -Fc -f /tmp/dnd_ai.dump
+docker compose -p $DndProject -f compose.yaml cp db:/tmp/dnd_ai.dump "./$DndDbName-$(Get-Date -Format 'yyyyMMdd').dump"
+docker compose -p $DndProject -f compose.yaml exec -T db rm /tmp/dnd_ai.dump
 ```
 
-`-Fc` produces `pg_dump`'s custom format — compressed, and the only format the `pg_restore` commands below accept. The result is an ordinary host file: back it up like any other file (off-host copy, versioned storage, whatever your deployment needs) — and, per the section above, remember it's a **database-only** artifact; recovering onto a brand-new cluster also needs the role-recreation step built into the procedure below.
+`-Fc` produces `pg_dump`'s custom format — compressed, and the only format the `pg_restore` commands below accept. The result is an ordinary host file, not scoped to any Compose project: back it up like any other file (off-host copy, versioned storage, whatever your deployment needs), and use it with either procedure below. Per the section above, it's a **database-only** artifact — recovering onto a brand-new cluster also needs the role-recreation step built into the procedure below.
 
-**An untested backup is not a recovery plan.** Periodically run the fresh-database restore procedure below against a real dump, but point it at an *isolated throwaway Compose project* rather than your real deployment, so a mistake can't touch production data:
+#### Recovering an actual deployment
 
-```bash
-COMPOSE_PROJECT_NAME=dnd-ai-restore-test docker compose up -d --wait db
-# ... run the fresh-database restore procedure below against that project ...
-COMPOSE_PROJECT_NAME=dnd-ai-restore-test docker compose down -v
-```
+The procedure for standing up a new deployment from a backup, recovering after data loss, or a major-version upgrade (further down — which always needs a brand-new data directory). Every command targets `$DND_PROJECT`/`$DndProject` — the real deployment's project, confirmed above — and `-f compose.yaml` only, so nothing here can accidentally publish a port via `compose.override.yaml`. **Steps 3 and 4 are destructive to whatever `$DND_DB_NAME` database currently exists in that project** — re-run the `ps` confirmation above immediately before them if any time has passed, or if you're following this in a new shell session.
 
-Confirm the data is actually there (the "verify" step below) before trusting the backup, on whatever schedule matches how much data loss you can tolerate.
-
-#### Restore — recommended path: fresh database on a cluster with roles bootstrapped
-
-This is the right procedure for standing up a new deployment from a backup, recovering after data loss, or a major-version upgrade (below — which always needs a brand-new data directory). **Confirm which server and which Compose project you're pointed at before running any of this** — steps 3–4 are destructive to whatever `dnd_ai` database currently exists at that target; never run them against a production stack without double-checking `docker compose ps`/`$COMPOSE_PROJECT_NAME` first.
-
-1. **Start PostgreSQL on a fresh, empty volume** (a new deployment, or a new major version's image — see below). `POSTGRES_DB=dnd_ai` makes container initialization also create an empty, unmigrated `dnd_ai` database — that's the starting point the next step builds on:
+1. **Start PostgreSQL** — on a fresh, empty volume for a new deployment or a major-version upgrade (further down), or the deployment's existing volume for an ordinary recovery:
 
    ```bash
-   docker compose up -d --wait db
+   docker compose -p "$DND_PROJECT" -f compose.yaml up -d --wait db
    ```
 
-2. **Run migrations once**, so the six cluster-wide roles, extensions, schemas, and current schema objects exist:
+   On a fresh volume, `POSTGRES_DB` (`$DND_DB_NAME` by default) makes container initialization also create an empty, unmigrated database of that name — the starting point step 2 builds on.
+
+2. **Run migrations once**, so the six cluster-wide roles, extensions, schemas, and current schema objects exist (`MIGRATION_DATABASE_URL` must be set — see "Required setup" above):
 
    ```bash
-   docker compose --profile tools run --rm migrate
+   docker compose -p "$DND_PROJECT" -f compose.yaml --profile tools run --rm migrate
    ```
 
-   This — not the dump — is what actually recreates `migration_owner`, `migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, and `admin_maintenance` (`001_bootstrap`'s `CREATE ROLE ... IF NOT EXISTS` pattern is idempotent, so this is also safe to run against a server that already has them). It needs the connecting role (`POSTGRES_USER`, `postgres` by default) to be able to create and grant roles, which the official `postgres` image's bootstrap user already is (superuser); if `POSTGRES_USER` is something else, it needs equivalent privilege.
+   This — not the dump — is what actually recreates `migration_owner`, `migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, and `admin_maintenance` (`001_bootstrap`'s `CREATE ROLE ... IF NOT EXISTS` pattern is idempotent, so this step is also safe to run against a server that already has them, e.g. an ordinary in-place recovery). It needs the connecting role (`POSTGRES_USER`, `$DND_DB_USER` by default) to be able to create and grant roles, which the official `postgres` image's bootstrap user already is (superuser); if `POSTGRES_USER` is something else, it needs equivalent privilege. This recreates role *definitions* only — see "What that role bootstrap does not recover" above for what it doesn't.
 
-3. **Recreate the target database, preserving the roles migration just created** — `dropdb`/`createdb` only ever affect the named database, never cluster-wide roles, so this is safe immediately after step 2. Identical in Bash and PowerShell — both simply invoke `docker compose exec`:
+3. **Recreate the target database, preserving the roles migration just created:**
 
    ```bash
-   docker compose exec -T db dropdb -U postgres --if-exists dnd_ai
-   docker compose exec -T db createdb -U postgres --owner postgres dnd_ai
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db dropdb -U "$DND_DB_USER" --if-exists "$DND_DB_NAME"
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db createdb -U "$DND_DB_USER" --owner "$DND_DB_USER" "$DND_DB_NAME"
    ```
 
-   (`dropdb`/`createdb` need to run as a role with `CREATEDB` or superuser — `postgres`, the default `POSTGRES_USER`, already qualifies as superuser in the official image.)
+   `dropdb` destroys only the `$DND_DB_NAME` database inside the `$DND_PROJECT` project you targeted with `-p` — it has no way to reach a database in a different Compose project, and it never touches cluster-wide roles, which is why this is safe to run immediately after step 2. (`dropdb`/`createdb` need to run as a role with `CREATEDB` or superuser — `postgres`, the default `POSTGRES_USER`, already qualifies as superuser in the official image.)
 
 4. **Restore the dump** into the now-empty database:
 
    ```bash
-   docker compose cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
-   docker compose exec -T db pg_restore -U postgres -d dnd_ai /tmp/restore.dump
-   docker compose exec -T db rm /tmp/restore.dump
+   docker compose -p "$DND_PROJECT" -f compose.yaml cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db pg_restore -U "$DND_DB_USER" -d "$DND_DB_NAME" /tmp/restore.dump
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db rm /tmp/restore.dump
    ```
 
-   (Substitute your actual dump filename — same three commands on both shells.)
+   Substitute your actual dump filename. **Restoring a dump created by a newer application/schema revision into an older application image is unsupported** — before proceeding, make sure the `migrate` image you're running is a version that already knows about the dump's revision (or later); upgrade the image first if it's older than the dump.
 
-5. **Verify the restore**:
+5. **Check Alembic state, then verify restored data** — deliberately two different commands, because the first only inspects and the second (used conditionally) changes the database:
 
    ```bash
-   docker compose --profile tools run --rm migrate alembic -c database/alembic.ini current
-   docker compose exec -T db psql -U postgres -d dnd_ai -c "SELECT schemaname, count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'public') GROUP BY schemaname ORDER BY 1;"
-   docker compose exec -T db psql -U postgres -d dnd_ai -c "SELECT count(*) FROM core.worlds;"
+   docker compose -p "$DND_PROJECT" -f compose.yaml --profile tools run --rm migrate alembic -c database/alembic.ini current
    ```
 
-   `alembic current` reports which revision the restored data represents. If it already reports the current head, **no migration is needed** — restoring a dump taken from an up-to-date database is a no-op for Alembic. If it reports an older revision (the dump came from an earlier application version), bring it forward the normal way:
+   This overrides the `migrate` service's default command (`alembic -c database/alembic.ini upgrade head`) with `alembic -c database/alembic.ini current` — it reports which revision the restored data represents without changing anything. If it already reports the current head, **no migration is needed**: restoring a dump taken from an up-to-date database is a no-op for Alembic, and running the default command against it would produce no schema changes. If it reports an older revision (the dump came from an earlier application version), bring it forward with the service's actual default command:
 
    ```bash
-   docker compose --profile tools run --rm migrate
+   docker compose -p "$DND_PROJECT" -f compose.yaml --profile tools run --rm migrate
    ```
 
-   The `pg_tables`/`core.worlds` queries above are a cheap sanity check that real rows came back rather than an empty schema; adjust the second query to a table you know should be populated in your deployment.
+   Then confirm real data came back, not just an empty schema:
+
+   ```bash
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db psql -U "$DND_DB_USER" -d "$DND_DB_NAME" -c "SELECT schemaname, count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'public') GROUP BY schemaname ORDER BY 1;"
+   docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db psql -U "$DND_DB_USER" -d "$DND_DB_NAME" -c "SELECT count(*) FROM core.worlds;"
+   ```
+
+   Adjust the second query to a table you know should be populated in your deployment. Once verified, complete "What that role bootstrap does not recover" above — rotate or reapply runtime credentials — before treating the recovered deployment as live.
+
+*(PowerShell: every command above is identical with `$DndProject`/`$DndDbUser`/`$DndDbName` in place of `$DND_PROJECT`/`$DND_DB_USER`/`$DND_DB_NAME`, per the variable block above — e.g. step 1 becomes `docker compose -p $DndProject -f compose.yaml up -d --wait db`.)*
+
+#### Testing a backup: isolated throwaway drill
+
+**An untested backup is not a recovery plan.** Periodically run the same restore steps above against a real dump, but inside a project that cannot be confused with, reach, or delete your real deployment. Use a fixed, obviously disposable project name — not `$DND_PROJECT` — so it never depends on that variable being set correctly, and `-f compose.yaml` only, so the drill never loads `compose.override.yaml` and never publishes a host port:
+
+Bash:
+
+```bash
+DND_TEST_PROJECT=dnd-ai-restore-test
+
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml up -d --wait db
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml --profile tools run --rm migrate
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml exec -T db dropdb -U "$DND_DB_USER" --if-exists "$DND_DB_NAME"
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml exec -T db createdb -U "$DND_DB_USER" --owner "$DND_DB_USER" "$DND_DB_NAME"
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml exec -T db pg_restore -U "$DND_DB_USER" -d "$DND_DB_NAME" /tmp/restore.dump
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml exec -T db rm /tmp/restore.dump
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml --profile tools run --rm migrate alembic -c database/alembic.ini current
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml exec -T db psql -U "$DND_DB_USER" -d "$DND_DB_NAME" -c "SELECT count(*) FROM core.worlds;"
+docker compose -p "$DND_TEST_PROJECT" -f compose.yaml down -v
+```
+
+PowerShell:
+
+```powershell
+$DndTestProject = "dnd-ai-restore-test"
+
+docker compose -p $DndTestProject -f compose.yaml up -d --wait db
+docker compose -p $DndTestProject -f compose.yaml --profile tools run --rm migrate
+docker compose -p $DndTestProject -f compose.yaml exec -T db dropdb -U $DndDbUser --if-exists $DndDbName
+docker compose -p $DndTestProject -f compose.yaml exec -T db createdb -U $DndDbUser --owner $DndDbUser $DndDbName
+docker compose -p $DndTestProject -f compose.yaml cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+docker compose -p $DndTestProject -f compose.yaml exec -T db pg_restore -U $DndDbUser -d $DndDbName /tmp/restore.dump
+docker compose -p $DndTestProject -f compose.yaml exec -T db rm /tmp/restore.dump
+docker compose -p $DndTestProject -f compose.yaml --profile tools run --rm migrate alembic -c database/alembic.ini current
+docker compose -p $DndTestProject -f compose.yaml exec -T db psql -U $DndDbUser -d $DndDbName -c "SELECT count(*) FROM core.worlds;"
+docker compose -p $DndTestProject -f compose.yaml down -v
+```
+
+Every line names `$DND_TEST_PROJECT`/`$DndTestProject` explicitly — none of them can reach `$DND_PROJECT`'s data. Compose derives container, network, and (because `compose.yaml`'s `dnd_ai_pgdata` volume has no explicit top-level `name:` — see its comment) volume names from the project name, so `dnd-ai-restore-test` gets entirely separate resources from whatever `$DND_PROJECT` resolves to; the two projects share nothing but the built image. The `db` *hostname* used inside `exec`/`cp`/`run` stays literally `db` regardless of project — that's the Compose service name, resolved on that project's own internal network, and the project name changes resource naming, never that hostname. The final `down -v` removes only `$DND_TEST_PROJECT`'s container and volume; `$DND_PROJECT`'s container and volume belong to a different project and are untouched by it.
+
+Using the same host dump file for both the drill and a real recovery is fine — it's an ordinary file on the host filesystem, not scoped to any project. Only the *copy made inside the container* (`/tmp/restore.dump`) belongs to whichever project the `cp` targeted, and each procedure cleans up its own copy.
+
+Confirm the data is actually there (the `alembic current`/`core.worlds` checks above) before trusting the backup, on whatever schedule matches how much data loss you can tolerate.
 
 #### Restore — exceptional path: in place, over an existing database
 
-Recreating the database (above) is the normal recovery path — prefer it whenever you can afford the brief downtime. Restoring **in place**, without dropping the database first, is for the narrower case where you specifically cannot recreate it (for example, other services depend on it staying up) and are willing to accept the limitations below. It uses `pg_restore --clean --if-exists`:
+Recreating the database (above) is the normal recovery path — prefer it whenever you can afford the brief downtime. Restoring **in place**, without dropping the database first, is for the narrower case where you specifically cannot recreate it (for example, other services depend on it staying up) and are willing to accept the limitations below. Still scoped to `$DND_PROJECT` — confirm the target the same way as step 3 above before running this. It uses `pg_restore --clean --if-exists`:
 
 ```bash
-docker compose cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
-docker compose exec -T db pg_restore -U postgres -d dnd_ai --clean --if-exists /tmp/restore.dump
-docker compose exec -T db rm /tmp/restore.dump
+docker compose -p "$DND_PROJECT" -f compose.yaml cp ./dnd_ai-20260811.dump db:/tmp/restore.dump
+docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db pg_restore -U "$DND_DB_USER" -d "$DND_DB_NAME" --clean --if-exists /tmp/restore.dump
+docker compose -p "$DND_PROJECT" -f compose.yaml exec -T db rm /tmp/restore.dump
 ```
 
 **What `--clean` actually guarantees, precisely:** for each object the dump *contains*, `pg_restore --clean` emits a `DROP` for that object immediately before recreating it from the dump; `--if-exists` just silences the error when an object it expects to drop isn't there. That is narrower than "resets the database to match the dump":
 
 - **Anything not represented in the dump is left alone.** A table, role grant, or other object created after the backup was taken — or anything outside what `pg_dump` captured in the first place — is untouched, so an in-place restore can leave stale or unrelated state behind rather than reproducing a clean copy of the backed-up database.
-- **It can fail outright, rather than silently succeeding**, when: another session holds a lock on an object being dropped (open connections to the database block the `DROP`); the dump's objects are owned by a role that doesn't match what's currently in place; or a dependency (an extension, a view depending on a table) isn't in the state `--clean`'s drop order expects.
+- **It can fail outright, rather than silently succeeding**, when: another session holds a lock on an object being dropped (open connections to the `$DND_DB_NAME` database in `$DND_PROJECT` block the `DROP`); the dump's objects are owned by a role that doesn't match what's currently in place; or a dependency (an extension, a view depending on a table) isn't in the state `--clean`'s drop order expects.
 
 Treat in-place `--clean --if-exists` restoration as an exceptional, break-glass procedure, not the default — the fresh-database path above has none of these failure modes, because there's nothing pre-existing to conflict with.
 
@@ -374,10 +457,10 @@ Treat in-place `--clean --if-exists` restoration as an exceptional, break-glass 
 - It includes role **attributes and password hashes** — applying it unreviewed onto another cluster copies credentials for roles that have nothing to do with this project, an unnecessary credential-hygiene risk.
 - Applying it blindly (`psql -f globals.sql`) to a cluster that already has some of those roles, with different attributes or passwords, can silently change them.
 
-If you need cluster-wide role parity for reasons beyond this project (migrating an entire shared PostgreSQL server, not just this database), treat `pg_dumpall --globals-only` output as sensitive, review it before applying, and scope it down to the roles you actually intend to carry over rather than applying it wholesale. For this project specifically, prefer the migration-driven role recreation in the fresh-database procedure above — it only ever creates the exact six roles `001_bootstrap` defines, nothing from any other application on the cluster.
+If you need cluster-wide role parity for reasons beyond this project (migrating an entire shared PostgreSQL server, not just this database), treat `pg_dumpall --globals-only` output as sensitive, review it before applying, and scope it down to the roles you actually intend to carry over rather than applying it wholesale — never restore it indiscriminately. For this project specifically, prefer the migration-driven role recreation in the recovery procedure above — it only ever creates the exact six roles `001_bootstrap` defines, nothing from any other application on the cluster, and never touches a password hash.
 
-- **Upgrading the PostgreSQL minor version** (e.g. `18.4` → a later `18.x`): bump the tag in `compose.yaml`'s `db.image` and `docker compose up -d db` — PostgreSQL minor versions share an on-disk format, so this is a routine restart.
-- **Upgrading the PostgreSQL major version** (e.g. `18.x` → `19.x`): the on-disk format is not compatible across major versions — PostgreSQL refuses to even start against a data directory from a different major version, which is the safe failure mode, but plan deliberately rather than discovering this live. The restore target must be a **freshly initialized data directory on the new major version**: a new named volume (or a separate Compose project pointed at one), never the existing `dnd_ai_pgdata` volume reused in place. Concretely: take a backup first (above); bring up a `db` service on the new major version's image against a brand-new, empty volume; follow the full fresh-database restore procedure above end to end (migrate first, to recreate the roles on the new cluster, then recreate the database and restore the dump into it); verify; and only then repoint the deployment at the new volume/instance and retire the old one. `pg_upgrade` is a documented alternative that avoids a full dump/restore for a large database, at the cost of more manual steps than this repository's `compose.yaml` currently automates — not covered here.
+- **Upgrading the PostgreSQL minor version** (e.g. `18.4` → a later `18.x`): bump the tag in `compose.yaml`'s `db.image` and `docker compose -p "$DND_PROJECT" -f compose.yaml up -d db` — PostgreSQL minor versions share an on-disk format, so this is a routine restart.
+- **Upgrading the PostgreSQL major version** (e.g. `18.x` → `19.x`): the on-disk format is not compatible across major versions — PostgreSQL refuses to even start against a data directory from a different major version, which is the safe failure mode, but plan deliberately rather than discovering this live. The restore target must be a **freshly initialized data directory on the new major version**: a new named volume (or a separate Compose project pointed at one), never the existing `dnd_ai_pgdata` volume reused in place. Concretely: take a backup first (above); bring up a `db` service on the new major version's image against a brand-new, empty volume; follow "[Recovering an actual deployment](#recovering-an-actual-deployment)" above end to end (migrate first, to recreate the roles on the new cluster, then recreate the database and restore the dump into it); verify; and only then repoint the deployment at the new volume/instance and retire the old one. `pg_upgrade` is a documented alternative that avoids a full dump/restore for a large database, at the cost of more manual steps than this repository's `compose.yaml` currently automates — not covered here.
 
 ---
 
