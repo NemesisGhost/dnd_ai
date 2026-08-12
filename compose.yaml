@@ -56,7 +56,18 @@ services:
         source: dnd_ai_pgdata
         target: /var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-dnd_ai}"]
+      # Deliberately targets the always-present `postgres` maintenance
+      # database, not ${POSTGRES_DB} — the documented recovery procedure
+      # (docs/DEVELOPMENT.md §3.6) drops and recreates the application
+      # database, and a health check connecting to it would either hold a
+      # connection that blocks the drop, or report the container unhealthy
+      # for the window between drop and recreate (which `depends_on:
+      # condition: service_healthy` on the migrate service would then wait
+      # on unnecessarily). `postgres` always exists on a running cluster
+      # regardless of what happens to the application database, so this
+      # reports the server's actual up/down state, not the application
+      # database's.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10

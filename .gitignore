@@ -95,6 +95,11 @@ ipython_config.py
 .env
 .env.local
 .env.*.local
+# Disposable Compose --env-file workflows (docs/DEVELOPMENT.md §3.6) —
+# .env.restore-test for the isolated restore drill, .env.pg-new for a
+# major-version upgrade's new cluster. Both are real credentials, however
+# short-lived, and must never be committed.
+.env.*
 !.env.example
 
 # pipenv
