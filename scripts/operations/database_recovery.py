@@ -13,17 +13,15 @@ Safety model — three levels, not a single "read-only" claim:
                     running; nothing is created.
 
   docker-ephemeral  May run `docker compose exec`/`cp` against an ALREADY
-                    RUNNING `db` container (no new container created), and
-                    may create a genuinely new one-off `migrate` container
-                    via `docker compose run --rm` for the migration-target
-                    check (preflight only — requires the `migrate` image to
-                    already exist, see `check_migrate_image_present`; this
-                    script never lets that check silently trigger a build)
-                    or for `verify`'s migration-head check (may build the
-                    image if missing, same as `verify`'s other checks —
-                    see `check_migration_head`). Neither one-off container
-                    invokes this repository's env.py, so its custom
-                    `CREATE SCHEMA IF NOT EXISTS core;` never runs. None of
+                    RUNNING `db` container (no new container created), and,
+                    for the migration-target check only (preflight,
+                    `restore --mode fresh`, `bootstrap-roles`), may create
+                    a genuinely new one-off `migrate` container via
+                    `docker compose run --rm` — requires the `migrate`
+                    image to already exist, see
+                    `check_migrate_image_present`; this script never lets
+                    that check silently trigger a build. `verify` never
+                    creates any new container at all — see below. None of
                     this creates, drops, or alters any PostgreSQL database,
                     role, or volume.
 
@@ -33,25 +31,33 @@ Safety model — three levels, not a single "read-only" claim:
                     any subprocess — Docker-ephemeral or otherwise — runs.
 
 `verify` performs no PostgreSQL state mutation, unconditionally — it has no
-`--confirm-*` flag and never runs migrations. Its Alembic check
-(`check_migration_head`) does NOT shell out to `alembic current
---check-heads`: that command loads this repository's own
+`--confirm-*` flag and never runs migrations, and it inspects exactly one
+database throughout: the `--project`/`--compose-file`/`--db-user`/
+`--db-name` the operator explicitly selected, via `docker compose exec db
+psql` — never MIGRATION_DATABASE_URL, never the `migrate` service, for any
+check. Its Alembic check (`check_migration_head`) does NOT shell out to
+`alembic current --check-heads`: that command loads this repository's own
 `database/migrations/env.py`, whose `run_migrations_online()`
 unconditionally executes and commits `CREATE SCHEMA IF NOT EXISTS core;`
 before running any migration — real, project-specific mutation that
 Alembic's own `dont_mutate=True` (which only constrains Alembic's version-
-table bookkeeping) does not suppress. Instead, `check_migration_head` reads
-repository head(s) via Alembic's `ScriptDirectory` (parses the migration
-scripts on disk — no env.py, no database connection at all) and reads
-database head(s) via a direct `SELECT` against `core.alembic_version` over
-a connection with PostgreSQL's own `default_transaction_read_only=on` set
+table bookkeeping) does not suppress. Instead, `check_migration_head`
+computes repository head(s) entirely in-process via Alembic's
+`ScriptDirectory` (`_repository_migration_heads` — no subprocess, no
+container, no database connection at all) and reads database head(s) via a
+direct `SELECT` against `core.alembic_version` on the SAME already-running
+`db` container `exec`'d by every other check in `verify`, over a
+connection with PostgreSQL's own `default_transaction_read_only=on` set
 for that session, so the server itself — not this script's care — would
 reject any write that connection ever attempted. A target with no `core`
 schema or version table at all is detected via `to_regclass()` (a pure
 catalog lookup, never an error, never a schema-creating side effect) and
 reported as its own distinct failure. The two head sets are then compared
-exactly, correctly handling zero, one, or multiple heads; any mismatch —
-behind head, ahead, diverged, or missing — makes `verify` exit nonzero.
+exactly in Python, correctly handling zero, one, or multiple heads; any
+mismatch — behind head, ahead, diverged, or missing — makes `verify` exit
+nonzero. Every failure path returns a short, fixed, classified message —
+never raw subprocess stderr — so a connection failure can never leak
+connection details into this check's output.
 
 `restore` and `bootstrap-roles` run their static and docker-ephemeral
 checks (their "preflight") before doing anything destructive, and refuse to
@@ -65,10 +71,13 @@ own docstring/help for exactly which checks run at which `--level`.
 
 This script never reads or prints POSTGRES_PASSWORD, MIGRATION_DATABASE_URL,
 or any other credential — it only ever passes `--env-file <path>` through to
-`docker compose`, which resolves secrets itself, and the two places it reads
-a database connection's identity (`verify_migration_target`,
-`check_migration_head`) print only database/user/revision identifiers,
-never the URL. `docker compose config`'s
+`docker compose`, which resolves secrets itself. The one place this script
+reads a *migration-service* connection's identity, `verify_migration_target`
+(preflight only — never `verify`), prints only the resulting database/user
+names, never the URL; `check_migration_head` never connects to
+MIGRATION_DATABASE_URL at all, and every failure it can return is a short,
+fixed, classified string rather than raw subprocess/exception text.
+`docker compose config`'s
 JSON output is parsed in memory and never printed in full — callers only
 ever extract and display non-secret structural fields (service names, port
 bindings). Every subprocess is invoked as an argument list (never
@@ -91,6 +100,14 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# Alembic is a core project dependency (pyproject.toml), always present in
+# the same environment this script itself runs in — so repository migration
+# heads can be read directly, in-process, without a subprocess or container
+# of any kind. See `_repository_migration_heads` for why this never loads
+# database/migrations/env.py.
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 # Six roles from database/migrations/versions/001_bootstrap.py and
 # docs/DATABASE_CONVENTIONS.md §27.1 — migration_owner is the sole NOLOGIN
@@ -168,80 +185,6 @@ with psycopg.connect(url) as conn:
         cur.execute("SELECT current_database(), current_user")
         db, user = cur.fetchone()
         print(f"MIGRATION_TARGET\\t{db}\\t{user}")
-"""
-
-
-# Runs entirely inside a one-off `migrate` service container so it has both
-# the migration scripts on disk and Alembic installed, but it deliberately
-# never loads this repository's env.py (database/migrations/env.py).
-# env.py's run_migrations_online() unconditionally executes and commits
-# `CREATE SCHEMA IF NOT EXISTS core;` before running any migration — that
-# is real, project-specific mutation, and it is NOT suppressed by Alembic's
-# own `dont_mutate=True` (used internally by `alembic current
-# --check-heads`), which only constrains Alembic's own version-table
-# bookkeeping, not custom SQL a project's env.py chooses to run. Running
-# `alembic current --check-heads` directly against this project would
-# therefore let a "verification" step create `core` on a target that
-# doesn't have it yet — which is exactly why this script exists instead of
-# just shelling out to that command:
-#
-#   - repository head(s): `ScriptDirectory.from_config(...).get_heads()`,
-#     which only reads alembic.ini's script_location and parses the
-#     migration scripts on disk — no env.py, no database connection.
-#   - database head(s): a direct `SELECT ... FROM core.alembic_version`
-#     over a connection with `default_transaction_read_only=on` set at the
-#     PostgreSQL session level (the same mechanism `_psql_scalar_readonly`
-#     already uses elsewhere in this script), so PostgreSQL itself — not
-#     this script's care — rejects any write the connection might ever
-#     attempt. `core.alembic_version`'s existence is checked with
-#     `to_regclass()` first — a pure catalog lookup that returns NULL
-#     rather than raising — so a target with no `core` schema at all is
-#     reported as its own distinct, clean failure rather than crashing or,
-#     worse, ever creating the schema itself.
-#
-# Prints exactly one machine-readable line to stdout and exits nonzero on
-# any failure (mismatch, missing table, or connection error), so the
-# caller never has to parse Alembic's own human-oriented command output.
-_HEAD_CHECK_SCRIPT = """\
-import os
-import sys
-
-import psycopg
-from alembic.config import Config
-from alembic.script import ScriptDirectory
-
-script = ScriptDirectory.from_config(Config("database/alembic.ini"))
-repo_heads = set(script.get_heads())
-repo_str = ",".join(sorted(repo_heads)) or "(none)"
-
-url = os.environ["DATABASE_URL"]
-for prefix in ("postgresql+psycopg://", "postgresql+psycopg2://"):
-    if url.startswith(prefix):
-        url = "postgresql://" + url[len(prefix):]
-        break
-
-try:
-    with psycopg.connect(
-        url, options="-c default_transaction_read_only=on", autocommit=True
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('core.alembic_version') IS NOT NULL")
-            (table_exists,) = cur.fetchone()
-            if not table_exists:
-                print("HEAD_CHECK\\tMISSING\\tcore.alembic_version does not exist")
-                sys.exit(1)
-            cur.execute("SELECT version_num FROM core.alembic_version")
-            db_heads = {row[0] for row in cur.fetchall()}
-except Exception as exc:
-    print(f"HEAD_CHECK\\tERROR\\t{str(exc)[:800]}")
-    sys.exit(1)
-
-db_str = ",".join(sorted(db_heads)) or "(none)"
-if db_heads == repo_heads:
-    print(f"HEAD_CHECK\\tMATCH\\tdb={db_str}\\trepo={repo_str}")
-    sys.exit(0)
-print(f"HEAD_CHECK\\tMISMATCH\\tdb={db_str}\\trepo={repo_str}")
-sys.exit(1)
 """
 
 
@@ -764,44 +707,83 @@ def verify_migration_target(
     return True, f"confirmed: connects to {actual_db!r} as {actual_user!r}"
 
 
-def check_migration_head(target: ComposeTarget) -> tuple[bool, str]:
-    """Read-only proof the database is at the repository's migration head(s).
+def _repository_migration_heads() -> set[str]:
+    """Repository migration head revision id(s), read entirely in-process.
 
-    Docker-ephemeral: creates a genuinely new, one-off `migrate` container,
-    the same category of operation as `verify_migration_target` above —
-    but unlike running `alembic current --check-heads` directly against
-    this project, it never loads `database/migrations/env.py`, so that
-    module's unconditional `CREATE SCHEMA IF NOT EXISTS core;` never runs.
-    See `_HEAD_CHECK_SCRIPT`'s own comment for the full mechanism: repository
-    heads come from Alembic's `ScriptDirectory` (no env.py, no database),
-    database heads come from a direct, PostgreSQL-enforced read-only query
-    against `core.alembic_version`. Prints neither a connection URL nor a
-    password — only revision identifiers, which are not secrets.
+    No subprocess, no container, and no database connection of any kind.
+    `ScriptDirectory.from_config()` only reads `alembic.ini`'s
+    `script_location`; `get_heads()` only parses the migration scripts
+    already on disk under it. Neither ever loads
+    `database/migrations/env.py` — that only happens via
+    `ScriptDirectory.run_env()`, which this function never calls, so
+    `env.py`'s unconditional `CREATE SCHEMA IF NOT EXISTS core;` cannot run
+    here. `alembic.ini`'s path is resolved relative to this script's own
+    file location, not the process's current working directory, so this
+    behaves identically no matter where `database_recovery.py` is invoked
+    from.
     """
-    result = compose_run(
-        target,
-        "--profile",
-        "tools",
-        "run",
-        "--rm",
-        "migrate",
-        "python",
-        "-c",
-        _HEAD_CHECK_SCRIPT,
-        capture=True,
+    alembic_ini = Path(__file__).resolve().parents[2] / "database" / "alembic.ini"
+    script = ScriptDirectory.from_config(Config(str(alembic_ini)))
+    return set(script.get_heads())
+
+
+def check_migration_head(target: ComposeTarget) -> tuple[bool, str]:
+    """Read-only proof that THIS command's explicitly selected database is at
+    the repository's migration head(s).
+
+    Deliberately never touches the `migrate` service or
+    MIGRATION_DATABASE_URL. Every other check `verify` runs inspects
+    `target` — the `--project`/`--compose-file`/`--db-user`/`--db-name` the
+    operator explicitly selected — via `docker compose exec db psql`, and
+    this check is no exception: a stale, mistargeted, or even
+    externally-pointed MIGRATION_DATABASE_URL can never make this check
+    inspect a different database than the rest of `verify` does, because it
+    is never consulted at all. Docker-ephemeral: `exec` against the
+    already-running `db` container only — creates no new container.
+
+    Repository head(s) come from `_repository_migration_heads()` (no
+    env.py, no database connection). Database head(s) come from a direct
+    `SELECT version_num FROM core.alembic_version` via
+    `_psql_scalar_readonly`, which sets PostgreSQL's own
+    `default_transaction_read_only=on` for that one psql process — the
+    server itself, not this function's care, would reject any write it
+    ever attempted. `core.alembic_version`'s existence is checked first via
+    `to_regclass()` (a pure catalog lookup that returns NULL rather than
+    erroring), so a target missing `core` entirely is reported as its own
+    distinct failure rather than crashing or creating anything. A query
+    failure at either step is its own distinct hard failure too, never
+    silently folded into "missing" or "mismatch."
+
+    Every failure message returned here is a short, fixed, classified
+    string — never raw subprocess stderr or an exception's own text — so a
+    connection error can never leak connection configuration (host, port,
+    database name, or anything else) into this check's output.
+    """
+    try:
+        repo_heads = _repository_migration_heads()
+    except Exception:
+        return False, "could not read repository migration heads from database/alembic.ini"
+    repo_str = ",".join(sorted(repo_heads)) or "(none)"
+
+    exists_ok, exists_value = _psql_scalar_readonly(
+        target, "SELECT to_regclass('core.alembic_version') IS NOT NULL"
     )
-    line = next(
-        (ln for ln in reversed(result.stdout.splitlines()) if ln.startswith("HEAD_CHECK\t")),
-        None,
+    if not exists_ok:
+        return False, "could not query whether core.alembic_version exists"
+    if exists_value != "t":
+        return False, "core.alembic_version does not exist"
+
+    rows_ok, rows_value = _psql_scalar_readonly(
+        target, "SELECT version_num FROM core.alembic_version ORDER BY version_num"
     )
-    if line is None:
-        tail = result.stderr.strip()[-800:] if result.stderr else ""
-        return False, "head check produced no parseable output" + (f": {tail}" if tail else "")
-    _, _, rest = line.partition("\t")
-    status, _, detail = rest.partition("\t")
-    if status == "MATCH":
-        return True, detail
-    return False, detail or f"head check failed ({status})"
+    if not rows_ok:
+        return False, "could not read core.alembic_version"
+    db_heads = {line.strip() for line in rows_value.splitlines() if line.strip()}
+    db_str = ",".join(sorted(db_heads)) or "(none)"
+
+    if db_heads == repo_heads:
+        return True, f"db={db_str} repo={repo_str}"
+    return False, f"db={db_str} repo={repo_str} (mismatch)"
 
 
 # pg_dump's custom format (`-Fc`) begins with the 5-byte magic string
@@ -948,7 +930,7 @@ def _validate_check_query(query: str) -> tuple[bool, str]:
 
 
 def _psql_scalar_readonly(target: ComposeTarget, sql: str) -> tuple[bool, str]:
-    """Run a single scalar query with PostgreSQL itself enforcing read-only execution.
+    """Run a query with PostgreSQL itself enforcing read-only execution.
 
     `default_transaction_read_only=on` is set for this one psql process via
     `PGOPTIONS`, scoped with `exec -e` rather than any persistent server
@@ -956,7 +938,11 @@ def _psql_scalar_readonly(target: ComposeTarget, sql: str) -> tuple[bool, str]:
     is what actually rejects a side-effecting statement (e.g. one that
     calls a volatile function): the server raises "cannot execute ... in a
     read-only transaction" and psql exits nonzero, which this function
-    reports as a failed check.
+    reports as a failed check. Returns the raw captured stdout (stripped of
+    leading/trailing whitespace only) as a single string — for a
+    single-row, single-column query that's the scalar value itself; for a
+    single-column query with multiple rows, callers split it on newlines
+    (see `check_migration_head`).
     """
     result = compose_run(
         target,
@@ -1789,19 +1775,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
         )
 
     print(
-        "-- Alembic head verification (read-only: repository heads read via Alembic's "
-        "ScriptDirectory, database heads read via a PostgreSQL-enforced read-only query "
-        "against core.alembic_version — deliberately never loads this repo's env.py, whose "
-        "CREATE SCHEMA IF NOT EXISTS core cannot run here) --"
+        "-- Alembic head verification (read-only: repository heads computed in-process via "
+        "Alembic's ScriptDirectory — no env.py, no database connection; database heads read "
+        "from THIS database (--project/--compose-file/--db-user/--db-name), via a "
+        "PostgreSQL-enforced read-only query against core.alembic_version — "
+        "MIGRATION_DATABASE_URL is never consulted for this or any other check) --"
     )
     head_ok, head_detail = check_migration_head(target)
     report.add("database is at the repository's current head revision(s)", head_ok, head_detail)
     print(
-        "    (this proves the database's recorded revision(s) exactly match the migration "
-        "scripts' actual head(s) — a set comparison, correctly handling zero, one, or "
-        "multiple heads — not merely that core.alembic_version is readable. A database "
-        "sitting at an older revision, a diverged/multiple-head mismatch, or a target with "
-        "no core schema or version table at all, fails this check without creating anything.)"
+        "    (this proves the explicitly selected database's recorded revision(s) exactly "
+        "match the migration scripts' actual head(s) — a set comparison, correctly handling "
+        "zero, one, or multiple heads — not merely that core.alembic_version is readable. A "
+        "database sitting at an older revision, a diverged/multiple-head mismatch, or a "
+        "target with no core schema or version table at all, fails this check without "
+        "creating anything.)"
     )
 
     print("-- structural table counts --")
@@ -2130,11 +2118,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify = sub.add_parser(
         "verify",
         help="Run the post-recovery acceptance battery. Unconditionally non-mutating — no "
-        "--confirm-* flag, no PostgreSQL state changes, ever. Confirms the database is at "
-        "the repository's current migration head(s) via a read-only comparison (Alembic's "
-        "ScriptDirectory for repository heads, a read-only-enforced query against "
-        "core.alembic_version for database heads) that deliberately never loads this repo's "
-        "env.py, not merely that core.alembic_version is readable.",
+        "--confirm-* flag, no PostgreSQL state changes, ever. Every check, including the "
+        "migration-head check, inspects exactly this command's own --project/--compose-file/"
+        "--db-user/--db-name — MIGRATION_DATABASE_URL is never consulted. Confirms the "
+        "database is at the repository's current migration head(s) via a read-only "
+        "comparison (Alembic's ScriptDirectory, computed locally, for repository heads; a "
+        "read-only-enforced query against THIS database's core.alembic_version for database "
+        "heads) that deliberately never loads this repo's env.py, not merely that "
+        "core.alembic_version is readable.",
     )
     _add_target_args(p_verify)
     p_verify.add_argument(
