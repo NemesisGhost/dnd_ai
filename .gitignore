@@ -99,22 +99,25 @@ ipython_config.py
 # deliberately negated below — this is intentional, not an oversight. It
 # covers the disposable Compose --env-file workflows in
 # docs/DEVELOPMENT.md §3.6 (.env.restore-test for the isolated restore
-# drill, .env.pg-new for a major-version upgrade's new cluster) along with
-# .env itself, without needing a new pattern each time a new disposable
-# file is introduced. If a future *safe, non-secret* .env.* template ever
-# needs to be tracked, add its own `!.env.<name>` exception here — do not
-# narrow this pattern down to a fixed list instead, since that would let a
+# drill, .env.bootstrap for bootstrapping roles into a temporary database,
+# .env.pg-experiment for a pre-adoption major-version compatibility
+# experiment, .env.pg-new for a cutover's new cluster) along with .env
+# itself, without needing a new pattern each time a new disposable file is
+# introduced. If a future *safe, non-secret* .env.* template ever needs to
+# be tracked, add its own `!.env.<name>` exception here — do not narrow
+# this pattern down to a fixed list instead, since that would let a
 # forgotten new disposable file get committed silently.
 .env.*
 !.env.example
 
-# Scratch Compose override for a future major-version upgrade
-# (docs/DEVELOPMENT.md §3.6, "Upgrading the PostgreSQL major version") —
-# never committed. Narrowly scoped to this one documented filename, not a
+# Scratch Compose override for a pre-adoption PostgreSQL major-version
+# compatibility experiment (docs/DEVELOPMENT.md §3.6, "Future major-version
+# adoption and cutover", Phase A) — never committed, never used against a
+# real deployment. Narrowly scoped to this one documented filename, not a
 # broad `compose.*.yaml` pattern: committed Compose files (compose.yaml,
 # compose.override.yaml, compose.ci.yaml) are part of the supported
 # deployment topology and must stay trackable.
-compose.pg-new-image.yaml
+compose.pg-experiment-image.yaml
 
 # pipenv
 #   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
