@@ -1,0 +1,198 @@
+"""Tests for `dnd_ai.api.auth` — the OIDC bearer-token dependencies wired
+into FastAPI (header extraction, JWKS resolution, and resolution to a
+`security.users` row). `dnd_ai.domain.tokens`' own signature/claims
+verification is covered directly, with no database, by
+`tests/unit/test_token_verification.py`; this module proves the
+request-scoped wiring around it end to end against real PostgreSQL —
+`get_engine` overridden the same way `test_api_deps.py` already
+establishes, and `get_jwks_client` overridden with a fake JWKS client (a
+dict lookup against a locally generated keypair, never a live identity
+provider or JWKS HTTP server — the same no-live-provider strategy the
+unit tests use).
+"""
+
+import uuid
+from collections.abc import Callable
+from typing import Annotated
+
+import jwt
+import pytest
+from fastapi import Depends
+from fastapi.testclient import TestClient
+from sqlalchemy import Connection, Engine
+
+from dnd_ai.api.app import create_app
+from dnd_ai.api.auth import (
+    get_authenticated_user_id,
+    get_jwks_client,
+    get_verified_token_claims,
+)
+from dnd_ai.api.deps import get_connection, get_engine
+from dnd_ai.config import settings
+from dnd_ai.domain.tokens import VerifiedTokenClaims
+from tests.factories import make_external_identity, make_user
+from tests.jwt_helpers import RSAKeypair, generate_test_rsa_keypair, make_signed_jwt
+
+pytestmark = pytest.mark.database
+
+_ISSUER = "https://test-idp.example"
+_AUDIENCE = "test-audience"
+
+
+class _FakeJWKSClient:
+    """Stands in for `jwt.PyJWKClient` — a plain dict lookup against a
+    locally generated keypair, so these tests never fetch a JWKS document
+    over the network."""
+
+    def __init__(self, keypair: RSAKeypair) -> None:
+        self._keypair = keypair
+
+    def get_signing_key(self, kid: str) -> object:
+        if kid != self._keypair.kid:
+            raise jwt.exceptions.PyJWKClientError(f"no signing key for kid={kid!r}")
+        return type("_FakeJWK", (), {"key": self._keypair.public_key})()
+
+
+@pytest.fixture
+def keypair() -> RSAKeypair:
+    return generate_test_rsa_keypair()
+
+
+@pytest.fixture
+def client_factory(
+    postgres_engine: Engine, keypair: RSAKeypair, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[], TestClient]:
+    monkeypatch.setattr(settings, "oidc_issuer", _ISSUER)
+    monkeypatch.setattr(settings, "oidc_audience", _AUDIENCE)
+
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    app.dependency_overrides[get_jwks_client] = lambda: _FakeJWKSClient(keypair)
+
+    @app.get("/test-claims")
+    def _claims(
+        claims: Annotated[VerifiedTokenClaims, Depends(get_verified_token_claims)],
+    ) -> dict[str, str | None]:
+        return {"issuer": claims.issuer, "subject": claims.subject, "email": claims.email}
+
+    @app.get("/test-authenticated-user")
+    def _authenticated_user(
+        user_id: Annotated[uuid.UUID, Depends(get_authenticated_user_id)],
+        # Proves the dependency really opened its own connection via
+        # get_connection, not just resolved a claim in isolation.
+        _connection: Annotated[Connection, Depends(get_connection)],
+    ) -> dict[str, str]:
+        return {"user_id": str(user_id)}
+
+    def _make() -> TestClient:
+        return TestClient(app, raise_server_exceptions=False)
+
+    return _make
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ---------------------------------------------------------------------------
+# get_verified_token_claims — header extraction + JWKS resolution, no DB
+# ---------------------------------------------------------------------------
+
+
+def test_missing_authorization_header_is_rejected(client_factory: Callable[[], TestClient]) -> None:
+    with client_factory() as client:
+        response = client.get("/test-claims")
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "header_value", ["not-a-bearer-token", "Basic dXNlcjpwYXNz", "Bearer", "Bearer "]
+)
+def test_malformed_authorization_header_is_rejected(
+    header_value: str, client_factory: Callable[[], TestClient]
+) -> None:
+    with client_factory() as client:
+        response = client.get("/test-claims", headers={"Authorization": header_value})
+    assert response.status_code == 401
+
+
+def test_an_invalid_token_is_rejected(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient]
+) -> None:
+    token = make_signed_jwt(keypair, issuer="https://wrong-issuer.example", audience=_AUDIENCE)
+    with client_factory() as client:
+        response = client.get("/test-claims", headers=_bearer(token))
+    assert response.status_code == 401
+
+
+def test_a_valid_token_resolves_to_its_claims(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient]
+) -> None:
+    token = make_signed_jwt(
+        keypair,
+        issuer=_ISSUER,
+        audience=_AUDIENCE,
+        subject="some-subject",
+        extra_claims={"email": "player@example.com"},
+    )
+    with client_factory() as client:
+        response = client.get("/test-claims", headers=_bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {
+        "issuer": _ISSUER,
+        "subject": "some-subject",
+        "email": "player@example.com",
+    }
+
+
+# ---------------------------------------------------------------------------
+# get_authenticated_user_id — resolution against security.external_identities
+# ---------------------------------------------------------------------------
+
+
+def test_a_token_for_an_unlinked_identity_is_rejected(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient]
+) -> None:
+    token = make_signed_jwt(
+        keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=f"unknown-{uuid.uuid4().hex[:8]}"
+    )
+    with client_factory() as client:
+        response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 401
+
+
+def test_a_token_for_a_revoked_identity_is_rejected(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    # A dedicated, committed connection — the FastAPI app's own request
+    # runs on a separate connection (via the overridden get_engine), so
+    # setup data must actually be committed to be visible to it, unlike
+    # the always-rolled-back db_connection fixture used elsewhere.
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Revoked Identity Tester")
+        make_external_identity(
+            setup_connection, user_id, issuer=_ISSUER, subject=subject, revoked=True
+        )
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 401
+
+
+def test_a_token_for_a_linked_active_identity_resolves_the_correct_user(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Linked Identity Tester")
+        make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {"user_id": str(user_id)}

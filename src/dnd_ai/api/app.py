@@ -10,13 +10,14 @@ isolated, optional module of its own, per ADR 0012's "Lambda, Mangum, API
 Gateway, RDS, or another cloud adapter may be added as isolated optional
 deployment adapters, but none is required for production."
 
-Deliberately excludes, for now: OIDC token verification (needs its own
-scoping pass: library choice, JWKS caching, and a no-live-provider test
-strategy per docs/architecture/SYSTEM_ARCHITECTURE.md §22) and command/query
-endpoints (each needs a request/response contract designed against a
-specific `dnd_ai.commands`/future `dnd_ai.queries` call). This module is the
+OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
+is delivered and available as a dependency, but nothing in this module
+requires it yet — no route here needs an authenticated caller.
+Deliberately still excludes command/query endpoints (each needs a
+request/response contract designed against a specific
+`dnd_ai.commands`/future `dnd_ai.queries` call). This module is the
 plumbing those land on: app factory, error contract, correlation IDs,
-health/readiness, and per-request transaction management.
+health/readiness, per-request transaction management, and authentication.
 """
 
 import logging
@@ -28,6 +29,7 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import Engine, text
 from starlette.responses import JSONResponse
 
+from .auth import dispose_jwks_client
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine
 from .errors import install_error_handlers
@@ -41,6 +43,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         dispose_engine()
+        dispose_jwks_client()
 
 
 def create_app() -> FastAPI:

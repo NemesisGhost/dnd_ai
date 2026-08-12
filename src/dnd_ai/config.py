@@ -63,6 +63,16 @@ working for the application too, without requiring the same value under
 two different names — but, per the production rule above, only outside
 production.
 
+`oidc_issuer`/`oidc_audience`/`oidc_jwks_url` (`DND_AI_OIDC_ISSUER`,
+`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) follow the identical
+production-fail-closed shape as `database_url`: all three default to
+`None` locally/in tests (no OIDC provider is required to run the API
+skeleton or its non-authenticated endpoints yet), but `Settings()` raises
+immediately in production unless all three are populated — a partially
+configured OIDC provider is exactly the kind of silent-fallback the
+`database_url` precedent above already refuses to allow. See
+`dnd_ai.api.auth`/`dnd_ai.domain.tokens` for what reads them.
+
 Host-mounted secret files (docs/LOCAL_DEPLOYMENT.md "Compose
 responsibilities and network policy" — "credentials in host-readable
 environment/secret files or mounted secrets outside the repository") are
@@ -109,6 +119,9 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_FEATURE_DISCORD_INTEGRATION",
         "DND_AI_FEATURE_FOUNDRY_INTEGRATION",
         "DND_AI_SECRETS_DIR",
+        "DND_AI_OIDC_ISSUER",
+        "DND_AI_OIDC_AUDIENCE",
+        "DND_AI_OIDC_JWKS_URL",
     }
 )
 
@@ -191,13 +204,26 @@ class Settings(BaseSettings):
     feature_discord_integration: bool = False
     feature_foundry_integration: bool = False
 
+    # Required together only in production — see _require_oidc_settings_in_production.
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+
     @model_validator(mode="after")
     def _resolve_database_url(self) -> "Settings":
         """No silent fallback to the local development database/credentials
         — or to the legacy `DATABASE_URL` alias — once `environment` is
         `production` (finding: "production must not silently fall back").
         Convenience defaults, and the legacy alias, stay available only
-        where they're safe."""
+        where they're safe.
+
+        Deliberately runs (and, on failure, raises) before
+        `_require_oidc_settings_in_production` below — `model_validator
+        (mode="after")` methods execute in class-body order, and the first
+        one to raise stops the chain, so a production process missing both
+        `database_url` and the OIDC settings reports the (pre-existing,
+        already-tested) database error first rather than the two errors
+        racing to decide which message a caller sees."""
         if self.database_url is not None:
             return self
         if self.environment == "production":
@@ -212,6 +238,34 @@ class Settings(BaseSettings):
             if self.legacy_database_url is not None
             else _LOCAL_DEV_DATABASE_URL
         )
+        return self
+
+    @model_validator(mode="after")
+    def _require_oidc_settings_in_production(self) -> "Settings":
+        """No silent partial-OIDC-configuration in production, mirroring
+        `_resolve_database_url` above: `oidc_issuer`/`oidc_audience`/
+        `oidc_jwks_url` are all optional locally/in tests (the API skeleton
+        and its non-authenticated endpoints run without them), but a
+        production process that's missing any one of the three fails
+        startup outright rather than serving requests no token could ever
+        satisfy."""
+        if self.environment != "production":
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("DND_AI_OIDC_ISSUER", self.oidc_issuer),
+                ("DND_AI_OIDC_AUDIENCE", self.oidc_audience),
+                ("DND_AI_OIDC_JWKS_URL", self.oidc_jwks_url),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                f"{', '.join(missing)} (as environment variables, or mounted secrets) "
+                "are required when DND_AI_ENVIRONMENT=production — all three OIDC settings "
+                "must be configured together, or none of them."
+            )
         return self
 
 
