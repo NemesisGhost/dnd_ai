@@ -1,5 +1,15 @@
 # Database Recovery Operations
 
+> **Status: accepted production deliverable.** The recovery
+> implementation completed its final production review at commit `f0572d0`.
+> Further speculative review is not an acceptance gate. Validate it in
+> operation with periodic disposable backup -> restore -> verify drills and
+> reopen implementation work only for an observed failure, a topology change,
+> or a PostgreSQL/Compose major-version change. A drill should include
+> operator-supplied business-data counts or checksums; archive readability and
+> schema verification alone cannot prove that a backup contains the intended
+> business data.
+
 Authoritative operator reference for backup, restore, role bootstrap,
 verification, and teardown against the self-hosted Docker Compose
 topology, via **`scripts/operations/database_recovery.py`**. See

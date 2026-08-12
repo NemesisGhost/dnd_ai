@@ -4,6 +4,26 @@
 - **Date**: 2026-08-11
 - **Supersedes**: [ADR 0011](0011-local-first-development-aws-verified-delivery.md) in full; the deployment-target and merge-gate clauses of [ADR 0008](0008-aws-first-deployment-and-verification.md) that ADR 0011 had left standing
 
+## Implementation acceptance
+
+The self-hosted database deployment and recovery deliverables are accepted with
+production recovery hardening complete at commit `f0572d0` (`Harden recovery migration-head validation`). 
+The accepted scope is the base/override Compose topology, containerized CI target, and the backup,
+archive validation, restore, role bootstrap, non-mutating verification, and
+teardown workflows implemented by
+`scripts/operations/database_recovery.py` and documented in
+[DATABASE_RECOVERY.md](../operations/DATABASE_RECOVERY.md).
+
+This acceptance closes further review as a delivery gate. The next useful
+evidence is a periodic disposable backup -> restore -> verify drill using real
+operator data checks; that is an operational practice, not a reason to keep the
+implementation in perpetual review. Reopen the deliverable for an observed
+failure, a deployment-topology change, or a PostgreSQL/Compose major-version
+change. The known operating responsibilities and limitations remain explicit
+in the recovery guide: off-host backup retention, business-data validation,
+credential reapplication, capacity monitoring, and investigation of partial
+restore failures.
+
 ## Context
 
 ADR 0008 made the deployed AWS `dev` RDS instance the target every phase deploys to and the target CI verifies migrations and the `tests/database`/`tests/scenario` suites against, on the reasoning that "what was verified was not what was deployed" and that RDS-specific defects (the ungated `GRANT rds_iam` in the bootstrap revision is the canonical example) survive a fully green local run. ADR 0011 kept that CI merge gate but moved the developer's *inner loop* to a local PostgreSQL 18 server, because paying a network round trip to shared RDS on every iteration was expensive and the failure modes it introduced (expired credentials, a changed public IP, an orphaned ephemeral database, a transient RDS connection fault) were operational, not domain.

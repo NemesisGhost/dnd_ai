@@ -272,6 +272,8 @@ Backup, restore, role bootstrap, verification, and teardown all run through one 
 
 **Full operator documentation — including every command invocation, the isolated restore drill, role bootstrap, major-version adoption/cutover, and cleanup/exit-status semantics — lives in [docs/operations/DATABASE_RECOVERY.md](operations/DATABASE_RECOVERY.md).** That document is authoritative for operational invocation; run `uv run python scripts/operations/database_recovery.py <command> --help` for the full flag reference. This section stays a summary so the two never diverge — do not duplicate full command blocks back into it.
 
+**Delivery status:** the self-hosted database recovery implementation is accepted. Do not keep reopening it for hypothetical parser or wording edge cases. The remaining obligation is operational evidence: periodically run the documented disposable backup -> restore -> verify drill with representative business-data checks. Reopen the implementation only for a reproduced defect, a deployment-topology change, or a PostgreSQL/Compose major-version change.
+
 ---
 
 ## 4. Database and migrations
