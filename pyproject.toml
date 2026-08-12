@@ -4,9 +4,7 @@ version = "0.1.0"
 description = "Persistent world simulation platform for tabletop RPGs"
 requires-python = ">=3.12"
 dependencies = [
-    # >=1.17.1: `alembic current --check-heads` (scripts/operations/database_recovery.py's
-    # non-mutating `verify` head check) was added in that release.
-    "alembic>=1.17.1",
+    "alembic>=1.13.0",
     "fastapi>=0.109.0",
     "psycopg[binary]>=3.1.0",
     "pydantic>=2.5.0",

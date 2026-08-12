@@ -36,10 +36,11 @@ higher one:
   exactly this.
 - **docker-ephemeral** — may run `docker compose exec`/`cp` against an
   **already-running** `db` container (creates no new container), and, for
-  the migration-target check specifically, creates a genuinely **new**
-  one-off container via `docker compose run --rm` (see "Required
-  preparation" below for why that never happens silently). None of this
-  creates, drops, or alters any PostgreSQL database, role, or volume.
+  the migration-target check (preflight) and the migration-head check
+  (`verify`), creates a genuinely **new** one-off `migrate` container via
+  `docker compose run --rm` (see "Required preparation" below for why the
+  preflight one never triggers a build silently). None of this creates,
+  drops, or alters any PostgreSQL database, role, or volume.
   `preflight --level docker` (the default) runs both levels.
 - **destructive** — force-drops/recreates a database, runs real
   migrations, restores a dump, or `down -v`s a project. Always gated
@@ -48,11 +49,20 @@ higher one:
   everything, including Docker-side state, untouched.
 
 `verify` performs no PostgreSQL state mutation, unconditionally — it has no
-`--confirm-*` flag and never runs migrations. Its Alembic check is
-`alembic current --check-heads`, a genuine PostgreSQL-side read (Alembic's
-`current` command runs with `dont_mutate=True`) that proves the database's
-recorded revision(s) actually equal the migration scripts' current head(s)
-— see "Verification" below.
+`--confirm-*` flag and never runs migrations. **Its Alembic check does not
+shell out to `alembic current --check-heads`.** That command loads this
+repository's own `database/migrations/env.py`, whose
+`run_migrations_online()` unconditionally executes and commits `CREATE
+SCHEMA IF NOT EXISTS core;` before running any migration — genuine,
+project-specific mutation that Alembic's own `dont_mutate=True` (which only
+constrains Alembic's internal version-table bookkeeping) does **not**
+suppress, so `alembic current --check-heads` is not actually a pure read
+against *this* project. Instead, `verify` computes repository head(s)
+directly via Alembic's `ScriptDirectory` API (parses the migration scripts
+on disk — no env.py, no database connection) and reads database head(s)
+via a direct `SELECT` against `core.alembic_version` over a connection with
+PostgreSQL's own `default_transaction_read_only=on` set for that session —
+see "Verification" below for the full mechanism.
 
 `restore` and `bootstrap-roles` run their static and docker-ephemeral
 checks — their **preflight** — before doing anything destructive, and
@@ -285,13 +295,13 @@ uv run python scripts/operations/database_recovery.py verify \
 - **Ownership**, one focused query per object kind so a defect in one kind can't hide behind another: schemas, tables/sequences/views/matviews, functions/procedures, domains/enums. Each expects a single `migration_owner` owner (`public` and `pg_%` schemas excluded throughout — extension-owned objects there are expected, not a defect).
 - **`core.alembic_version`'s exceptional owner**, checked against `--connect-role` (defaults to `--db-user`) **by name**, not folded into the grouped relation-ownership count above. Alembic creates its own bookkeeping table before `001_bootstrap` can `SET ROLE migration_owner`, and `001_bootstrap` deliberately grants that table's DML to `migration_owner` without transferring ownership — so this table is legitimately owned by whichever role connected and bootstrapped the database, which is configurable (`POSTGRES_USER`, or whatever role your deployment's migration URL actually connects as), not hardcoded to `postgres`. Any *other* owner appearing among the relations query above is a real defect, not this expected exception.
 - **Required extensions** (`pgcrypto`, `pg_trgm`) — hard failure if missing. `btree_gist` is checked too but only as a warning if absent, since it's installed by a later revision (009) and its absence is expected on a database that predates it.
-- **The database is at the repository's current migration head(s)** — `alembic current --check-heads`, added in Alembic 1.17.1 (this project's declared minimum, `pyproject.toml`, was raised from `>=1.13.0` to `>=1.17.1` specifically for this). This is a genuine PostgreSQL-side read: Alembic's `current` command runs with `dont_mutate=True` regardless of `--check-heads`. It proves something stronger than "Alembic can read `core.alembic_version`" — it compares the database's recorded current revision(s) against the migration scripts' actual head(s) as **sets**, using Alembic's own comparison rather than this tool matching revision-id text itself, so a database sitting at an older revision, or one that has genuinely diverged across multiple heads, is caught correctly and makes this check fail. No connection URL or credential is printed — Alembic only renders that when invoked with `--verbose`, which this tool never passes.
+- **The database is at the repository's current migration head(s)** — but **not** via `alembic current --check-heads`. That command loads this repository's own `database/migrations/env.py`, and `env.py`'s `run_migrations_online()` unconditionally executes and commits `CREATE SCHEMA IF NOT EXISTS core;` before running any migration (see `env.py`'s own comments — it exists so a brand-new database can be migrated from nothing). Alembic's `dont_mutate=True`, which the `current` command always runs with, only constrains **Alembic's own** version-table bookkeeping; it has no power over custom SQL a project's `env.py` chooses to run. So on a target with no `core` schema yet, `alembic current --check-heads` would itself create — and commit — that schema, which is exactly the kind of side effect a verification step must never have. `verify` therefore never invokes that command, or `env.py`, at all. Instead it: (1) reads the repository's head(s) via Alembic's `ScriptDirectory` API, which only parses `alembic.ini`'s `script_location` and the migration scripts on disk — no `env.py`, no database connection; (2) reads the database's current revision(s) with a direct `SELECT version_num FROM core.alembic_version`, over a connection with PostgreSQL's own `default_transaction_read_only=on` set for the whole session (the same mechanism the `--check` queries below use), so the server itself — not this tool's care — would reject any write that connection ever attempted; (3) checks `core.alembic_version` exists first via `to_regclass()`, a pure catalog lookup that returns null rather than erroring, so a target missing `core` entirely is reported as its own clean, distinct failure rather than crashing or creating anything. The two head sets are then compared **exactly**, correctly handling zero, one, or multiple heads — a database sitting at an older revision, one that has diverged across multiple heads, or one missing `core.alembic_version` altogether is caught correctly and makes this check fail, without ever mutating the target. No connection URL, password, env-file content, or raw Compose environment value is printed — only revision identifiers, which are not secrets.
 - **Structural table counts** — proves the expected schemas and tables exist. This is deliberately **not** the same claim as "the expected business data exists": a structurally valid deployment may legitimately contain zero rows in any given table (a brand-new deployment has zero worlds, and that's correct, not broken).
 - **Your own data checks**, via repeatable `--check "<SELECT ...>" "<expected scalar>"` pairs — operator-controlled, and refused if a check isn't a single non-empty `SELECT`. **Read-only execution is enforced by PostgreSQL itself, not by that lexical check**: each `--check` query runs with `default_transaction_read_only=on` set for that one psql process, so a `SELECT` that calls a side-effecting function (confirmed against `SELECT lo_create(-1)`) fails with a server-side "cannot execute ... in a read-only transaction" error and is reported as a failed check — the lexical single-statement/`SELECT`-prefix requirement only rejects obviously wrong input before it reaches the server. This is how you verify the data you actually expect, rather than treating "nonzero" as a universal proxy for correctness. For a restore drill, record source-side counts (or checksums) before backing up, then pass them as `--check` expectations after restoring — comparing selected source and restored counts, not assuming either is right.
 
 Any hard-failing check makes `verify` exit nonzero; `btree_gist`'s absence is reported but does not by itself fail the run.
 
-**`verify` never runs a real migration, and does not offer an opt-in to run one.** An earlier revision of this tool had a `--confirm-migrate` flag that ran an actual `alembic upgrade head` as an end-to-end smoke test; it was removed because it added no acceptance value the head check above doesn't already cover — once `alembic current --check-heads` confirms the database is genuinely at head, an `alembic upgrade head` run against that same database has nothing to apply and cannot exercise any code path the head check, the role checks, and the direct `CREATE ON DATABASE` privilege check don't already exercise. If you specifically want to exercise a real migration run as part of a recovery drill, that already happens for you: `restore --mode fresh` and `bootstrap-roles` both run one as part of their own destructive phase, before `verify` is ever invoked (see "Fresh-cluster restore" and "Existing-cluster restore" above).
+**`verify` never runs a real migration, and does not offer an opt-in to run one.** An earlier revision of this tool had a `--confirm-migrate` flag that ran an actual `alembic upgrade head` as an end-to-end smoke test; it was removed because it added no acceptance value the head check above doesn't already cover — once the head check above confirms the database is genuinely at head, an `alembic upgrade head` run against that same database has nothing to apply and cannot exercise any code path the head check, the role checks, and the direct `CREATE ON DATABASE` privilege check don't already exercise. If you specifically want to exercise a real migration run as part of a recovery drill, that already happens for you: `restore --mode fresh` and `bootstrap-roles` both run one as part of their own destructive phase, before `verify` is ever invoked (see "Fresh-cluster restore" and "Existing-cluster restore" above).
 
 ## Isolated restore drill
 
@@ -532,6 +542,6 @@ If a `restore` or `bootstrap-roles` run fails partway through, it deliberately l
 | `backup`/`restore` succeeds but a non-essential cleanup step (removing an in-container temp file) fails afterward | **0**, with a printed `... succeeded WITH CLEANUP WARNING` message naming the leftover path | The primary operation's data is intact; a stray temp file needs manual removal |
 | `bootstrap-roles` verifies roles successfully but cannot remove the temporary database afterward | nonzero, with a message distinguishing "bootstrap succeeded" from "cleanup failed, temporary database remains" | Operator intervention is required — the nonzero exit is deliberate here, unlike the backup/restore cleanup-warning case |
 | `bootstrap-roles`/`restore -mode fresh` fails after role verification but before/during the destructive steps | nonzero, evidence preserved (temporary database, or a partially-migrated fresh-mode target) | Never auto-cleaned; inspect before retrying or tearing down |
-| `verify`'s `alembic current --check-heads` check finds the database behind head, or diverged across multiple heads | nonzero | No migration ran — `verify` never runs one; re-run `restore`/`bootstrap-roles` or investigate the migration history instead |
+| `verify`'s read-only migration-head check finds the database behind head, diverged across multiple heads, or missing `core`/`core.alembic_version` entirely | nonzero | No migration ran, and nothing was created — `verify` never invokes `env.py`; re-run `restore`/`bootstrap-roles` or investigate the migration history instead |
 | `preflight --for bootstrap-roles` finds the temporary database name already in use, or its existence query fails | nonzero (hard failure) | Distinguished from "confirmed absent" — a failed query is never treated as evidence of absence |
 | `validate-archive`/`restore` preflight rejects a file that lacks the PostgreSQL custom-format ('PGDMP') signature | nonzero | Rejected locally, before any Docker operation; plain-text/tar-format archives are not accepted even if `pg_restore` could read them |
