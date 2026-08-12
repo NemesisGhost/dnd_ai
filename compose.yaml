@@ -1,0 +1,114 @@
+# Self-hosted deployment topology for the D&D AI World Platform.
+# See docs/DEVELOPMENT.md §3 (local/self-hosted setup) and
+# docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md.
+#
+# This base file is the production/self-hosted default and is deliberately
+# conservative:
+#   - PostgreSQL is NOT published on any host port. compose.override.yaml
+#     (auto-loaded by plain `docker compose ...` commands with no -f flags)
+#     adds a 127.0.0.1-only mapping for local development. CI
+#     (compose.ci.yaml) is loaded with explicit -f flags and never sees the
+#     override, so it never gets one either.
+#   - POSTGRES_PASSWORD has no fallback default — `docker compose up` fails
+#     immediately if it isn't set, rather than silently starting with a
+#     guessable password. Set it in .env (see .env.example).
+#   - MIGRATION_DATABASE_URL has no fallback default either — a complete
+#     SQLAlchemy URL you supply yourself, kept in sync with
+#     POSTGRES_PASSWORD by hand, so a password containing URL-special
+#     characters can be percent-encoded correctly instead of being
+#     restricted to a "safe" subset. See .env.example.
+#
+# Usage:
+#   cp .env.example .env              # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required
+#   docker compose up -d db           # start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
+#   docker compose --profile tools run --rm migrate   # apply migrations
+#   docker compose down               # stop; add -v to also drop the data volume
+#
+# There is no "api" service yet: src/dnd_ai/api has no committed source
+# (docs/DEVELOPMENT.md §2), so there is nothing runnable to containerize
+# beyond the database toolchain in the `migrate` service below. Add an
+# "api" service here, built from the same Dockerfile with a different
+# command, once that module exists (docs/PLAN.md §31.3).
+
+services:
+  db:
+    image: postgres:18.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — copy .env.example to .env and set it before starting the self-hosted stack}
+      POSTGRES_DB: ${POSTGRES_DB:-dnd_ai}
+    # No `ports:` here by design — see the header comment. Do not add a
+    # default host port mapping to this file; use compose.override.yaml
+    # (local development) or a deliberate, reviewed override of your own
+    # (real external access) instead.
+    volumes:
+      # PostgreSQL 18's official image changed its data-directory layout:
+      # PGDATA now defaults to /var/lib/postgresql/18/docker, versioned
+      # under /var/lib/postgresql, not directly at
+      # /var/lib/postgresql/data (the pre-18 convention). Mounting
+      # .../data here would silently miss where the server actually
+      # writes, leaving the named volume empty while data lands on the
+      # container's ephemeral layer. Mount the parent directory instead.
+      # Do NOT change this back to /var/lib/postgresql/data — see
+      # docker-library/postgres's PostgreSQL 18 image notes.
+      - type: volume
+        source: dnd_ai_pgdata
+        target: /var/lib/postgresql
+    healthcheck:
+      # Deliberately targets the always-present `postgres` maintenance
+      # database, not ${POSTGRES_DB} — the documented recovery procedure
+      # (docs/DEVELOPMENT.md §3.6) drops and recreates the application
+      # database, and a health check connecting to it would either hold a
+      # connection that blocks the drop, or report the container unhealthy
+      # for the window between drop and recreate (which `depends_on:
+      # condition: service_healthy` on the migrate service would then wait
+      # on unnecessarily). `postgres` always exists on a running cluster
+      # regardless of what happens to the application database, so this
+      # reports the server's actual up/down state, not the application
+      # database's.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # One-off job, not started by `docker compose up`. Runs Alembic to head
+  # against the `db` service, using the same image the future API/worker/
+  # adapter services will share (docs/DEVELOPMENT.md §2). Reaches `db` over
+  # the compose-internal network by service name — this needs no published
+  # host port.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    environment:
+      # MIGRATION_DATABASE_URL is a complete SQLAlchemy URL you supply
+      # yourself (see .env.example) — deliberately NOT assembled from
+      # POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB above by Compose
+      # interpolation, because interpolation is plain string substitution,
+      # not a URL encoder: a password containing characters that are
+      # special in a URL (@ : / ? # [ ] % and similar) would silently
+      # produce a broken connection string. Percent-encode the password
+      # segment yourself if it needs one, and keep this in sync with
+      # POSTGRES_PASSWORD above by hand — Compose cannot derive one from
+      # the other safely.
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required — copy .env.example to .env and set it before running the migrate service}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "-c", "database/alembic.ini", "upgrade", "head"]
+
+volumes:
+  # Persistent by default — normal self-hosted use expects data to survive
+  # `docker compose down`/restarts. Backup and upgrade responsibilities for
+  # this volume: docs/DEVELOPMENT.md §3.6.
+  #
+  # Deliberately not given an explicit top-level `name:` — Compose then
+  # scopes the real volume name by project (COMPOSE_PROJECT_NAME / `-p`),
+  # so a verification run under a throwaway project name can never collide
+  # with, inspect, or delete a real deployment's data. If you need a
+  # predictable name for backup tooling, set COMPOSE_PROJECT_NAME rather
+  # than pinning `name:` here.
+  dnd_ai_pgdata: {}

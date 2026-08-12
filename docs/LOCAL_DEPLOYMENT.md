@@ -1,6 +1,6 @@
 # Local Production Deployment and Operations
 
-This is the target production runbook. It describes intended configuration; no deployment is performed by this documentation change. See [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md).
+This is the target production runbook. It describes intended configuration; no deployment is performed by this documentation change. See [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md), which builds on [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)'s self-hosted Docker Compose decision.
 
 ## Topology and service ownership
 

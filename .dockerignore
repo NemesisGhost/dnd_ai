@@ -1,0 +1,33 @@
+# Version control and editor/tooling state
+.git/
+.github/
+.vscode/
+.claude/
+
+# Python virtualenv and caches — rebuilt inside the image
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local scratch/tooling output
+.tmp/
+*.log
+
+# Not needed inside the runtime image
+docs/
+terraform/
+tests/
+scripts/
+build.ps1
+.vscode/
+.dockerignore
+compose*.yaml
+
+# Secrets and local environment — never bake into an image
+.env
+.env.*
+!.env.example

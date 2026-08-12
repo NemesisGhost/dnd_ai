@@ -1,13 +1,11 @@
 # ADR 0008: Everything deploys to and is verified in AWS (historical)
 
-- **Status**: Accepted, partially superseded by [ADR 0011](0011-local-first-development-aws-verified-delivery.md)
+- **Status**: Superseded by [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md)
 - **Date**: 2026-07-31
 
-> **Amended 2026-08-07.** [ADR 0011](0011-local-first-development-aws-verified-delivery.md) supersedes this ADR's **inner-loop** clause: development and iteration now run against a local PostgreSQL 18 server by default, not against `dev` RDS. Everything else here stands — CI still verifies migrations and the `tests/database`/`tests/scenario` suites against the deployed `dev` instance as a merge gate, application services still deploy only to ECS Fargate, and "it passes locally" is still not a sufficient claim to close a phase. Read the two together: this ADR explains *why AWS verification exists*; ADR 0011 changes *when in the cycle it happens*.
+> **Amended 2026-08-07, superseded 2026-08-11.** [ADR 0011](0011-local-first-development-aws-verified-delivery.md) first superseded this ADR's **inner-loop** clause: development and iteration moved to a local PostgreSQL 18 server by default, not `dev` RDS. [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md) then superseded what ADR 0011 had left standing: self-hosted Docker Compose is now the deployment topology (not ECS Fargate), and containerized PostgreSQL 18 in CI is the merge gate (not AWS `dev` RDS). This document is kept as the historical record of why AWS-based verification was originally adopted and the real defect (the ungated `GRANT rds_iam`) that motivated it; it no longer describes current policy. Read ADR 0012 for what's current.
 
 ## Context
-
-> **Superseded for current and future production hosting by [ADR 0012](0012-locally-host-production-on-existing-mini-pc.md).** This record is retained because it explains completed AWS work and the transitional RDS environment; its AWS production requirements are no longer active.
 
 The project originally treated AWS as optional for most work. [CONTRIBUTING.md](../CONTRIBUTING.md) told contributors that everything through Phase 7 ran against a local Docker PostgreSQL container and that "you do not need AWS to contribute"; [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) said local development needed no AWS resources; the test layers ran on testcontainers; and CI used a `postgres:15` service container. AWS entered the picture only for the final Phase 1 exit criterion.
 

@@ -1,0 +1,22 @@
+# CI override for compose.yaml: disposable tmpfs storage instead of the
+# named volume. Usage: docker compose -f compose.yaml -f compose.ci.yaml <command>
+#
+# No `ports:` override is needed here: compose.yaml's base `db` service
+# does not publish a host port at all (see its header comment), and CI is
+# invoked with explicit -f flags, so compose.override.yaml — which adds a
+# 127.0.0.1-only port for local development — is never loaded in the first
+# place. .github/workflows/ci.yml's docker-build job asserts this stays
+# true by inspecting `docker compose config`'s merged output.
+#
+# `db`'s data directory is backed by tmpfs instead of the named
+# `dnd_ai_pgdata` volume, at the same mount target PostgreSQL 18 actually
+# uses (/var/lib/postgresql — see compose.yaml's comment on its
+# data-directory layout). Compose merges `volumes:` entries by target path,
+# so this replaces rather than adds to the base definition, and nothing
+# persists between CI runs by construction.
+
+services:
+  db:
+    volumes:
+      - type: tmpfs
+        target: /var/lib/postgresql

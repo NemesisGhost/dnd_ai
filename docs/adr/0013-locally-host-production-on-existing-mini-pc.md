@@ -1,8 +1,9 @@
-# ADR 0012: Host production on the existing Ubuntu mini-PC
+# ADR 0013: Host production on the existing Ubuntu mini-PC
 
-- Status: Accepted
+- Status: Accepted (planning; not yet implemented — no reverse proxy, TLS, No-IP, or CSRF work has landed)
 - Date: 2026-08-11
-- Supersedes: the production-hosting portions of [ADR 0008](0008-aws-first-deployment-and-verification.md) and [ADR 0011](0011-local-first-development-aws-verified-delivery.md)
+- Builds on: [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md), which made self-hosted Docker Compose the officially supported deployment topology and already deprecated AWS ECS Fargate as the default production compute target. This ADR narrows that decision to a specific host — the existing Ubuntu mini-PC — and adds the production-specific concerns (reverse proxy, TLS, dynamic DNS, CSRF/cookie hardening, backups, upgrade/rollback) that ADR 0012 scoped out as being about the dev/CI database target, not full production hosting.
+- Supersedes: nothing directly; the production-hosting compute-target portions of [ADR 0008](0008-aws-first-deployment-and-verification.md) were already superseded by ADR 0012.
 
 ## Context
 
@@ -32,12 +33,13 @@ Benefits include reuse of owned hardware, lower recurring cost, one local operat
 
 Accepted risks include residential power and internet outages, dynamic-IP changes, constrained upload bandwidth, hardware failure, and the operator owning patching, monitoring, backup, restore, and incident response. Mitigations include automatic TLS and No-IP updates, restart policies, health checks, log rotation, disk monitoring, resource limits, and tested onsite plus offsite backups.
 
-Existing AWS resources are transitional, not immediate deletion targets. They remain until local migrations, extensions, bootstrap roles, the Phase 10 vertical slice, reverse-proxy authentication/authorization, backup/restore, and required data migration are verified and teardown is explicitly approved.
+Per ADR 0012, AWS RDS is already an optional, no-longer-CI-verified path rather than a required production destination, so choosing the mini-PC here does not by itself require tearing anything down. The retained `terraform/modules/database`/`secrets` and `dev` environment stay available for anyone who deploys there; teardown, if ever pursued, is a separate, explicitly approved decision gated on the local Phase 10 vertical slice, reverse-proxy authentication/authorization, and backup/restore all being verified first.
 
 A move to a VPS or AWS is justified if measured availability, bandwidth, capacity, security, maintenance burden, disaster-recovery objectives, or multi-operator needs exceed what the residential host can reliably provide. The portable application boundary makes that a deployment change rather than an application rewrite.
 
 ## References
 
+- [ADR 0012](0012-self-hosted-docker-deployment-and-ci-verification.md) — the self-hosted Docker Compose decision this ADR builds on
 - [PLAN.md](../PLAN.md)
 - [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md)
 - [LOCAL_DEPLOYMENT.md](../LOCAL_DEPLOYMENT.md)

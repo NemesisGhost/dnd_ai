@@ -16,23 +16,25 @@
 #   scripts/verify.sh migration-round-trip --confirm-destructive
 #
 # `database`/`scenario`/`full`/`migration-round-trip` need DATABASE_URL
-# already set per docs/DEVELOPMENT.md §3 — a local PostgreSQL server by
-# default. Ingress is only relevant when DATABASE_URL names an AWS RDS
-# endpoint (matched by a *.rds.amazonaws.com host, see needs_ingress()
-# below): in that case they open a short-lived dev security-group ingress
-# rule via scripts/aws-db-allow-my-ip.sh and always attempt to close it on
-# exit, even on failure. Against a local target, open_ingress is a no-op and
-# nothing AWS-related runs. Ingress-revocation failure is never swallowed:
-# it fails an otherwise-successful run, and — if a stage already failed — is
-# reported alongside that failure without overriding it as the primary cause.
-# This is the same guaranteed-teardown discipline docs/PHASE5_VERIFICATION.md's
-# exit reviews established for the test-only concurrency helper.
+# already set per docs/DEVELOPMENT.md §3 — a local or self-hosted (Docker
+# Compose) PostgreSQL server by default. AWS RDS is an optional, no longer
+# CI-verified target (docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md);
+# ingress handling below is a no-op unless DATABASE_URL happens to name an
+# AWS RDS endpoint (matched by a *.rds.amazonaws.com host, see
+# needs_ingress() below), in which case it opens a short-lived dev
+# security-group ingress rule via scripts/aws-db-allow-my-ip.sh and always
+# attempts to close it on exit, even on failure. Ingress-revocation failure
+# is never swallowed: it fails an otherwise-successful run, and — if a stage
+# already failed — is reported alongside that failure without overriding it
+# as the primary cause. This is the same guaranteed-teardown discipline
+# docs/PHASE5_VERIFICATION.md's exit reviews established for the test-only
+# concurrency helper.
 #
 # `migration-round-trip` runs `alembic downgrade base` then `upgrade head`
 # against whatever DATABASE_URL currently points at. That is safe against a
-# disposable ephemeral database (what CI always uses, via
-# scripts/ci_ephemeral_database.py) and destructive against anything else.
-# It refuses to run without --confirm-destructive.
+# disposable database (what CI always uses — a fresh containerized
+# PostgreSQL service per run) and destructive against anything else. It
+# refuses to run without --confirm-destructive.
 #
 # The ingress open/close script invoked can be overridden via
 # VERIFY_SH_INGRESS_SCRIPT (defaults to scripts/aws-db-allow-my-ip.sh) so

@@ -1,12 +1,12 @@
-# Infrastructure Guide
+# Infrastructure Guide (optional AWS path)
 
-> **Current production target:** the existing Ubuntu mini-PC described in [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md) and [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). The AWS material below documents existing transitional resources and their historical operation; it is not the production destination and is not an instruction to tear resources down now.
+**This document describes the optional, no-longer-required AWS RDS path.** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology, and CI verifies against containerized PostgreSQL rather than AWS — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §3.6](DEVELOPMENT.md#36-self-hosted-docker-compose). Nothing here is needed for development, CI, or ordinary contribution; it remains accurate reference material for anyone who chooses to host on AWS RDS instead.
 
-AWS retirement is gated on successful local migrations/extensions/roles, the Phase 10 vertical slice, proxy authentication and authorization, tested onsite/offsite backup restoration, required data migration, and explicit approval. Retirement must inventory resources, take final snapshots or exports, verify local restoration, remove resources through the existing Terraform process, and confirm recurring charges stop.
+> **Planned production target:** the existing Ubuntu mini-PC, per the (not yet implemented) [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md) and [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). The AWS material below is optional reference material, not a resource slated for teardown — see line 3 above.
 
 Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
 
-Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services is planned but unbuilt: [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) specifies ECS Fargate, and this document gains those sections when the modules exist.
+Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31](PLAN.md#31-aws-deployment-plan-for-application-services) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
 
 **Which document do you want?**
 

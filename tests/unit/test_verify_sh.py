@@ -11,6 +11,7 @@ needs neither database nor network).
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -21,6 +22,41 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VERIFY_SH = REPO_ROOT / "scripts" / "verify.sh"
+
+
+def _resolve_bash() -> str:
+    """Full path to a real `bash`, not the bare name.
+
+    On Windows, subprocess.run(["bash", ...]) resolves the executable via
+    CreateProcess's own search order, which checks System32 *before* PATH
+    (Microsoft's documented lpApplicationName=NULL behavior) — so if
+    anything has ever registered C:\\Windows\\System32\\bash.exe (the WSL
+    launcher stub; Docker Desktop's Windows integration does this), it wins
+    over Git Bash even when Git Bash appears earlier in PATH. That stub
+    fails outright unless a real WSL distro with /bin/bash is installed and
+    set default.
+
+    shutil.which() does a plain left-to-right PATH scan instead of
+    replicating that OS search order, so it finds Git Bash first whenever
+    Git Bash actually precedes System32 in PATH (the normal case here) —
+    passing its resolved absolute path to subprocess.run sidesteps
+    CreateProcess's own resolution entirely, since a full path is used
+    as-is with no search.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        # Fails loudly rather than skipping — this project's tests/unit
+        # runs everywhere pytest does, and a skip here would silently drop
+        # coverage of scripts/verify.sh's control flow rather than
+        # reporting it, the same false-green tests/conftest.py's
+        # DatabaseConfigurationError exists to avoid for the database tiers.
+        raise RuntimeError(
+            "No `bash` found on PATH — required to exercise scripts/verify.sh "
+            "(tests/unit/test_verify_sh.py). Install Git for Windows or another "
+            "bash and ensure it's on PATH."
+        )
+    return bash
+
 
 _UV_STUB = """#!/usr/bin/env bash
 # Ignores its arguments entirely; only STUB_UV_EXIT decides pass/fail, so a
@@ -74,7 +110,7 @@ def _run_verify(
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
-        ["bash", str(VERIFY_SH), *args],
+        [_resolve_bash(), str(VERIFY_SH), *args],
         cwd=sandbox,
         env=env,
         capture_output=True,

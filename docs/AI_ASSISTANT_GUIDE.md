@@ -200,42 +200,40 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 - `DB_PASSWORD = "mypassword123"` in Python code
 - API keys in seed SQL files or committed configs
 
-### 11. Develop locally, verify in AWS
-
-**Hosting update:** [ADR 0012](adr/0012-locally-host-production-on-existing-mini-pc.md) supersedes the production and indefinite AWS-verification assumptions in this historical subsection. Production deployables run via Docker Compose on the existing Ubuntu mini-PC and are verified through its reverse proxy. RDS verification is transitional while those AWS resources remain. Do not add Lambda, API Gateway, ECS/Fargate, RDS, S3, or CloudFront as required production infrastructure; keep the application portable and treat any cloud adapter as optional.
+### 11. Develop and verify against PostgreSQL 18, self-hosted
 
 ✅ **Correct**:
-- Run migrations and database/scenario tests against a local PostgreSQL server whose **major version matches RDS** (currently 18.x)
-- Treat the CI run against the deployed `dev` RDS instance as the merge gate and the phase-exit evidence
-- Record both in `docs/PHASEn_VERIFICATION.md`: what passed locally, and the CI run ID that proved it on RDS
-- Exercise each deployable on ECS Fargate in `dev` once its phase introduces it
+- Run migrations and database/scenario tests against a local/self-hosted PostgreSQL server whose **major version matches CI** (currently 18.x)
+- Treat the CI run against a disposable containerized PostgreSQL 18 instance as the merge gate and the phase-exit evidence
+- Record both in `docs/PHASEn_VERIFICATION.md`: what passed locally, and the CI run ID that proved it
+- Exercise each deployable via `compose.yaml` once its phase introduces it
 
 ❌ **Wrong**:
 - Treating a green local run as phase-exit evidence on its own
 - Installing whatever PostgreSQL major version is convenient locally — that produces green local runs that fail CI
-- Re-running a red CI job that followed a green local run, instead of investigating it as an RDS-specific defect or local/`dev` drift
+- Re-running a red CI job that followed a green local run, instead of investigating it as a real defect or local/CI drift
 - Deferring deployment verification until the end of the project
+- Assuming AWS credentials are needed for any of the above — they are not; AWS RDS is an optional path CI no longer verifies
 
-See [PLAN.md §23.0](PLAN.md#230-verification-policy), [ADR 0008](adr/0008-aws-first-deployment-and-verification.md), and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md).
+See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) (supersedes [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)).
 
 ---
 
 ## Technology Stack Reference
 
-The current infrastructure/compute entries are: the existing Ubuntu mini-PC; Docker Compose; a Caddy- or Traefik-class reverse proxy; React; FastAPI under Uvicorn; local PostgreSQL 18.x; and only required worker/scheduled-job containers. No-IP provides dynamic DNS. Secrets are outside the repository. The older AWS/Fargate rows below are superseded historical guidance retained until a broader guide cleanup.
-
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| **Infrastructure** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS. Everything deploys to AWS and is verified there by CI ([ADR 0008](adr/0008-aws-first-deployment-and-verification.md), [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)); the pre-restart Lambda/API Gateway wiring was removed and is not coming back |
-| **Compute** | ECS Fargate | API, background worker, Discord adapter, and one-off jobs (including migrations) run one shared image from ECR. Modular monolith, not Lambda-per-function. See [PLAN.md §30](PLAN.md#30-aws-deployment-plan-for-application-services) — planned, unbuilt |
-| **IaC** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
-| **Database** | PostgreSQL 18.x | Local server for development, RDS for `dev`/`staging`/`prod`; the major version must match across both ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
+| **Deployment** | Self-hosted Docker Compose | `compose.yaml`/`Dockerfile` — the officially supported topology, verified by CI ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) |
+| **Compute** | One shared container image | Migrations today (`compose.yaml`'s `migrate` service); API, background worker, and Discord adapter share the same image once `src/dnd_ai/api` exists. AWS ECS Fargate/Lambda remain an optional, unbuilt path — [PLAN.md §31](PLAN.md#31-aws-deployment-plan-for-application-services) |
+| **Infrastructure (optional)** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS — retained for anyone who chooses to host there instead; no longer continuously verified. The pre-restart Lambda/API Gateway wiring was removed and is not coming back |
+| **IaC (optional)** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
+| **Database** | PostgreSQL 18.x | Local/self-hosted for development and CI; AWS RDS optional for `dev`/`staging`/`prod` if deployed. The major version must match everywhere it runs ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
 | **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
-| **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §27](PLAN.md#27-deferred-decisions) |
+| **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §28](PLAN.md#28-deferred-decisions) |
 | **UI** | React | Web/admin client talking to REST API; not yet started |
 | **Integrations** | FoundryVTT Module, Discord Bot, MCP Interface | All are clients, all go through application API |
 | **Migrations** | Alembic | See [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions) |
-| **Tooling** | uv, pytest against a local PostgreSQL 18 server (CI repeats it against `dev` RDS), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); verification policy in [PLAN.md §23.0](PLAN.md#230-verification-policy) |
+| **Tooling** | uv, pytest against a local/self-hosted PostgreSQL 18 server (CI repeats it against a disposable containerized instance), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); verification policy in [PLAN.md §24.0](PLAN.md#240-verification-policy) |
 
 **Do not introduce new technologies** without explicit design review and documentation update.
 

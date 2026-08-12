@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Opens or closes a short-lived security-group ingress rule on the dev database
-# for the caller's current public IP, per docs/PLAN.md §29.9. This is the
-# reachability mechanism for day-to-day migrations and tests/database /
-# tests/scenario against the deployed dev RDS instance — not a permanent
-# allowlist entry in Terraform.
+# for the caller's current public IP, per docs/PLAN.md §30.9. AWS dev RDS is
+# now an optional, no-longer-CI-verified path — self-hosted Docker Compose
+# (compose.yaml) is the officially supported target
+# (docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md). This
+# script remains for anyone who still points DATABASE_URL at dev RDS
+# directly; it is not a permanent allowlist entry in Terraform.
 #
 # Usage:
 #   scripts/aws-db-allow-my-ip.sh open  [--environment dev] [--profile <profile>]
