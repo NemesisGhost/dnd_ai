@@ -27,13 +27,15 @@ Safety model — three levels, not a single "read-only" claim:
                     behind an explicit `--confirm-*` flag, checked before
                     any subprocess — Docker-ephemeral or otherwise — runs.
 
-`verify` performs no PostgreSQL state mutation by default: every one of its
-checks, including the Alembic-revision check (`alembic current`, which only
-reads `core.alembic_version`), is non-mutating. Its one destructive
-exception — an actual `alembic upgrade head` run — only executes when
-`--confirm-migrate` is explicitly passed, checked immediately before that
-one subprocess; without it, `verify` never runs migrations, and nothing in
-its output claims otherwise.
+`verify` performs no PostgreSQL state mutation, unconditionally — it has no
+`--confirm-*` flag and never runs migrations. Its Alembic check is
+`alembic current --check-heads`, which PostgreSQL-side is a pure read (see
+`alembic.command.current`'s `dont_mutate=True`) and proves the database's
+recorded revision(s) actually equal the migration scripts' current head(s)
+— a set comparison Alembic performs itself, not fragile text matching —
+rather than merely that `core.alembic_version` is readable. A database
+behind head, or genuinely diverged across multiple heads, fails this check
+and makes `verify` exit nonzero.
 
 `restore` and `bootstrap-roles` run their static and docker-ephemeral
 checks (their "preflight") before doing anything destructive, and refuse to
@@ -1601,7 +1603,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     )
     target.validate_files_exist()
     connect_role = args.connect_role or args.db_user
-    announce("verify", target, connect_role=connect_role)
+    announce(
+        "verify (non-mutating: confirms the database is at repository head; never runs migrations)",
+        target,
+        connect_role=connect_role,
+    )
     report = Report()
 
     print("-- role verification --")
@@ -1652,7 +1658,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         )
 
     print(
-        "-- Alembic revision (non-mutating: `alembic current` only reads core.alembic_version) --"
+        "-- Alembic head verification (non-mutating: `alembic current --check-heads`, which "
+        "PostgreSQL never mutates — see alembic.command.current's dont_mutate=True) --"
     )
     current = compose_run(
         target,
@@ -1665,41 +1672,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
         "-c",
         "database/alembic.ini",
         "current",
+        "--check-heads",
         capture=True,
     )
     report.add(
-        "alembic current",
+        "database is at the repository's current head revision(s)",
         current.returncode == 0,
-        current.stdout.strip() or current.stderr.strip(),
+        current.stdout.strip() or current.stderr.strip() or "no output",
     )
-
-    # Real migration execution is DESTRUCTIVE — it can change schema/data —
-    # so, unlike the rest of this non-mutating acceptance battery, it never
-    # runs unless explicitly confirmed. Checked immediately before the one
-    # subprocess it gates, consistent with every other --confirm-* flag in
-    # this script.
-    if args.confirm_migrate:
-        print(
-            "-- migration machinery (DESTRUCTIVE: --confirm-migrate passed — running a real "
-            "`alembic upgrade head` against this database) --"
-        )
-        migrate = compose_run(target, "--profile", "tools", "run", "--rm", "migrate")
-        report.add(
-            "alembic upgrade head (--confirm-migrate)",
-            migrate.returncode == 0,
-            "ran cleanly (this proves migration machinery works end-to-end; it does not by "
-            "itself prove CREATE ON DATABASE — the privilege check above already did that "
-            "directly)"
-            if migrate.returncode == 0
-            else "failed — this was a real migration attempt against this database, not a "
-            "dry run; inspect its output above before retrying",
-        )
-    else:
-        print(
-            "-- migration machinery: skipped (verify never runs migrations by default; pass "
-            "--confirm-migrate to also run a real, DESTRUCTIVE `alembic upgrade head` as an "
-            "end-to-end smoke test) --"
-        )
+    print(
+        "    (this proves the database's recorded revision(s) match the migration scripts' "
+        "actual head(s) — a set comparison performed by Alembic itself, not by comparing text "
+        "— not merely that core.alembic_version is readable. A database sitting at an older "
+        "revision, or a diverged/multiple-head mismatch, fails this check.)"
+    )
 
     print("-- structural table counts --")
     ok, rows = _psql_rows(
@@ -2026,9 +2012,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_verify = sub.add_parser(
         "verify",
-        help="Run the post-recovery acceptance battery. Non-mutating by default — no "
-        "PostgreSQL state changes; pass --confirm-migrate to also run a real, DESTRUCTIVE "
-        "`alembic upgrade head` smoke test.",
+        help="Run the post-recovery acceptance battery. Unconditionally non-mutating — no "
+        "--confirm-* flag, no PostgreSQL state changes, ever. Confirms the database is at "
+        "the repository's current migration head(s) (`alembic current --check-heads`), not "
+        "merely that core.alembic_version is readable.",
     )
     _add_target_args(p_verify)
     p_verify.add_argument(
@@ -2046,15 +2033,6 @@ def build_parser() -> argparse.ArgumentParser:
         "psql process) — PostgreSQL itself rejects any side-effecting statement, not just "
         "this script's lexical SELECT-prefix check. Repeatable. "
         'Example: --check "SELECT count(*) FROM core.worlds" "0"',
-    )
-    p_verify.add_argument(
-        "--confirm-migrate",
-        action="store_true",
-        help="DESTRUCTIVE, opt-in only: also run a real `alembic upgrade head` against this "
-        "database, in addition to the non-mutating `alembic current` check that always runs. "
-        "Without this flag (the default), verify never runs migrations and performs no "
-        "PostgreSQL state mutation. Passing this can make real schema/data changes if the "
-        "database is not already at head. Checked immediately before that one subprocess.",
     )
     p_verify.set_defaults(func=cmd_verify)
 
