@@ -6,11 +6,13 @@ extraction, and the request-scoped dependencies command/query endpoints
 will eventually depend on.
 
 `get_jwks_client()` mirrors `dnd_ai.api.deps.get_engine`'s shape exactly —
-a process-wide singleton, lazily built, overridable wholesale in tests via
-`app.dependency_overrides`. It returns a `_JWKSClient`, this module's own
-wrapper around `jwt.PyJWKClient`, not that class directly — two of
-`PyJWKClient`'s own defaults are unsafe against a `kid` taken straight
-from an unauthenticated caller's bearer token:
+a process-wide singleton, lazily built under a lock (see its own docstring
+for why an unsynchronized lazy-init is its own race), overridable
+wholesale in tests via `app.dependency_overrides`. It returns a
+`_JWKSClient`, this module's own wrapper around `jwt.PyJWKClient`, not
+that class directly — several of `PyJWKClient`'s own behaviors are unsafe
+against a `kid` taken straight from an unauthenticated caller's bearer
+token, or under ordinary concurrent request traffic:
 
 1. `PyJWKClient.get_signing_key()` forces an *unconditional* network
    refetch of the JWKS document whenever the requested `kid` isn't in the
@@ -23,7 +25,20 @@ from an unauthenticated caller's bearer token:
    timestamp (never a per-`kid` structure, so nothing here grows with how
    many distinct bogus `kid`s a caller submits) serialized with a lock,
    and lowers the network timeout to `_JWKS_FETCH_TIMEOUT_SECONDS`.
-2. `PyJWKClient`'s optional per-key cache (`cache_keys=True`) is a plain
+2. Neither `PyJWKClient` nor its `JWKSetCache` does any locking of its
+   own (verified against the installed `jwt.jwks_client`/`jwt.jwk_set_cache`
+   source, not assumed) — a cold or TTL-expired Tier-1 cache is exactly as
+   unsynchronized as an unrecognized `kid` is: concurrent requests can each
+   independently observe "no cached data" and each perform their own
+   outbound fetch. `_JWKSClient.get_signing_key()` only ever reads the
+   cache lock-free (`_peek_signing_keys()`, which can never itself trigger
+   I/O); anything that might need to fetch — a cold/expired cache or an
+   unresolved `kid` — goes through `self._lock`, which rechecks the cache
+   immediately after acquiring it (double-checked locking) so a fetch a
+   waiting peer already performed is reused instead of repeated. Ordinary
+   cached-key verification (the common case) never touches the lock at
+   all.
+3. `PyJWKClient`'s optional per-key cache (`cache_keys=True`) is a plain
    LRU with **no time-based expiry** — once populated, a given `kid` keeps
    serving the same key material until evicted by LRU pressure or the
    process restarts, regardless of the JWKS-set cache's own `lifespan`.
@@ -45,7 +60,7 @@ verification dependency.
 import threading
 import time
 import uuid
-from typing import Annotated
+from typing import Annotated, cast
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
@@ -80,7 +95,7 @@ _JWKS_FETCH_TIMEOUT_SECONDS = 5.0
 
 
 class _JWKSClient:
-    """Wraps `jwt.PyJWKClient` to close the two gaps described in this
+    """Wraps `jwt.PyJWKClient` to close the gaps described in this
     module's docstring. Never raises anything but what the underlying
     `jwt.PyJWKClient` call itself raises (`jwt.exceptions.PyJWTError` and
     its subclasses) — `get_signing_key` returns a resolved key or raises;
@@ -108,10 +123,10 @@ class _JWKSClient:
         self._last_forced_refresh: float | None = None
 
     def get_signing_key(self, kid: str) -> RSAPublicKey:
-        signing_keys = self._client.get_signing_keys()
-        matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
+        signing_keys = self._peek_signing_keys()
+        matched = jwt.PyJWKClient.match_kid(signing_keys, kid) if signing_keys is not None else None
         if matched is None:
-            matched = self._resolve_via_forced_refresh(kid)
+            matched = self._resolve_under_lock(kid)
         key = matched.key
         # verify_bearer_token has already rejected any token whose header
         # `alg` isn't RS256 before this is ever called, but a misconfigured
@@ -122,34 +137,98 @@ class _JWKSClient:
             raise TypeError(f"JWKS key for kid={kid!r} is not an RSA public key")
         return key
 
-    def _resolve_via_forced_refresh(self, kid: str) -> jwt.PyJWK:
-        """Only reached on a cache miss. Forces at most one network refetch
-        per `_forced_refresh_cooldown`, serialized by `self._lock` so
-        concurrent misses (whether for the same or different bogus `kid`s)
-        never trigger overlapping fetches — a second caller arriving while
-        one is in flight blocks here rather than starting its own."""
+    def _peek_signing_keys(self) -> list[jwt.PyJWK] | None:
+        """Read-only: the currently cached, unexpired signing keys, or
+        `None` if the Tier-1 JWKS-set cache is empty or expired. Never
+        performs network I/O under any circumstance — safe to call
+        without `self._lock`, and safe to treat as a consistent snapshot,
+        unlike `PyJWKClient.get_signing_keys()`/`.get_jwk_set()`
+        themselves, which fetch as a side effect of a cache miss.
+
+        Deliberately does not call `PyJWKClient.get_jwk_set(refresh=False)`
+        — that method fetches on its own whenever `JWKSetCache.get()`
+        returns `None`, which is exactly the unsynchronized-fetch
+        behavior this wrapper exists to avoid on any lock-free path. This
+        reimplements only its cache-*hit* half: `JWKSetCache.get()`
+        returns the raw dict `fetch_data()` originally cached (verified
+        against the installed `jwt.jwks_client`/`jwt.jwk_set_cache`
+        source — despite `PyJWTSetWithTimestamp`'s own type hint saying
+        `PyJWKSet`), which still needs `jwt.PyJWKSet.from_dict()` to
+        become `PyJWK` objects; `PyJWKClient` itself re-parses on every
+        call, cache hit or not, so doing the same here costs nothing
+        extra relative to the codepath this replaces."""
+        cache = self._client.jwk_set_cache
+        if cache is None:
+            return None
+        # jwt.JWKSetCache.get()'s own declared return type is
+        # Optional[PyJWKSet], but per the docstring above it actually
+        # returns the raw dict fetch_data() cached — a type-hint/runtime
+        # mismatch in the installed library itself, not a mistake here.
+        # cast() tells mypy to trust the verified runtime behavior rather
+        # than the (incorrect) stub, which otherwise treats the isinstance
+        # check below as an impossible PyJWKSet/dict overlap.
+        data = cast(object, cache.get())
+        if data is None or not isinstance(data, dict):
+            return None
+        try:
+            jwk_set = jwt.PyJWKSet.from_dict(data)
+        except jwt.PyJWKSetError:
+            return None
+        return [key for key in jwk_set.keys if key.public_key_use in ("sig", None) and key.key_id]
+
+    def _resolve_under_lock(self, kid: str) -> jwt.PyJWK:
+        """Reached only on a cache-read miss (cold, TTL-expired, or
+        genuinely missing `kid`) — every path that might need to perform
+        network I/O funnels through here, all under `self._lock`."""
         with self._lock:
-            now = time.monotonic()
-            if (
-                self._last_forced_refresh is None
-                or now - self._last_forced_refresh >= self._forced_refresh_cooldown
-            ):
-                try:
-                    signing_keys = self._client.get_signing_keys(refresh=True)
-                finally:
-                    # Advance the cooldown regardless of outcome. A failed
-                    # fetch must not let the very next request retry
-                    # immediately — that would defeat the rate bound just
-                    # as surely as a successful one that still misses, and
-                    # would let a struggling/unreachable identity provider
-                    # be hammered on every incoming request.
-                    self._last_forced_refresh = time.monotonic()
-            else:
-                # Still cooling down: reuse whatever the Tier-1 cache
-                # currently holds — possibly already refreshed by a peer
-                # request that raced us for the lock — rather than
-                # fetching again.
-                signing_keys = self._client.get_signing_keys()
+            # Double-checked locking: recheck now that we hold the lock —
+            # a peer thread may have already fetched or refreshed while
+            # this thread was waiting for it.
+            signing_keys = self._peek_signing_keys()
+            if signing_keys is not None:
+                matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
+                if matched is not None:
+                    return matched
+                # Cache is warm but doesn't contain kid — gate behind the
+                # forced-refresh cooldown (finding 1's DoS bound).
+                return self._forced_refresh_and_match_locked(kid)
+            # Cache is cold or TTL-expired for every thread reaching here.
+            # A plain (non-forced) fetch happens at most once per
+            # contending group of threads — bounded by holding the lock
+            # for its duration, not gated by the forced-refresh cooldown,
+            # since this path is never attacker-rate-driven (it's already
+            # bounded by `lifespan`, and PyJWKClient.get_signing_keys()
+            # below is itself what performs the fetch; the lock is what
+            # keeps concurrent callers to one call instead of one each).
+            signing_keys = self._client.get_signing_keys()
+            matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
+            if matched is not None:
+                return matched
+            return self._forced_refresh_and_match_locked(kid)
+
+    def _forced_refresh_and_match_locked(self, kid: str) -> jwt.PyJWK:
+        """Caller must already hold `self._lock`."""
+        now = time.monotonic()
+        if (
+            self._last_forced_refresh is None
+            or now - self._last_forced_refresh >= self._forced_refresh_cooldown
+        ):
+            try:
+                signing_keys = self._client.get_signing_keys(refresh=True)
+            finally:
+                # Advance the cooldown regardless of outcome. A failed
+                # fetch must not let the very next request retry
+                # immediately — that would defeat the rate bound just as
+                # surely as a successful one that still misses, and would
+                # let a struggling/unreachable identity provider be
+                # hammered on every incoming request.
+                self._last_forced_refresh = time.monotonic()
+        else:
+            # Still cooling down: reuse whatever the Tier-1 cache
+            # currently holds — possibly already refreshed by a peer
+            # request that raced us for the lock — rather than fetching
+            # again.
+            signing_keys = self._client.get_signing_keys()
         matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
         if matched is None:
             raise jwt.PyJWKClientError(f"Unable to find a signing key that matches: {kid!r}")
@@ -158,19 +237,34 @@ class _JWKSClient:
 
 _jwks_client: _JWKSClient | None = None
 
+# Guards lazy construction of the module-wide _jwks_client singleton.
+# Without this, concurrent first callers could each observe
+# `_jwks_client is None` before any of them assigns it, constructing
+# multiple independent _JWKSClient instances — each with its own cache,
+# lock, and forced-refresh cooldown, defeating every guarantee above for
+# whichever requests happen to land on the "losing" instances.
+_jwks_client_init_lock = threading.Lock()
+
 
 def get_jwks_client() -> _JWKSClient:
     global _jwks_client
-    if _jwks_client is None:
-        # config._require_oidc_settings_in_production guarantees this is
-        # populated in production; a None here outside production is a
-        # deployment/config defect (an auth-requiring route was reached
-        # without OIDC configured), not a client-facing failure — the
-        # AssertionError surfaces as the generic 500 contract in
-        # api.errors, exactly like any other unclassified server defect.
-        assert settings.oidc_jwks_url is not None
-        _jwks_client = _JWKSClient(settings.oidc_jwks_url)
-    return _jwks_client
+    if _jwks_client is not None:
+        return _jwks_client
+    with _jwks_client_init_lock:
+        # Double-checked locking: another thread may have already
+        # constructed and published the singleton while this thread was
+        # waiting for the lock.
+        if _jwks_client is None:
+            # config._require_oidc_settings_in_production guarantees this
+            # is populated in production; a None here outside production
+            # is a deployment/config defect (an auth-requiring route was
+            # reached without OIDC configured), not a client-facing
+            # failure — the AssertionError surfaces as the generic 500
+            # contract in api.errors, exactly like any other unclassified
+            # server defect.
+            assert settings.oidc_jwks_url is not None
+            _jwks_client = _JWKSClient(settings.oidc_jwks_url)
+        return _jwks_client
 
 
 def dispose_jwks_client() -> None:
@@ -178,7 +272,8 @@ def dispose_jwks_client() -> None:
     `dnd_ai.api.deps.dispose_engine`. Tests that override `get_jwks_client`
     manage their own client's lifetime and never touch this."""
     global _jwks_client
-    _jwks_client = None
+    with _jwks_client_init_lock:
+        _jwks_client = None
 
 
 def get_verified_token_claims(

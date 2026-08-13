@@ -127,14 +127,26 @@ def resolve_user_by_external_identity(
 ) -> uuid.UUID | None:
     """Resolve an OIDC (issuer, subject) pair to its linked `security.users`
     row (docs/architecture/DATABASE_MODEL.md §19.1 step 1). Returns None for
-    an unknown or revoked identity, or one linked to a user without an
-    active lifecycle status (`core.lifecycle_statuses.code = 'active'`,
-    the same check `resolve_access_context` below already applies to
-    campaign-membership status) — the caller decides how to respond
-    (for example, provisioning a new user on first login is an application
-    command, not this lookup). A revoked external identity or an
-    inactive/archived/deleted user must not authenticate even though the
-    row itself still exists."""
+    an unknown or revoked identity, or one linked to a user whose own
+    lifecycle status code is not `'active'` — the caller decides how to
+    respond (for example, provisioning a new user on first login is an
+    application command, not this lookup). A revoked external identity or
+    a non-active (inactive/archived/deleted) user must not authenticate
+    even though the row itself still exists.
+
+    Checks `core.lifecycle_statuses.code = 'active'` only — deliberately
+    never that lookup row's own `is_active` flag. Per revision
+    `080_security_identity_and_access.py`'s own "Deliberate scoping
+    decisions" (and docs/architecture/DATABASE_MODEL.md §19's account of
+    it), `is_active` on a lookup table means whether that *value* is
+    currently offered for *new* assignment — a different question from
+    whether a user already assigned `'active'` should retroactively stop
+    counting as one, which is exactly why that same revision's own
+    `security.campaign_has_access_manager()` deliberately excludes
+    `core.lifecycle_statuses.is_active` from its otherwise-analogous
+    `membership_statuses`/`capabilities` `is_active` checks. Extending
+    that semantics here would be the same scope creep that decision
+    already declined."""
     value = connection.execute(
         text("""
             SELECT ei.user_id
@@ -145,7 +157,6 @@ def resolve_user_by_external_identity(
               AND ei.subject = :subject
               AND ei.revoked_at IS NULL
               AND ls.code = 'active'
-              AND ls.is_active
         """),
         {"issuer": issuer, "subject": subject},
     ).scalar()
