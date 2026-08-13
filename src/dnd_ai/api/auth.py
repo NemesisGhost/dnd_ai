@@ -38,7 +38,32 @@ token, or under ordinary concurrent request traffic:
    waiting peer already performed is reused instead of repeated. Ordinary
    cached-key verification (the common case) never touches the lock at
    all.
-3. `PyJWKClient`'s optional per-key cache (`cache_keys=True`) is a plain
+3. A *failed* fetch — whether triggered by a cold cache, a TTL-expired
+   one, or a forced refresh for an unrecognized `kid` — previously
+   recorded no retry timer at all, so the lock only bounded *concurrent*
+   fetch attempts, never *sequential* ones: once released, the very next
+   request retried immediately, and every attempt could block for up to
+   `_JWKS_FETCH_TIMEOUT_SECONDS`. Cache expiry is time-driven, but each
+   retry attempt is triggered by an incoming request — an unauthenticated
+   caller sending a steady stream of requests during an identity-provider
+   outage could keep the network fetch happening on every single one of
+   them, indefinitely. `_JWKSClient` now records a dedicated
+   `_JWKS_FAILURE_RETRY_COOLDOWN_SECONDS` timer (`_last_failed_fetch`,
+   deliberately its own timestamp — never conflated with the Tier-1 TTL
+   or the forced-refresh cooldown above, each of which keeps its own
+   precise invariant) on any failed attempt, gating every one of the
+   fetch paths above uniformly. `PyJWKClient.fetch_data()` also writes a
+   successful-at-the-transport-level-but-otherwise-unusable response
+   (malformed JSON shape, an empty or unparseable key set) into the
+   Tier-1 cache *before* `get_jwk_set()` ever validates it — left alone,
+   that would keep "successfully" satisfying every cache read and failing
+   the same parse for the rest of `lifespan`, so `_JWKSClient` evicts it
+   immediately so the cooldown's eventual retry actually attempts a fresh
+   fetch rather than re-reading the same poison. A connection-level
+   failure (nothing was ever written to the cache) evicts nothing, so an
+   older, still-valid cached entry survives an unrelated failed forced
+   refresh exactly as before.
+4. `PyJWKClient`'s optional per-key cache (`cache_keys=True`) is a plain
    LRU with **no time-based expiry** — once populated, a given `kid` keeps
    serving the same key material until evicted by LRU pressure or the
    process restarts, regardless of the JWKS-set cache's own `lifespan`.
@@ -60,6 +85,7 @@ verification dependency.
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import Annotated, cast
 
 import jwt
@@ -93,6 +119,15 @@ _JWKS_FORCED_REFRESH_COOLDOWN_SECONDS = 30.0
 # worker handling it) can be tied up if the endpoint is slow or unreachable.
 _JWKS_FETCH_TIMEOUT_SECONDS = 5.0
 
+# Bounds how often a fetch may be *retried* after it fails, regardless of
+# which path triggered it (cold cache, TTL expiry, or a forced refresh for
+# an unrecognized kid) — see this module's docstring, point 3. Deliberately
+# a separate timer from both the Tier-1 lifespan and the forced-refresh
+# cooldown above: this one governs retry pacing specifically after a
+# failure, not routine expiry or unknown-kid rate-limiting, and the three
+# must never be conflated into one timestamp.
+_JWKS_FAILURE_RETRY_COOLDOWN_SECONDS = 30.0
+
 
 class _JWKSClient:
     """Wraps `jwt.PyJWKClient` to close the gaps described in this
@@ -109,7 +144,9 @@ class _JWKSClient:
         *,
         lifespan: float = _JWKS_SET_LIFESPAN_SECONDS,
         forced_refresh_cooldown: float = _JWKS_FORCED_REFRESH_COOLDOWN_SECONDS,
+        failure_retry_cooldown: float = _JWKS_FAILURE_RETRY_COOLDOWN_SECONDS,
         timeout: float = _JWKS_FETCH_TIMEOUT_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = jwt.PyJWKClient(
             jwks_url,
@@ -119,8 +156,13 @@ class _JWKSClient:
             timeout=timeout,
         )
         self._forced_refresh_cooldown = forced_refresh_cooldown
+        self._failure_retry_cooldown = failure_retry_cooldown
+        # Injectable so tests can advance time deterministically instead of
+        # sleeping for real — see tests/unit/test_jwks_client.py.
+        self._monotonic = monotonic
         self._lock = threading.Lock()
         self._last_forced_refresh: float | None = None
+        self._last_failed_fetch: float | None = None
 
     def get_signing_key(self, kid: str) -> RSAPublicKey:
         signing_keys = self._peek_signing_keys()
@@ -174,7 +216,15 @@ class _JWKSClient:
             jwk_set = jwt.PyJWKSet.from_dict(data)
         except jwt.PyJWKSetError:
             return None
-        return [key for key in jwk_set.keys if key.public_key_use in ("sig", None) and key.key_id]
+        signing_keys = [
+            key for key in jwk_set.keys if key.public_key_use in ("sig", None) and key.key_id
+        ]
+        # An empty result (every cached key filtered out — no signing-use
+        # key, or none with a kid) is exactly as unusable as an unparseable
+        # response; treat it identically as "no cache" rather than a
+        # distinct empty-but-cached state, so it's gated by the same
+        # failure-retry cooldown instead of the unknown-kid one.
+        return signing_keys or None
 
     def _resolve_under_lock(self, kid: str) -> jwt.PyJWK:
         """Reached only on a cache-read miss (cold, TTL-expired, or
@@ -195,44 +245,112 @@ class _JWKSClient:
             # Cache is cold or TTL-expired for every thread reaching here.
             # A plain (non-forced) fetch happens at most once per
             # contending group of threads — bounded by holding the lock
-            # for its duration, not gated by the forced-refresh cooldown,
-            # since this path is never attacker-rate-driven (it's already
-            # bounded by `lifespan`, and PyJWKClient.get_signing_keys()
-            # below is itself what performs the fetch; the lock is what
-            # keeps concurrent callers to one call instead of one each).
-            signing_keys = self._client.get_signing_keys()
+            # for its duration. This is *not* rate-driven by the Tier-1
+            # `lifespan` alone the way it might first appear: cache expiry
+            # is time-driven, but each *retry attempt* is triggered by an
+            # incoming request, so a failed fetch here is exactly as
+            # capable of being hammered by request volume as the unknown-
+            # kid path below — `_fetch_signing_keys_locked` applies the
+            # same failure-retry cooldown to both.
+            signing_keys = self._fetch_signing_keys_locked(refresh=False)
             matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
             if matched is not None:
                 return matched
             return self._forced_refresh_and_match_locked(kid)
 
     def _forced_refresh_and_match_locked(self, kid: str) -> jwt.PyJWK:
-        """Caller must already hold `self._lock`."""
-        now = time.monotonic()
+        """Caller must already hold `self._lock`. Reached either straight
+        from `_resolve_under_lock` (cache warm, kid missing) or after a
+        cold/expired-cache fetch that still didn't contain `kid`."""
+        now = self._monotonic()
         if (
             self._last_forced_refresh is None
             or now - self._last_forced_refresh >= self._forced_refresh_cooldown
         ):
             try:
-                signing_keys = self._client.get_signing_keys(refresh=True)
+                signing_keys = self._fetch_signing_keys_locked(refresh=True)
             finally:
-                # Advance the cooldown regardless of outcome. A failed
-                # fetch must not let the very next request retry
-                # immediately — that would defeat the rate bound just as
-                # surely as a successful one that still misses, and would
-                # let a struggling/unreachable identity provider be
-                # hammered on every incoming request.
-                self._last_forced_refresh = time.monotonic()
+                # Advance the cooldown regardless of outcome — including a
+                # failure-cooldown-gated no-op below. A caller must not be
+                # able to keep forcing attempts every request, whether by
+                # submitting a stream of bogus kids or by an unreachable
+                # identity provider that keeps every attempt failing.
+                self._last_forced_refresh = self._monotonic()
         else:
-            # Still cooling down: reuse whatever the Tier-1 cache
-            # currently holds — possibly already refreshed by a peer
-            # request that raced us for the lock — rather than fetching
-            # again.
+            # Still cooling down, and the cache is known-warm — this
+            # branch is only reached right after a successful peek within
+            # this same, unbroken lock acquisition (either directly, or
+            # via the cold-cache fetch just above, which only calls this
+            # method once it has *already* produced a warm cache) — so
+            # this is a guaranteed cache hit. Deliberately bypasses
+            # `_fetch_signing_keys_locked`/the failure-retry cooldown
+            # entirely rather than risk resetting failure state that has
+            # nothing to do with this read.
             signing_keys = self._client.get_signing_keys()
         matched = jwt.PyJWKClient.match_kid(signing_keys, kid)
         if matched is None:
             raise jwt.PyJWKClientError(f"Unable to find a signing key that matches: {kid!r}")
         return matched
+
+    def _fetch_signing_keys_locked(self, *, refresh: bool) -> list[jwt.PyJWK]:
+        """Caller must already hold `self._lock`. The single choke point
+        every fetch-triggering path (cold cache, TTL expiry, and forced
+        refresh for an unknown kid) goes through, so a failure on any one
+        of them bounds retries — via `_last_failed_fetch` and
+        `_JWKS_FAILURE_RETRY_COOLDOWN_SECONDS` — uniformly across all of
+        them, rather than only the forced-refresh path having a cooldown
+        of its own."""
+        now = self._monotonic()
+        if (
+            self._last_failed_fetch is not None
+            and now - self._last_failed_fetch < self._failure_retry_cooldown
+        ):
+            # No network I/O, no re-parsing of whatever might still be
+            # cached — a recent attempt (from this path or the other)
+            # already failed and the cooldown hasn't elapsed.
+            raise jwt.PyJWKClientError(
+                "JWKS fetch failed recently; retrying is on a bounded cooldown"
+            )
+        try:
+            signing_keys = self._client.get_signing_keys(refresh=refresh)
+        except jwt.PyJWKClientConnectionError:
+            # Transport-level failure: jwt.PyJWKClient.fetch_data() raises
+            # this *before* ever writing to its own Tier-1 cache (verified
+            # against the installed jwt.jwks_client source), so whatever
+            # was already cached, if anything, is untouched and must stay
+            # that way — only the failure-retry timer advances.
+            self._last_failed_fetch = self._monotonic()
+            raise
+        except Exception:
+            # Anything else reaching here means the fetch succeeded at the
+            # transport level but produced something unusable — a non-
+            # JSON-object response (PyJWKClientError) or an invalid/empty
+            # key set (PyJWKSetError, from PyJWKSet.from_dict()/__init__).
+            # jwt.PyJWKClient.fetch_data() already wrote that bad response
+            # into the Tier-1 cache *before* this validation ever ran, so
+            # it must be evicted — left alone, it would keep "successfully"
+            # satisfying every subsequent cache read (valid by timestamp)
+            # and failing the same parse for the rest of `lifespan`,
+            # without the failure cooldown's eventual retry ever getting a
+            # chance to find out the identity provider has recovered.
+            self._last_failed_fetch = self._monotonic()
+            self._evict_cache()
+            raise
+        else:
+            self._last_failed_fetch = None
+            return signing_keys
+
+    def _evict_cache(self) -> None:
+        cache = self._client.jwk_set_cache
+        if cache is not None:
+            # JWKSetCache.put()'s own type hint requires a PyJWKSet, but
+            # its actual implementation explicitly treats `None` as "clear
+            # the cache" (verified against the installed
+            # jwt.jwk_set_cache source) — an intentional, documented-by-
+            # behavior call, not an abuse of an implementation detail the
+            # type hint simply doesn't reflect (the same kind of stub/
+            # runtime mismatch `_peek_signing_keys` already works around).
+            cache.put(None)  # type: ignore[arg-type]
 
 
 _jwks_client: _JWKSClient | None = None

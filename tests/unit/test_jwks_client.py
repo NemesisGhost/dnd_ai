@@ -16,6 +16,12 @@ broken, unsynchronized code — the whole point of holding is to force any
 genuinely concurrent fetch attempts to actually overlap in time, so
 `max_concurrent_calls > 1` is a deterministic proof a race occurred, not
 a matter of timing luck.
+
+The failure-retry-cooldown tests use `_FakeClock`, an injectable stand-in
+for `time.monotonic()` (`_JWKSClient`'s own `monotonic` constructor
+parameter), so cooldown/TTL elapsing is simulated by advancing a counter
+rather than sleeping for real — deterministic and fast, no timing
+fragility.
 """
 
 import threading
@@ -41,6 +47,21 @@ def _jwk_dict(kid: str, public_key: RSAPublicKey) -> dict[str, object]:
     return jwk
 
 
+class _FakeClock:
+    """A deterministic stand-in for `time.monotonic()` — advanced
+    explicitly rather than by sleeping for real, so cooldown/TTL tests
+    aren't timing-fragile."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._now = start
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 def _assert_all_threads_finished(threads: list[threading.Thread]) -> None:
     """`Thread.join(timeout=...)` returning does not mean the thread
     finished — it can also mean the timeout elapsed while the thread is
@@ -54,10 +75,14 @@ def _assert_all_threads_finished(threads: list[threading.Thread]) -> None:
 class _FakeTransport:
     """Stands in for the JWKS HTTP endpoint. `keys` is mutable between
     calls to simulate the identity provider rotating its published key
-    set; `fail_next`/`return_malformed_next` simulate one transient
-    failure. `hold_seconds` deliberately slows `produce()` down and
-    `max_concurrent_calls` records the highest number of overlapping
-    callers observed inside it — see this module's docstring."""
+    set. `fail_next`/`return_malformed_next` simulate exactly one
+    transient failure; `always_fail`/`always_return_malformed` simulate a
+    sustained outage (every call fails) for the failure-retry-cooldown
+    tests — a one-shot flag can't prove "sequential failures stay
+    bounded," since it stops failing after the first attempt. `hold_seconds`
+    deliberately slows `produce()` down and `max_concurrent_calls` records
+    the highest number of overlapping callers observed inside it — see
+    this module's docstring."""
 
     def __init__(self, keys: Iterable[RSAKeypair], *, hold_seconds: float = 0.0) -> None:
         self.keys: dict[str, RSAPublicKey] = {kp.kid: kp.public_key for kp in keys}
@@ -65,7 +90,10 @@ class _FakeTransport:
         self.call_count = 0
         self.max_concurrent_calls = 0
         self.fail_next = False
+        self.always_fail = False
         self.return_malformed_next = False
+        self.always_return_malformed = False
+        self.malformed_payload: object = ["not", "a", "json", "object"]
         self._in_flight = 0
         self._instrumentation_lock = threading.Lock()
 
@@ -77,12 +105,12 @@ class _FakeTransport:
         try:
             if self.hold_seconds:
                 time.sleep(self.hold_seconds)
-            if self.fail_next:
+            if self.always_fail or self.fail_next:
                 self.fail_next = False
                 raise jwt.PyJWKClientConnectionError("simulated transient network failure")
-            if self.return_malformed_next:
+            if self.always_return_malformed or self.return_malformed_next:
                 self.return_malformed_next = False
-                return ["not", "a", "json", "object"]
+                return self.malformed_payload
             return {"keys": [_jwk_dict(kid, key) for kid, key in self.keys.items()]}
         finally:
             with self._instrumentation_lock:
@@ -110,13 +138,20 @@ def _install_fake_transport(client: _JWKSClient, transport: _FakeTransport) -> N
 
 
 def _make_client(
-    transport: _FakeTransport, *, lifespan: float = 300.0, cooldown: float = 30.0
+    transport: _FakeTransport,
+    *,
+    lifespan: float = 300.0,
+    cooldown: float = 30.0,
+    failure_cooldown: float = 30.0,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> _JWKSClient:
     client = _JWKSClient(
         "https://test-idp.example/jwks",
         lifespan=lifespan,
         forced_refresh_cooldown=cooldown,
+        failure_retry_cooldown=failure_cooldown,
         timeout=1.0,
+        monotonic=monotonic,
     )
     _install_fake_transport(client, transport)
     return client
@@ -345,6 +380,190 @@ def test_a_malformed_jwks_response_fails_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Outage amplification: bounded failure-retry cooldown. A direct probe of
+# five sequential requests against a failed transport, before this fix,
+# produced five fetches — the lock bounded *concurrent* attempts but
+# recorded no retry timer, so every request after the lock was released
+# retried immediately. Cache expiry is time-driven, but each retry attempt
+# is triggered by an incoming request, so this is exactly as reachable by
+# an unauthenticated caller as the unknown-kid path.
+# ---------------------------------------------------------------------------
+
+
+def test_repeated_sequential_cold_cache_failures_cause_one_fetch_within_the_cooldown() -> None:
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair])
+    transport.always_fail = True
+    clock = _FakeClock()
+    client = _make_client(transport, failure_cooldown=30.0, monotonic=clock)
+
+    # The first request performs the real (failing) attempt.
+    with pytest.raises(jwt.PyJWKClientConnectionError):
+        client.get_signing_key(keypair.kid)
+
+    # Every subsequent request, still within the cooldown, is short-
+    # circuited by _JWKSClient itself — a different exception than the
+    # transport's own failure, proving no further attempt was made.
+    for _ in range(4):
+        with pytest.raises(jwt.PyJWKClientError) as excinfo:
+            client.get_signing_key(keypair.kid)
+        assert not isinstance(excinfo.value, jwt.PyJWKClientConnectionError)
+
+    assert transport.call_count == 1
+
+
+def test_concurrent_cold_cache_failures_cause_one_fetch() -> None:
+    """Only the one thread that actually reaches the transport (bounded
+    to at most one by the lock, mirroring the cold-start-success case)
+    sees `PyJWKClientConnectionError`; every other concurrent caller is
+    short-circuited by the failure cooldown once it acquires the lock —
+    both are `jwt.PyJWTError` (the common base), which is what matters
+    here: every caller fails closed, and the transport is touched once."""
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair], hold_seconds=0.1)
+    transport.always_fail = True
+    client = _make_client(transport, failure_cooldown=30.0)
+
+    errors: list[jwt.PyJWTError] = []
+    other_errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+
+    def _attempt(_i: int) -> None:
+        try:
+            client.get_signing_key(keypair.kid)
+        except jwt.PyJWTError as exc:
+            with errors_lock:
+                errors.append(exc)
+        except BaseException as exc:  # noqa: BLE001
+            with errors_lock:
+                other_errors.append(exc)
+
+    _run_concurrently(_attempt, 10)
+
+    assert not other_errors, other_errors
+    assert len(errors) == 10
+    assert transport.max_concurrent_calls == 1
+    assert transport.call_count == 1
+
+
+def test_repeated_failures_after_ttl_expiry_remain_bounded() -> None:
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair])
+    clock = _FakeClock()
+    # jwt.PyJWKClient's own Tier-1 cache tracks its TTL with the *real*
+    # clock internally (it doesn't accept an injectable one — only this
+    # wrapper's own cooldown timestamps do), so expiry here needs an
+    # actual short sleep; the failure-retry cooldown below is still
+    # driven entirely by the fake clock.
+    client = _make_client(transport, lifespan=0.05, failure_cooldown=30.0, monotonic=clock)
+
+    # Warm the cache successfully.
+    resolved = client.get_signing_key(keypair.kid)
+    assert resolved.public_numbers() == keypair.public_key.public_numbers()
+    assert transport.call_count == 1
+
+    time.sleep(0.1)  # let the Tier-1 cache actually expire
+    transport.always_fail = True
+
+    with pytest.raises(jwt.PyJWKClientConnectionError):
+        client.get_signing_key(keypair.kid)
+
+    for _ in range(4):
+        with pytest.raises(jwt.PyJWKClientError) as excinfo:
+            client.get_signing_key(keypair.kid)
+        assert not isinstance(excinfo.value, jwt.PyJWKClientConnectionError)
+
+    assert transport.call_count == 2  # 1 warmup + 1 shared failed refetch attempt
+
+
+def test_exactly_one_retry_occurs_after_the_failure_cooldown_and_it_restores_resolution() -> None:
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair])
+    transport.always_fail = True
+    clock = _FakeClock()
+    client = _make_client(transport, failure_cooldown=30.0, monotonic=clock)
+
+    # The first request attempts a real fetch, which fails.
+    with pytest.raises(jwt.PyJWKClientConnectionError):
+        client.get_signing_key(keypair.kid)
+    assert transport.call_count == 1
+
+    # Still within the cooldown: short-circuited by _JWKSClient itself,
+    # never reaching the transport at all — a different exception type
+    # than the transport's own failure, proving no fetch was attempted.
+    with pytest.raises(jwt.PyJWKClientError) as excinfo:
+        client.get_signing_key(keypair.kid)
+    assert not isinstance(excinfo.value, jwt.PyJWKClientConnectionError)
+    assert transport.call_count == 1
+
+    # The cooldown elapses and the identity provider has recovered.
+    clock.advance(31.0)
+    transport.always_fail = False
+
+    resolved = client.get_signing_key(keypair.kid)
+    assert resolved.public_numbers() == keypair.public_key.public_numbers()
+    assert transport.call_count == 2  # exactly one retry attempt
+
+
+def test_a_non_dict_jwks_response_does_not_poison_the_cache_or_repeatedly_fetch() -> None:
+    """jwt.PyJWKClient.fetch_data() writes a response into the Tier-1
+    cache *before* get_jwk_set() validates it's a JSON object — without
+    eviction, this would keep "successfully" satisfying every cache read
+    (valid by timestamp) and failing the same parse for the rest of
+    `lifespan`, without ever attempting a real refetch."""
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair])
+    transport.always_return_malformed = True
+    clock = _FakeClock()
+    client = _make_client(transport, lifespan=300.0, failure_cooldown=30.0, monotonic=clock)
+
+    for _ in range(5):
+        with pytest.raises(jwt.PyJWKClientError):
+            client.get_signing_key(keypair.kid)
+    assert transport.call_count == 1
+
+    clock.advance(31.0)
+    transport.always_return_malformed = False
+
+    resolved = client.get_signing_key(keypair.kid)
+    assert resolved.public_numbers() == keypair.public_key.public_numbers()
+    assert transport.call_count == 2
+
+
+def test_a_dict_shaped_but_unusable_jwks_response_does_not_poison_the_cache() -> None:
+    """The other malformed shape: valid JSON, valid dict, but an empty
+    key set — jwt.PyJWKSet itself raises PyJWKSetError for this, a
+    *sibling* of PyJWKClientError (both extend PyJWTError directly, not
+    each other), exercised separately to prove eviction isn't
+    accidentally keyed to one specific exception type."""
+    keypair = generate_test_rsa_keypair()
+    transport = _FakeTransport([keypair])
+    transport.malformed_payload = {"keys": []}
+    transport.always_return_malformed = True
+    clock = _FakeClock()
+    client = _make_client(transport, failure_cooldown=30.0, monotonic=clock)
+
+    # The first request performs the real attempt, which fails parsing.
+    with pytest.raises(jwt.PyJWKSetError):
+        client.get_signing_key(keypair.kid)
+
+    # Subsequent requests, still within the cooldown, are short-circuited
+    # by _JWKSClient itself (PyJWKClientError, not PyJWKSetError) — no
+    # further parsing of the (now-evicted) payload was attempted.
+    for _ in range(2):
+        with pytest.raises(jwt.PyJWKClientError):
+            client.get_signing_key(keypair.kid)
+    assert transport.call_count == 1
+
+    clock.advance(31.0)
+    transport.always_return_malformed = False
+
+    resolved = client.get_signing_key(keypair.kid)
+    assert resolved.public_numbers() == keypair.public_key.public_numbers()
+    assert transport.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # Finding 3: no non-expiring per-key cache
 # ---------------------------------------------------------------------------
 
@@ -402,7 +621,9 @@ def test_concurrent_get_jwks_client_initialization_returns_one_shared_instance(
             *,
             lifespan: float = auth_module._JWKS_SET_LIFESPAN_SECONDS,
             forced_refresh_cooldown: float = auth_module._JWKS_FORCED_REFRESH_COOLDOWN_SECONDS,
+            failure_retry_cooldown: float = auth_module._JWKS_FAILURE_RETRY_COOLDOWN_SECONDS,
             timeout: float = auth_module._JWKS_FETCH_TIMEOUT_SECONDS,
+            monotonic: Callable[[], float] = time.monotonic,
         ) -> None:
             nonlocal construction_count
             with construction_count_lock:
@@ -413,7 +634,9 @@ def test_concurrent_get_jwks_client_initialization_returns_one_shared_instance(
                 jwks_url,
                 lifespan=lifespan,
                 forced_refresh_cooldown=forced_refresh_cooldown,
+                failure_retry_cooldown=failure_retry_cooldown,
                 timeout=timeout,
+                monotonic=monotonic,
             )
 
     monkeypatch.setattr(auth_module, "_JWKSClient", _SlowJWKSClient)
