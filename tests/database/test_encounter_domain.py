@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
     make_action,
+    make_campaign,
     make_character,
     make_combat_action,
     make_encounter,
@@ -29,6 +30,7 @@ from tests.factories import (
     make_item_instance,
     make_location,
     make_ruleset_version_for_world,
+    make_session,
     make_world,
     make_world_time,
 )
@@ -48,6 +50,13 @@ class Fixture:
         self.location_id = make_location(connection, self.world_id)
         self.character_a = make_character(connection, self.world_id, name="Rin")
         self.character_b = make_character(connection, self.world_id, name="Borrin")
+        # "pending" sidesteps the active-campaign access-manager retention
+        # invariant (revision 080) — these tests don't grant access.manage
+        # and don't otherwise care about campaign lifecycle.
+        self.campaign_id = make_campaign(
+            connection, self.timeline_id, lifecycle_status_code="pending"
+        )
+        self.session_id = make_session(connection, self.campaign_id, 1)
         self.encounter_id = make_encounter(connection, self.timeline_id, self.t0)
         self.participant_a = make_encounter_participant(
             connection, self.encounter_id, self.character_a, side="party"
@@ -88,6 +97,82 @@ def test_an_encounters_location_must_share_its_timelines_world(
     with pytest.raises(CONSTRAINT_ERRORS) as exc:
         make_encounter(db_connection, f.timeline_id, f.t0, location_id=foreign_location)
     assert "belongs to world" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# narrative.encounters.campaign_id / .session_id (revision 081)
+# ---------------------------------------------------------------------------
+
+
+def test_an_encounter_with_matching_campaign_and_session_can_be_created(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(
+        db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id, session_id=f.session_id
+    )
+    assert encounter_id is not None
+
+
+def test_an_encounters_campaign_must_belong_to_its_timeline(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    foreign_campaign = make_campaign(db_connection, other_timeline, lifecycle_status_code="pending")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=foreign_campaign)
+    assert "belongs to timeline" in str(exc.value)
+
+
+def test_an_encounters_session_must_belong_to_its_campaign(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The reported gap: a session belonging to a *different*, same-world
+    campaign is not caught by the same-world guard alone — this is the
+    dedicated campaign/session ownership check revision 081 adds."""
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+    foreign_session = make_session(db_connection, other_campaign, 1)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_encounter(
+            db_connection,
+            f.timeline_id,
+            f.t0,
+            campaign_id=f.campaign_id,
+            session_id=foreign_session,
+        )
+    assert "belongs to campaign" in str(exc.value)
+
+
+def test_an_encounters_session_requires_a_campaign_id(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """campaign_id absent (NULL) with session_id supplied is rejected the
+    same way — a session always belongs to exactly one real campaign
+    (campaign.sessions.campaign_id NOT NULL), so NULL can never be it."""
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        make_encounter(db_connection, f.timeline_id, f.t0, session_id=f.session_id)
+    assert "belongs to campaign" in str(exc.value)
+
+
+def test_reparenting_a_sessions_campaign_cannot_invalidate_an_existing_encounter(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """campaign.sessions.campaign_id is already immutable
+    (tr_sessions_enforce_immutable, revision 080) — this proves that
+    protection still stands and is what keeps an already-valid encounter's
+    campaign/session pairing from being invalidated out from under it."""
+    make_encounter(
+        db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id, session_id=f.session_id
+    )
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE campaign.sessions SET campaign_id = :c WHERE session_id = :s"),
+            {"c": other_campaign, "s": f.session_id},
+        )
+    assert "immutable" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

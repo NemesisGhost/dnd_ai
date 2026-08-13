@@ -606,6 +606,8 @@ Primary tables:
 
 FoundryVTT may remain the detailed tactical authority during live combat; the database captures synchronized state and meaningful outcomes rather than duplicating every tactical decision. Persist enough to support initiative and turn order, current HP and conditions, resource consumption, participants, defeated/escaped/surrendered/captured outcomes, an encounter summary, and the resulting narrative events.
 
+`narrative.encounters.campaign_id`/`.session_id` (both nullable) form the same timeline -> campaign -> session ownership chain `narrative.events` and `interaction.interactions` already require: `campaign_id`, when set, must belong to the encounter's own `timeline_id`, and `session_id`, when set, must belong to `campaign_id` — enforced by `narrative.enforce_encounter_world()` (revision 081, extending revision 078's original same-world-only checks) and, ahead of it in application code, `dnd_ai.commands.encounters._validate_session_campaign()`.
+
 ## 14. Quest and story model
 
 ```mermaid

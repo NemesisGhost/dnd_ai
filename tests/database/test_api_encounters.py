@@ -28,6 +28,7 @@ from tests.factories import (
     make_membership_role,
     make_role,
     make_role_capability,
+    make_session,
     make_timeline,
     make_user,
     make_world,
@@ -48,6 +49,7 @@ class Fixture:
         self.campaign_id = make_campaign(
             connection, self.timeline_id, lifecycle_status_code="pending"
         )
+        self.session_id = make_session(connection, self.campaign_id, 1)
         self.attacker_id = make_character(connection, self.world_id, name="Rin")
         self.defender_id = make_character(connection, self.world_id, name="Borrin")
         make_character_state(
@@ -558,3 +560,102 @@ def test_ending_with_duplicate_outcome_participants_is_rejected_without_side_eff
             {"e": encounter_id, "p": f.defender_id},
         ).scalar()
         assert outcome is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-campaign session integrity
+# ---------------------------------------------------------------------------
+
+
+def _no_encounter_or_participant_rows(postgres_engine: Engine, campaign_id: uuid.UUID) -> None:
+    with postgres_engine.connect() as verify:
+        encounter_count = verify.execute(
+            text("SELECT count(*) FROM narrative.encounters WHERE campaign_id = :c"),
+            {"c": campaign_id},
+        ).scalar()
+        assert encounter_count == 0, "a rejected request left an encounter row behind"
+
+        participant_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.encounter_participants ep
+                JOIN narrative.encounters e ON e.encounter_id = ep.encounter_id
+                WHERE e.campaign_id = :c
+            """),
+            {"c": campaign_id},
+        ).scalar()
+        assert participant_count == 0, "a rejected request left a participant row behind"
+
+
+def test_starting_an_encounter_with_a_matching_campaign_session_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "participant_entity_ids": [str(f.attacker_id)],
+                "session_id": str(f.session_id),
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    encounter_id = uuid.UUID(response.json()["encounter_id"])
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("SELECT session_id FROM narrative.encounters WHERE encounter_id = :e"),
+            {"e": encounter_id},
+        ).one()
+        assert row.session_id == f.session_id
+
+
+def test_starting_an_encounter_with_a_foreign_campaign_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The reported gap: a caller authorized for f.campaign_id must not be
+    able to durably link an encounter to a same-world session belonging to
+    a different campaign — this must fail with a fixed, non-disclosing 404,
+    not a 201."""
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "participant_entity_ids": [str(f.attacker_id)],
+                "session_id": str(foreign_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(foreign_session_id) not in body["error"]["message"]
+    assert str(f.campaign_id) not in body["error"]["message"]
+    assert str(other_campaign_id) not in body["error"]["message"]
+    _no_encounter_or_participant_rows(postgres_engine, f.campaign_id)
+
+
+def test_starting_an_encounter_with_a_nonexistent_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    nonexistent_session_id = uuid.uuid4()
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "participant_entity_ids": [str(f.attacker_id)],
+                "session_id": str(nonexistent_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(nonexistent_session_id) not in body["error"]["message"]
+    _no_encounter_or_participant_rows(postgres_engine, f.campaign_id)

@@ -15,6 +15,14 @@ attach to, left at the default 'initiated' status: no check_requests are
 created here, so the interaction-lifecycle locking revisions 067/070-072
 added never engages, and there is no exit criterion requiring this
 command to also close out the interaction's own lifecycle.
+
+start_encounter validates session_id/campaign_id agreement in application
+code (_validate_session_campaign) before inserting anything, closing out
+with a fixed 404 (SessionNotInCampaignError) — see that function's own
+docstring. Revision 081 adds the equivalent database-level guard as
+defense in depth, extending narrative.enforce_encounter_world() the same
+way narrative.events (revision 057) and interaction.interactions
+(revision 061) already validate their own campaign_id/session_id chain.
 """
 
 import json
@@ -24,10 +32,35 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.errors import SafeMessageError
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
 from .events import EventParticipant, _insert_event_row
+
+
+class SessionNotInCampaignError(DomainAuthorizationError):
+    """Raised by `_start_encounter_impl()` when a supplied `session_id`
+    does not resolve to a `campaign.sessions` row belonging exactly to the
+    supplied `campaign_id` — including a nonexistent session and a
+    session that belongs to a different (even same-world) campaign.
+    `campaign_id=None` with a `session_id` supplied is also rejected here:
+    a session always belongs to exactly one campaign
+    (`campaign.sessions.campaign_id NOT NULL`), so "no campaign at all"
+    can never be the campaign a real session belongs to — the same rule
+    `narrative.enforce_event_consistency()` (revision 057) and
+    `interaction.enforce_interaction_consistency()` (revision 061) already
+    apply to `narrative.events`/`interaction.interactions`, and revision
+    081 now applies to `narrative.encounters` at the database layer too
+    (see that migration).
+
+    Inherits `DomainAuthorizationError`'s fixed 404 contract deliberately:
+    confirming that a session exists but belongs to a different campaign
+    would itself disclose cross-campaign information to a caller who is
+    only authorized for the campaign named in the request
+    (docs/architecture/DATABASE_MODEL.md §19.7). The supplied campaign_id/
+    session_id are included only in the constructor's `detail` argument
+    (`str(self)`), never in `safe_message` — see `SafeMessageError`'s own
+    contract for why that distinction matters."""
 
 
 class EncounterNotActiveError(SafeMessageError):
@@ -67,6 +100,45 @@ class EndEncounterResult:
     event_id: uuid.UUID
 
 
+def _validate_session_campaign(
+    connection: Connection, *, campaign_id: uuid.UUID | None, session_id: uuid.UUID | None
+) -> None:
+    """Rejects a start_encounter() call whose session_id does not belong
+    exactly to campaign_id, before anything is inserted.
+
+    Without this, narrative.encounters.session_id could reference a
+    campaign.sessions row belonging to a same-world but different
+    campaign than the caller is authorized for (or acting on behalf of),
+    since a normal foreign key only proves the session exists, never that
+    it belongs to the given campaign — a durable cross-campaign session
+    linkage the API's own campaign-scoped authorization
+    (dnd_ai.api.access.require_campaign_capability) never catches, since
+    campaign_id itself is trusted (it comes from the URL path, already
+    authorized) while session_id is caller-supplied request data. Revision
+    081 adds the equivalent database-level guard (narrative.
+    enforce_encounter_world(), extended) as defense in depth, mirroring
+    the same check narrative.enforce_event_consistency() (revision 057)
+    and interaction.enforce_interaction_consistency() (revision 061)
+    already apply to their own campaign_id/session_id columns — this
+    function is what turns a violation into a clean, fixed 404
+    (SessionNotInCampaignError) at the point a normal API request would
+    hit it, rather than only the database trigger's generic 500 fallback
+    a caller should never normally reach."""
+    if session_id is None:
+        return
+
+    session_campaign_id = connection.execute(
+        text("SELECT campaign_id FROM campaign.sessions WHERE session_id = :session"),
+        {"session": session_id},
+    ).scalar()
+
+    if session_campaign_id is None or campaign_id is None or session_campaign_id != campaign_id:
+        raise SessionNotInCampaignError(
+            f"session {session_id} does not belong to campaign {campaign_id!r} "
+            f"(session's actual campaign: {session_campaign_id!r})"
+        )
+
+
 def _start_encounter_impl(
     connection: Connection,
     *,
@@ -83,7 +155,12 @@ def _start_encounter_impl(
     this package splits each command into a composable, connection-taking
     implementation and a public engine-based convenience wrapper (below).
     A caller that owns the surrounding transaction itself (e.g. the API
-    layer's per-request connection) calls this directly."""
+    layer's per-request connection) calls this directly.
+
+    Validates session_id/campaign_id agreement (_validate_session_campaign)
+    before inserting anything — see that function's own docstring."""
+    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+
     encounter_id = connection.execute(
         text("""
             INSERT INTO narrative.encounters

@@ -21,13 +21,16 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.commands.encounters import (
     EncounterNotActiveError,
     EndEncounterResult,
+    SessionNotInCampaignError,
     end_encounter,
     resolve_combat_turn,
     start_encounter,
 )
 from tests.factories import (
+    make_campaign,
     make_character,
     make_character_state,
+    make_session,
     make_timeline,
     make_world,
     make_world_time,
@@ -43,6 +46,13 @@ class Fixture:
         self.world_time_id = make_world_time(connection, self.world_id, 100)
         self.attacker_id = make_character(connection, self.world_id, name="Rin")
         self.defender_id = make_character(connection, self.world_id, name="Borrin")
+        # "pending" sidesteps the active-campaign access-manager retention
+        # invariant (revision 080) — these tests don't grant access.manage
+        # and don't otherwise care about campaign lifecycle.
+        self.campaign_id = make_campaign(
+            connection, self.timeline_id, lifecycle_status_code="pending"
+        )
+        self.session_id = make_session(connection, self.campaign_id, 1)
         make_character_state(
             connection,
             self.timeline_id,
@@ -577,3 +587,111 @@ def test_ending_an_encounter_with_duplicate_outcome_participants_is_rejected(
             {"e": start.encounter_id, "p": f.defender_id},
         ).scalar()
         assert outcome is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-campaign session integrity
+# ---------------------------------------------------------------------------
+
+
+def _no_encounter_or_participant_rows(postgres_engine: Engine, timeline_id: uuid.UUID) -> None:
+    with postgres_engine.connect() as verify:
+        encounter_count = verify.execute(
+            text("SELECT count(*) FROM narrative.encounters WHERE timeline_id = :t"),
+            {"t": timeline_id},
+        ).scalar()
+        assert encounter_count == 0, "a rejected start_encounter left an encounter row behind"
+
+        participant_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.encounter_participants ep
+                JOIN narrative.encounters e ON e.encounter_id = ep.encounter_id
+                WHERE e.timeline_id = :t
+            """),
+            {"t": timeline_id},
+        ).scalar()
+        assert participant_count == 0, "a rejected start_encounter left a participant row behind"
+
+
+def test_starting_an_encounter_with_a_matching_campaign_and_session_succeeds(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    result = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id,),
+        campaign_id=f.campaign_id,
+        session_id=f.session_id,
+    )
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT campaign_id, session_id FROM narrative.encounters WHERE encounter_id = :e"
+            ),
+            {"e": result.encounter_id},
+        ).one()
+        assert row.campaign_id == f.campaign_id
+        assert row.session_id == f.session_id
+
+
+def test_starting_an_encounter_with_a_foreign_campaign_session_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The reported gap: a same-world but different campaign's session
+    must be rejected even though enforce_encounter_world's own same-world
+    check alone would never catch it."""
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with pytest.raises(SessionNotInCampaignError):
+        start_encounter(
+            postgres_engine,
+            timeline_id=f.timeline_id,
+            world_time_id=f.world_time_id,
+            participant_entity_ids=(f.attacker_id,),
+            campaign_id=f.campaign_id,
+            session_id=foreign_session_id,
+        )
+
+    _no_encounter_or_participant_rows(postgres_engine, f.timeline_id)
+
+
+def test_starting_an_encounter_with_a_nonexistent_session_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    with pytest.raises(SessionNotInCampaignError):
+        start_encounter(
+            postgres_engine,
+            timeline_id=f.timeline_id,
+            world_time_id=f.world_time_id,
+            participant_entity_ids=(f.attacker_id,),
+            campaign_id=f.campaign_id,
+            session_id=uuid.uuid4(),
+        )
+
+    _no_encounter_or_participant_rows(postgres_engine, f.timeline_id)
+
+
+def test_starting_an_encounter_with_a_session_but_no_campaign_id_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Decided rule (matches narrative.events'/interaction.interactions'
+    own campaign_id/session_id chain check): a session always belongs to
+    exactly one real campaign, so a caller supplying session_id without
+    campaign_id is rejected rather than silently treated as unscoped."""
+    with pytest.raises(SessionNotInCampaignError):
+        start_encounter(
+            postgres_engine,
+            timeline_id=f.timeline_id,
+            world_time_id=f.world_time_id,
+            participant_entity_ids=(f.attacker_id,),
+            campaign_id=None,
+            session_id=f.session_id,
+        )
+
+    _no_encounter_or_participant_rows(postgres_engine, f.timeline_id)
