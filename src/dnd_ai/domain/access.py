@@ -127,14 +127,25 @@ def resolve_user_by_external_identity(
 ) -> uuid.UUID | None:
     """Resolve an OIDC (issuer, subject) pair to its linked `security.users`
     row (docs/architecture/DATABASE_MODEL.md §19.1 step 1). Returns None for
-    an unknown or revoked identity — the caller decides how to respond
+    an unknown or revoked identity, or one linked to a user without an
+    active lifecycle status (`core.lifecycle_statuses.code = 'active'`,
+    the same check `resolve_access_context` below already applies to
+    campaign-membership status) — the caller decides how to respond
     (for example, provisioning a new user on first login is an application
-    command, not this lookup)."""
+    command, not this lookup). A revoked external identity or an
+    inactive/archived/deleted user must not authenticate even though the
+    row itself still exists."""
     value = connection.execute(
         text("""
-            SELECT user_id
-            FROM security.external_identities
-            WHERE issuer = :issuer AND subject = :subject AND revoked_at IS NULL
+            SELECT ei.user_id
+            FROM security.external_identities ei
+            JOIN security.users u ON u.user_id = ei.user_id
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE ei.issuer = :issuer
+              AND ei.subject = :subject
+              AND ei.revoked_at IS NULL
+              AND ls.code = 'active'
+              AND ls.is_active
         """),
         {"issuer": issuer, "subject": subject},
     ).scalar()

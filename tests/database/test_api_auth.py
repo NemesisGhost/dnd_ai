@@ -17,6 +17,7 @@ from typing import Annotated
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine
@@ -40,17 +41,20 @@ _AUDIENCE = "test-audience"
 
 
 class _FakeJWKSClient:
-    """Stands in for `jwt.PyJWKClient` — a plain dict lookup against a
-    locally generated keypair, so these tests never fetch a JWKS document
-    over the network."""
+    """Stands in for `dnd_ai.api.auth._JWKSClient` — a plain dict lookup
+    against a locally generated keypair, so these tests never fetch a JWKS
+    document over the network. Matches `_JWKSClient.get_signing_key`'s
+    contract exactly: returns the `RSAPublicKey` directly (not a `PyJWK`-
+    like wrapper with a `.key` attribute), and raises on an unresolvable
+    kid rather than returning something invalid."""
 
     def __init__(self, keypair: RSAKeypair) -> None:
         self._keypair = keypair
 
-    def get_signing_key(self, kid: str) -> object:
+    def get_signing_key(self, kid: str) -> RSAPublicKey:
         if kid != self._keypair.kid:
-            raise jwt.exceptions.PyJWKClientError(f"no signing key for kid={kid!r}")
-        return type("_FakeJWK", (), {"key": self._keypair.public_key})()
+            raise jwt.PyJWKClientError(f"no signing key for kid={kid!r}")
+        return self._keypair.public_key
 
 
 @pytest.fixture
@@ -174,6 +178,21 @@ def test_a_token_for_a_revoked_identity_is_rejected(
         make_external_identity(
             setup_connection, user_id, issuer=_ISSUER, subject=subject, revoked=True
         )
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 401
+
+
+def test_a_token_for_an_inactive_linked_user_is_rejected(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Archived Identity Tester", status_code="archived")
+        make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
         setup_connection.commit()
 
     token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)

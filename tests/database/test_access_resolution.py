@@ -446,3 +446,21 @@ def test_resolve_user_by_external_identity_unknown_pair_returns_none(
         db_connection, issuer="https://idp.example", subject=str(uuid.uuid4())
     )
     assert resolved is None
+
+
+def test_resolve_user_by_external_identity_rejects_inactive_linked_user(
+    db_connection: Connection,
+) -> None:
+    """A revoked *identity* is already covered above; this proves the
+    other half — a still-active, non-revoked identity linked to a user
+    whose own lifecycle status is no longer 'active' must not
+    authenticate either (finding: inactive users could still
+    authenticate)."""
+    archived_user_id = make_user(db_connection, "Archived User", status_code="archived")
+    make_external_identity(
+        db_connection, archived_user_id, issuer="https://idp.example", subject="sub-archived"
+    )
+    resolved = resolve_user_by_external_identity(
+        db_connection, issuer="https://idp.example", subject="sub-archived"
+    )
+    assert resolved is None
