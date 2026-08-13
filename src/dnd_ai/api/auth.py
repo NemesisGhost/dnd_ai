@@ -72,6 +72,32 @@ token, or under ordinary concurrent request traffic:
    which does expire on `lifespan`, so key material for any `kid` can
    never outlive that TTL (or this module's own forced-refresh cooldown)
    without a real refetch.
+5. `PyJWKClient.fetch_data()` calls `urllib.request.urlopen(request,
+   timeout=self.timeout, context=self.ssl_context)` directly, with no
+   constructor hook to supply a custom opener or redirect handler
+   (verified against the installed `jwt.jwks_client` source). Python's
+   default `urllib.request.HTTPRedirectHandler` follows a redirect to
+   *any* scheme — including a downgrade from `https` to plain `http`, or
+   to a URL carrying embedded credentials — with no restriction of its
+   own. An HTTPS-configured JWKS endpoint that is (or becomes, via a
+   compromised or misconfigured intermediary) willing to issue such a
+   redirect could otherwise have its key-set fetch silently downgraded to
+   an unencrypted, tamperable one, defeating `oidc_jwks_url`'s HTTPS-only
+   requirement in production (`dnd_ai.config`) after the fact.
+   `_JWKSClient` replaces `fetch_data()` with `_build_validating_fetch_
+   data()`'s version, which validates both the initial request URL and
+   every redirect target against the same `allowed_url_schemes` policy
+   `dnd_ai.config` already enforces for the configured value
+   (`OIDC_PRODUCTION_URL_SCHEMES`/`OIDC_LOCAL_URL_SCHEMES` — one shared
+   source of truth for both), and rejects embedded credentials in either.
+   A same-scheme, credential-free redirect is still followed — this is
+   deliberately a validated pass-through, not a blanket "no redirects"
+   rule, since a JWKS URL redirecting to a CDN-hosted copy of the same
+   document is a legitimate, common deployment shape. Building a fresh
+   `urllib.request.OpenerDirector` per call (via `build_opener()`, never
+   `install_opener()`) keeps this scoped to JWKS fetches only — it never
+   mutates process-wide `urllib` state that unrelated code elsewhere in
+   the process might depend on.
 
 Deliberately out of scope here: updating `security.external_identities.
 last_authenticated_at`/`.claims_snapshot` on a successful verification.
@@ -82,18 +108,22 @@ both inconsistent with that rule and unnecessary write load for a bare
 verification dependency.
 """
 
+import json
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import Callable
 from typing import Annotated, cast
+from urllib.parse import urlsplit
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import Depends, Header
 from sqlalchemy import Connection
 
-from dnd_ai.config import settings
+from dnd_ai.config import OIDC_LOCAL_URL_SCHEMES, OIDC_PRODUCTION_URL_SCHEMES, settings
 from dnd_ai.domain.access import resolve_user_by_external_identity
 from dnd_ai.domain.tokens import VerifiedTokenClaims, verify_bearer_token
 
@@ -129,6 +159,105 @@ _JWKS_FETCH_TIMEOUT_SECONDS = 5.0
 _JWKS_FAILURE_RETRY_COOLDOWN_SECONDS = 30.0
 
 
+class _JWKSTransportSecurityError(urllib.error.URLError):
+    """Raised by `_validate_jwks_transport_url`/`_ValidatingRedirectHandler`
+    when a JWKS fetch URL or redirect target violates the allowed-scheme
+    or no-embedded-credentials policy (see this module's docstring, point
+    5). A `URLError` subclass so it's caught by the same `except (URLError,
+    TimeoutError)` clause `_build_validating_fetch_data()` already needs
+    for ordinary connection failures, converting uniformly to `jwt.
+    PyJWKClientConnectionError` — `_JWKSClient`'s failure-retry-cooldown
+    and cache-eviction logic then treats a blocked downgrade exactly like
+    any other transport-level failure: nothing gets cached, and the
+    existing cooldown paces any retry."""
+
+
+def _validate_jwks_transport_url(url: str, *, allowed_schemes: frozenset[str], what: str) -> None:
+    """Shared by the initial-request check and every redirect hop in
+    `_build_validating_fetch_data()` below. Deliberately narrower than
+    `dnd_ai.config._validate_oidc_url` (no host/fragment/emptiness
+    checks) — this runs on *every* fetch attempt, including a redirect
+    target a remote server chose, so it only enforces what actually
+    matters for transport safety: the scheme stays within policy, and no
+    credentials are smuggled in."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() not in allowed_schemes:
+        raise _JWKSTransportSecurityError(
+            f"refusing JWKS {what} with disallowed scheme {parsed.scheme!r}: {url!r}"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise _JWKSTransportSecurityError(
+            f"refusing JWKS {what} containing embedded credentials: {url!r}"
+        )
+
+
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Validates every redirect target against `allowed_schemes` before
+    following it — Python's own `HTTPRedirectHandler` places no
+    restriction on what scheme a redirect may point to. A same-scheme,
+    credential-free redirect is still followed (delegates to `super()`)
+    — this is a validated pass-through, not a blanket rejection; see this
+    module's docstring, point 5, for why that's the deliberate choice."""
+
+    def __init__(self, allowed_schemes: frozenset[str]) -> None:
+        super().__init__()
+        self._allowed_schemes = allowed_schemes
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        _validate_jwks_transport_url(
+            newurl, allowed_schemes=self._allowed_schemes, what="redirect target"
+        )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
+
+
+def _build_validating_fetch_data(
+    client: jwt.PyJWKClient, *, allowed_schemes: frozenset[str]
+) -> Callable[[], object]:
+    """Returns a `fetch_data` replacement for `client`, closing this
+    module's docstring point 5. Otherwise mirrors the installed `jwt.
+    PyJWKClient.fetch_data()` exactly — including writing a successful
+    fetch to `client.jwk_set_cache` and converting any `URLError`/
+    `TimeoutError` (including this module's own `_JWKSTransportSecurityError`)
+    into `jwt.PyJWKClientConnectionError` — so every other `_JWKSClient`
+    behavior (failure-retry cooldown, cache eviction only on a
+    validation-stage failure, ...) continues to apply unchanged; only how
+    the network request itself is made, and which redirects it will
+    follow, differs from the library default."""
+
+    def fetch_data() -> object:
+        try:
+            _validate_jwks_transport_url(
+                client.uri, allowed_schemes=allowed_schemes, what="fetch URL"
+            )
+            redirect_handler = _ValidatingRedirectHandler(allowed_schemes)
+            handlers: list[urllib.request.BaseHandler] = [redirect_handler]
+            if client.ssl_context is not None:
+                handlers.append(urllib.request.HTTPSHandler(context=client.ssl_context))
+            opener = urllib.request.build_opener(*handlers)
+            request = urllib.request.Request(url=client.uri, headers=client.headers)
+            with opener.open(request, timeout=client.timeout) as response:
+                jwk_set = json.load(response)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+            raise jwt.PyJWKClientConnectionError(
+                f'Fail to fetch data from the url, err: "{exc}"'
+            ) from exc
+        if client.jwk_set_cache is not None:
+            client.jwk_set_cache.put(jwk_set)
+        return jwk_set
+
+    return fetch_data
+
+
 class _JWKSClient:
     """Wraps `jwt.PyJWKClient` to close the gaps described in this
     module's docstring. Never raises anything but what the underlying
@@ -147,6 +276,7 @@ class _JWKSClient:
         failure_retry_cooldown: float = _JWKS_FAILURE_RETRY_COOLDOWN_SECONDS,
         timeout: float = _JWKS_FETCH_TIMEOUT_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        allowed_url_schemes: frozenset[str] = OIDC_PRODUCTION_URL_SCHEMES,
     ) -> None:
         self._client = jwt.PyJWKClient(
             jwks_url,
@@ -154,6 +284,12 @@ class _JWKSClient:
             cache_jwk_set=True,
             lifespan=lifespan,
             timeout=timeout,
+        )
+        # Replaces PyJWKClient's own fetch_data — see this module's
+        # docstring, point 5, and _build_validating_fetch_data's own
+        # docstring for why.
+        self._client.fetch_data = _build_validating_fetch_data(  # type: ignore[method-assign]
+            self._client, allowed_schemes=allowed_url_schemes
         )
         self._forced_refresh_cooldown = forced_refresh_cooldown
         self._failure_retry_cooldown = failure_retry_cooldown
@@ -373,15 +509,20 @@ def get_jwks_client() -> _JWKSClient:
         # constructed and published the singleton while this thread was
         # waiting for the lock.
         if _jwks_client is None:
-            # config._require_oidc_settings_in_production guarantees this
-            # is populated in production; a None here outside production
-            # is a deployment/config defect (an auth-requiring route was
-            # reached without OIDC configured), not a client-facing
-            # failure — the AssertionError surfaces as the generic 500
-            # contract in api.errors, exactly like any other unclassified
-            # server defect.
+            # config._validate_oidc_settings guarantees this is populated
+            # (and HTTPS, in production) once Settings() has constructed
+            # at all; a None here is a deployment/config defect (an auth-
+            # requiring route was reached without OIDC configured), not a
+            # client-facing failure — the AssertionError surfaces as the
+            # generic 500 contract in api.errors, exactly like any other
+            # unclassified server defect.
             assert settings.oidc_jwks_url is not None
-            _jwks_client = _JWKSClient(settings.oidc_jwks_url)
+            allowed_schemes = (
+                OIDC_PRODUCTION_URL_SCHEMES
+                if settings.environment == "production"
+                else OIDC_LOCAL_URL_SCHEMES
+            )
+            _jwks_client = _JWKSClient(settings.oidc_jwks_url, allowed_url_schemes=allowed_schemes)
         return _jwks_client
 
 

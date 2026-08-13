@@ -624,6 +624,7 @@ def test_concurrent_get_jwks_client_initialization_returns_one_shared_instance(
             failure_retry_cooldown: float = auth_module._JWKS_FAILURE_RETRY_COOLDOWN_SECONDS,
             timeout: float = auth_module._JWKS_FETCH_TIMEOUT_SECONDS,
             monotonic: Callable[[], float] = time.monotonic,
+            allowed_url_schemes: frozenset[str] = auth_module.OIDC_PRODUCTION_URL_SCHEMES,
         ) -> None:
             nonlocal construction_count
             with construction_count_lock:
@@ -637,6 +638,7 @@ def test_concurrent_get_jwks_client_initialization_returns_one_shared_instance(
                 failure_retry_cooldown=failure_retry_cooldown,
                 timeout=timeout,
                 monotonic=monotonic,
+                allowed_url_schemes=allowed_url_schemes,
             )
 
     monkeypatch.setattr(auth_module, "_JWKSClient", _SlowJWKSClient)
