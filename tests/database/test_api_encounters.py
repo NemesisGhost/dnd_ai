@@ -402,3 +402,159 @@ def test_ending_an_encounter_from_another_campaign_is_not_found(
             json={"world_time_id": str(f.world_time_id)},
         )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Encounter lifecycle enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_a_turn_after_the_encounter_is_completed_is_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        end_response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={"world_time_id": str(f.world_time_id)},
+        )
+        assert end_response.status_code == 200, end_response.text
+
+        turn_response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/turns",
+            json={
+                "round_number": 1,
+                "turn_order": 0,
+                "actor_entity_id": str(f.attacker_id),
+                "world_time_id": str(f.world_time_id),
+                "target_entity_id": str(f.defender_id),
+                "hit": True,
+                "damage_amount": 7,
+            },
+        )
+
+    assert turn_response.status_code == 409
+    body = turn_response.json()
+    assert str(f.campaign_id) not in body["error"]["message"]
+    assert str(encounter_id) not in body["error"]["message"]
+
+
+def test_ending_an_already_completed_encounter_is_conflict_and_does_not_change_resulting_event(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        first = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={"world_time_id": str(f.world_time_id), "summary": "First."},
+        )
+        assert first.status_code == 200, first.text
+        first_event_id = first.json()["event_id"]
+
+        second = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={"world_time_id": str(f.world_time_id), "summary": "Second."},
+        )
+
+    assert second.status_code == 409
+    body = second.json()
+    assert str(encounter_id) not in body["error"]["message"]
+    assert first_event_id not in body["error"]["message"]
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id, summary FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": encounter_id},
+        ).one()
+        assert row.status == "completed"
+        assert str(row.resulting_event_id) == first_event_id
+        assert row.summary == "First."
+
+
+# ---------------------------------------------------------------------------
+# End-encounter outcome validation
+# ---------------------------------------------------------------------------
+
+
+def test_ending_with_an_unknown_outcome_participant_is_rejected_without_side_effects(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        stranger_id = make_character(connection, f.world_id, name="Stranger")
+
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "outcomes": [{"participant_entity_id": str(stranger_id), "outcome": "defeated"}],
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert str(stranger_id) not in body["error"]["message"]
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": encounter_id},
+        ).one()
+        assert row.status == "active"
+        assert row.resulting_event_id is None
+
+
+def test_ending_with_duplicate_outcome_participants_is_rejected_without_side_effects(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "outcomes": [
+                    {"participant_entity_id": str(f.defender_id), "outcome": "defeated"},
+                    {"participant_entity_id": str(f.defender_id), "outcome": "escaped"},
+                ],
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert str(f.defender_id) not in body["error"]["message"]
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": encounter_id},
+        ).one()
+        assert row.status == "active"
+        assert row.resulting_event_id is None
+
+        outcome = verify.execute(
+            text(
+                "SELECT outcome FROM narrative.encounter_participants "
+                "WHERE encounter_id = :e AND participant_entity_id = :p"
+            ),
+            {"e": encounter_id, "p": f.defender_id},
+        ).scalar()
+        assert outcome is None

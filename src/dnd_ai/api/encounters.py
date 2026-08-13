@@ -28,6 +28,22 @@ round/participant turn is rejected as a 409 conflict by the existing
 bespoke idempotency-key store is needed for this endpoint yet, consistent
 with `dnd_ai.api.deps.get_idempotency_key`'s own "most commands already
 derive their own idempotency from domain state" scoping note.
+
+Lifecycle: `_lock_encounter()` (shared by `_resolve_combat_turn_impl` and
+`_end_encounter_impl`) requires the locked encounter to be `'active'`,
+raising `dnd_ai.commands.encounters.EncounterNotActiveError` — a
+`SafeMessageError` the existing generic handler maps to a fixed,
+non-disclosing 409 — otherwise. This also covers a repeated or genuinely
+concurrent `end` request: the second caller only proceeds past the shared
+`FOR UPDATE` lock once the first has committed, observes the already-
+`'completed'` status, and is rejected before touching any other row, so
+at most one completion event/`resulting_event_id` is ever recorded per
+encounter. `end`'s outcomes list is validated the same way, before any
+mutation: every `participant_entity_id` must already be a participant in
+the encounter, and duplicates are rejected — both raise a plain
+`ValueError`, mapped by the existing generic handler to a fixed, non-
+disclosing 400, exactly like every other unclassified domain validation
+failure in this codebase.
 """
 
 import uuid

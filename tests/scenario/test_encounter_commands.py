@@ -11,13 +11,20 @@ narrative.event_effects/event_causes rows — not by inspecting the
 transaction boundary.
 """
 
+import threading
 import uuid
 from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.commands.encounters import end_encounter, resolve_combat_turn, start_encounter
+from dnd_ai.commands.encounters import (
+    EncounterNotActiveError,
+    EndEncounterResult,
+    end_encounter,
+    resolve_combat_turn,
+    start_encounter,
+)
 from tests.factories import (
     make_character,
     make_character_state,
@@ -327,3 +334,246 @@ def test_resolving_a_turn_for_a_non_participant_fails_cleanly(
             {"e": start.encounter_id},
         ).scalar()
         assert round_count == 0, "a round row survived a rolled-back resolve_combat_turn"
+
+
+# ---------------------------------------------------------------------------
+# Encounter lifecycle enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_resolving_a_turn_on_a_completed_encounter_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+    end_encounter(postgres_engine, encounter_id=start.encounter_id, world_time_id=f.world_time_id)
+
+    with pytest.raises(EncounterNotActiveError):
+        resolve_combat_turn(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            round_number=1,
+            turn_order=0,
+            actor_entity_id=f.attacker_id,
+            world_time_id=f.world_time_id,
+            target_entity_id=f.defender_id,
+            hit=True,
+            damage_amount=7,
+        )
+
+    # No round/turn/event survived the rejected turn, and HP is untouched.
+    with postgres_engine.connect() as verify:
+        round_count = verify.execute(
+            text("SELECT count(*) FROM narrative.encounter_rounds WHERE encounter_id = :e"),
+            {"e": start.encounter_id},
+        ).scalar()
+        assert round_count == 0
+    assert _character_hit_points(postgres_engine, f.timeline_id, f.defender_id) == 20
+
+
+def test_ending_an_already_completed_encounter_is_rejected_and_leaves_state_untouched(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+    first = end_encounter(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        world_time_id=f.world_time_id,
+        summary="First completion.",
+    )
+
+    with pytest.raises(EncounterNotActiveError):
+        end_encounter(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            world_time_id=f.world_time_id,
+            summary="Second completion attempt.",
+        )
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id, summary FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": start.encounter_id},
+        ).one()
+        assert row.status == "completed"
+        assert row.resulting_event_id == first.event_id
+        assert row.summary == "First completion."
+
+        cause_count = verify.execute(
+            text("SELECT count(*) FROM narrative.event_causes WHERE cause_encounter_id = :e"),
+            {"e": start.encounter_id},
+        ).scalar()
+        assert cause_count == 1, "a second completion event was recorded"
+
+
+def test_two_concurrent_completion_attempts_leave_exactly_one_canonical_event(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """narrative.encounters' own FOR UPDATE lock (_lock_encounter) serializes
+    two genuinely concurrent end_encounter() calls for the same encounter —
+    the loser observes the winner's already-'completed' status and is
+    rejected with EncounterNotActiveError rather than racing to record a
+    second completion event or overwrite resulting_event_id."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+
+    barrier = threading.Barrier(2)
+    results: dict[str, EndEncounterResult] = {}
+    errors: dict[str, Exception] = {}
+
+    def _end(label: str) -> None:
+        barrier.wait(timeout=90)
+        try:
+            results[label] = end_encounter(
+                postgres_engine,
+                encounter_id=start.encounter_id,
+                world_time_id=f.world_time_id,
+                summary=f"completion {label}",
+            )
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            errors[label] = exc
+
+    thread_a = threading.Thread(target=_end, args=("a",))
+    thread_b = threading.Thread(target=_end, args=("b",))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=90)
+    thread_b.join(timeout=90)
+
+    assert not thread_a.is_alive(), "thread a did not finish"
+    assert not thread_b.is_alive(), "thread b did not finish"
+    assert len(results) == 1, "exactly one completion must succeed"
+    assert len(errors) == 1, "exactly one completion must be rejected"
+    (loser_error,) = errors.values()
+    assert isinstance(loser_error, EncounterNotActiveError)
+
+    (winner_result,) = results.values()
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": start.encounter_id},
+        ).one()
+        assert row.status == "completed"
+        assert row.resulting_event_id == winner_result.event_id
+
+        cause_count = verify.execute(
+            text("SELECT count(*) FROM narrative.event_causes WHERE cause_encounter_id = :e"),
+            {"e": start.encounter_id},
+        ).scalar()
+        assert cause_count == 1, "exactly one completion event must remain canonical"
+
+
+# ---------------------------------------------------------------------------
+# End-encounter outcome validation
+# ---------------------------------------------------------------------------
+
+
+def test_ending_an_encounter_with_an_unknown_outcome_participant_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+    with postgres_engine.begin() as connection:
+        stranger_id = make_character(connection, f.world_id, name="Stranger")
+
+    with pytest.raises(ValueError, match="not participants"):
+        end_encounter(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            world_time_id=f.world_time_id,
+            outcomes=((stranger_id, "defeated"),),
+        )
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": start.encounter_id},
+        ).one()
+        assert row.status == "active", "a rejected completion must not change encounter status"
+        assert row.resulting_event_id is None
+
+        event_count = verify.execute(
+            text("SELECT count(*) FROM narrative.events WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 0, "a rejected completion must not record an event"
+
+        outcome = verify.execute(
+            text(
+                "SELECT outcome FROM narrative.encounter_participants "
+                "WHERE encounter_id = :e AND participant_entity_id = :p"
+            ),
+            {"e": start.encounter_id, "p": f.defender_id},
+        ).scalar()
+        assert outcome is None, "a rejected completion must not partially apply outcomes"
+
+
+def test_ending_an_encounter_with_duplicate_outcome_participants_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
+        end_encounter(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            world_time_id=f.world_time_id,
+            outcomes=((f.defender_id, "defeated"), (f.defender_id, "escaped")),
+        )
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": start.encounter_id},
+        ).one()
+        assert row.status == "active"
+        assert row.resulting_event_id is None
+
+        event_count = verify.execute(
+            text("SELECT count(*) FROM narrative.events WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar()
+        assert event_count == 0
+
+        outcome = verify.execute(
+            text(
+                "SELECT outcome FROM narrative.encounter_participants "
+                "WHERE encounter_id = :e AND participant_entity_id = :p"
+            ),
+            {"e": start.encounter_id, "p": f.defender_id},
+        ).scalar()
+        assert outcome is None

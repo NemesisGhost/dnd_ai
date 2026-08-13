@@ -19,12 +19,33 @@ command to also close out the interaction's own lifecycle.
 
 import json
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.domain.errors import SafeMessageError
+
 from ._shared import lookup_id
 from .events import EventParticipant, _insert_event_row
+
+
+class EncounterNotActiveError(SafeMessageError):
+    """Raised by `_lock_encounter()` when the encounter it just locked is
+    not `'active'` — already `'completed'`/`'aborted'`, still `'pending'`,
+    or (the concurrent case this exists for) completed by a second
+    `end_encounter`/`resolve_combat_turn` call that was serialized behind
+    the same `FOR UPDATE` lock and only proceeds once the first caller's
+    transaction has committed and released it. A conflict, not a
+    validation failure — the request was well-formed, but the encounter's
+    own state has since moved on — so this maps to HTTP 409, not 400.
+    `safe_message` is a fixed, generic string; the encounter's id and its
+    actual status are never included (only available via `str(self)` for
+    local/server-side debugging, per `SafeMessageError`'s own contract)."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The encounter is not active."
 
 
 @dataclass(frozen=True)
@@ -126,15 +147,34 @@ def start_encounter(
 def _lock_encounter(connection: Connection, encounter_id: uuid.UUID) -> uuid.UUID:
     """Acquire an exclusive row lock on the encounter (a structural row that
     always exists) before touching its rounds/turns, and return its
-    timeline_id."""
-    timeline_id = connection.execute(
-        text("SELECT timeline_id FROM narrative.encounters WHERE encounter_id = :e FOR UPDATE"),
+    timeline_id.
+
+    Raises EncounterNotActiveError if the locked row's own status isn't
+    'active' — every caller (resolve_combat_turn, end_encounter) requires
+    an active encounter, so this is enforced once, here, under the same
+    FOR UPDATE lock rather than re-checked independently by each. This is
+    also what makes a second, concurrent end_encounter/resolve_combat_turn
+    call for the same encounter safe: FOR UPDATE serializes the two
+    callers, so the second one only proceeds past this SELECT once the
+    first has committed — at which point it observes the first caller's
+    already-'completed' (or otherwise non-'active') status and is rejected
+    here, before touching any other row, rather than racing to insert a
+    second completion event or overwrite resulting_event_id."""
+    row = connection.execute(
+        text(
+            "SELECT timeline_id, status FROM narrative.encounters "
+            "WHERE encounter_id = :e FOR UPDATE"
+        ),
         {"e": encounter_id},
-    ).scalar()
-    if timeline_id is None:
+    ).first()
+    if row is None:
         raise ValueError(f"encounter {encounter_id} does not exist")
-    assert isinstance(timeline_id, uuid.UUID)
-    return timeline_id
+    if row.status != "active":
+        raise EncounterNotActiveError(
+            f"encounter {encounter_id} is not active (status={row.status!r})"
+        )
+    assert isinstance(row.timeline_id, uuid.UUID)
+    return row.timeline_id
 
 
 def _get_or_create_round(
@@ -478,6 +518,57 @@ def resolve_combat_turn(
         )
 
 
+def _validate_outcome_participants(
+    connection: Connection,
+    *,
+    encounter_id: uuid.UUID,
+    outcomes: tuple[tuple[uuid.UUID, str], ...],
+) -> None:
+    """Rejects an end_encounter() outcomes list before anything is mutated.
+
+    Without this, the per-outcome UPDATE below (`WHERE encounter_id = ...
+    AND participant_entity_id = ...`) silently matches zero rows for a
+    participant_entity_id that isn't actually in the encounter, or for a
+    later duplicate of one already applied — neither is a constraint
+    violation Postgres would ever reject, so the encounter would still be
+    marked completed, with a resulting_event_id, while the caller's
+    outcome request was partly or entirely discarded without any error: a
+    durable false success. Checked as one explicit, atomic precondition
+    instead, entirely in Python against data already read (no per-outcome
+    round trip), so a rejection here happens before the completion event,
+    its event_causes row, the encounter's own status/resulting_event_id
+    update, or any outcome UPDATE — nothing from a rejected request is
+    left partially applied."""
+    if not outcomes:
+        return
+
+    participant_entity_ids = [participant_entity_id for participant_entity_id, _ in outcomes]
+    counts = Counter(participant_entity_ids)
+    duplicates = {participant_entity_id for participant_entity_id, n in counts.items() if n > 1}
+    if duplicates:
+        raise ValueError(
+            f"duplicate outcome participant_entity_id(s) {sorted(duplicates)} "
+            f"for encounter {encounter_id}"
+        )
+
+    known_participant_ids = {
+        row[0]
+        for row in connection.execute(
+            text(
+                "SELECT participant_entity_id FROM narrative.encounter_participants "
+                "WHERE encounter_id = :encounter"
+            ),
+            {"encounter": encounter_id},
+        )
+    }
+    unknown = set(participant_entity_ids) - known_participant_ids
+    if unknown:
+        raise ValueError(
+            f"outcome participant_entity_id(s) {sorted(unknown)} are not participants "
+            f"in encounter {encounter_id}"
+        )
+
+
 def _end_encounter_impl(
     connection: Connection,
     *,
@@ -492,6 +583,7 @@ def _end_encounter_impl(
     already has open — see _resolve_combat_turn_impl's docstring for the
     composition pattern this mirrors."""
     timeline_id = _lock_encounter(connection, encounter_id)
+    _validate_outcome_participants(connection, encounter_id=encounter_id, outcomes=outcomes)
 
     world_id = connection.execute(
         text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
