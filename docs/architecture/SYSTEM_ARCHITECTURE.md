@@ -581,6 +581,9 @@ Run against a local/self-hosted PostgreSQL 18 server during development and agai
 - Discord adapter
 - AI provider adapters
 - MCP tools
+- OIDC bearer-token verification (`dnd_ai.domain.tokens`, `dnd_ai.api.auth`)
+
+No live external dependency in tests. Established by the OIDC token-verification workstream (Phase 10), the first of this project's contract-test surfaces to actually need one: rather than a live identity provider or a JWKS HTTP server, the verifier resolves its signing key through an injected `kid -> key` callable, and tests supply a fake resolver backed by a keypair generated locally in the test process (see `tests/jwt_helpers.py`, `tests/unit/test_token_verification.py`). Prefer this shape — an injectable resolver/client seam plus a locally generated credential or fixture, never a live third-party call or a spun-up local server standing in for one — for any later contract test in this category (Foundry, Discord, AI provider adapters) that would otherwise need external reachability to run.
 
 ### End-to-end tests
 

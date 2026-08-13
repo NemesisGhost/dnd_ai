@@ -63,6 +63,44 @@ working for the application too, without requiring the same value under
 two different names — but, per the production rule above, only outside
 production.
 
+`oidc_issuer`/`oidc_audience`/`oidc_jwks_url` (`DND_AI_OIDC_ISSUER`,
+`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) follow the identical
+production-fail-closed shape as `database_url`: all three default to
+`None` locally/in tests (no OIDC provider is required to run the API
+skeleton or its non-authenticated endpoints yet), but `Settings()` raises
+immediately in production unless all three are populated. `_validate_oidc_
+settings` goes further than mere presence, in both environments:
+
+- **Production** additionally requires `oidc_issuer`/`oidc_jwks_url` to be
+  absolute, credential-free, fragment-free **HTTPS** URLs with a host, and
+  `oidc_audience` to be non-empty with no leading/trailing whitespace. A
+  plain-HTTP JWKS endpoint lets a network-positioned attacker substitute
+  the key set and forge tokens for arbitrary issuer/subject identities —
+  refused outright at `Settings()` construction (process startup, before
+  `/readyz` can report success or an authenticated route is ever called),
+  never merely warned about or discovered lazily on first use.
+- **Local/test** may configure an HTTP identity provider (`OIDC_LOCAL_URL_
+  SCHEMES` — a private/in-process test IdP has no equivalent network-
+  attacker threat model), but a *partial* configuration — some but not all
+  three fields set — is rejected exactly like production's all-or-nothing
+  rule, and whichever fields *are* set still go through the same
+  structural checks (non-empty, well-formed, no credentials, no fragment)
+  minus the scheme restriction. An incomplete or malformed OIDC
+  configuration can never actually serve an authenticated route, so
+  accepting it silently would only defer an otherwise-immediate startup
+  failure to first use.
+
+Deliberately never trimmed, rewritten, or otherwise normalized beyond
+this validation: `dnd_ai.domain.tokens.verify_bearer_token` compares a
+token's `iss` claim against `oidc_issuer` byte-for-byte, so silently
+reshaping the configured string — even adding/removing a trailing slash —
+would change what it matches, not just how it's spelled. See
+`dnd_ai.api.auth`/`dnd_ai.domain.tokens` for what reads these fields, and
+`dnd_ai.api.auth._JWKSClient`/`get_jwks_client()` for the matching
+redirect-scheme enforcement applied to the actual JWKS network fetch
+(`OIDC_PRODUCTION_URL_SCHEMES`/`OIDC_LOCAL_URL_SCHEMES` below are the
+single shared source of truth both modules validate against).
+
 Host-mounted secret files (docs/LOCAL_DEPLOYMENT.md "Compose
 responsibilities and network policy" — "credentials in host-readable
 environment/secret files or mounted secrets outside the repository") are
@@ -83,6 +121,7 @@ real deployment-supplied variable, not a developer-convenience default.
 import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from pydantic import Field, model_validator
@@ -93,6 +132,15 @@ _LOCAL_DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432
 _SECRETS_DIR = os.environ.get("DND_AI_SECRETS_DIR", "/run/secrets")
 
 _DATABASE_URL_SECRET_FILENAME = "dnd_ai_database_url"
+
+# The single shared source of truth for which URL schemes an OIDC
+# issuer/JWKS URL may use, by environment — imported by
+# dnd_ai.api.auth._JWKSClient/get_jwks_client() so the same policy governs
+# both static config validation here and the actual network fetch's
+# redirect handling there. Public (no leading underscore) specifically so
+# that cross-module import.
+OIDC_PRODUCTION_URL_SCHEMES = frozenset({"https"})
+OIDC_LOCAL_URL_SCHEMES = frozenset({"http", "https"})
 
 # Variables dnd_ai.config.Settings itself declares (kept in sync with the
 # fields below by tests/unit/test_config.py's metadata-completeness check,
@@ -109,6 +157,9 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_FEATURE_DISCORD_INTEGRATION",
         "DND_AI_FEATURE_FOUNDRY_INTEGRATION",
         "DND_AI_SECRETS_DIR",
+        "DND_AI_OIDC_ISSUER",
+        "DND_AI_OIDC_AUDIENCE",
+        "DND_AI_OIDC_JWKS_URL",
     }
 )
 
@@ -163,6 +214,43 @@ def _default_env_file() -> Path:
     return Path.cwd() / ".env"
 
 
+def _validate_oidc_url(value: str, *, field_name: str, allowed_schemes: frozenset[str]) -> None:
+    """Structural validation shared by production and local/test — only
+    the allowed scheme set differs (`OIDC_PRODUCTION_URL_SCHEMES` vs.
+    `OIDC_LOCAL_URL_SCHEMES`). Rejects, rather than silently repairs,
+    every problem: empty/whitespace-padded values, a missing or
+    unparseable host, embedded credentials (`user:pass@host`), a URL
+    fragment, and any scheme outside the allowed set (in production,
+    that means plain HTTP is refused outright — see this module's
+    docstring for why). Never trims or otherwise rewrites `value` itself;
+    see the module docstring's "Deliberately never trimmed..." paragraph
+    for why even that would be unsafe here."""
+    if not value or value != value.strip():
+        raise ValueError(
+            f"{field_name} must not be empty and must not have leading/trailing whitespace"
+        )
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is not a valid URL: {exc}") from exc
+    if parsed.scheme.lower() not in allowed_schemes:
+        allowed = " or ".join(sorted(allowed_schemes))
+        raise ValueError(f"{field_name} must be an absolute {allowed} URL, got {value!r}")
+    if not parsed.hostname:
+        raise ValueError(f"{field_name} must include a host, got {value!r}")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field_name} must not contain embedded credentials")
+    if parsed.fragment:
+        raise ValueError(f"{field_name} must not contain a URL fragment")
+
+
+def _validate_oidc_audience(value: str) -> None:
+    if not value or value != value.strip():
+        raise ValueError(
+            "DND_AI_OIDC_AUDIENCE must not be empty and must not have leading/trailing whitespace"
+        )
+
+
 class Settings(BaseSettings):
     """Application settings loaded from `DND_AI_*` environment variables
     (including those `.env` supplies outside production — see
@@ -191,13 +279,26 @@ class Settings(BaseSettings):
     feature_discord_integration: bool = False
     feature_foundry_integration: bool = False
 
+    # Required together only in production — see _require_oidc_settings_in_production.
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+
     @model_validator(mode="after")
     def _resolve_database_url(self) -> "Settings":
         """No silent fallback to the local development database/credentials
         — or to the legacy `DATABASE_URL` alias — once `environment` is
         `production` (finding: "production must not silently fall back").
         Convenience defaults, and the legacy alias, stay available only
-        where they're safe."""
+        where they're safe.
+
+        Deliberately runs (and, on failure, raises) before
+        `_require_oidc_settings_in_production` below — `model_validator
+        (mode="after")` methods execute in class-body order, and the first
+        one to raise stops the chain, so a production process missing both
+        `database_url` and the OIDC settings reports the (pre-existing,
+        already-tested) database error first rather than the two errors
+        racing to decide which message a caller sees."""
         if self.database_url is not None:
             return self
         if self.environment == "production":
@@ -212,6 +313,57 @@ class Settings(BaseSettings):
             if self.legacy_database_url is not None
             else _LOCAL_DEV_DATABASE_URL
         )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_oidc_settings(self) -> "Settings":
+        """No silent partial or malformed OIDC configuration, in either
+        environment — see the module docstring's `oidc_issuer`/
+        `oidc_audience`/`oidc_jwks_url` paragraph for the full policy.
+        Presence (all-or-nothing) is checked first and identically in
+        both branches below; only the allowed URL scheme set differs
+        between them."""
+        configured = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
+        if self.environment == "production":
+            missing = [
+                name
+                for name, value in (
+                    ("DND_AI_OIDC_ISSUER", self.oidc_issuer),
+                    ("DND_AI_OIDC_AUDIENCE", self.oidc_audience),
+                    ("DND_AI_OIDC_JWKS_URL", self.oidc_jwks_url),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"{', '.join(missing)} (as environment variables, or mounted secrets) "
+                    "are required when DND_AI_ENVIRONMENT=production — all three OIDC settings "
+                    "must be configured together, or none of them."
+                )
+            allowed_schemes = OIDC_PRODUCTION_URL_SCHEMES
+        else:
+            if any(value is not None for value in configured) and not all(
+                value is not None for value in configured
+            ):
+                raise ValueError(
+                    "DND_AI_OIDC_ISSUER, DND_AI_OIDC_AUDIENCE, and DND_AI_OIDC_JWKS_URL must be "
+                    "configured together, or none of them — a partially configured OIDC "
+                    "provider can never actually serve an authenticated route."
+                )
+            if all(value is None for value in configured):
+                return self
+            allowed_schemes = OIDC_LOCAL_URL_SCHEMES
+
+        assert self.oidc_issuer is not None
+        assert self.oidc_audience is not None
+        assert self.oidc_jwks_url is not None
+        _validate_oidc_url(
+            self.oidc_issuer, field_name="DND_AI_OIDC_ISSUER", allowed_schemes=allowed_schemes
+        )
+        _validate_oidc_url(
+            self.oidc_jwks_url, field_name="DND_AI_OIDC_JWKS_URL", allowed_schemes=allowed_schemes
+        )
+        _validate_oidc_audience(self.oidc_audience)
         return self
 
 

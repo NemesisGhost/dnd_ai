@@ -106,14 +106,16 @@ def make_entity(
     return value
 
 
-def make_user(connection: Connection, display_name: str = "Tester") -> uuid.UUID:
+def make_user(
+    connection: Connection, display_name: str = "Tester", *, status_code: str = "active"
+) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO security.users (display_name, lifecycle_status_id)
             VALUES (:name, :status)
             RETURNING user_id
         """),
-        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", "active")},
+        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value

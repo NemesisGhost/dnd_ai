@@ -46,6 +46,24 @@ class SafeMessageError(ValueError):
     safe_message: str = "The request could not be processed."
 
 
+class AuthenticationError(SafeMessageError):
+    """A `SafeMessageError` for a request that carries no valid
+    authenticated identity — no bearer token, a malformed one, or one that
+    fails signature/issuer/audience/expiry verification
+    (`dnd_ai.domain.tokens.verify_bearer_token`). Deliberately generic: the
+    specific reason a token was rejected (expired vs. wrong issuer vs. bad
+    signature) is exactly the kind of detail that helps an attacker
+    iterate, so `safe_message` never varies by cause — only server-side
+    logs (via `str(self)`) get anything more specific. Maps to HTTP 401,
+    matching `dnd_ai.api.errors.UnauthorizedError`'s identical wording for
+    the sibling case (a request with no `Authorization` header at all).
+    """
+
+    safe_status_code: int = 401
+    safe_error_code: str = "unauthorized"
+    safe_message: str = "Authentication is required."
+
+
 class DomainAuthorizationError(SafeMessageError):
     """A `SafeMessageError` for a case where even confirming *why* a
     request was rejected — the specific identifiers or relationship

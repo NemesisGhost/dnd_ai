@@ -446,3 +446,47 @@ def test_resolve_user_by_external_identity_unknown_pair_returns_none(
         db_connection, issuer="https://idp.example", subject=str(uuid.uuid4())
     )
     assert resolved is None
+
+
+def test_resolve_user_by_external_identity_rejects_inactive_linked_user(
+    db_connection: Connection,
+) -> None:
+    """A revoked *identity* is already covered above; this proves the
+    other half — a still-active, non-revoked identity linked to a user
+    whose own lifecycle status is no longer 'active' must not
+    authenticate either (finding: inactive users could still
+    authenticate)."""
+    archived_user_id = make_user(db_connection, "Archived User", status_code="archived")
+    make_external_identity(
+        db_connection, archived_user_id, issuer="https://idp.example", subject="sub-archived"
+    )
+    resolved = resolve_user_by_external_identity(
+        db_connection, issuer="https://idp.example", subject="sub-archived"
+    )
+    assert resolved is None
+
+
+def test_resolve_user_by_external_identity_ignores_lookup_row_availability(
+    db_connection: Connection,
+) -> None:
+    """`core.lifecycle_statuses.is_active` means whether that *value* is
+    currently offered for *new* assignment (docs/architecture/
+    DATABASE_MODEL.md §19, revision 080's "Deliberate scoping decisions")
+    — it must not retroactively affect a user already assigned 'active'.
+    This mutates the shared seeded 'active' row, but only inside
+    `db_connection`'s own transaction, which always rolls back at
+    teardown (tests/conftest.py) — never visible to any other test or
+    connection, and never committed."""
+    active_user_id = make_user(db_connection, "Already Active User", status_code="active")
+    make_external_identity(
+        db_connection, active_user_id, issuer="https://idp.example", subject="sub-already-active"
+    )
+
+    db_connection.execute(
+        text("UPDATE core.lifecycle_statuses SET is_active = false WHERE code = 'active'")
+    )
+
+    resolved = resolve_user_by_external_identity(
+        db_connection, issuer="https://idp.example", subject="sub-already-active"
+    )
+    assert resolved == active_user_id

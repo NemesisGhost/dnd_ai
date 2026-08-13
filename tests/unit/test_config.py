@@ -45,6 +45,13 @@ def _clear_database_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DND_AI_DATABASE_URL", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _clear_oidc_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DND_AI_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("DND_AI_OIDC_AUDIENCE", raising=False)
+    monkeypatch.delenv("DND_AI_OIDC_JWKS_URL", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # database_url resolution and precedence (in-process — none of this depends
 # on class-definition-time state)
@@ -103,6 +110,9 @@ def test_production_without_database_url_raises(monkeypatch: pytest.MonkeyPatch)
 def test_production_with_prefixed_database_url_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
     monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
     settings = Settings()
     assert settings.environment == "production"
     assert settings.database_url == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
@@ -118,6 +128,216 @@ def test_production_with_only_legacy_database_url_still_raises(
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://legacy:legacy@dbhost/dnd_ai")
     with pytest.raises(ValidationError, match="DND_AI_DATABASE_URL"):
+        Settings()
+
+
+# ---------------------------------------------------------------------------
+# OIDC settings — production fail-closed behavior, mirroring database_url
+# (in-process)
+# ---------------------------------------------------------------------------
+
+
+def test_oidc_settings_default_to_none_outside_production() -> None:
+    settings = Settings()
+    assert settings.oidc_issuer is None
+    assert settings.oidc_audience is None
+    assert settings.oidc_jwks_url is None
+
+
+def test_production_without_oidc_settings_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    "present_fields",
+    [
+        {"DND_AI_OIDC_ISSUER": "https://idp.example"},
+        {"DND_AI_OIDC_ISSUER": "https://idp.example", "DND_AI_OIDC_AUDIENCE": "dnd-ai-api"},
+        {"DND_AI_OIDC_AUDIENCE": "dnd-ai-api", "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks"},
+    ],
+)
+def test_production_with_partial_oidc_settings_raises(
+    present_fields: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    for name, value in present_fields.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_production_with_all_oidc_settings_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/.well-known/jwks.json")
+    settings = Settings()
+    assert settings.oidc_issuer == "https://idp.example"
+    assert settings.oidc_audience == "dnd-ai-api"
+    assert settings.oidc_jwks_url == "https://idp.example/.well-known/jwks.json"
+
+
+# ---------------------------------------------------------------------------
+# OIDC settings — production URL/audience structural validation. A
+# plain-HTTP JWKS endpoint lets a network-positioned attacker substitute
+# the key set and forge tokens, so production requires HTTPS, a host, no
+# embedded credentials, and no fragment on both URL fields, and a
+# whitespace-clean, non-empty audience — all in-process.
+# ---------------------------------------------------------------------------
+
+_PRODUCTION_ENV = {
+    "DND_AI_ENVIRONMENT": "production",
+    "DND_AI_DATABASE_URL": "postgresql+psycopg://prod:prod@dbhost/dnd_ai",
+}
+
+
+def _set_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) -> None:
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_production_rejects_http_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "http://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+def test_production_rejects_http_jwks_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "http://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_JWKS_URL"):
+        Settings()
+
+
+@pytest.mark.parametrize("bad_value", ["", "   ", " dnd-ai-api", "dnd-ai-api "])
+def test_production_rejects_empty_or_whitespace_padded_audience(
+    bad_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", bad_value)
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_AUDIENCE"):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "not-a-url",
+        "https://",
+        "https:///path-no-host",
+        "https://[invalid/jwks",
+    ],
+)
+def test_production_rejects_malformed_or_missing_host_issuer(
+    bad_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", bad_url)
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+def test_production_rejects_embedded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://user:pass@idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+def test_production_rejects_url_fragment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks#frag")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_JWKS_URL"):
+        Settings()
+
+
+def test_production_issuer_is_never_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JWT issuer matching must stay exact — a trailing slash must survive
+    validation unchanged, never silently added or stripped, since that
+    would change what a token's `iss` claim is compared against."""
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example/")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    settings = Settings()
+    assert settings.oidc_issuer == "https://idp.example/"
+
+
+# ---------------------------------------------------------------------------
+# OIDC settings — local/test policy: HTTP permitted for a private/in-
+# process test identity provider, but partial or structurally malformed
+# configuration is still rejected (docs: dnd_ai.config's own module
+# docstring, "Local/test may configure an HTTP identity provider...").
+# ---------------------------------------------------------------------------
+
+
+def test_local_allows_http_oidc_urls_when_fully_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "http://localhost:8080/realms/test")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "http://localhost:8080/realms/test/jwks")
+    settings = Settings()
+    assert settings.oidc_issuer == "http://localhost:8080/realms/test"
+    assert settings.oidc_jwks_url == "http://localhost:8080/realms/test/jwks"
+
+
+def test_local_still_rejects_malformed_oidc_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "not-a-url")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "http://localhost:8080/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+def test_local_still_rejects_empty_audience(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "http://localhost:8080/realms/test")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "http://localhost:8080/realms/test/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_AUDIENCE"):
+        Settings()
+
+
+def test_local_still_rejects_embedded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "http://user:pass@localhost:8080/realms/test")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "http://localhost:8080/realms/test/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    "present_fields",
+    [
+        {"DND_AI_OIDC_ISSUER": "http://localhost:8080/realms/test"},
+        {
+            "DND_AI_OIDC_ISSUER": "http://localhost:8080/realms/test",
+            "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
+        },
+    ],
+)
+def test_local_rejects_partial_oidc_configuration(
+    present_fields: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in present_fields.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
         Settings()
 
 
@@ -236,6 +456,9 @@ _ALL_TEST_MANAGED_ENV_VARS = (
     "DND_AI_FEATURE_AI_NPC_DIALOGUE",
     "DND_AI_FEATURE_DISCORD_INTEGRATION",
     "DND_AI_FEATURE_FOUNDRY_INTEGRATION",
+    "DND_AI_OIDC_ISSUER",
+    "DND_AI_OIDC_AUDIENCE",
+    "DND_AI_OIDC_JWKS_URL",
     "DND_AI_SECRETS_DIR",
     "DND_AI_TEST_DATABASE_URL",
     "DND_AI_CI_DB_NAME",
@@ -320,7 +543,13 @@ def test_production_succeeds_with_mounted_secret_file(tmp_path: Path) -> None:
         "postgresql+psycopg://prod:prod@dbhost/dnd_ai", encoding="utf-8"
     )
     result = _run_config_import(
-        {"DND_AI_ENVIRONMENT": "production", "DND_AI_SECRETS_DIR": str(secrets_dir)},
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DND_AI_SECRETS_DIR": str(secrets_dir),
+            "DND_AI_OIDC_ISSUER": "https://idp.example",
+            "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
+            "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
+        },
         cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
@@ -348,6 +577,9 @@ def test_process_environment_selects_production_env_file_is_ignored(tmp_path: Pa
         {
             "DND_AI_ENVIRONMENT": "production",
             "DND_AI_DATABASE_URL": "postgresql+psycopg://from-real-env:from-real-env@dbhost/dnd_ai",
+            "DND_AI_OIDC_ISSUER": "https://idp.example",
+            "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
+            "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
         },
         cwd=tmp_path,
     )
@@ -393,7 +625,13 @@ def test_production_with_real_environment_plus_mounted_secret_is_accepted(
         "postgresql+psycopg://prod:prod@dbhost/dnd_ai", encoding="utf-8"
     )
     result = _run_config_import(
-        {"DND_AI_ENVIRONMENT": "production", "DND_AI_SECRETS_DIR": str(secrets_dir)},
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DND_AI_SECRETS_DIR": str(secrets_dir),
+            "DND_AI_OIDC_ISSUER": "https://idp.example",
+            "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
+            "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
+        },
         cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
