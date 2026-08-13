@@ -46,6 +46,55 @@ class EndEncounterResult:
     event_id: uuid.UUID
 
 
+def _start_encounter_impl(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    participant_entity_ids: tuple[uuid.UUID, ...],
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    location_id: uuid.UUID | None = None,
+    summary: str | None = None,
+) -> StartEncounterResult:
+    """The actual work of start_encounter(), on a connection the caller
+    already has open — see _resolve_combat_turn_impl's docstring for why
+    this package splits each command into a composable, connection-taking
+    implementation and a public engine-based convenience wrapper (below).
+    A caller that owns the surrounding transaction itself (e.g. the API
+    layer's per-request connection) calls this directly."""
+    encounter_id = connection.execute(
+        text("""
+            INSERT INTO narrative.encounters
+                (timeline_id, campaign_id, session_id, location_id, world_time_id, status,
+                 summary)
+            VALUES (:timeline, :campaign, :session, :location, :world_time, 'active', :summary)
+            RETURNING encounter_id
+        """),
+        {
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "location": location_id,
+            "world_time": world_time_id,
+            "summary": summary,
+        },
+    ).scalar()
+    assert isinstance(encounter_id, uuid.UUID)
+
+    for participant_entity_id in participant_entity_ids:
+        connection.execute(
+            text("""
+                INSERT INTO narrative.encounter_participants
+                    (encounter_id, participant_entity_id)
+                VALUES (:encounter, :participant)
+            """),
+            {"encounter": encounter_id, "participant": participant_entity_id},
+        )
+
+    return StartEncounterResult(encounter_id=encounter_id)
+
+
 def start_encounter(
     engine: Engine,
     *,
@@ -57,38 +106,21 @@ def start_encounter(
     location_id: uuid.UUID | None = None,
     summary: str | None = None,
 ) -> StartEncounterResult:
-    """Create an encounter and its initial participants, atomically."""
+    """Create an encounter and its initial participants, atomically. Public
+    convenience API: opens and commits its own transaction. See
+    _start_encounter_impl() for the composable form a caller with its own
+    transaction (e.g. an API command endpoint) uses instead."""
     with engine.begin() as connection:
-        encounter_id = connection.execute(
-            text("""
-                INSERT INTO narrative.encounters
-                    (timeline_id, campaign_id, session_id, location_id, world_time_id, status,
-                     summary)
-                VALUES (:timeline, :campaign, :session, :location, :world_time, 'active', :summary)
-                RETURNING encounter_id
-            """),
-            {
-                "timeline": timeline_id,
-                "campaign": campaign_id,
-                "session": session_id,
-                "location": location_id,
-                "world_time": world_time_id,
-                "summary": summary,
-            },
-        ).scalar()
-        assert isinstance(encounter_id, uuid.UUID)
-
-        for participant_entity_id in participant_entity_ids:
-            connection.execute(
-                text("""
-                    INSERT INTO narrative.encounter_participants
-                        (encounter_id, participant_entity_id)
-                    VALUES (:encounter, :participant)
-                """),
-                {"encounter": encounter_id, "participant": participant_entity_id},
-            )
-
-    return StartEncounterResult(encounter_id=encounter_id)
+        return _start_encounter_impl(
+            connection,
+            timeline_id=timeline_id,
+            world_time_id=world_time_id,
+            participant_entity_ids=participant_entity_ids,
+            campaign_id=campaign_id,
+            session_id=session_id,
+            location_id=location_id,
+            summary=summary,
+        )
 
 
 def _lock_encounter(connection: Connection, encounter_id: uuid.UUID) -> uuid.UUID:
@@ -446,6 +478,69 @@ def resolve_combat_turn(
         )
 
 
+def _end_encounter_impl(
+    connection: Connection,
+    *,
+    encounter_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    outcomes: tuple[tuple[uuid.UUID, str], ...] = (),
+    summary: str | None = None,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+) -> EndEncounterResult:
+    """The actual work of end_encounter(), on a connection the caller
+    already has open — see _resolve_combat_turn_impl's docstring for the
+    composition pattern this mirrors."""
+    timeline_id = _lock_encounter(connection, encounter_id)
+
+    world_id = connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": timeline_id},
+    ).scalar()
+    assert isinstance(world_id, uuid.UUID)
+
+    event_id = _insert_event_row(
+        connection,
+        world_id=world_id,
+        timeline_id=timeline_id,
+        world_time_id=world_time_id,
+        event_type_code="other",
+        name="Encounter ended",
+        details=summary,
+        campaign_id=campaign_id,
+        session_id=session_id,
+    )
+    connection.execute(
+        text("""
+            INSERT INTO narrative.event_causes (event_id, cause_encounter_id)
+            VALUES (:event, :encounter)
+        """),
+        {"event": event_id, "encounter": encounter_id},
+    )
+
+    connection.execute(
+        text("""
+            UPDATE narrative.encounters
+            SET status = 'completed', summary = COALESCE(:summary, summary),
+                resulting_event_id = :event, updated_at = now()
+            WHERE encounter_id = :encounter
+        """),
+        {"summary": summary, "event": event_id, "encounter": encounter_id},
+    )
+
+    for participant_entity_id, outcome in outcomes:
+        connection.execute(
+            text("""
+                UPDATE narrative.encounter_participants
+                SET outcome = :outcome, updated_at = now()
+                WHERE encounter_id = :encounter AND participant_entity_id = :entity
+            """),
+            {"outcome": outcome, "encounter": encounter_id, "entity": participant_entity_id},
+        )
+
+    return EndEncounterResult(event_id=event_id)
+
+
 def end_encounter(
     engine: Engine,
     *,
@@ -458,53 +553,16 @@ def end_encounter(
 ) -> EndEncounterResult:
     """Mark an encounter completed, record each participant's outcome
     (defeated/escaped/surrendered/captured), and link the resulting event —
-    atomically."""
+    atomically. Public convenience API: opens and commits its own
+    transaction. See _end_encounter_impl() for the composable form a caller
+    with its own transaction (e.g. an API command endpoint) uses instead."""
     with engine.begin() as connection:
-        timeline_id = _lock_encounter(connection, encounter_id)
-
-        world_id = connection.execute(
-            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
-            {"t": timeline_id},
-        ).scalar()
-        assert isinstance(world_id, uuid.UUID)
-
-        event_id = _insert_event_row(
+        return _end_encounter_impl(
             connection,
-            world_id=world_id,
-            timeline_id=timeline_id,
+            encounter_id=encounter_id,
             world_time_id=world_time_id,
-            event_type_code="other",
-            name="Encounter ended",
-            details=summary,
+            outcomes=outcomes,
+            summary=summary,
             campaign_id=campaign_id,
             session_id=session_id,
         )
-        connection.execute(
-            text("""
-                INSERT INTO narrative.event_causes (event_id, cause_encounter_id)
-                VALUES (:event, :encounter)
-            """),
-            {"event": event_id, "encounter": encounter_id},
-        )
-
-        connection.execute(
-            text("""
-                UPDATE narrative.encounters
-                SET status = 'completed', summary = COALESCE(:summary, summary),
-                    resulting_event_id = :event, updated_at = now()
-                WHERE encounter_id = :encounter
-            """),
-            {"summary": summary, "event": event_id, "encounter": encounter_id},
-        )
-
-        for participant_entity_id, outcome in outcomes:
-            connection.execute(
-                text("""
-                    UPDATE narrative.encounter_participants
-                    SET outcome = :outcome, updated_at = now()
-                    WHERE encounter_id = :encounter AND participant_entity_id = :entity
-                """),
-                {"outcome": outcome, "encounter": encounter_id, "entity": participant_entity_id},
-            )
-
-    return EndEncounterResult(event_id=event_id)

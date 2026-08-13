@@ -11,13 +11,12 @@ Gateway, RDS, or another cloud adapter may be added as isolated optional
 deployment adapters, but none is required for production."
 
 OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
-is delivered and available as a dependency, but nothing in this module
-requires it yet — no route here needs an authenticated caller.
-Deliberately still excludes command/query endpoints (each needs a
-request/response contract designed against a specific
-`dnd_ai.commands`/future `dnd_ai.queries` call). This module is the
-plumbing those land on: app factory, error contract, correlation IDs,
-health/readiness, per-request transaction management, and authentication.
+is delivered and used by the first command endpoints below
+(`dnd_ai.api.encounters`) via `dnd_ai.api.access`. This module remains the
+plumbing every router builds on: app factory, error contract, correlation
+IDs, health/readiness, per-request transaction management, and
+authentication — routers register their own paths, this module only
+mounts them.
 """
 
 import logging
@@ -32,6 +31,7 @@ from starlette.responses import JSONResponse
 from .auth import dispose_jwks_client
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine
+from .encounters import router as encounters_router
 from .errors import install_error_handlers
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="D&D AI World Platform API", lifespan=_lifespan)
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
+    app.include_router(encounters_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
