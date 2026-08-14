@@ -166,6 +166,28 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        # See the identical cleanup in tests/scenario/test_encounter_commands.py's
+        # own `f` fixture for the full explanation: campaign.campaigns/.sessions
+        # (created ad hoc by test_a_foundry_turn_on_a_campaign_owned_encounter_
+        # inherits_its_campaign, scoped to this fixture's timeline_id) are not
+        # reached by DELETE FROM core.worlds under session_replication_role =
+        # replica (that would normally cascade via campaign.timelines, but
+        # replica mode disables the cascade too), and revision 080's deferred
+        # tr_campaigns_retain_access_manager constraint trigger turns a
+        # leftover campaign row into a later, unrelated test failure
+        # (tests/database/test_seed_idempotency.py's ALTER TABLE campaign.
+        # campaigns) rather than just harmless leaked data.
+        cleanup.execute(
+            text(
+                "DELETE FROM campaign.sessions WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": fixture.timeline_id},
+        )
         cleanup.execute(
             text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
         )

@@ -77,6 +77,38 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        # campaign.campaigns/.sessions are neither entity-rooted nor reached
+        # by DELETE FROM core.worlds below — that DELETE would normally
+        # cascade to them via campaign.timelines (ON DELETE CASCADE), but
+        # session_replication_role = replica also disables that cascade, the
+        # same way it disables the FK enforcement this cleanup relies on to
+        # delete out of dependency order. Left unlisted, every campaign (the
+        # fixture's own, plus every ad-hoc "other campaign" individual tests
+        # create for mismatch/reparenting cases — all scoped to this same
+        # timeline_id) would survive this cleanup indefinitely. That is
+        # normally harmless leaked test data, but revision 080's
+        # tr_campaigns_retain_access_manager (a DEFERRABLE INITIALLY DEFERRED
+        # constraint trigger on campaign.campaigns) makes it actively break
+        # an unrelated test: any later UPDATE of campaign.campaigns in the
+        # same pytest session — e.g. tests/database/test_seed_idempotency.py
+        # replaying revision 024's downgrade() — queues that deferred
+        # trigger against whatever campaign rows still exist, then fails
+        # with "cannot ALTER TABLE because it has pending trigger events"
+        # the moment that same transaction tries to ALTER TABLE campaign.
+        # campaigns. Deleted explicitly here, scoped by timeline_id (not
+        # just the fixture's own campaign_id) to catch every campaign this
+        # test created, sessions first since they reference campaign_id.
+        cleanup.execute(
+            text(
+                "DELETE FROM campaign.sessions WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": fixture.timeline_id},
+        )
         cleanup.execute(
             text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
         )
