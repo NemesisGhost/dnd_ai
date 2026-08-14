@@ -201,6 +201,8 @@ MANAGED_TABLES = [
     ("security", "access_groups"),
     ("security", "access_group_memberships"),
     ("security", "resource_grants"),
+    # Phase 10, workstream 6 correction pass — durable command idempotency
+    ("security", "idempotent_requests"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is
