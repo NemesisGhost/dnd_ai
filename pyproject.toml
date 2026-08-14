@@ -101,6 +101,14 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--showlocals",
+    # Default tmp_path/tmp_path_factory basetemp is the OS temp dir
+    # (Windows: %TEMP%, under AppData\Local\Temp), shared with every other
+    # process on the machine — on at least one development sandbox this hit
+    # permission errors unrelated to any test's own logic. Pointing basetemp
+    # at a dedicated directory inside the repo (gitignored; pytest clears it
+    # at the start of every session) keeps tmp_path-based tests reproducible
+    # regardless of the ambient OS temp dir's state or permissions.
+    "--basetemp=.pytest_tmp",
 ]
 markers = [
     "unit: Unit tests with no database",

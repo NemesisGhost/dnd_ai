@@ -608,6 +608,8 @@ FoundryVTT may remain the detailed tactical authority during live combat; the da
 
 `narrative.encounters.campaign_id`/`.session_id` (both nullable) form the same timeline -> campaign -> session ownership chain `narrative.events` and `interaction.interactions` already require: `campaign_id`, when set, must belong to the encounter's own `timeline_id`, and `session_id`, when set, must belong to `campaign_id` — enforced by `narrative.enforce_encounter_world()` (revision 081, extending revision 078's original same-world-only checks) and, ahead of it in application code, `dnd_ai.commands.encounters._validate_session_campaign()`.
 
+`narrative.encounters.campaign_id` is immutable once the encounter exists, including NULL <-> non-NULL transitions — stricter than the generic `core.enforce_immutable_columns()` pattern (§30/33), which allows one NULL -> value transition — enforced by a dedicated `tr_encounters_campaign_immutable` trigger (revision 081 correction). Reparenting an encounter to a different campaign would otherwise silently orphan any `interaction.interactions`/`narrative.events` rows already created under its original campaign (via `narrative.event_causes.cause_encounter_id`/`.resulting_event_id`), which never re-validate against the encounter's own row changing; `src/dnd_ai/commands/encounters.py`'s `_lock_encounter()`/`LockedEncounter` is the matching application-layer guarantee that every such row is always attributed to the encounter's real (and now permanently fixed) campaign.
+
 ## 14. Quest and story model
 
 ```mermaid

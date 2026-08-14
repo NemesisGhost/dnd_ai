@@ -182,6 +182,198 @@ def test_reparenting_a_sessions_campaign_cannot_invalidate_an_existing_encounter
 
 
 # ---------------------------------------------------------------------------
+# narrative.encounters.campaign_id immutability (revision 081 correction)
+#
+# The original revision 081 argued no reverse-mutation guard was needed here
+# because narrative.enforce_encounter_world() re-validates the encounter's
+# own row on every UPDATE. That reasoning missed that reparenting silently
+# orphans interaction.interactions/narrative.events rows already created
+# under the encounter's *original* campaign — those never re-validate
+# against the encounter row changing. campaign_id is now immutable once set,
+# including NULL <-> non-NULL transitions (stricter than
+# core.enforce_immutable_columns()'s NULL-transition-permitting default —
+# see tr_encounters_campaign_immutable's own migration docstring for why).
+# ---------------------------------------------------------------------------
+
+
+def test_an_encounters_campaign_id_is_immutable_once_set(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
+            {"c": other_campaign, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_an_encounters_campaign_id_cannot_go_from_null_to_a_value(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Deliberately stricter than core.enforce_immutable_columns() (revision
+    030/033), which allows one NULL -> value transition for columns like
+    rules.features.class_id. A campaign-less encounter's NULL is a
+    meaningful, permanent identity choice, not a placeholder awaiting a
+    value."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
+            {"c": f.campaign_id, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_an_encounters_campaign_id_cannot_go_from_a_value_to_null(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = NULL WHERE encounter_id = :e"),
+            {"e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_setting_an_encounters_campaign_id_to_its_current_value_is_not_a_change(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The trigger compares OLD vs NEW, not whether campaign_id appeared in
+    the UPDATE's column list — an UPDATE that re-asserts the same value
+    (e.g. a blanket ORM-style save) must not be rejected."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+
+    db_connection.execute(
+        text(
+            "UPDATE narrative.encounters SET campaign_id = :c, summary = 'touched' "
+            "WHERE encounter_id = :e"
+        ),
+        {"c": f.campaign_id, "e": encounter_id},
+    )
+    row = db_connection.execute(
+        text("SELECT campaign_id, summary FROM narrative.encounters WHERE encounter_id = :e"),
+        {"e": encounter_id},
+    ).one()
+    assert row.campaign_id == f.campaign_id
+    assert row.summary == "touched"
+
+
+def test_reparenting_after_a_recorded_turn_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+    interaction_id = make_interaction(
+        db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id, session_id=f.session_id
+    )
+    action_id = make_action(db_connection, interaction_id, f.character_a)
+    combat_action_id = make_combat_action(db_connection, action_id)
+    round_id = make_encounter_round(db_connection, encounter_id, 1)
+    participant_id = make_encounter_participant(db_connection, encounter_id, f.character_a)
+    make_encounter_turn(
+        db_connection, round_id, participant_id, 0, combat_action_id=combat_action_id
+    )
+
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+    # SAVEPOINT (begin_nested): the failed UPDATE aborts the outer
+    # transaction in PostgreSQL, which would poison the verification query
+    # below unless the attempt is scoped to a sub-transaction.
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
+            {"c": other_campaign, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    # The turn's interaction row must still show the original campaign —
+    # the rejected reparent must not have left anything half-applied.
+    stored = db_connection.execute(
+        text("SELECT campaign_id FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": interaction_id},
+    ).scalar()
+    assert stored == f.campaign_id
+
+
+def test_reparenting_after_a_damage_event_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+    event_id = make_event(
+        db_connection,
+        f.world_id,
+        f.timeline_id,
+        f.t0,
+        campaign_id=f.campaign_id,
+        session_id=f.session_id,
+        event_type_code="combat_damage_dealt",
+    )
+    db_connection.execute(
+        text(
+            "INSERT INTO narrative.event_causes (event_id, cause_encounter_id) "
+            "VALUES (:event, :encounter)"
+        ),
+        {"event": event_id, "encounter": encounter_id},
+    )
+
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
+            {"c": other_campaign, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    stored = db_connection.execute(
+        text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"), {"e": event_id}
+    ).scalar()
+    assert stored == f.campaign_id
+
+
+def test_reparenting_after_completion_is_rejected(db_connection: Connection, f: Fixture) -> None:
+    event_id = make_event(
+        db_connection,
+        f.world_id,
+        f.timeline_id,
+        f.t0,
+        campaign_id=f.campaign_id,
+        session_id=f.session_id,
+    )
+    encounter_id = make_encounter(
+        db_connection,
+        f.timeline_id,
+        f.t0,
+        campaign_id=f.campaign_id,
+        status="completed",
+        resulting_event_id=event_id,
+    )
+
+    other_campaign = make_campaign(db_connection, f.timeline_id, lifecycle_status_code="pending")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
+            {"c": other_campaign, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    row = db_connection.execute(
+        text(
+            "SELECT e.campaign_id AS encounter_campaign, ev.campaign_id AS event_campaign "
+            "FROM narrative.encounters e "
+            "JOIN narrative.events ev ON ev.event_id = e.resulting_event_id "
+            "WHERE e.encounter_id = :e"
+        ),
+        {"e": encounter_id},
+    ).one()
+    assert row.encounter_campaign == f.campaign_id
+    assert row.event_campaign == f.campaign_id
+
+
+# ---------------------------------------------------------------------------
 # narrative.encounter_participants
 # ---------------------------------------------------------------------------
 

@@ -41,12 +41,49 @@ Purpose:
        `narrative.encounters` outside that command (a future command,
        direct administrative SQL, or a bug in the application check).
 
-    Reparenting: this revision does *not* need to make
-    `narrative.encounters.campaign_id`/`.timeline_id` immutable to stay
-    correct. `narrative.enforce_encounter_world()` is a `BEFORE INSERT OR
-    UPDATE` trigger on `narrative.encounters` itself, so a direct UPDATE
-    of either column re-validates immediately, at that UPDATE — unlike
-    the "parent row's own scope changes out from under an already-valid
+    Reparenting — corrected (same still-unreleased revision; this branch
+    has not merged to main, so this is amended in place rather than
+    spawning a new revision number, the same "correction pass" convention
+    Phase 7's revision 074 followed while still unmerged — see CLAUDE.md
+    §2): the paragraph below (kept for the historical record of what was
+    argued and why it was wrong) reasoned that `narrative.encounters.
+    campaign_id` did not need to be immutable because
+    `narrative.enforce_encounter_world()` re-validates on every UPDATE.
+    That is true, but incomplete: it only re-validates the *encounter
+    row's own* internal consistency (its `campaign_id` against its
+    `timeline_id`, its `session_id` against its `campaign_id`) — it says
+    nothing about rows in *other* tables that were already created
+    *because of* the encounter's campaign at the time. Once `src/dnd_ai/
+    commands/encounters.py`'s `resolve_combat_turn()`/`end_encounter()`
+    stamp an `interaction.interactions` row or a `narrative.events` row
+    (cited back via `narrative.event_causes.cause_encounter_id` or
+    `narrative.encounters.resulting_event_id`) with the encounter's
+    campaign at that moment, a later `UPDATE narrative.encounters SET
+    campaign_id = ...` reparenting the encounter to a different,
+    same-timeline campaign succeeds cleanly (this trigger has nothing to
+    say about it) while those already-created rows keep pointing at the
+    *old* campaign — exactly the "parent row's own scope changes out from
+    under an already-valid child row that never re-validates" class of
+    gap this paragraph explicitly (and, it turns out, wrongly) claimed
+    did not apply here. It does apply — one hop further out, through
+    `narrative.encounters` as an intermediate parent, rather than
+    directly through `campaign.sessions`/`campaign.campaigns` the way
+    revisions 030/075/080 closed it elsewhere. The fix is the same shape
+    those revisions already established: make the column immutable
+    (`Corrected forward migration` below), rather than build a
+    transactional cascade-and-revalidate path for a change — reparenting
+    an encounter already in play — that should not happen in the first
+    place. See "Corrected forward migration" for why this needed a
+    *bespoke* trigger rather than reusing `core.enforce_immutable_columns()`
+    (revision 030/033) directly.
+
+    Reparenting — original (superseded) analysis, kept for the record:
+    this revision does *not* need to make `narrative.encounters.
+    campaign_id`/`.timeline_id` immutable to stay correct.
+    `narrative.enforce_encounter_world()` is a `BEFORE INSERT OR UPDATE`
+    trigger on `narrative.encounters` itself, so a direct UPDATE of
+    either column re-validates immediately, at that UPDATE — unlike the
+    "parent row's own scope changes out from under an already-valid
     *child* row that never re-validates" class of gap revisions 030/075/
     080 closed elsewhere (e.g. security.resource_grants scoping through
     campaign.sessions/narrative.events without either of those tables'
@@ -110,19 +147,57 @@ Purpose:
     — closing that gap in application code, not by changing anything about
     `narrative.encounters` or this migration.
 
-Forward migration:
-    - LOCK TABLE narrative.encounters IN SHARE MODE — first statement,
-      before anything else. See "Locking considerations" below.
-    - A pre-flight audit (anonymous DO block): counts existing
-      narrative.encounters rows that already violate either rule above and
-      RAISEs, refusing to proceed, if any exist — this project has no live
-      deployment yet (docs/PLAN.md "Current status"), so every real
-      environment is expected to have zero, but the audit runs
-      unconditionally rather than assuming that.
-    - narrative.enforce_encounter_world(): CREATE OR REPLACE, extended
-      with the two checks above. The existing BEFORE INSERT OR UPDATE
-      trigger on narrative.encounters already points at this function by
-      name, so no trigger changes are needed.
+    Sibling review, correction pass: `integration.sync_jobs`/`.sync_state`
+    (revision 079) also reference `target_encounter_id`, but neither table
+    has a `campaign_id` column at all — Phase 9's integration domain scopes
+    an external system to a `world_id` only (see that revision, and
+    `dnd_ai.commands.integration.apply_foundry_combat_sync()`'s own
+    docstring on why its combat-turn calls stay unscoped until Phase 11).
+    There is no column there for a reparented encounter to leave stale, so
+    the audit and the immutability guard below both correctly stop at
+    `interaction.interactions`/`narrative.events`/`narrative.
+    event_causes`/`narrative.encounters.resulting_event_id` — every table
+    in this domain that *does* carry `campaign_id`.
+
+Corrected forward migration (folded into this same upgrade(), after the
+original three steps below):
+    - A second pre-flight audit (anonymous DO block), under the same
+      LOCK TABLE already held: counts existing narrative.encounters rows
+      whose dependent interaction.interactions (reached through
+      encounter_rounds -> encounter_turns -> combat_actions -> actions),
+      narrative.events (reached through event_causes.cause_encounter_id),
+      or resulting_event_id's own narrative.events row already disagree
+      with the encounter's own campaign_id — the durable orphaned-
+      provenance state a past reparenting UPDATE (only ever exercised by
+      this project's own tests, never by any command — see "Reparenting —
+      corrected" above) could have left behind. RAISEs, refusing to
+      proceed, if any exist; this project has no live deployment yet
+      (docs/PLAN.md "Current status"), so every real environment is
+      expected to have zero, but the audit runs unconditionally rather
+      than assuming that, the same as the original audit above.
+    - narrative.enforce_encounter_campaign_immutable(): a new, bespoke
+      BEFORE UPDATE trigger function on narrative.encounters, rejecting
+      any UPDATE where NEW.campaign_id IS DISTINCT FROM OLD.campaign_id —
+      deliberately *not* core.enforce_immutable_columns() (revision
+      030/033): that shared function's current body only blocks a change
+      away from an already-non-NULL value, explicitly allowing one NULL ->
+      value transition (see tests/database/test_immutable_identity.py::
+      test_a_features_null_association_can_still_be_set_once) — the right
+      behavior for a column like rules.features.class_id, which starts
+      unset and is filled in once. narrative.encounters.campaign_id is
+      different in kind: "no campaign" (NULL, a GM-only/campaign-less
+      encounter) is itself a meaningful, permanent identity choice made at
+      creation, not a placeholder awaiting a value — so a NULL -> value
+      transition must be rejected exactly like a value -> value one, which
+      the shared function does not do and was not changed to do (that
+      would alter behavior for every one of its ~15 other existing
+      callers). Attached as tr_encounters_campaign_immutable — sorts
+      alphabetically before the existing tr_encounters_enforce_world and
+      tr_encounters_set_updated_at (revision 078), though firing order
+      between the two BEFORE UPDATE triggers is immaterial here: they
+      enforce independent, non-conflicting rules, and a reparenting UPDATE
+      this new trigger rejects never reaches enforce_encounter_world()'s
+      own (unrelated) checks either way.
 
 Rollback:
     Supported. CREATE OR REPLACE FUNCTION back to revision 078's original
@@ -133,10 +208,17 @@ Rollback:
     stricter definition takes effect" race for it to close; see
     "Locking considerations" for the full asymmetry argument.
 
+    Corrected rollback (same reasoning, extended): also DROPs
+    tr_encounters_campaign_immutable and narrative.
+    enforce_encounter_campaign_immutable() — downgrading restores
+    campaign_id's original mutability, the same "downgrade only weakens"
+    asymmetry as the rest of this migration's rollback, so no LOCK TABLE
+    is needed for this half either.
+
 Data implications:
-    None beyond the pre-flight audit — no row is modified. If the audit
-    finds violations, the migration fails outright rather than silently
-    reinterpreting or discarding existing data.
+    None beyond the pre-flight audits — no row is modified by either. If
+    an audit finds violations, the migration fails outright rather than
+    silently reinterpreting or discarding existing data.
 
 Locking considerations:
     LOCK TABLE narrative.encounters IN SHARE MODE runs first, before the
@@ -203,12 +285,30 @@ Locking considerations:
     lock — so there is no lock-ordering cycle for PostgreSQL's deadlock
     detector to ever need to break.
 
+    Corrected forward migration's own locking: CREATE TRIGGER (unlike
+    CREATE OR REPLACE FUNCTION) takes a SHARE ROW EXCLUSIVE lock on the
+    table it's attached to — a *stronger* mode than the SHARE lock this
+    migration already holds from its very first statement. Requesting a
+    stronger lock mode on an already-locked object, in the same session
+    that holds the weaker one, is not a self-deadlock: PostgreSQL simply
+    grants the escalation (no other session can be granted SHARE ROW
+    EXCLUSIVE concurrently with this session's own SHARE, so there is
+    nothing else to wait on), and it does not shrink the set of blocked
+    writers — SHARE ROW EXCLUSIVE still conflicts with ROW EXCLUSIVE
+    (INSERT/UPDATE/DELETE), the same as SHARE — so no new lock-ordering
+    cycle or blocking gap is introduced. The second audit above still
+    needs its own protection from the *original* SHARE lock, acquired
+    before either audit runs: CREATE TRIGGER's own lock only starts
+    protecting the table once that specific statement executes, which is
+    after both audits have already run.
+
 SQLAlchemy metadata / architecture docs:
     src/dnd_ai/persistence/tables/encounters.py declares no CHECK
     constraints or triggers (see that module's own note — alembic check
     only compares tables/columns/comments, never trigger bodies), so no
     change is needed there. docs/architecture/DATABASE_MODEL.md §13 gained
-    one sentence noting this invariant.
+    one sentence noting the original session/campaign invariant, and a
+    second sentence for this correction's campaign_id immutability.
 
 See: docs/DATABASE_CONVENTIONS.md §9.5 (same-world consistency)
      docs/architecture/DATABASE_MODEL.md §13 (encounters and combat)
@@ -221,9 +321,15 @@ See: docs/DATABASE_CONVENTIONS.md §9.5 (same-world consistency)
      database/migrations/versions/078_encounter_domain.py
      (narrative.enforce_encounter_world()'s original, same-world-only body)
      database/migrations/versions/030_parent_scope_immutability.py,
+     database/migrations/versions/033_rules_identity_immutability.py,
      database/migrations/versions/080_security_identity_and_access.py
      (campaign.campaigns.timeline_id and campaign.sessions.campaign_id
-     immutability, why no new reverse-mutation guard is needed here)
+     immutability; core.enforce_immutable_columns()'s NULL-transition
+     behavior, and why this revision's own campaign_id guard needed to be
+     stricter than it rather than reusing it)
+     src/dnd_ai/commands/encounters.py
+     (_lock_encounter()/LockedEncounter — the application-layer provenance
+     fix this migration's guard makes durable at the database layer too)
 """
 
 from alembic import op
@@ -359,9 +465,101 @@ def upgrade() -> None:
         'require (revision 081).';
     """)
 
+    # --- Correction (same still-unreleased revision — see "Reparenting —
+    # corrected" in this module's own docstring): campaign_id immutability,
+    # plus a second pre-flight audit for provenance already orphaned by a
+    # reparenting UPDATE. Both run under the LOCK TABLE already acquired
+    # above, before anything in this section — see "Locking considerations".
+
+    op.execute("""
+        DO $$
+        DECLARE
+            v_violations INTEGER;
+        BEGIN
+            SELECT count(*) INTO v_violations
+            FROM narrative.encounters e
+            WHERE EXISTS (
+                SELECT 1
+                FROM narrative.encounter_rounds er
+                JOIN narrative.encounter_turns et ON et.encounter_round_id = er.encounter_round_id
+                JOIN interaction.combat_actions ca ON ca.combat_action_id = et.combat_action_id
+                JOIN interaction.actions a ON a.action_id = ca.action_id
+                JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
+                WHERE er.encounter_id = e.encounter_id
+                  AND i.campaign_id IS DISTINCT FROM e.campaign_id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM narrative.event_causes ec
+                JOIN narrative.events ev ON ev.event_id = ec.event_id
+                WHERE ec.cause_encounter_id = e.encounter_id
+                  AND ev.campaign_id IS DISTINCT FROM e.campaign_id
+            )
+            OR (
+                e.resulting_event_id IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM narrative.events ev
+                    WHERE ev.event_id = e.resulting_event_id
+                      AND ev.campaign_id IS DISTINCT FROM e.campaign_id
+                )
+            );
+
+            IF v_violations > 0 THEN
+                RAISE EXCEPTION
+                    'narrative.encounters has % row(s) whose dependent interaction.'
+                    'interactions/narrative.events provenance disagrees with the '
+                    'encounter''s own campaign_id (orphaned by a prior reparenting UPDATE) '
+                    '— resolve them before enabling campaign_id immutability (revision 081)',
+                    v_violations
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+        END;
+        $$;
+    """)
+
+    op.execute("""
+        CREATE OR REPLACE FUNCTION narrative.enforce_encounter_campaign_immutable()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            IF NEW.campaign_id IS DISTINCT FROM OLD.campaign_id THEN
+                RAISE EXCEPTION
+                    'narrative.encounters.campaign_id is immutable once the encounter '
+                    'exists — reparenting (including NULL <-> non-NULL transitions) is '
+                    'not permitted for encounter %',
+                    OLD.encounter_id
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+    """)
+    op.execute("""
+        COMMENT ON FUNCTION narrative.enforce_encounter_campaign_immutable() IS
+        'narrative.encounters.campaign_id is immutable once set, including NULL <-> '
+        'non-NULL transitions — stricter than core.enforce_immutable_columns() '
+        '(revision 030/033), which deliberately allows one NULL -> value transition. '
+        'An encounter''s owning campaign (or the deliberate absence of one) is decided '
+        'in full at creation and never re-evaluated, because interaction.interactions/'
+        'narrative.events rows already created under it do not themselves re-validate '
+        'when the encounter later moves (revision 081 correction).';
+    """)
+    op.execute("""
+        CREATE TRIGGER tr_encounters_campaign_immutable
+        BEFORE UPDATE ON narrative.encounters
+        FOR EACH ROW EXECUTE FUNCTION narrative.enforce_encounter_campaign_immutable();
+    """)
+
 
 def downgrade() -> None:
     """Revert the migration."""
+
+    # --- Correction cleanup (same still-unreleased revision): drop the
+    # campaign_id immutability guard first — no LOCK TABLE needed, since
+    # downgrading only weakens enforcement (see "Locking considerations").
+    op.execute("DROP TRIGGER IF EXISTS tr_encounters_campaign_immutable ON narrative.encounters;")
+    op.execute("DROP FUNCTION IF EXISTS narrative.enforce_encounter_campaign_immutable();")
 
     op.execute("""
         CREATE OR REPLACE FUNCTION narrative.enforce_encounter_world()

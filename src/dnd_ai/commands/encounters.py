@@ -33,6 +33,20 @@ race. See _lock_encounter's and EncounterNotFoundError's own docstrings
 for the full account, including the deliberate campaign_id=None
 "unscoped" mode dnd_ai.commands.integration.apply_foundry_combat_sync()
 currently relies on.
+
+That caller-supplied campaign_id is only ever an *assertion*, never the
+value persisted on the interaction.interactions/narrative.events rows
+these commands create — those are always attributed to the locked
+encounter's own, actual campaign_id (_lock_encounter's return value,
+LockedEncounter.campaign_id), regardless of whether an assertion was
+made. This matters specifically for the unscoped mode: skipping the
+ownership assertion (campaign_id=None) must not also discard a
+campaign-owned encounter's real provenance onto NULL child rows — those
+are two independent questions ("is the caller authorized against this
+campaign" vs. "which campaign do the rows this call creates actually
+belong to"), and Foundry not yet answering the first (Phase 11's job) is
+no reason to get the second wrong today. See LockedEncounter's own
+docstring for the full account.
 """
 
 import json
@@ -120,6 +134,31 @@ class EncounterNotActiveError(SafeMessageError):
 
 
 @dataclass(frozen=True)
+class LockedEncounter:
+    """The `_lock_encounter()` result: what was actually true of the row it
+    just locked, as distinct from what a caller asserted before locking it.
+
+    `campaign_id` here is the encounter's own, authoritative, just-locked
+    value — never the caller's `expected_campaign_id` argument. The two
+    agree whenever `expected_campaign_id` was supplied (a mismatch raises
+    `EncounterNotFoundError` before this is ever constructed), but when
+    `expected_campaign_id=None` (the unscoped mode — see `_lock_encounter`'s
+    own docstring) they are *not* the same thing: `campaign_id` on this
+    result can still be a real, non-NULL campaign, even though no assertion
+    was made against it. Every caller that persists a child row attributed
+    to the encounter (an `interaction.interactions` row, a completion
+    `narrative.events` row) must stamp that row's own `campaign_id` from
+    *this* field, not from whatever `expected_campaign_id` it happened to
+    pass in — otherwise an unscoped call (Foundry's current
+    `apply_foundry_combat_sync`) would silently discard a campaign-owned
+    encounter's real provenance onto NULL child rows, rather than merely
+    skipping the ownership assertion it was never meant to make."""
+
+    timeline_id: uuid.UUID
+    campaign_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
 class StartEncounterResult:
     encounter_id: uuid.UUID
 
@@ -151,6 +190,22 @@ def _validate_session_campaign(
     everywhere a request can supply a session_id alongside a trusted
     campaign_id, not just at creation.
 
+    campaign_id here must always be the *authoritative* campaign, not
+    merely an asserted one: _start_encounter_impl has no encounter yet, so
+    its own campaign_id argument (the one about to be persisted) is
+    authoritative by construction. _resolve_combat_turn_impl and
+    _end_encounter_impl instead pass the just-locked encounter's actual
+    campaign_id (LockedEncounter.campaign_id from _lock_encounter) — never
+    their own campaign_id argument, which is only an ownership assertion
+    that may deliberately be None (unscoped) even when the encounter is
+    genuinely campaign-owned. Validating a supplied session_id against an
+    unscoped None would wrongly reject a real, in-campaign session for
+    every unscoped caller (Foundry today); validating it against the
+    encounter's true campaign is both correct and — since a real session
+    always has a non-NULL campaign_id — still rejects a session on a
+    genuinely campaign-less encounter, which no session can ever belong
+    to.
+
     Without this, a caller-supplied session_id could reference a
     campaign.sessions row belonging to a same-world but different
     campaign than the caller is authorized for (or acting on behalf of),
@@ -159,7 +214,8 @@ def _validate_session_campaign(
     linkage the API's own campaign-scoped authorization
     (dnd_ai.api.access.require_campaign_capability) never catches, since
     campaign_id itself is trusted (it comes from the URL path, already
-    authorized) while session_id is caller-supplied request data.
+    authorized, or — for turns/end — from the locked encounter itself)
+    while session_id is caller-supplied request data.
     narrative.encounters, interaction.interactions, and narrative.events
     each independently validate this same rule at the database layer too
     (narrative.enforce_encounter_world() extended by revision 081,
@@ -271,12 +327,24 @@ def _lock_encounter(
     encounter_id: uuid.UUID,
     *,
     expected_campaign_id: uuid.UUID | None = None,
-) -> uuid.UUID:
+) -> LockedEncounter:
     """Acquire an exclusive row lock on the encounter (a structural row
     that always exists), atomically verify campaign ownership when
-    `expected_campaign_id` is supplied, and return the locked row's
-    `timeline_id`. Every mutating caller (`_resolve_combat_turn_impl`,
-    `_end_encounter_impl`) calls this before touching any other row.
+    `expected_campaign_id` is supplied, and return a `LockedEncounter`
+    carrying the locked row's real `timeline_id` and `campaign_id`. Every
+    mutating caller (`_resolve_combat_turn_impl`, `_end_encounter_impl`)
+    calls this before touching any other row.
+
+    `expected_campaign_id` is an assertion, not a value to persist:
+    it says "reject unless the encounter belongs to this campaign," never
+    "attribute the rows this call creates to this campaign." Every caller
+    that stamps `campaign_id` onto a child row it creates (an
+    `interaction.interactions` row, a completion `narrative.events` row)
+    must use the returned `LockedEncounter.campaign_id` — the encounter's
+    own, actual, just-locked value — for that, not the `expected_campaign_id`
+    it happened to pass in here. The two agree whenever an assertion was
+    made and passed; see `LockedEncounter`'s own docstring for why they
+    must not be conflated in the `expected_campaign_id=None` case.
 
     Ownership check order matters and is deliberate: existence and
     campaign ownership are checked *first*, against the just-locked row,
@@ -347,7 +415,8 @@ def _lock_encounter(
             f"encounter {encounter_id} is not active (status={row.status!r})"
         )
     assert isinstance(row.timeline_id, uuid.UUID)
-    return row.timeline_id
+    assert row.campaign_id is None or isinstance(row.campaign_id, uuid.UUID)
+    return LockedEncounter(timeline_id=row.timeline_id, campaign_id=row.campaign_id)
 
 
 def _get_or_create_round(
@@ -445,21 +514,42 @@ def _resolve_combat_turn_impl(
     (no hit/miss distinction reported). See the inline comment above the
     damage-application check for the full reasoning.
 
-    campaign_id, when set, is required to match the locked encounter's own
-    campaign_id (_lock_encounter's expected_campaign_id) — a caller that
-    supplies a campaign_id is asserting the encounter belongs to it, and a
-    mismatch (including a same-timeline reparenting race — see
-    _lock_encounter's own docstring) raises EncounterNotFoundError before
-    anything else runs. campaign_id=None (apply_foundry_combat_sync's
-    current usage) skips this check — see _lock_encounter's docstring for
-    why that is deliberate, not an oversight.
+    campaign_id, when set, is only an *assertion*: it is required to match
+    the locked encounter's own campaign_id (_lock_encounter's
+    expected_campaign_id), and a mismatch (including a same-timeline
+    reparenting race — see _lock_encounter's own docstring) raises
+    EncounterNotFoundError before anything else runs. campaign_id=None
+    (apply_foundry_combat_sync's current usage) skips only that assertion
+    — see _lock_encounter's docstring for why that is deliberate, not an
+    oversight. Either way, the interaction.interactions row and any
+    resulting narrative.events row this call creates are attributed to the
+    *locked* encounter's actual campaign_id (LockedEncounter.campaign_id),
+    never to this campaign_id argument — an unscoped call still inherits
+    a campaign-owned encounter's real provenance, it just doesn't assert
+    one.
 
-    Validates session_id/campaign_id agreement (_validate_session_campaign)
-    immediately after locking the encounter, before _get_or_create_round's
-    own possible INSERT or any other mutation.
+    Validates session_id against the locked encounter's actual campaign
+    (_validate_session_campaign), immediately after locking the encounter,
+    before _get_or_create_round's own possible INSERT or any other
+    mutation. A supplied session_id is never accepted or rejected based on
+    this call's own (possibly unscoped) campaign_id argument.
+
+    session_id=None is left NULL on the interaction.interactions row this
+    call creates — it is never inherited from the encounter's own
+    session_id (the session it was started in). An encounter can span more
+    than one campaign.sessions row over its lifetime (it is a narrative
+    span, not a single sitting), so silently attributing every turn to the
+    encounter's *starting* session would misattribute any turn actually
+    played in a later session — the same reasoning narrative.events and
+    interaction.interactions already apply by treating session_id as a
+    fact about the specific row being created, never derived from a
+    parent/causing row (dnd_ai.commands.events._insert_event_row's own
+    session_id parameter behaves identically). A caller that wants a
+    turn's session recorded must supply it explicitly.
     """
-    timeline_id = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
-    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+    locked = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
+    timeline_id = locked.timeline_id
+    _validate_session_campaign(connection, campaign_id=locked.campaign_id, session_id=session_id)
     encounter_round_id = _get_or_create_round(
         connection, encounter_id=encounter_id, round_number=round_number
     )
@@ -489,7 +579,7 @@ def _resolve_combat_turn_impl(
         """),
         {
             "timeline": timeline_id,
-            "campaign": campaign_id,
+            "campaign": locked.campaign_id,
             "session": session_id,
             "itype": interaction_type_id,
             "world_time": world_time_id,
@@ -604,7 +694,7 @@ def _resolve_combat_turn_impl(
             event_type_code="combat_damage_dealt",
             name="Combat damage dealt",
             details=event_details,
-            campaign_id=campaign_id,
+            campaign_id=locked.campaign_id,
             session_id=session_id,
             participants=(
                 EventParticipant(entity_id=actor_entity_id, role_code="actor"),
@@ -769,13 +859,27 @@ def _end_encounter_impl(
     """The actual work of end_encounter(), on a connection the caller
     already has open — see _resolve_combat_turn_impl's docstring for the
     composition pattern this mirrors, and for the campaign_id/
-    expected_campaign_id contract this shares with it. Validates session_id/
-    campaign_id agreement (_validate_session_campaign) immediately after
-    locking the encounter, before _validate_outcome_participants or any
-    mutation — session_id here lands on the completion event
-    _insert_event_row() creates below, not on the encounter row itself."""
-    timeline_id = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
-    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+    expected_campaign_id contract (an assertion, checked but never
+    persisted) this shares with it. The completion event's own campaign_id
+    is always the locked encounter's actual campaign
+    (LockedEncounter.campaign_id), not this call's campaign_id argument —
+    an unscoped call (campaign_id=None) still attributes the completion
+    event to a campaign-owned encounter's real campaign.
+
+    Validates session_id against the locked encounter's actual campaign
+    (_validate_session_campaign) immediately after locking the encounter,
+    before _validate_outcome_participants or any mutation — session_id
+    here lands on the completion event _insert_event_row() creates below,
+    not on the encounter row itself. session_id=None is left NULL, never
+    inherited from the encounter's own session_id — see
+    _resolve_combat_turn_impl's docstring for the identical reasoning
+    (an encounter can outlive the session it was started in, so the
+    session an encounter actually *ended* in is a fact about the
+    completion event, not something to infer from the encounter's start).
+    """
+    locked = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
+    timeline_id = locked.timeline_id
+    _validate_session_campaign(connection, campaign_id=locked.campaign_id, session_id=session_id)
     _validate_outcome_participants(connection, encounter_id=encounter_id, outcomes=outcomes)
 
     world_id = connection.execute(
@@ -792,7 +896,7 @@ def _end_encounter_impl(
         event_type_code="other",
         name="Encounter ended",
         details=summary,
-        campaign_id=campaign_id,
+        campaign_id=locked.campaign_id,
         session_id=session_id,
     )
     connection.execute(

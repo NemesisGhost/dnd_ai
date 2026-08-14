@@ -19,6 +19,7 @@ from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from dnd_ai.commands.encounters import (
     EncounterNotActiveError,
@@ -42,6 +43,8 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.scenario
+
+CONSTRAINT_ERRORS = (IntegrityError, InternalError, ProgrammingError)
 
 
 class Fixture:
@@ -920,32 +923,40 @@ def test_ending_an_encounter_with_a_mismatched_campaign_is_rejected(
     _no_end_side_effects(postgres_engine, start.encounter_id)
 
 
-def test_reparenting_an_encounters_campaign_mid_flight_is_observed_by_the_locked_command(
+def test_a_concurrent_reparent_attempt_during_an_in_flight_turn_cannot_leave_mixed_provenance(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    """Controlled two-connection race, standing in for the TOCTOU this
-    revision closes: a caller observes (or is authorized against) an
-    encounter's campaign at one point in time, then a *different*
-    transaction reparents the encounter to another campaign on the same
-    timeline before the caller's own mutation runs. _lock_encounter's
-    ownership check must observe the encounter's true, current owner —
-    never a value cached from before the reparent — because it reads
-    campaign_id from the same FOR UPDATE-locked row a reparenting UPDATE
-    must also wait behind.
+    """narrative.encounters.campaign_id is now immutable (revision 081's
+    corrected reparenting analysis — see that migration's own docstring):
+    reparenting is rejected outright, with or without a race. This proves
+    the stronger guarantee holds under genuine concurrency too, not just
+    at rest.
 
-    Sequence: a raw connection acquires the encounter's row lock via an
-    uncommitted `UPDATE ... SET campaign_id = other` (not yet committed).
-    A second thread calls _resolve_combat_turn_impl expecting the
-    *original* campaign_id — this must block on the same row lock. Once
-    genuinely blocked (confirmed server-side, not assumed from timing),
-    the main thread commits the reparent. The previously blocked call then
-    proceeds, observes the *new* campaign_id, and must reject — proving
-    the check always sees the encounter's true owner at the moment it
-    actually locks the row, not whatever was true earlier.
+    An earlier version of this test (from before campaign_id became
+    immutable) proved the *previous* mechanism instead: that
+    _lock_encounter's ownership assertion always observed the encounter's
+    true, current owner rather than a value cached from before a
+    successful reparent. That mechanism is now moot — a reparenting
+    UPDATE can no longer succeed at all, so there is nothing for a caller
+    to "observe" after the fact. What still needs proving is that the
+    *reparent itself* is the one that loses this race, cleanly, and that
+    the turn already in flight completes normally under the campaign it
+    started with — never a state where the turn's own interaction/event
+    rows and the encounter's own campaign_id could end up disagreeing.
+
+    Sequence: a real resolve_combat_turn() call acquires the encounter's
+    row lock via _lock_encounter's own FOR UPDATE SELECT, inside an
+    uncommitted transaction. A second thread attempts a raw reparenting
+    UPDATE — this must block on the same row lock, exactly as it would
+    behind any other uncommitted writer. Once genuinely blocked (confirmed
+    server-side, not assumed from timing), the main thread commits the
+    turn. The previously blocked reparent then proceeds — and must fail
+    immediately with the immutability violation, never succeed.
 
     end_encounter is not separately race-tested: _end_encounter_impl calls
-    the identical _lock_encounter, so this proves the shared mechanism for
-    both callers."""
+    the identical _lock_encounter, and the immutability trigger this test
+    proves is unconditional — it does not depend on which command holds
+    the row lock first."""
     start = start_encounter(
         postgres_engine,
         timeline_id=f.timeline_id,
@@ -958,110 +969,439 @@ def test_reparenting_an_encounters_campaign_mid_flight_is_observed_by_the_locked
             connection, f.timeline_id, lifecycle_status_code="pending"
         )
 
-    reparent_connection = postgres_engine.connect()
-    reparent_transaction = reparent_connection.begin()
+    turn_connection = postgres_engine.connect()
+    turn_transaction = turn_connection.begin()
 
-    turn_started = threading.Event()
-    turn_done = threading.Event()
+    reparent_started = threading.Event()
+    reparent_done = threading.Event()
     pids: dict[str, int] = {}
-    results: dict[str, ResolveCombatTurnResult] = {}
     errors: dict[str, Exception] = {}
 
-    def _turn() -> None:
+    def _reparent() -> None:
         try:
             with postgres_engine.connect() as connection:
-                # SELECT pg_backend_pid() auto-begins this connection's
-                # transaction (SQLAlchemy 2.x) — _resolve_combat_turn_impl
-                # below runs in that same, already-open transaction rather
-                # than a second one started via connection.begin() (which
-                # would raise InvalidRequestError: a connection can't
-                # begin() a transaction while one it already auto-began is
-                # still open). commit() is called explicitly, only on
-                # success — if _resolve_combat_turn_impl raises, this
-                # function's own `with` block closes the connection
-                # without committing, rolling the autobegun transaction
-                # back, exactly as the rejection-with-no-side-effects
-                # cases elsewhere in this module require.
-                pids["turn"] = connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
-                turn_started.set()
-                results["turn"] = _resolve_combat_turn_impl(
-                    connection,
-                    encounter_id=start.encounter_id,
-                    round_number=1,
-                    turn_order=0,
-                    actor_entity_id=f.attacker_id,
-                    world_time_id=f.world_time_id,
-                    target_entity_id=f.defender_id,
-                    hit=True,
-                    damage_amount=7,
-                    # The campaign the caller observed/was authorized
-                    # against *before* this call — the reparent below
-                    # happens after this value was decided.
-                    campaign_id=f.campaign_id,
+                pids["reparent"] = connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                reparent_started.set()
+                connection.execute(
+                    text(
+                        "UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"
+                    ),
+                    {"c": other_campaign_id, "e": start.encounter_id},
                 )
                 connection.commit()
         except Exception as exc:  # noqa: BLE001 - captured for the assertion below
-            errors["turn"] = exc
+            errors["reparent"] = exc
         finally:
-            turn_done.set()
+            reparent_done.set()
 
+    turn_result: ResolveCombatTurnResult | None = None
     try:
-        # Acquire the encounter's row lock via an uncommitted reparenting
-        # UPDATE — _resolve_combat_turn_impl's own FOR UPDATE SELECT must
-        # wait behind this exact row lock, the same as it would behind any
-        # other uncommitted writer.
-        reparent_connection.execute(
-            text("UPDATE narrative.encounters SET campaign_id = :c WHERE encounter_id = :e"),
-            {"c": other_campaign_id, "e": start.encounter_id},
+        # Hold the encounter's row lock via a real, uncommitted turn — the
+        # concurrent reparent's own UPDATE must wait behind this exact
+        # row lock.
+        turn_result = _resolve_combat_turn_impl(
+            turn_connection,
+            encounter_id=start.encounter_id,
+            round_number=1,
+            turn_order=0,
+            actor_entity_id=f.attacker_id,
+            world_time_id=f.world_time_id,
+            target_entity_id=f.defender_id,
+            hit=True,
+            damage_amount=7,
+            campaign_id=f.campaign_id,
         )
 
-        thread = threading.Thread(target=_turn)
+        thread = threading.Thread(target=_reparent)
         thread.start()
-        assert turn_started.wait(timeout=180), "turn thread never started"
-        turn_pid = pids["turn"]
+        assert reparent_started.wait(timeout=180), "reparent thread never started"
+        reparent_pid = pids["reparent"]
 
-        # Poll pg_stat_activity for confirmation the turn's own locking
-        # SELECT is genuinely blocked, rather than assuming a fixed sleep
-        # was long enough — matched by exact backend pid (deterministic,
-        # unlike matching on query text).
+        # Poll pg_stat_activity for confirmation the reparent's own UPDATE
+        # is genuinely blocked, rather than assuming a fixed sleep was long
+        # enough — matched by exact backend pid (deterministic, unlike
+        # matching on query text).
         deadline = time.monotonic() + 60
         blocked = False
         while time.monotonic() < deadline:
-            waiting = reparent_connection.execute(
+            waiting = turn_connection.execute(
                 text(
                     "SELECT count(*) FROM pg_stat_activity "
                     "WHERE pid = :pid AND wait_event_type = 'Lock'"
                 ),
-                {"pid": turn_pid},
+                {"pid": reparent_pid},
             ).scalar()
             if waiting:
                 blocked = True
                 break
             time.sleep(0.1)
 
-        assert blocked, "the concurrent turn was never observed blocked behind the reparent"
-        assert not turn_done.is_set(), (
-            "the turn completed despite the reparent lock still being held"
+        assert blocked, "the concurrent reparent was never observed blocked behind the turn"
+        assert not reparent_done.is_set(), (
+            "the reparent completed despite the turn's row lock still being held"
         )
     finally:
         with contextlib.suppress(Exception):
-            reparent_transaction.commit()
+            turn_transaction.commit()
         with contextlib.suppress(Exception):
-            reparent_connection.close()
+            turn_connection.close()
 
-    assert turn_done.wait(timeout=60), "the turn never completed after the reparent committed"
+    assert reparent_done.wait(timeout=60), "the reparent never completed after the turn committed"
     thread.join(timeout=60)
     assert not thread.is_alive()
 
-    assert "turn" not in results, "the turn must not succeed once its expected campaign is stale"
-    assert "turn" in errors, "the turn must reject the now-reparented encounter"
-    assert isinstance(errors["turn"], EncounterNotFoundError)
+    assert turn_result is not None
+    assert turn_result.event_id is not None, "the in-flight turn itself must have succeeded"
+    assert "reparent" in errors, "the reparent must be rejected once unblocked"
+    assert isinstance(errors["reparent"], CONSTRAINT_ERRORS)
+    assert "immutable" in str(errors["reparent"])
 
     with postgres_engine.connect() as verify:
-        row = verify.execute(
+        encounter_row = verify.execute(
             text("SELECT campaign_id FROM narrative.encounters WHERE encounter_id = :e"),
             {"e": start.encounter_id},
         ).one()
-        assert row.campaign_id == other_campaign_id, "the reparent itself must have committed"
+        assert encounter_row.campaign_id == f.campaign_id, (
+            "the rejected reparent must not have changed the encounter's campaign"
+        )
+
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": turn_result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id == f.campaign_id, (
+            "the in-flight turn's own provenance must stay attributed to the original campaign"
+        )
+
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": turn_result.event_id},
+        ).one()
+        assert event_row.campaign_id == f.campaign_id, (
+            "the in-flight turn's damage event must stay attributed to the original campaign"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Campaign provenance (as distinct from the ownership assertion above)
+# ---------------------------------------------------------------------------
+
+
+def test_resolving_a_turn_with_a_matching_campaign_attributes_records_to_it(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The scoped-and-matching path (already exercised indirectly by the
+    mismatch/reparenting tests above) gets its own direct positive
+    assertion: a caller that supplies the encounter's real campaign_id as
+    its ownership assertion gets records attributed to that same campaign
+    — the unchanged, still-correct behavior this revision must not
+    regress."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+
+    result = resolve_combat_turn(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        target_entity_id=f.defender_id,
+        hit=True,
+        damage_amount=7,
+        campaign_id=f.campaign_id,
+    )
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id == f.campaign_id
+
+
+def test_resolving_a_turn_with_an_omitted_campaign_still_attributes_records_to_the_encounters_actual_campaign(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """campaign_id=None on resolve_combat_turn() skips only the ownership
+    *assertion* (_lock_encounter's expected_campaign_id) — it must not
+    also discard the encounter's real campaign provenance onto the
+    interaction.interactions/narrative.events rows this call creates. A
+    campaign-owned encounter must still produce campaign-owned records
+    even for an unscoped caller, exactly as apply_foundry_combat_sync()
+    (which always calls unscoped today) relies on."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+
+    result = resolve_combat_turn(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        target_entity_id=f.defender_id,
+        hit=True,
+        damage_amount=7,
+        campaign_id=None,
+    )
+    assert result.event_id is not None
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id == f.campaign_id
+
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": result.event_id},
+        ).one()
+        assert event_row.campaign_id == f.campaign_id
+
+
+def test_ending_an_encounter_with_an_omitted_campaign_still_attributes_the_completion_event_to_the_encounters_actual_campaign(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The end_encounter() mirror of the resolve_combat_turn case above:
+    an unscoped end_encounter() call must still attribute the completion
+    event to the encounter's real campaign, not NULL."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+
+    result = end_encounter(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        world_time_id=f.world_time_id,
+        campaign_id=None,
+    )
+
+    with postgres_engine.connect() as verify:
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": result.event_id},
+        ).one()
+        assert event_row.campaign_id == f.campaign_id
+
+
+def test_resolving_a_turn_on_a_campaign_less_encounter_remains_unscoped(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The other half of the same contract: an encounter that genuinely
+    has no campaign (campaign_id NULL) must still produce campaign-less
+    records — provenance inheritance never invents a campaign that isn't
+    there."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+
+    result = resolve_combat_turn(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        target_entity_id=f.defender_id,
+        hit=True,
+        damage_amount=7,
+    )
+    assert result.event_id is not None
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id is None
+
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": result.event_id},
+        ).one()
+        assert event_row.campaign_id is None
+
+
+def test_ending_a_campaign_less_encounter_remains_unscoped(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+
+    result = end_encounter(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        world_time_id=f.world_time_id,
+    )
+
+    with postgres_engine.connect() as verify:
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": result.event_id},
+        ).one()
+        assert event_row.campaign_id is None
+
+
+def test_resolving_a_turn_with_an_omitted_campaign_still_accepts_a_session_matching_the_encounters_actual_campaign(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Session validation must be checked against the encounter's actual,
+    locked campaign — never against this call's own (possibly unscoped)
+    campaign_id argument. Before this fix, an unscoped caller supplying a
+    session_id that genuinely belongs to the encounter's real campaign
+    would have been wrongly rejected (validated against campaign_id=None,
+    which no real session ever matches)."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+
+    result = resolve_combat_turn(
+        postgres_engine,
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        target_entity_id=f.defender_id,
+        hit=True,
+        damage_amount=7,
+        campaign_id=None,
+        session_id=f.session_id,
+    )
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id, i.session_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id == f.campaign_id
+        assert interaction_row.session_id == f.session_id
+
+
+def test_resolving_a_turn_with_an_omitted_campaign_still_rejects_a_foreign_session(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The other half: an unscoped caller supplying a session_id that
+    belongs to a *different* campaign than the encounter's actual owner
+    must still be rejected — the assertion being skipped is ownership of
+    the encounter, not validity of a supplied session."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with pytest.raises(SessionNotInCampaignError):
+        resolve_combat_turn(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            round_number=1,
+            turn_order=0,
+            actor_entity_id=f.attacker_id,
+            world_time_id=f.world_time_id,
+            target_entity_id=f.defender_id,
+            hit=True,
+            damage_amount=7,
+            campaign_id=None,
+            session_id=foreign_session_id,
+        )
 
     _no_turn_side_effects(postgres_engine, f, start.encounter_id)
+
+
+def test_ending_an_encounter_with_an_omitted_campaign_still_rejects_a_foreign_session(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The end_encounter() mirror of the rejection case above."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+    )
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with pytest.raises(SessionNotInCampaignError):
+        end_encounter(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            world_time_id=f.world_time_id,
+            campaign_id=None,
+            session_id=foreign_session_id,
+        )
+
+    _no_end_side_effects(postgres_engine, start.encounter_id)

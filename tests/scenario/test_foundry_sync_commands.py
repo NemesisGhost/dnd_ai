@@ -132,6 +132,7 @@ from dnd_ai.commands.integration import (
     register_external_system,
 )
 from tests.factories import (
+    make_campaign,
     make_character,
     make_character_state,
     make_timeline,
@@ -283,6 +284,80 @@ def test_an_inbound_foundry_combat_payload_updates_persistent_state(
             {"e": result.combat_result.event_id},
         ).one()
         assert cause_row.cause_encounter_id == start.encounter_id
+
+
+def test_a_foundry_turn_on_a_campaign_owned_encounter_inherits_its_campaign(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """apply_foundry_combat_sync() deliberately calls _resolve_combat_turn_impl
+    with no campaign_id, leaving _lock_encounter's ownership *assertion*
+    unscoped (Phase 9's integration.* schema has no campaign to assert
+    against yet — see that function's own docstring). That must not mean
+    the interaction/event rows it creates lose the target encounter's real
+    campaign provenance: the encounter here is campaign-owned, so the
+    interaction.interactions row and the resulting combat_damage_dealt
+    narrative.events row must both carry that same campaign_id, exactly as
+    they would for a campaign-scoped direct caller — a routine Foundry
+    turn must never silently downgrade a campaign-owned encounter's
+    records to campaign_id=NULL."""
+    system = register_external_system(
+        postgres_engine, world_id=f.world_id, system_type="foundry", display_name="Test Foundry"
+    )
+    with postgres_engine.begin() as connection:
+        # "pending" sidesteps the active-campaign access-manager retention
+        # invariant (revision 080) — this test doesn't grant access.manage
+        # and doesn't otherwise care about campaign lifecycle.
+        campaign_id = make_campaign(connection, f.timeline_id, lifecycle_status_code="pending")
+
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=campaign_id,
+    )
+
+    result = apply_foundry_combat_sync(
+        postgres_engine,
+        external_system_id=system.external_system_id,
+        external_operation_id="campaign-provenance-op-1",
+        encounter_id=start.encounter_id,
+        round_number=1,
+        turn_order=0,
+        actor_entity_id=f.attacker_id,
+        world_time_id=f.world_time_id,
+        target_entity_id=f.defender_id,
+        hit=True,
+        damage_amount=6,
+    )
+    assert result.combat_result.event_id is not None
+
+    with postgres_engine.connect() as verify:
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.campaign_id FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = (
+                    SELECT ca.combat_action_id FROM interaction.combat_actions ca
+                    WHERE ca.action_id = a.action_id
+                )
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": result.combat_result.encounter_turn_id},
+        ).one()
+        assert interaction_row.campaign_id == campaign_id, (
+            "an unscoped Foundry turn must still attribute its interaction row to the "
+            "target encounter's real campaign, not NULL"
+        )
+
+        event_row = verify.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :e"),
+            {"e": result.combat_result.event_id},
+        ).one()
+        assert event_row.campaign_id == campaign_id, (
+            "an unscoped Foundry turn must still attribute its resulting event to the "
+            "target encounter's real campaign, not NULL"
+        )
 
 
 def test_re_registering_the_same_external_actor_is_idempotent(
