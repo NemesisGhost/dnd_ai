@@ -77,6 +77,65 @@ Purpose:
     *bespoke* trigger rather than reusing `core.enforce_immutable_columns()`
     (revision 030/033) directly.
 
+    Reparenting — corrected again (same still-unreleased revision): the
+    first correction pass above made `campaign_id` immutable but left
+    `timeline_id` mutable, reasoning (wrongly, in the now-superseded
+    paragraph below) that campaign-owned encounters were adequately
+    protected *indirectly* — `campaign_id`'s own immutability plus
+    `enforce_encounter_world()`'s existing "campaign must belong to
+    timeline" check together mean a campaign-owned encounter's
+    `timeline_id` can never actually move without also changing
+    `campaign_id` (which is blocked). That reasoning has a gap: it says
+    nothing about a *campaign-less* encounter (`campaign_id IS NULL`),
+    which has no campaign relationship to indirectly pin its timeline
+    down. `enforce_encounter_world()` only re-validates same-world
+    agreement — moving such an encounter to a *different timeline in the
+    same world* passes every existing check cleanly, while the
+    `interaction.interactions`/`narrative.events` rows its turns/
+    completion already created stay on the *original* timeline. This is
+    the exact same "parent row's own scope changes out from under an
+    already-valid child row" shape the `campaign_id` fix above closes —
+    just for the one column that fix didn't cover. `timeline_id` is now
+    immutable too, merged into the *same* trigger/function as
+    `campaign_id` (renamed `enforce_encounter_identity_immutable()` /
+    `tr_encounters_identity_immutable`, from `enforce_encounter_
+    campaign_immutable()`/`tr_encounters_campaign_immutable`) rather than
+    a second, separate trigger: both columns are now identical in shape
+    ("reject any change, full stop, including NULL <-> value for
+    campaign_id") and both exist to protect the exact same class of
+    already-created dependent rows, so one clearly-named "encounter
+    identity is fixed at creation" guard covers both, instead of two
+    near-duplicate ones a reader would have to notice enforce the same
+    idea. The corrected pre-flight audit (below) is extended the same
+    way: every place it already checked `campaign_id` agreement now also
+    checks `timeline_id` agreement, since a pre-existing corrupted row
+    could disagree on either column independently.
+
+    Session review (same correction pass, no code change): is
+    `narrative.encounters.session_id` exposed to the same risk, and
+    should it be made immutable too? No — unlike `timeline_id`/
+    `campaign_id`, nothing derives its *own* session scope from the
+    encounter's `session_id`. `_resolve_combat_turn_impl()`/
+    `_end_encounter_impl()` (`src/dnd_ai/commands/encounters.py`) each
+    take their *own* `session_id` argument for the `interaction.
+    interactions`/`narrative.events` row they create, independent of
+    whatever `narrative.encounters.session_id` holds and deliberately
+    never inherited from it (documented on those functions themselves —
+    an encounter can span more than one `campaign.sessions` row over its
+    life, so inheriting the encounter's *starting* session onto a turn
+    played in a later one would misattribute it). `narrative.encounters.
+    session_id` therefore records one fact only — which session the
+    encounter was *started* in — that no other row's own provenance is
+    built on top of; changing it later cannot orphan anything the way
+    `timeline_id`/`campaign_id` could. It remains ordinary, freely
+    mutable metadata, still revalidated against `campaign_id` on every
+    UPDATE by `enforce_encounter_world()` (unchanged). `location_id` was
+    considered on the same basis and excluded for the same reason: no
+    other row's provenance derives its own location from an encounter's
+    `location_id` either. Per this project's own proportional-scope
+    convention, neither is protected without a concrete invariant to
+    protect.
+
     Reparenting — original (superseded) analysis, kept for the record:
     this revision does *not* need to make `narrative.encounters.
     campaign_id`/`.timeline_id` immutable to stay correct.
@@ -149,15 +208,16 @@ Purpose:
 
     Sibling review, correction pass: `integration.sync_jobs`/`.sync_state`
     (revision 079) also reference `target_encounter_id`, but neither table
-    has a `campaign_id` column at all — Phase 9's integration domain scopes
-    an external system to a `world_id` only (see that revision, and
-    `dnd_ai.commands.integration.apply_foundry_combat_sync()`'s own
-    docstring on why its combat-turn calls stay unscoped until Phase 11).
-    There is no column there for a reparented encounter to leave stale, so
-    the audit and the immutability guard below both correctly stop at
-    `interaction.interactions`/`narrative.events`/`narrative.
-    event_causes`/`narrative.encounters.resulting_event_id` — every table
-    in this domain that *does* carry `campaign_id`.
+    has a `campaign_id` or `timeline_id` column at all — Phase 9's
+    integration domain scopes an external system to a `world_id` only
+    (see that revision, and `dnd_ai.commands.integration.
+    apply_foundry_combat_sync()`'s own docstring on why its combat-turn
+    calls stay unscoped until Phase 11). There is no column there for a
+    reparented encounter to leave stale, so the audit and the
+    immutability guard below both correctly stop at `interaction.
+    interactions`/`narrative.events`/`narrative.event_causes`/`narrative.
+    encounters.resulting_event_id` — every table in this domain that
+    *does* carry `campaign_id`/`timeline_id`.
 
 Corrected forward migration (folded into this same upgrade(), after the
 original three steps below):
@@ -167,21 +227,25 @@ original three steps below):
       encounter_rounds -> encounter_turns -> combat_actions -> actions),
       narrative.events (reached through event_causes.cause_encounter_id),
       or resulting_event_id's own narrative.events row already disagree
-      with the encounter's own campaign_id — the durable orphaned-
-      provenance state a past reparenting UPDATE (only ever exercised by
-      this project's own tests, never by any command — see "Reparenting —
-      corrected" above) could have left behind. RAISEs, refusing to
-      proceed, if any exist; this project has no live deployment yet
+      with the encounter's own timeline_id *or* campaign_id (IS DISTINCT
+      FROM either) — the durable orphaned-provenance state a past
+      reparenting UPDATE (only ever exercised by this project's own
+      tests, never by any command — see "Reparenting — corrected"/
+      "corrected again" above) could have left behind. RAISEs, refusing
+      to proceed, if any exist; this project has no live deployment yet
       (docs/PLAN.md "Current status"), so every real environment is
       expected to have zero, but the audit runs unconditionally rather
       than assuming that, the same as the original audit above.
-    - narrative.enforce_encounter_campaign_immutable(): a new, bespoke
+    - narrative.enforce_encounter_identity_immutable(): a new, bespoke
       BEFORE UPDATE trigger function on narrative.encounters, rejecting
-      any UPDATE where NEW.campaign_id IS DISTINCT FROM OLD.campaign_id —
-      deliberately *not* core.enforce_immutable_columns() (revision
-      030/033): that shared function's current body only blocks a change
-      away from an already-non-NULL value, explicitly allowing one NULL ->
-      value transition (see tests/database/test_immutable_identity.py::
+      any UPDATE where NEW.timeline_id IS DISTINCT FROM OLD.timeline_id
+      or NEW.campaign_id IS DISTINCT FROM OLD.campaign_id — timeline_id
+      checked first, so a caller that tries to move both together sees
+      the timeline_id violation — deliberately *not* core.
+      enforce_immutable_columns() (revision 030/033): that shared
+      function's current body only blocks a change away from an
+      already-non-NULL value, explicitly allowing one NULL -> value
+      transition (see tests/database/test_immutable_identity.py::
       test_a_features_null_association_can_still_be_set_once) — the right
       behavior for a column like rules.features.class_id, which starts
       unset and is filled in once. narrative.encounters.campaign_id is
@@ -191,9 +255,12 @@ original three steps below):
       transition must be rejected exactly like a value -> value one, which
       the shared function does not do and was not changed to do (that
       would alter behavior for every one of its ~15 other existing
-      callers). Attached as tr_encounters_campaign_immutable — sorts
-      alphabetically before the existing tr_encounters_enforce_world and
-      tr_encounters_set_updated_at (revision 078), though firing order
+      callers); timeline_id is never NULL to begin with, so it needs no
+      such distinction, but is checked by the same function for the one-
+      trigger-covers-both-columns reason explained under "Reparenting —
+      corrected again" above. Attached as tr_encounters_identity_immutable
+      — sorts alphabetically before the existing tr_encounters_enforce_world
+      and tr_encounters_set_updated_at (revision 078), though firing order
       between the two BEFORE UPDATE triggers is immaterial here: they
       enforce independent, non-conflicting rules, and a reparenting UPDATE
       this new trigger rejects never reaches enforce_encounter_world()'s
@@ -209,11 +276,11 @@ Rollback:
     "Locking considerations" for the full asymmetry argument.
 
     Corrected rollback (same reasoning, extended): also DROPs
-    tr_encounters_campaign_immutable and narrative.
-    enforce_encounter_campaign_immutable() — downgrading restores
-    campaign_id's original mutability, the same "downgrade only weakens"
-    asymmetry as the rest of this migration's rollback, so no LOCK TABLE
-    is needed for this half either.
+    tr_encounters_identity_immutable and narrative.
+    enforce_encounter_identity_immutable() — downgrading restores
+    timeline_id's and campaign_id's original mutability, the same
+    "downgrade only weakens" asymmetry as the rest of this migration's
+    rollback, so no LOCK TABLE is needed for this half either.
 
 Data implications:
     None beyond the pre-flight audits — no row is modified by either. If
@@ -221,13 +288,18 @@ Data implications:
     silently reinterpreting or discarding existing data.
 
 Locking considerations:
-    LOCK TABLE narrative.encounters IN SHARE MODE runs first, before the
-    audit, and is held for the rest of this migration's transaction —
-    through the audit, the CREATE OR REPLACE FUNCTION, and this
-    migration's own commit (Alembic runs one revision's upgrade() inside
-    one transaction; PostgreSQL releases an explicit LOCK TABLE only at
-    COMMIT/ROLLBACK, never earlier, and never implicitly re-acquires or
-    drops it mid-transaction).
+    LOCK TABLE narrative.encounters IN SHARE ROW EXCLUSIVE MODE runs
+    first, before the audit, and is held for the rest of this migration's
+    transaction — through both audits, both CREATE OR REPLACE FUNCTION
+    calls, CREATE TRIGGER, and this migration's own commit (Alembic runs
+    one revision's upgrade() inside one transaction; PostgreSQL releases
+    an explicit LOCK TABLE only at COMMIT/ROLLBACK, never earlier, and
+    never implicitly re-acquires or drops it mid-transaction). This is
+    SHARE ROW EXCLUSIVE from the very first statement, not the plain
+    SHARE the first correction pass acquired and then let CREATE TRIGGER
+    silently escalate mid-transaction — see "Why SHARE ROW EXCLUSIVE, and
+    why it's acquired upfront" below for why the escalating version was
+    itself corrected.
 
     Why a table lock is needed at all: CREATE OR REPLACE FUNCTION takes no
     lock whatsoever on narrative.encounters — it only touches the
@@ -243,35 +315,70 @@ Locking considerations:
     then persist, silently invalid, forever: exactly the race this
     revision's LOCK TABLE closes.
 
-    Why SHARE, and why it's sufficient: PostgreSQL's own lock-conflict
-    matrix (docs "13.3. Explicit Locking", "Table-Level Locks") is what
-    decides this, not a preference — INSERT and UPDATE each acquire ROW
-    EXCLUSIVE on their target table, and ROW EXCLUSIVE conflicts with
-    exactly four modes: SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS
-    EXCLUSIVE (never with ROW SHARE, ROW EXCLUSIVE itself, or SHARE UPDATE
-    EXCLUSIVE). SHARE is the weakest of those four conflicting modes, so
-    it is the weakest lock that still queues every concurrent INSERT/
-    UPDATE/DELETE behind this migration's own transaction. It does *not*
-    block ordinary reads: SHARE does not conflict with ACCESS SHARE
-    (plain SELECT) or even ROW SHARE (SELECT ... FOR UPDATE/FOR SHARE),
-    so read traffic against narrative.encounters is unaffected for the
-    lock's whole duration — only writers wait. A blocked writer is not
-    rejected or retried; it simply waits in PostgreSQL's normal lock queue
-    and proceeds, under the *new* (already-committed) trigger definition,
-    the moment this migration's transaction ends — so a concurrent insert
-    attempted during the migration either lands cleanly after it (revalidated
-    by the stricter check) or was already valid and unaffected; none can land
-    invalid.
+    Why SHARE ROW EXCLUSIVE, and why it's acquired upfront (corrected):
+    PostgreSQL's own lock-conflict matrix (docs "13.3. Explicit Locking",
+    "Table-Level Locks") is what decides the *floor* here, not a
+    preference — INSERT and UPDATE each acquire ROW EXCLUSIVE on their
+    target table, and ROW EXCLUSIVE conflicts with exactly four modes:
+    SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS EXCLUSIVE (never
+    with ROW SHARE, ROW EXCLUSIVE itself, or SHARE UPDATE EXCLUSIVE).
+    Plain SHARE would already be the weakest of those four conflicting
+    modes, so it would be *sufficient* to queue every concurrent INSERT/
+    UPDATE/DELETE behind this migration's own transaction — and the first
+    correction pass acquired exactly that. But CREATE TRIGGER (this
+    correction pass's own addition) itself requires SHARE ROW EXCLUSIVE,
+    a *stronger* mode than SHARE — so that version acquired SHARE first
+    and let CREATE TRIGGER escalate to SHARE ROW EXCLUSIVE mid-
+    transaction. Lock escalation within one already-held lock is not by
+    itself a self-deadlock (a session may always request a stronger mode
+    on an object it already holds a weaker one on), but it does open a
+    *different*, real hazard this correction closes: two migrations
+    (a rolling deployment double-running, or any other concurrent session
+    also doing `LOCK TABLE ... IN SHARE MODE`) can each successfully
+    acquire plain SHARE simultaneously — SHARE does not conflict with
+    itself — and then each attempt to escalate to SHARE ROW EXCLUSIVE at
+    the same time. SHARE ROW EXCLUSIVE *does* conflict with SHARE, so
+    each session's escalation request blocks on the *other* session's
+    still-held SHARE lock: a classic lock-upgrade deadlock, which
+    PostgreSQL's deadlock detector would eventually break by aborting one
+    side, but only after a real wait and a failed migration run neither
+    side needed to hit. Acquiring SHARE ROW EXCLUSIVE directly, as the
+    very first statement, removes the two-step path entirely: two
+    concurrent sessions requesting SHARE ROW EXCLUSIVE up front simply
+    serialize on the normal lock queue (SHARE ROW EXCLUSIVE conflicts
+    with itself, so the second waits for the first to finish and commit,
+    the same as it would wait behind any other single blocking writer)
+    — no escalation, so no lock-upgrade cycle for the deadlock detector
+    to ever need to resolve.
+
+    It does *not* block ordinary reads: SHARE ROW EXCLUSIVE does not
+    conflict with ACCESS SHARE (plain SELECT) or ROW SHARE (SELECT ...
+    FOR UPDATE/FOR SHARE), the identical read-friendliness plain SHARE
+    already had — so read traffic against narrative.encounters is
+    unaffected for the lock's whole duration, only writers wait. (SHARE
+    ROW EXCLUSIVE does additionally conflict with SHARE UPDATE EXCLUSIVE
+    — VACUUM (non-FULL), ANALYZE, CREATE INDEX CONCURRENTLY, and a few
+    ALTER TABLE forms — which plain SHARE did not; immaterial here, since
+    this migration's own hold is short and bounded, the same argument
+    "Expected blocking, and why it is bounded" below already makes for
+    ordinary writers.) A blocked writer is not rejected or retried; it
+    simply waits in PostgreSQL's normal lock queue and proceeds, under
+    the *new* (already-committed) trigger definition, the moment this
+    migration's transaction ends — so a concurrent insert attempted
+    during the migration either lands cleanly after it (revalidated by
+    the stricter check) or was already valid and unaffected; none can
+    land invalid.
 
     Expected blocking, and why it is bounded: this migration's own work
-    between acquiring the lock and releasing it (at commit) is one COUNT(*)
-    audit query and one CREATE OR REPLACE FUNCTION — no table rewrite, no
-    index build, nothing whose cost scales with narrative.encounters' row
-    count beyond that single COUNT(*) scan. A concurrent writer therefore
-    waits, at most, for however long this migration itself takes to run
-    end to end (milliseconds to low seconds under normal conditions), not
-    for an unrelated long-running operation. This is the same "one bounded
-    DDL transaction, writers queue briefly behind it" shape every other
+    between acquiring the lock and releasing it (at commit) is two
+    COUNT(*) audit queries, two CREATE OR REPLACE FUNCTION calls, and one
+    CREATE TRIGGER — no table rewrite, no index build, nothing whose cost
+    scales with narrative.encounters' row count beyond those two bounded
+    COUNT(*) scans. A concurrent writer therefore waits, at most, for
+    however long this migration itself takes to run end to end
+    (milliseconds to low seconds under normal conditions), not for an
+    unrelated long-running operation. This is the same "one bounded DDL
+    transaction, writers queue briefly behind it" shape every other
     trigger-replacing correction pass in this project already has —
     revision 081 differs only in making that queuing explicit via LOCK
     TABLE, where the earlier ones' own audits (when they had one) didn't
@@ -279,28 +386,18 @@ Locking considerations:
     window on a live-written table the same way.
 
     Deadlock: this migration acquires exactly one lock (the table lock,
-    first, before anything else) and never waits on any other lock while
-    holding it — CREATE OR REPLACE FUNCTION's own catalog-row lock is
-    never held by a session that could in turn be waiting on this table
-    lock — so there is no lock-ordering cycle for PostgreSQL's deadlock
-    detector to ever need to break.
-
-    Corrected forward migration's own locking: CREATE TRIGGER (unlike
-    CREATE OR REPLACE FUNCTION) takes a SHARE ROW EXCLUSIVE lock on the
-    table it's attached to — a *stronger* mode than the SHARE lock this
-    migration already holds from its very first statement. Requesting a
-    stronger lock mode on an already-locked object, in the same session
-    that holds the weaker one, is not a self-deadlock: PostgreSQL simply
-    grants the escalation (no other session can be granted SHARE ROW
-    EXCLUSIVE concurrently with this session's own SHARE, so there is
-    nothing else to wait on), and it does not shrink the set of blocked
-    writers — SHARE ROW EXCLUSIVE still conflicts with ROW EXCLUSIVE
-    (INSERT/UPDATE/DELETE), the same as SHARE — so no new lock-ordering
-    cycle or blocking gap is introduced. The second audit above still
-    needs its own protection from the *original* SHARE lock, acquired
-    before either audit runs: CREATE TRIGGER's own lock only starts
-    protecting the table once that specific statement executes, which is
-    after both audits have already run.
+    first, before anything else, at the *strongest* mode it will ever
+    need for the whole transaction — no escalation, per "Why SHARE ROW
+    EXCLUSIVE" above) and never waits on any other lock while holding it
+    — CREATE OR REPLACE FUNCTION's own catalog-row lock and CREATE
+    TRIGGER's own (already-held, non-escalating) table lock are never
+    held by a session that could in turn be waiting on this table lock —
+    so there is no lock-ordering cycle for PostgreSQL's deadlock detector
+    to ever need to break. Both audits run under this same lock, acquired
+    before either of them, so the second audit is protected identically
+    to the first — there is no window where CREATE TRIGGER's own lock is
+    what the second audit was relying on, since the single upfront LOCK
+    TABLE already covers the entire transaction.
 
 SQLAlchemy metadata / architecture docs:
     src/dnd_ai/persistence/tables/encounters.py declares no CHECK
@@ -308,7 +405,17 @@ SQLAlchemy metadata / architecture docs:
     only compares tables/columns/comments, never trigger bodies), so no
     change is needed there. docs/architecture/DATABASE_MODEL.md §13 gained
     one sentence noting the original session/campaign invariant, and a
-    second sentence for this correction's campaign_id immutability.
+    second sentence — now covering both timeline_id and campaign_id — for
+    this correction's identity immutability.
+
+    tests/database/test_encounter_domain.py::
+    test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released
+    (the focused lock-conflict regression proving this migration's own
+    lock genuinely serializes writers) is updated to acquire SHARE ROW
+    EXCLUSIVE instead of plain SHARE, matching this correction — the
+    property under test (a held table lock blocks a concurrent INSERT
+    until released) is identical for either mode, so only the acquired
+    mode changes, not the test's own structure or assertions.
 
 See: docs/DATABASE_CONVENTIONS.md §9.5 (same-world consistency)
      docs/architecture/DATABASE_MODEL.md §13 (encounters and combat)
@@ -344,10 +451,13 @@ depends_on = None
 def upgrade() -> None:
     """Apply the migration."""
 
-    # Must precede the audit — see this revision's "Locking considerations"
-    # docstring section for the race this closes and why SHARE is the
-    # weakest mode that closes it.
-    op.execute("LOCK TABLE narrative.encounters IN SHARE MODE;")
+    # Must precede both audits — see this revision's "Locking
+    # considerations" docstring section for the race this closes and why
+    # SHARE ROW EXCLUSIVE (not plain SHARE, and acquired here rather than
+    # via a later mid-transaction escalation) is what CREATE TRIGGER below
+    # needs and what avoids a lock-upgrade deadlock hazard between two
+    # concurrent migration runs.
+    op.execute("LOCK TABLE narrative.encounters IN SHARE ROW EXCLUSIVE MODE;")
 
     op.execute("""
         DO $$
@@ -466,10 +576,12 @@ def upgrade() -> None:
     """)
 
     # --- Correction (same still-unreleased revision — see "Reparenting —
-    # corrected" in this module's own docstring): campaign_id immutability,
-    # plus a second pre-flight audit for provenance already orphaned by a
-    # reparenting UPDATE. Both run under the LOCK TABLE already acquired
-    # above, before anything in this section — see "Locking considerations".
+    # corrected"/"corrected again" in this module's own docstring):
+    # timeline_id and campaign_id identity immutability, plus a second
+    # pre-flight audit for provenance already orphaned by a reparenting
+    # UPDATE on either column. Both run under the LOCK TABLE already
+    # acquired above, before anything in this section — see "Locking
+    # considerations".
 
     op.execute("""
         DO $$
@@ -486,21 +598,30 @@ def upgrade() -> None:
                 JOIN interaction.actions a ON a.action_id = ca.action_id
                 JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
                 WHERE er.encounter_id = e.encounter_id
-                  AND i.campaign_id IS DISTINCT FROM e.campaign_id
+                  AND (
+                      i.timeline_id IS DISTINCT FROM e.timeline_id
+                      OR i.campaign_id IS DISTINCT FROM e.campaign_id
+                  )
             )
             OR EXISTS (
                 SELECT 1
                 FROM narrative.event_causes ec
                 JOIN narrative.events ev ON ev.event_id = ec.event_id
                 WHERE ec.cause_encounter_id = e.encounter_id
-                  AND ev.campaign_id IS DISTINCT FROM e.campaign_id
+                  AND (
+                      ev.timeline_id IS DISTINCT FROM e.timeline_id
+                      OR ev.campaign_id IS DISTINCT FROM e.campaign_id
+                  )
             )
             OR (
                 e.resulting_event_id IS NOT NULL
                 AND EXISTS (
                     SELECT 1 FROM narrative.events ev
                     WHERE ev.event_id = e.resulting_event_id
-                      AND ev.campaign_id IS DISTINCT FROM e.campaign_id
+                      AND (
+                          ev.timeline_id IS DISTINCT FROM e.timeline_id
+                          OR ev.campaign_id IS DISTINCT FROM e.campaign_id
+                      )
                 )
             );
 
@@ -508,8 +629,9 @@ def upgrade() -> None:
                 RAISE EXCEPTION
                     'narrative.encounters has % row(s) whose dependent interaction.'
                     'interactions/narrative.events provenance disagrees with the '
-                    'encounter''s own campaign_id (orphaned by a prior reparenting UPDATE) '
-                    '— resolve them before enabling campaign_id immutability (revision 081)',
+                    'encounter''s own timeline_id or campaign_id (orphaned by a prior '
+                    'reparenting UPDATE) — resolve them before enabling encounter '
+                    'identity immutability (revision 081)',
                     v_violations
                     USING ERRCODE = 'integrity_constraint_violation';
             END IF;
@@ -518,11 +640,18 @@ def upgrade() -> None:
     """)
 
     op.execute("""
-        CREATE OR REPLACE FUNCTION narrative.enforce_encounter_campaign_immutable()
+        CREATE OR REPLACE FUNCTION narrative.enforce_encounter_identity_immutable()
         RETURNS trigger
         LANGUAGE plpgsql
         AS $$
         BEGIN
+            IF NEW.timeline_id IS DISTINCT FROM OLD.timeline_id THEN
+                RAISE EXCEPTION
+                    'narrative.encounters.timeline_id is immutable once the encounter '
+                    'exists and cannot be changed for encounter %',
+                    OLD.encounter_id
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
             IF NEW.campaign_id IS DISTINCT FROM OLD.campaign_id THEN
                 RAISE EXCEPTION
                     'narrative.encounters.campaign_id is immutable once the encounter '
@@ -536,19 +665,20 @@ def upgrade() -> None:
         $$;
     """)
     op.execute("""
-        COMMENT ON FUNCTION narrative.enforce_encounter_campaign_immutable() IS
-        'narrative.encounters.campaign_id is immutable once set, including NULL <-> '
-        'non-NULL transitions — stricter than core.enforce_immutable_columns() '
-        '(revision 030/033), which deliberately allows one NULL -> value transition. '
-        'An encounter''s owning campaign (or the deliberate absence of one) is decided '
-        'in full at creation and never re-evaluated, because interaction.interactions/'
-        'narrative.events rows already created under it do not themselves re-validate '
-        'when the encounter later moves (revision 081 correction).';
+        COMMENT ON FUNCTION narrative.enforce_encounter_identity_immutable() IS
+        'narrative.encounters.timeline_id and .campaign_id are both immutable once '
+        'set — campaign_id including NULL <-> non-NULL transitions (stricter than '
+        'core.enforce_immutable_columns(), revision 030/033, which allows one NULL '
+        '-> value transition). An encounter''s owning timeline and campaign (or the '
+        'deliberate absence of a campaign) are decided in full at creation and never '
+        're-evaluated, because interaction.interactions/narrative.events rows '
+        'already created under them do not themselves re-validate when the '
+        'encounter later moves (revision 081 correction).';
     """)
     op.execute("""
-        CREATE TRIGGER tr_encounters_campaign_immutable
+        CREATE TRIGGER tr_encounters_identity_immutable
         BEFORE UPDATE ON narrative.encounters
-        FOR EACH ROW EXECUTE FUNCTION narrative.enforce_encounter_campaign_immutable();
+        FOR EACH ROW EXECUTE FUNCTION narrative.enforce_encounter_identity_immutable();
     """)
 
 
@@ -556,10 +686,11 @@ def downgrade() -> None:
     """Revert the migration."""
 
     # --- Correction cleanup (same still-unreleased revision): drop the
-    # campaign_id immutability guard first — no LOCK TABLE needed, since
-    # downgrading only weakens enforcement (see "Locking considerations").
-    op.execute("DROP TRIGGER IF EXISTS tr_encounters_campaign_immutable ON narrative.encounters;")
-    op.execute("DROP FUNCTION IF EXISTS narrative.enforce_encounter_campaign_immutable();")
+    # timeline_id/campaign_id identity immutability guard first — no LOCK
+    # TABLE needed, since downgrading only weakens enforcement (see
+    # "Locking considerations").
+    op.execute("DROP TRIGGER IF EXISTS tr_encounters_identity_immutable ON narrative.encounters;")
+    op.execute("DROP FUNCTION IF EXISTS narrative.enforce_encounter_identity_immutable();")
 
     op.execute("""
         CREATE OR REPLACE FUNCTION narrative.enforce_encounter_world()

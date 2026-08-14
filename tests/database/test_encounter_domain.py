@@ -182,17 +182,20 @@ def test_reparenting_a_sessions_campaign_cannot_invalidate_an_existing_encounter
 
 
 # ---------------------------------------------------------------------------
-# narrative.encounters.campaign_id immutability (revision 081 correction)
+# narrative.encounters.timeline_id/.campaign_id identity immutability
+# (revision 081 correction, tr_encounters_identity_immutable)
 #
 # The original revision 081 argued no reverse-mutation guard was needed here
 # because narrative.enforce_encounter_world() re-validates the encounter's
 # own row on every UPDATE. That reasoning missed that reparenting silently
 # orphans interaction.interactions/narrative.events rows already created
-# under the encounter's *original* campaign — those never re-validate
-# against the encounter row changing. campaign_id is now immutable once set,
-# including NULL <-> non-NULL transitions (stricter than
-# core.enforce_immutable_columns()'s NULL-transition-permitting default —
-# see tr_encounters_campaign_immutable's own migration docstring for why).
+# under the encounter's *original* timeline/campaign — those never
+# re-validate against the encounter row changing. Both columns are now
+# immutable once set — campaign_id including NULL <-> non-NULL transitions
+# (stricter than core.enforce_immutable_columns()'s NULL-transition-
+# permitting default) — via one shared trigger; see
+# tr_encounters_identity_immutable's own migration docstring for why both
+# columns share it rather than two separate triggers.
 # ---------------------------------------------------------------------------
 
 
@@ -373,6 +376,226 @@ def test_reparenting_after_completion_is_rejected(db_connection: Connection, f: 
     assert row.event_campaign == f.campaign_id
 
 
+def test_a_campaign_less_encounters_timeline_id_is_immutable_once_set(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """The gap this correction closes: a campaign-owned encounter's
+    timeline was already pinned *indirectly* (its campaign_id is
+    immutable, and enforce_encounter_world() requires campaign_id to
+    belong to timeline_id), but a campaign-less encounter has no campaign
+    relationship to pin it down at all — enforce_encounter_world()'s
+    same-world check alone happily accepts a move to a different timeline
+    in the same world."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0)
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET timeline_id = :t WHERE encounter_id = :e"),
+            {"t": other_timeline, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+
+def test_a_campaign_owned_encounters_timeline_id_change_remains_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """campaign_id's own immutability already made this unreachable
+    indirectly before this correction — this proves the *new* trigger is
+    what fires now (timeline_id is checked first), not merely the
+    pre-existing campaign/timeline consistency check, by moving
+    timeline_id and campaign_id together to a self-consistent pair on the
+    other timeline."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    other_campaign = make_campaign(db_connection, other_timeline, lifecycle_status_code="pending")
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text(
+                "UPDATE narrative.encounters SET timeline_id = :t, campaign_id = :c "
+                "WHERE encounter_id = :e"
+            ),
+            {"t": other_timeline, "c": other_campaign, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+    assert "timeline_id" in str(exc.value)
+
+
+def test_setting_an_encounters_timeline_id_to_its_current_value_is_not_a_change(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0, campaign_id=f.campaign_id)
+
+    db_connection.execute(
+        text(
+            "UPDATE narrative.encounters SET timeline_id = :t, campaign_id = :c, "
+            "summary = 'touched' WHERE encounter_id = :e"
+        ),
+        {"t": f.timeline_id, "c": f.campaign_id, "e": encounter_id},
+    )
+    row = db_connection.execute(
+        text(
+            "SELECT timeline_id, campaign_id, summary FROM narrative.encounters "
+            "WHERE encounter_id = :e"
+        ),
+        {"e": encounter_id},
+    ).one()
+    assert row.timeline_id == f.timeline_id
+    assert row.campaign_id == f.campaign_id
+    assert row.summary == "touched"
+
+
+def test_reparenting_a_campaign_less_encounters_timeline_after_a_recorded_turn_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """NULL campaign_id plus an existing turn/interaction: the encounter
+    has no campaign to indirectly pin its timeline, so only the new
+    timeline_id guard itself protects the interaction this turn already
+    created on the original timeline."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0)
+    interaction_id = make_interaction(db_connection, f.timeline_id, f.t0)
+    action_id = make_action(db_connection, interaction_id, f.character_a)
+    combat_action_id = make_combat_action(db_connection, action_id)
+    round_id = make_encounter_round(db_connection, encounter_id, 1)
+    participant_id = make_encounter_participant(db_connection, encounter_id, f.character_a)
+    make_encounter_turn(
+        db_connection, round_id, participant_id, 0, combat_action_id=combat_action_id
+    )
+
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET timeline_id = :t WHERE encounter_id = :e"),
+            {"t": other_timeline, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    stored = db_connection.execute(
+        text("SELECT timeline_id FROM interaction.interactions WHERE interaction_id = :i"),
+        {"i": interaction_id},
+    ).scalar()
+    assert stored == f.timeline_id
+
+
+def test_reparenting_a_campaign_less_encounters_timeline_after_a_caused_event_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0)
+    event_id = make_event(
+        db_connection,
+        f.world_id,
+        f.timeline_id,
+        f.t0,
+        event_type_code="combat_damage_dealt",
+    )
+    db_connection.execute(
+        text(
+            "INSERT INTO narrative.event_causes (event_id, cause_encounter_id) "
+            "VALUES (:event, :encounter)"
+        ),
+        {"event": event_id, "encounter": encounter_id},
+    )
+
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET timeline_id = :t WHERE encounter_id = :e"),
+            {"t": other_timeline, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    stored = db_connection.execute(
+        text("SELECT timeline_id FROM narrative.events WHERE event_id = :e"), {"e": event_id}
+    ).scalar()
+    assert stored == f.timeline_id
+
+
+def test_reparenting_a_campaign_less_encounters_timeline_after_completion_is_rejected(
+    db_connection: Connection, f: Fixture
+) -> None:
+    event_id = make_event(db_connection, f.world_id, f.timeline_id, f.t0)
+    encounter_id = make_encounter(
+        db_connection, f.timeline_id, f.t0, status="completed", resulting_event_id=event_id
+    )
+
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    with pytest.raises(CONSTRAINT_ERRORS) as exc, db_connection.begin_nested():
+        db_connection.execute(
+            text("UPDATE narrative.encounters SET timeline_id = :t WHERE encounter_id = :e"),
+            {"t": other_timeline, "e": encounter_id},
+        )
+    assert "immutable" in str(exc.value)
+
+    row = db_connection.execute(
+        text(
+            "SELECT e.timeline_id AS encounter_timeline, ev.timeline_id AS event_timeline "
+            "FROM narrative.encounters e "
+            "JOIN narrative.events ev ON ev.event_id = e.resulting_event_id "
+            "WHERE e.encounter_id = :e"
+        ),
+        {"e": encounter_id},
+    ).one()
+    assert row.encounter_timeline == f.timeline_id
+    assert row.event_timeline == f.timeline_id
+
+
+def test_the_provenance_audit_detects_a_preexisting_timeline_mismatch(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Standalone proof that revision 081's second pre-flight audit query
+    (the migration's own DO block, reproduced here verbatim as a plain
+    SELECT rather than its RAISE-wrapped form) actually flags exactly the
+    corruption tr_encounters_identity_immutable now prevents going
+    forward: a turn's interaction whose timeline_id disagrees with its
+    causing encounter's timeline_id. Nothing currently validates that
+    relationship on ordinary INSERT — it is reached only via
+    encounter_rounds/encounter_turns/combat_actions/actions, none of
+    which cross-check against the encounter's own timeline_id — so this
+    scenario is constructible directly through the normal factories,
+    without needing to bypass any trigger. Re-running the full migration
+    end to end to prove the audit fires is not feasible with this
+    project's tooling (see test_a_share_row_exclusive_lock_on_encounters_
+    blocks_a_concurrent_insert_until_released's own docstring); this
+    proves the audit's own SQL logic instead."""
+    encounter_id = make_encounter(db_connection, f.timeline_id, f.t0)
+    other_timeline = _make_timeline(db_connection, f.world_id, name="Other Branch")
+    interaction_id = make_interaction(db_connection, other_timeline, f.t0)
+    action_id = make_action(db_connection, interaction_id, f.character_a)
+    combat_action_id = make_combat_action(db_connection, action_id)
+    round_id = make_encounter_round(db_connection, encounter_id, 1)
+    participant_id = make_encounter_participant(db_connection, encounter_id, f.character_a)
+    make_encounter_turn(
+        db_connection, round_id, participant_id, 0, combat_action_id=combat_action_id
+    )
+
+    violations = db_connection.execute(
+        text("""
+            SELECT count(*)
+            FROM narrative.encounters e
+            WHERE EXISTS (
+                SELECT 1
+                FROM narrative.encounter_rounds er
+                JOIN narrative.encounter_turns et ON et.encounter_round_id = er.encounter_round_id
+                JOIN interaction.combat_actions ca ON ca.combat_action_id = et.combat_action_id
+                JOIN interaction.actions a ON a.action_id = ca.action_id
+                JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
+                WHERE er.encounter_id = e.encounter_id
+                  AND (
+                      i.timeline_id IS DISTINCT FROM e.timeline_id
+                      OR i.campaign_id IS DISTINCT FROM e.campaign_id
+                  )
+            )
+            AND e.encounter_id = :e
+        """),
+        {"e": encounter_id},
+    ).scalar()
+    assert violations == 1, (
+        "the migration's own audit query must detect a preexisting timeline mismatch "
+        "reached through encounter_rounds/encounter_turns/combat_actions/actions"
+    )
+
+
 # ---------------------------------------------------------------------------
 # narrative.encounter_participants
 # ---------------------------------------------------------------------------
@@ -547,8 +770,9 @@ def test_an_event_causes_encounter_must_share_the_events_timeline(
 
 
 # ---------------------------------------------------------------------------
-# Migration 081's LOCK TABLE ... IN SHARE MODE (the exact lock-conflict
-# property that migration's "Locking considerations" docstring depends on)
+# Migration 081's LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE (the exact
+# lock-conflict property that migration's "Locking considerations"
+# docstring depends on)
 # ---------------------------------------------------------------------------
 
 
@@ -579,7 +803,7 @@ def committed(postgres_engine: Engine) -> Iterator[_CommittedFixture]:
         )
 
 
-def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
+def test_a_share_row_exclusive_lock_on_encounters_blocks_a_concurrent_insert_until_released(
     postgres_engine: Engine, committed: _CommittedFixture
 ) -> None:
     """Focused database test for the exact lock conflict revision 081's
@@ -593,19 +817,25 @@ def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
     test-infrastructure policy).
 
     What this proves instead: `LOCK TABLE narrative.encounters IN SHARE
-    MODE`, held across a transaction, genuinely blocks a concurrent
-    INSERT (the same ROW EXCLUSIVE lock class UPDATE also acquires,
-    per PostgreSQL's table-level lock-conflict rules — see the
+    ROW EXCLUSIVE MODE`, held across a transaction, genuinely blocks a
+    concurrent INSERT (the same ROW EXCLUSIVE lock class UPDATE also
+    acquires, per PostgreSQL's table-level lock-conflict rules — see the
     migration's own "Locking considerations" docstring) until that
     transaction ends, and the blocked statement then proceeds cleanly.
-    Revision 081 acquires this exact lock before its audit and holds it
-    through `CREATE OR REPLACE FUNCTION` and its own commit — so if this
-    lock genuinely serializes writers against a held SHARE lock (proven
-    here), it equally serializes them against that migration's audit +
-    function replacement: no concurrent writer can commit a row the
-    audit already passed judgment on, because no concurrent writer can
-    commit *anything* until the migration's own transaction — audit,
-    function replacement, and all — has already committed.
+    Revision 081 acquires this exact lock (SHARE ROW EXCLUSIVE, not plain
+    SHARE — needed because its own CREATE TRIGGER requires it, and
+    acquired upfront rather than via a later escalation to avoid a
+    lock-upgrade deadlock hazard between two concurrent migration runs;
+    see the migration's own "Locking considerations" docstring) before
+    either of its two audits and holds it through both `CREATE OR REPLACE
+    FUNCTION` calls, `CREATE TRIGGER`, and its own commit — so if this
+    lock genuinely serializes writers against a held SHARE ROW EXCLUSIVE
+    lock (proven here), it equally serializes them against that
+    migration's audits + function replacement + trigger creation: no
+    concurrent writer can commit a row either audit already passed
+    judgment on, because no concurrent writer can commit *anything* until
+    the migration's own transaction — both audits, both function
+    replacements, the trigger, and all — has already committed.
     """
     lock_connection = postgres_engine.connect()
     lock_transaction = lock_connection.begin()
@@ -663,7 +893,7 @@ def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
     # guarded so a cleanup failure can never mask a real assertion error
     # already propagating.
     try:
-        lock_connection.execute(text("LOCK TABLE narrative.encounters IN SHARE MODE"))
+        lock_connection.execute(text("LOCK TABLE narrative.encounters IN SHARE ROW EXCLUSIVE MODE"))
 
         thread = threading.Thread(target=_insert)
         thread.start()
@@ -705,15 +935,19 @@ def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
                 break
             time.sleep(0.1)
 
-        assert blocked, "the concurrent INSERT was never observed blocked behind the SHARE lock"
-        assert not insert_done.is_set(), "INSERT completed despite the SHARE lock still being held"
+        assert blocked, (
+            "the concurrent INSERT was never observed blocked behind the SHARE ROW EXCLUSIVE lock"
+        )
+        assert not insert_done.is_set(), (
+            "INSERT completed despite the SHARE ROW EXCLUSIVE lock still being held"
+        )
     finally:
         with contextlib.suppress(Exception):
             lock_transaction.rollback()
         with contextlib.suppress(Exception):
             lock_connection.close()
 
-    assert insert_done.wait(timeout=60), "INSERT never completed after the SHARE lock was released"
+    assert insert_done.wait(timeout=60), "INSERT never completed after the lock was released"
     thread.join(timeout=60)
     assert not thread.is_alive()
     assert not errors, f"the INSERT failed after the lock released: {errors}"

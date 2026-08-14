@@ -1089,6 +1089,147 @@ def test_a_concurrent_reparent_attempt_during_an_in_flight_turn_cannot_leave_mix
         )
 
 
+def test_a_concurrent_timeline_reparent_attempt_during_an_in_flight_turn_cannot_leave_mixed_provenance(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """The campaign-less counterpart to the campaign_id race above:
+    narrative.encounters.timeline_id is now also immutable (revision
+    081's "corrected again" reparenting analysis). A campaign-*owned*
+    encounter's timeline was already pinned indirectly (campaign_id is
+    immutable, and enforce_encounter_world() requires campaign_id to
+    belong to timeline_id) — the previously-unprotected path was a
+    campaign-*less* encounter, which has no campaign relationship to pin
+    its timeline down. This encounter is created with campaign_id=None
+    specifically to exercise that path.
+
+    Sequence mirrors the campaign_id race exactly: a real
+    resolve_combat_turn() call acquires the encounter's row lock inside
+    an uncommitted transaction; a concurrent raw timeline-reparenting
+    UPDATE must block on that same row lock; once genuinely blocked
+    (confirmed server-side), the turn commits, and the previously blocked
+    reparent then proceeds and must fail immediately with the
+    immutability violation."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+    )
+    with postgres_engine.begin() as connection:
+        other_timeline_id = make_timeline(connection, f.world_id, name="Other Branch")
+
+    turn_connection = postgres_engine.connect()
+    turn_transaction = turn_connection.begin()
+
+    reparent_started = threading.Event()
+    reparent_done = threading.Event()
+    pids: dict[str, int] = {}
+    errors: dict[str, Exception] = {}
+
+    def _reparent() -> None:
+        try:
+            with postgres_engine.connect() as connection:
+                pids["reparent"] = connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                reparent_started.set()
+                connection.execute(
+                    text(
+                        "UPDATE narrative.encounters SET timeline_id = :t WHERE encounter_id = :e"
+                    ),
+                    {"t": other_timeline_id, "e": start.encounter_id},
+                )
+                connection.commit()
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            errors["reparent"] = exc
+        finally:
+            reparent_done.set()
+
+    turn_result: ResolveCombatTurnResult | None = None
+    try:
+        turn_result = _resolve_combat_turn_impl(
+            turn_connection,
+            encounter_id=start.encounter_id,
+            round_number=1,
+            turn_order=0,
+            actor_entity_id=f.attacker_id,
+            world_time_id=f.world_time_id,
+            target_entity_id=f.defender_id,
+            hit=True,
+            damage_amount=7,
+        )
+
+        thread = threading.Thread(target=_reparent)
+        thread.start()
+        assert reparent_started.wait(timeout=180), "reparent thread never started"
+        reparent_pid = pids["reparent"]
+
+        deadline = time.monotonic() + 60
+        blocked = False
+        while time.monotonic() < deadline:
+            waiting = turn_connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE pid = :pid AND wait_event_type = 'Lock'"
+                ),
+                {"pid": reparent_pid},
+            ).scalar()
+            if waiting:
+                blocked = True
+                break
+            time.sleep(0.1)
+
+        assert blocked, "the concurrent reparent was never observed blocked behind the turn"
+        assert not reparent_done.is_set(), (
+            "the reparent completed despite the turn's row lock still being held"
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            turn_transaction.commit()
+        with contextlib.suppress(Exception):
+            turn_connection.close()
+
+    assert reparent_done.wait(timeout=60), "the reparent never completed after the turn committed"
+    thread.join(timeout=60)
+    assert not thread.is_alive()
+
+    assert turn_result is not None
+    assert turn_result.event_id is not None, "the in-flight turn itself must have succeeded"
+    assert "reparent" in errors, "the reparent must be rejected once unblocked"
+    assert isinstance(errors["reparent"], CONSTRAINT_ERRORS)
+    assert "immutable" in str(errors["reparent"])
+
+    with postgres_engine.connect() as verify:
+        encounter_row = verify.execute(
+            text("SELECT timeline_id FROM narrative.encounters WHERE encounter_id = :e"),
+            {"e": start.encounter_id},
+        ).one()
+        assert encounter_row.timeline_id == f.timeline_id, (
+            "the rejected reparent must not have changed the encounter's timeline"
+        )
+
+        interaction_row = verify.execute(
+            text("""
+                SELECT i.timeline_id
+                FROM interaction.interactions i
+                JOIN interaction.actions a ON a.interaction_id = i.interaction_id
+                JOIN interaction.combat_actions ca ON ca.action_id = a.action_id
+                JOIN narrative.encounter_turns et ON et.combat_action_id = ca.combat_action_id
+                WHERE et.encounter_turn_id = :turn
+            """),
+            {"turn": turn_result.encounter_turn_id},
+        ).one()
+        assert interaction_row.timeline_id == f.timeline_id, (
+            "the in-flight turn's own provenance must stay attributed to the original timeline"
+        )
+
+        event_row = verify.execute(
+            text("SELECT timeline_id FROM narrative.events WHERE event_id = :e"),
+            {"e": turn_result.event_id},
+        ).one()
+        assert event_row.timeline_id == f.timeline_id, (
+            "the in-flight turn's damage event must stay attributed to the original timeline"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Campaign provenance (as distinct from the ownership assertion above)
 # ---------------------------------------------------------------------------
