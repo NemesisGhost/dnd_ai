@@ -654,6 +654,36 @@ def apply_foundry_combat_sync(
     module's docstring for the full three-step transaction design, the
     single-connection/advisory-lock concurrency model, and the
     replay/retry/conflict rules.
+
+    Deliberately calls _resolve_combat_turn_impl() with no campaign_id
+    (leaving _lock_encounter's own expected_campaign_id check unscoped),
+    not an oversight: this module's integration.* schema (revision 079)
+    scopes an external_system_id to a world_id only — see
+    integration.external_systems' own schema — never to a campaign, so
+    there is no authoritative campaign_id this function could authorize
+    an inbound Foundry combat turn against yet. It still resolves against
+    encounter_id's own real, current, FOR-UPDATE-locked timeline/status
+    (dnd_ai.commands.encounters._lock_encounter), so a nonexistent or
+    non-active encounter is still rejected exactly as it would be with a
+    campaign supplied — only the campaign-ownership *assertion* is
+    skipped. Phase 11 (Foundry MVP) is where Foundry users get mapped to
+    authenticated platform users and campaign membership, at which point
+    this function's caller — not this function itself, which has no
+    notion of an authenticated request — would be the place to resolve
+    and pass an authoritative campaign_id to assert against.
+
+    Not asserting a campaign does not mean discarding one: the
+    interaction.interactions row and any resulting narrative.events row
+    _resolve_combat_turn_impl creates are still attributed to
+    encounter_id's own actual, locked campaign_id (LockedEncounter.
+    campaign_id) whenever the target encounter is campaign-owned — the
+    same provenance a campaign-scoped caller would get. A campaign-less
+    encounter (campaign_id NULL) still produces campaign-less records, as
+    it always has. This is provenance inheritance, not authorization —
+    Foundry callers remain unauthenticated against any particular
+    campaign until Phase 11 does that work; see
+    dnd_ai.commands.encounters._lock_encounter's and LockedEncounter's own
+    docstrings for the general contract this relies on.
     """
     payload = _canonical_payload(
         encounter_id=encounter_id,
