@@ -695,3 +695,84 @@ def test_starting_an_encounter_with_a_session_but_no_campaign_id_is_rejected(
         )
 
     _no_encounter_or_participant_rows(postgres_engine, f.timeline_id)
+
+
+def test_resolving_a_turn_with_a_foreign_campaign_session_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """_validate_session_campaign() also guards resolve_combat_turn's own
+    session_id, which lands on the interaction.interactions row that turn
+    creates, not on the encounter itself."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+        session_id=f.session_id,
+    )
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with pytest.raises(SessionNotInCampaignError):
+        resolve_combat_turn(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            round_number=1,
+            turn_order=0,
+            actor_entity_id=f.attacker_id,
+            world_time_id=f.world_time_id,
+            campaign_id=f.campaign_id,
+            session_id=foreign_session_id,
+        )
+
+    with postgres_engine.connect() as verify:
+        round_count = verify.execute(
+            text("SELECT count(*) FROM narrative.encounter_rounds WHERE encounter_id = :e"),
+            {"e": start.encounter_id},
+        ).scalar()
+        assert round_count == 0, "a rejected turn left a round row behind"
+
+
+def test_ending_an_encounter_with_a_foreign_campaign_session_is_rejected(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """_validate_session_campaign() also guards end_encounter's own
+    session_id, which lands on the completion narrative.events row, not
+    on the encounter itself."""
+    start = start_encounter(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        participant_entity_ids=(f.attacker_id, f.defender_id),
+        campaign_id=f.campaign_id,
+        session_id=f.session_id,
+    )
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with pytest.raises(SessionNotInCampaignError):
+        end_encounter(
+            postgres_engine,
+            encounter_id=start.encounter_id,
+            world_time_id=f.world_time_id,
+            campaign_id=f.campaign_id,
+            session_id=foreign_session_id,
+        )
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": start.encounter_id},
+        ).one()
+        assert row.status == "active"
+        assert row.resulting_event_id is None

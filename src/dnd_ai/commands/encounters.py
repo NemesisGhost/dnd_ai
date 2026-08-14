@@ -103,10 +103,17 @@ class EndEncounterResult:
 def _validate_session_campaign(
     connection: Connection, *, campaign_id: uuid.UUID | None, session_id: uuid.UUID | None
 ) -> None:
-    """Rejects a start_encounter() call whose session_id does not belong
-    exactly to campaign_id, before anything is inserted.
+    """Rejects a caller-supplied session_id that does not belong exactly to
+    campaign_id, before anything is inserted or updated. Called by
+    _start_encounter_impl (session_id lands on narrative.encounters
+    itself), _resolve_combat_turn_impl (session_id lands on the
+    interaction.interactions row it creates), and _end_encounter_impl
+    (session_id lands on the narrative.events row end_encounter's
+    completion event creates) — the same rule, applied consistently
+    everywhere a request can supply a session_id alongside a trusted
+    campaign_id, not just at creation.
 
-    Without this, narrative.encounters.session_id could reference a
+    Without this, a caller-supplied session_id could reference a
     campaign.sessions row belonging to a same-world but different
     campaign than the caller is authorized for (or acting on behalf of),
     since a normal foreign key only proves the session exists, never that
@@ -114,16 +121,16 @@ def _validate_session_campaign(
     linkage the API's own campaign-scoped authorization
     (dnd_ai.api.access.require_campaign_capability) never catches, since
     campaign_id itself is trusted (it comes from the URL path, already
-    authorized) while session_id is caller-supplied request data. Revision
-    081 adds the equivalent database-level guard (narrative.
-    enforce_encounter_world(), extended) as defense in depth, mirroring
-    the same check narrative.enforce_event_consistency() (revision 057)
-    and interaction.enforce_interaction_consistency() (revision 061)
-    already apply to their own campaign_id/session_id columns — this
-    function is what turns a violation into a clean, fixed 404
+    authorized) while session_id is caller-supplied request data.
+    narrative.encounters, interaction.interactions, and narrative.events
+    each independently validate this same rule at the database layer too
+    (narrative.enforce_encounter_world() extended by revision 081,
+    interaction.enforce_interaction_consistency() revision 061,
+    narrative.enforce_event_consistency() revision 057) — this function is
+    what turns a violation into a clean, fixed 404
     (SessionNotInCampaignError) at the point a normal API request would
-    hit it, rather than only the database trigger's generic 500 fallback
-    a caller should never normally reach."""
+    hit it, rather than only the relevant database trigger's generic 500
+    fallback a caller should never normally reach."""
     if session_id is None:
         return
 
@@ -348,8 +355,13 @@ def _resolve_combat_turn_impl(
     damage_amount; hit=None applies damage when damage_amount is positive
     (no hit/miss distinction reported). See the inline comment above the
     damage-application check for the full reasoning.
+
+    Validates session_id/campaign_id agreement (_validate_session_campaign)
+    immediately after locking the encounter, before _get_or_create_round's
+    own possible INSERT or any other mutation.
     """
     timeline_id = _lock_encounter(connection, encounter_id)
+    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     encounter_round_id = _get_or_create_round(
         connection, encounter_id=encounter_id, round_number=round_number
     )
@@ -658,8 +670,13 @@ def _end_encounter_impl(
 ) -> EndEncounterResult:
     """The actual work of end_encounter(), on a connection the caller
     already has open — see _resolve_combat_turn_impl's docstring for the
-    composition pattern this mirrors."""
+    composition pattern this mirrors. Validates session_id/campaign_id
+    agreement (_validate_session_campaign) immediately after locking the
+    encounter, before _validate_outcome_participants or any mutation —
+    session_id here lands on the completion event _insert_event_row()
+    creates below, not on the encounter row itself."""
     timeline_id = _lock_encounter(connection, encounter_id)
+    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     _validate_outcome_participants(connection, encounter_id=encounter_id, outcomes=outcomes)
 
     world_id = connection.execute(

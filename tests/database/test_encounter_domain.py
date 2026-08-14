@@ -11,8 +11,14 @@ participant) uniqueness, and event_causes' extended exactly-one-of-four
 cause CHECK plus its new world-agreement trigger.
 """
 
+import contextlib
+import threading
+import time
+import uuid
+from collections.abc import Iterator
+
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from tests.factories import (
@@ -346,3 +352,166 @@ def test_an_event_causes_encounter_must_share_the_events_timeline(
             {"event": event_id, "encounter": f.encounter_id},
         )
     assert "belongs to timeline" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Migration 081's LOCK TABLE ... IN SHARE MODE (the exact lock-conflict
+# property that migration's "Locking considerations" docstring depends on)
+# ---------------------------------------------------------------------------
+
+
+class _CommittedFixture:
+    def __init__(self, connection: Connection, slug: str) -> None:
+        self.world_id = make_world(connection, slug=slug)
+        self.timeline_id = _make_timeline(connection, self.world_id, is_primary=True)
+        self.t0 = make_world_time(connection, self.world_id, 100)
+
+
+@pytest.fixture
+def committed(postgres_engine: Engine) -> Iterator[_CommittedFixture]:
+    """A genuinely committed (not rolled-back) world/timeline/world_time —
+    unlike this file's own `f` fixture, which lives inside `db_connection`'s
+    always-rolled-back transaction and is therefore invisible to any other
+    connection. The lock-conflict test below needs two independent
+    connections to see the same rows, so it cannot use `f`/`db_connection`."""
+    with postgres_engine.begin() as connection:
+        fixture = _CommittedFixture(connection, f"encounter-lock-{uuid.uuid4().hex[:8]}")
+    yield fixture
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        cleanup.execute(
+            text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
+        )
+        cleanup.execute(
+            text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
+        )
+
+
+def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
+    postgres_engine: Engine, committed: _CommittedFixture
+) -> None:
+    """Focused database test for the exact lock conflict revision 081's
+    migration (database/migrations/versions/081_encounter_session_scope.py)
+    depends on for its own correctness, standing in for genuinely pausing
+    mid-migration to inject a concurrent write — not feasible with this
+    project's migration tooling: tests/conftest.py's postgres_engine
+    fixture runs `alembic upgrade head` as one opaque, blocking subprocess
+    call with no hook to interject a concurrent statement between two of
+    its internal op.execute() calls (docs/PLAN.md §25.6 proportional
+    test-infrastructure policy).
+
+    What this proves instead: `LOCK TABLE narrative.encounters IN SHARE
+    MODE`, held across a transaction, genuinely blocks a concurrent
+    INSERT (the same ROW EXCLUSIVE lock class UPDATE also acquires,
+    per PostgreSQL's table-level lock-conflict rules — see the
+    migration's own "Locking considerations" docstring) until that
+    transaction ends, and the blocked statement then proceeds cleanly.
+    Revision 081 acquires this exact lock before its audit and holds it
+    through `CREATE OR REPLACE FUNCTION` and its own commit — so if this
+    lock genuinely serializes writers against a held SHARE lock (proven
+    here), it equally serializes them against that migration's audit +
+    function replacement: no concurrent writer can commit a row the
+    audit already passed judgment on, because no concurrent writer can
+    commit *anything* until the migration's own transaction — audit,
+    function replacement, and all — has already committed.
+    """
+    lock_connection = postgres_engine.connect()
+    lock_transaction = lock_connection.begin()
+
+    insert_started = threading.Event()
+    insert_done = threading.Event()
+    results: dict[str, uuid.UUID] = {}
+    errors: dict[str, Exception] = {}
+
+    def _insert() -> None:
+        try:
+            with postgres_engine.connect() as connection:
+                insert_started.set()
+                encounter_id = connection.execute(
+                    text("""
+                        INSERT INTO narrative.encounters (timeline_id, world_time_id)
+                        VALUES (:timeline, :world_time)
+                        RETURNING encounter_id
+                    """),
+                    {"timeline": committed.timeline_id, "world_time": committed.t0},
+                ).scalar()
+                connection.commit()
+                assert isinstance(encounter_id, uuid.UUID)
+                results["encounter_id"] = encounter_id
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            errors["insert"] = exc
+        finally:
+            insert_done.set()
+
+    # Everything from acquiring the lock to releasing it is inside this
+    # try/finally, unconditionally. postgres_engine is session-scoped: a
+    # connection left open here with the lock still held — because some
+    # assertion below raised before reaching the release code — would
+    # block every later test's writes to narrative.encounters for the
+    # rest of the pytest session, not just fail this one test. That is
+    # not a hypothetical: an earlier version of this test without this
+    # try/finally did exactly that, when a too-tight client-side timeout
+    # tripped an assertion before the lock was ever released, and every
+    # subsequent test touching narrative.encounters then hung indefinitely
+    # behind it. The lock itself is released by rollback (LOCK TABLE has
+    # no data of its own to commit); rollback/close are each independently
+    # guarded so a cleanup failure can never mask a real assertion error
+    # already propagating.
+    try:
+        lock_connection.execute(text("LOCK TABLE narrative.encounters IN SHARE MODE"))
+
+        thread = threading.Thread(target=_insert)
+        thread.start()
+        # 180s, calibrated to a measured worst case, not guessed: a bare,
+        # dependency-free postgres_engine().connect() with no lock, no
+        # query, and no relation to this test's own code has been directly
+        # timed at ~130s in this sandbox on repeated occasions (most
+        # recently: a 3-line throwaway script opening exactly one
+        # connection). This is Docker Desktop/host networking latency on
+        # this specific long-running sandbox session, not something this
+        # codebase can fix — a normal CI runner does not exhibit it. The
+        # try/finally above is what actually fixes correctness (a timeout
+        # here fails this one test cleanly instead of leaking the lock);
+        # this timeout only affects how patient the test is with a slow
+        # environment, never whether a timeout can corrupt state for tests
+        # that run after it. If this still isn't enough on some run, that
+        # is this sandbox continuing to degrade, not a regression here.
+        assert insert_started.wait(timeout=180), "insert thread never started"
+
+        # Poll pg_stat_activity server-side for confirmation the INSERT is
+        # genuinely blocked on our lock, rather than trusting a fixed
+        # client-side sleep to have been long enough.
+        deadline = time.monotonic() + 60
+        blocked = False
+        while time.monotonic() < deadline:
+            waiting = lock_connection.execute(
+                text("""
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE wait_event_type = 'Lock'
+                      AND query ILIKE 'INSERT INTO narrative.encounters%'
+                """)
+            ).scalar()
+            if waiting:
+                blocked = True
+                break
+            time.sleep(0.1)
+
+        assert blocked, "the concurrent INSERT was never observed blocked behind the SHARE lock"
+        assert not insert_done.is_set(), "INSERT completed despite the SHARE lock still being held"
+    finally:
+        with contextlib.suppress(Exception):
+            lock_transaction.rollback()
+        with contextlib.suppress(Exception):
+            lock_connection.close()
+
+    assert insert_done.wait(timeout=60), "INSERT never completed after the SHARE lock was released"
+    thread.join(timeout=60)
+    assert not thread.is_alive()
+    assert not errors, f"the INSERT failed after the lock released: {errors}"
+
+    with postgres_engine.connect() as verify:
+        exists = verify.execute(
+            text("SELECT count(*) FROM narrative.encounters WHERE encounter_id = :e"),
+            {"e": results["encounter_id"]},
+        ).scalar()
+        assert exists == 1, "the INSERT that proceeded after the lock released did not commit"

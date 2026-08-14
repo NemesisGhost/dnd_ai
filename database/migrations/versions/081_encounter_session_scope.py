@@ -61,32 +61,58 @@ Purpose:
     the trigger extended here plus campaign.sessions/campaign.campaigns'
     existing immutability).
 
-    Concurrency: like every other same-world/same-scope guard in this
-    project, this is a plain `BEFORE INSERT OR UPDATE` row trigger, not a
-    constraint trigger needing `DEFERRABLE` semantics — it only reads
-    already-committed rows in *other* tables (`campaign.campaigns`,
-    `campaign.sessions`) that this revision's own reparenting analysis
-    above shows cannot change in a way that would invalidate the check
-    after the fact, so there is no ordering/timing window a deferred check
-    would need to close.
+    Concurrency (steady state, after this migration has committed): like
+    every other same-world/same-scope guard in this project, this is a
+    plain `BEFORE INSERT OR UPDATE` row trigger, not a constraint trigger
+    needing `DEFERRABLE` semantics — it only reads already-committed rows
+    in *other* tables (`campaign.campaigns`, `campaign.sessions`) that
+    this revision's own reparenting analysis above shows cannot change in
+    a way that would invalidate the check after the fact, so there is no
+    ordering/timing window a deferred check would need to close.
 
-    Sibling review (no additional gap found, so no further change made):
-    `location_id`/`world_time_id` (same-world, `enforce_encounter_world()`
-    itself) and `encounter_participants.participant_entity_id` (same-world,
+    Concurrency (during this migration's own upgrade): closed by a
+    dedicated `LOCK TABLE narrative.encounters IN SHARE MODE` — see
+    "Locking considerations" below for the full account. In short: the
+    pre-flight audit and `CREATE OR REPLACE FUNCTION` are two separate
+    statements, and `CREATE OR REPLACE FUNCTION` takes no lock whatsoever
+    on `narrative.encounters` (it only locks the function's own catalog
+    entry) — so without an explicit table lock, a concurrent writer
+    (a rolling-deployment application instance still running the *old*
+    trigger definition, or any other session) could `INSERT`/`UPDATE` a
+    row that violates this revision's new rule in the window between the
+    audit observing zero violations and the new function definition
+    becoming visible, commit before this migration does, and leave that
+    invalid row in place permanently — the audit already ran and saw
+    nothing wrong, and the new function only validates rows written
+    *after* it takes effect, never retroactively.
+
+    Sibling review (no additional `narrative.encounters`-side gap found, so
+    no further change was made *here*): `location_id`/`world_time_id`
+    (same-world, `enforce_encounter_world()` itself) and
+    `encounter_participants.participant_entity_id` (same-world,
     `enforce_encounter_participant_world()`) were already validated by
     revision 078's own triggers. `resulting_event_id` points at a
     `narrative.events` row created by `end_encounter()`/`_insert_event_row()`
-    using the *encounter's own* `world_id`/`timeline_id`/`campaign_id`/
-    `session_id`, which `enforce_event_consistency()` (revision 057)
-    already validates independently on that row's own insert — a foreign-
-    campaign `session_id` supplied to `end_encounter()`'s request body is
-    already rejected there today (as a generic, non-disclosing 500, since
-    no application-level pre-check exists for that path); no `narrative.
-    encounters`-side change is needed for it to stay rejected, and adding a
-    third, cross-endpoint fixed-404 pre-check for it is out of scope for
-    this revision without a demonstrated case of it returning 200/201.
+    using its own `world_id`/`timeline_id` plus the *caller-supplied*
+    `campaign_id`/`session_id`, which `enforce_event_consistency()`
+    (revision 057) already validates independently on that row's own
+    insert; `_resolve_combat_turn_impl()`'s own `campaign_id`/`session_id`
+    land on the `interaction.interactions` row it creates, guarded the same
+    way by `interaction.enforce_interaction_consistency()` (revision 061).
+    At the time this revision first shipped, a foreign-campaign
+    `session_id` supplied to either of those two commands' request bodies
+    was already rejected by those *existing* database triggers, but only
+    as a generic, non-disclosing 500 — no application-level pre-check
+    existed for either path yet. `_validate_session_campaign()`
+    (`src/dnd_ai/commands/encounters.py`) is now called from
+    `_resolve_combat_turn_impl()` and `_end_encounter_impl()` too, not just
+    `_start_encounter_impl()`, upgrading both to the same clean, fixed 404
+    — closing that gap in application code, not by changing anything about
+    `narrative.encounters` or this migration.
 
 Forward migration:
+    - LOCK TABLE narrative.encounters IN SHARE MODE — first statement,
+      before anything else. See "Locking considerations" below.
     - A pre-flight audit (anonymous DO block): counts existing
       narrative.encounters rows that already violate either rule above and
       RAISEs, refusing to proceed, if any exist — this project has no live
@@ -100,7 +126,12 @@ Forward migration:
 
 Rollback:
     Supported. CREATE OR REPLACE FUNCTION back to revision 078's original
-    body (same-world checks only).
+    body (same-world checks only). Deliberately does *not* take the same
+    LOCK TABLE the forward migration does — downgrade only *weakens* the
+    trigger and runs no audit, so there is no analogous "audit observed a
+    clean state that a concurrent writer then invalidates before the
+    stricter definition takes effect" race for it to close; see
+    "Locking considerations" for the full asymmetry argument.
 
 Data implications:
     None beyond the pre-flight audit — no row is modified. If the audit
@@ -108,8 +139,69 @@ Data implications:
     reinterpreting or discarding existing data.
 
 Locking considerations:
-    CREATE OR REPLACE FUNCTION does not lock or rewrite narrative.
-    encounters; the audit is a read-only SELECT.
+    LOCK TABLE narrative.encounters IN SHARE MODE runs first, before the
+    audit, and is held for the rest of this migration's transaction —
+    through the audit, the CREATE OR REPLACE FUNCTION, and this
+    migration's own commit (Alembic runs one revision's upgrade() inside
+    one transaction; PostgreSQL releases an explicit LOCK TABLE only at
+    COMMIT/ROLLBACK, never earlier, and never implicitly re-acquires or
+    drops it mid-transaction).
+
+    Why a table lock is needed at all: CREATE OR REPLACE FUNCTION takes no
+    lock whatsoever on narrative.encounters — it only touches the
+    function's own pg_proc catalog row. Without an explicit lock, nothing
+    stops a concurrent session (a rolling-deployment application instance
+    still running against the *old* trigger definition, or any other
+    writer) from INSERTing or UPDATEing a row that violates this
+    revision's new rule at any point between the audit's SELECT and this
+    migration's own COMMIT, and committing before this migration does —
+    the audit already observed zero violations by then, and the new
+    function only validates rows written *after* it becomes the
+    committed, visible definition, never retroactively. That row would
+    then persist, silently invalid, forever: exactly the race this
+    revision's LOCK TABLE closes.
+
+    Why SHARE, and why it's sufficient: PostgreSQL's own lock-conflict
+    matrix (docs "13.3. Explicit Locking", "Table-Level Locks") is what
+    decides this, not a preference — INSERT and UPDATE each acquire ROW
+    EXCLUSIVE on their target table, and ROW EXCLUSIVE conflicts with
+    exactly four modes: SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS
+    EXCLUSIVE (never with ROW SHARE, ROW EXCLUSIVE itself, or SHARE UPDATE
+    EXCLUSIVE). SHARE is the weakest of those four conflicting modes, so
+    it is the weakest lock that still queues every concurrent INSERT/
+    UPDATE/DELETE behind this migration's own transaction. It does *not*
+    block ordinary reads: SHARE does not conflict with ACCESS SHARE
+    (plain SELECT) or even ROW SHARE (SELECT ... FOR UPDATE/FOR SHARE),
+    so read traffic against narrative.encounters is unaffected for the
+    lock's whole duration — only writers wait. A blocked writer is not
+    rejected or retried; it simply waits in PostgreSQL's normal lock queue
+    and proceeds, under the *new* (already-committed) trigger definition,
+    the moment this migration's transaction ends — so a concurrent insert
+    attempted during the migration either lands cleanly after it (revalidated
+    by the stricter check) or was already valid and unaffected; none can land
+    invalid.
+
+    Expected blocking, and why it is bounded: this migration's own work
+    between acquiring the lock and releasing it (at commit) is one COUNT(*)
+    audit query and one CREATE OR REPLACE FUNCTION — no table rewrite, no
+    index build, nothing whose cost scales with narrative.encounters' row
+    count beyond that single COUNT(*) scan. A concurrent writer therefore
+    waits, at most, for however long this migration itself takes to run
+    end to end (milliseconds to low seconds under normal conditions), not
+    for an unrelated long-running operation. This is the same "one bounded
+    DDL transaction, writers queue briefly behind it" shape every other
+    trigger-replacing correction pass in this project already has —
+    revision 081 differs only in making that queuing explicit via LOCK
+    TABLE, where the earlier ones' own audits (when they had one) didn't
+    need it because they weren't closing an audit-then-relax-enforcement
+    window on a live-written table the same way.
+
+    Deadlock: this migration acquires exactly one lock (the table lock,
+    first, before anything else) and never waits on any other lock while
+    holding it — CREATE OR REPLACE FUNCTION's own catalog-row lock is
+    never held by a session that could in turn be waiting on this table
+    lock — so there is no lock-ordering cycle for PostgreSQL's deadlock
+    detector to ever need to break.
 
 SQLAlchemy metadata / architecture docs:
     src/dnd_ai/persistence/tables/encounters.py declares no CHECK
@@ -145,6 +237,11 @@ depends_on = None
 
 def upgrade() -> None:
     """Apply the migration."""
+
+    # Must precede the audit — see this revision's "Locking considerations"
+    # docstring section for the race this closes and why SHARE is the
+    # weakest mode that closes it.
+    op.execute("LOCK TABLE narrative.encounters IN SHARE MODE;")
 
     op.execute("""
         DO $$

@@ -659,3 +659,154 @@ def test_starting_an_encounter_with_a_nonexistent_session_is_not_found(
     body = response.json()
     assert str(nonexistent_session_id) not in body["error"]["message"]
     _no_encounter_or_participant_rows(postgres_engine, f.campaign_id)
+
+
+def _no_turn_side_effects(postgres_engine: Engine, encounter_id: str) -> None:
+    with postgres_engine.connect() as verify:
+        round_count = verify.execute(
+            text("SELECT count(*) FROM narrative.encounter_rounds WHERE encounter_id = :e"),
+            {"e": encounter_id},
+        ).scalar()
+        assert round_count == 0, "a rejected turn request left a round row behind"
+
+        turn_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.encounter_turns et
+                JOIN narrative.encounter_rounds er ON er.encounter_round_id = et.encounter_round_id
+                WHERE er.encounter_id = :e
+            """),
+            {"e": encounter_id},
+        ).scalar()
+        assert turn_count == 0, "a rejected turn request left a turn row behind"
+
+
+def test_a_turn_with_a_foreign_campaign_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/turns",
+            json={
+                "round_number": 1,
+                "turn_order": 0,
+                "actor_entity_id": str(f.attacker_id),
+                "world_time_id": str(f.world_time_id),
+                "session_id": str(foreign_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(foreign_session_id) not in body["error"]["message"]
+    assert str(f.campaign_id) not in body["error"]["message"]
+    assert str(other_campaign_id) not in body["error"]["message"]
+    _no_turn_side_effects(postgres_engine, encounter_id)
+
+
+def test_a_turn_with_a_nonexistent_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    nonexistent_session_id = uuid.uuid4()
+
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/turns",
+            json={
+                "round_number": 1,
+                "turn_order": 0,
+                "actor_entity_id": str(f.attacker_id),
+                "world_time_id": str(f.world_time_id),
+                "session_id": str(nonexistent_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(nonexistent_session_id) not in body["error"]["message"]
+    _no_turn_side_effects(postgres_engine, encounter_id)
+
+
+def _end_encounter_had_no_effect(postgres_engine: Engine, encounter_id: str) -> None:
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT status, resulting_event_id FROM narrative.encounters "
+                "WHERE encounter_id = :e"
+            ),
+            {"e": encounter_id},
+        ).one()
+        assert row.status == "active", "a rejected end request must not change encounter status"
+        assert row.resulting_event_id is None
+
+        event_count = verify.execute(
+            text("""
+                SELECT count(*) FROM narrative.event_causes
+                WHERE cause_encounter_id = :e
+            """),
+            {"e": encounter_id},
+        ).scalar()
+        assert event_count == 0, "a rejected end request must not record a completion event"
+
+
+def test_ending_with_a_foreign_campaign_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        other_campaign_id = make_campaign(
+            connection, f.timeline_id, lifecycle_status_code="pending"
+        )
+        foreign_session_id = make_session(connection, other_campaign_id, 1)
+
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "session_id": str(foreign_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(foreign_session_id) not in body["error"]["message"]
+    assert str(f.campaign_id) not in body["error"]["message"]
+    assert str(other_campaign_id) not in body["error"]["message"]
+    _end_encounter_had_no_effect(postgres_engine, encounter_id)
+
+
+def test_ending_with_a_nonexistent_session_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    nonexistent_session_id = uuid.uuid4()
+
+    with client_factory(f.gm_user_id) as client:
+        started = _start_encounter(client, f)
+        encounter_id = started["encounter_id"]
+
+        response = client.post(
+            f"/campaigns/{f.campaign_id}/encounters/{encounter_id}/end",
+            json={
+                "world_time_id": str(f.world_time_id),
+                "session_id": str(nonexistent_session_id),
+            },
+        )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert str(nonexistent_session_id) not in body["error"]["message"]
+    _end_encounter_had_no_effect(postgres_engine, encounter_id)

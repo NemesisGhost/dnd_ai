@@ -45,17 +45,21 @@ the encounter, and duplicates are rejected — both raise a plain
 disclosing 400, exactly like every other unclassified domain validation
 failure in this codebase.
 
-Cross-campaign session integrity: `start_encounter_endpoint` passes the
-URL's own (already-authorized) `campaign_id` and the request body's
-caller-supplied `session_id` straight through to `_start_encounter_impl`,
-which validates the two agree (`dnd_ai.commands.encounters.
-_validate_session_campaign`) before inserting anything, raising
-`SessionNotInCampaignError` — a `SafeMessageError` the existing generic
-handler maps to a fixed, non-disclosing 404 — for a nonexistent or
-foreign-campaign session. See that function's docstring for why this
-can't be caught by `require_campaign_capability` alone: `campaign_id` is
-trusted (from the URL, already authorized), but `session_id` is ordinary
-caller-supplied request data with no authorization check of its own.
+Cross-campaign session integrity: all three routes pass the URL's own
+(already-authorized) `campaign_id` and the request body's caller-supplied
+`session_id` straight through to their respective `_..._impl` function,
+each of which validates the two agree
+(`dnd_ai.commands.encounters._validate_session_campaign`) before mutating
+anything, raising `SessionNotInCampaignError` — a `SafeMessageError` the
+existing generic handler maps to a fixed, non-disclosing 404 — for a
+nonexistent or foreign-campaign session. See that function's docstring
+for why this can't be caught by `require_campaign_capability` alone:
+`campaign_id` is trusted (from the URL, already authorized), but
+`session_id` is ordinary caller-supplied request data with no
+authorization check of its own — true for `start`'s `session_id` (lands
+on `narrative.encounters` itself), `turns`' `session_id` (lands on the
+`interaction.interactions` row that turn creates), and `end`'s
+`session_id` (lands on the completion `narrative.events` row) alike.
 """
 
 import uuid
