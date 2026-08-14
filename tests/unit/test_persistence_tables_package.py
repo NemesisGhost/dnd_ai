@@ -22,6 +22,8 @@ character.* table), for 144 tables total. Revisions 077-079 added the Phase 9
 item, encounter, and integration domains. Revision 080 reshaped security.users
 and replaced the old global security.roles/security.user_roles pair with the
 Phase 10 campaign-scoped security schema (13 new tables, 1 table dropped).
+Revision 082 (a Phase 10 workstream 6 correction pass) added
+security.idempotent_requests.
 """
 
 import importlib
@@ -230,6 +232,7 @@ EXPECTED_TABLES = {
         "security.character_relationship_type_capabilities",
         "security.character_relationship_types",
         "security.external_identities",
+        "security.idempotent_requests",
         "security.membership_character_relationships",
         "security.membership_roles",
         "security.membership_statuses",
