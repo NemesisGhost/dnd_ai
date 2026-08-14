@@ -149,6 +149,8 @@ from starlette.routing import Match, Route
 
 from dnd_ai.domain.errors import SafeMessageError
 
+from .correlation import get_request_correlation_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -376,9 +378,7 @@ def _validated_api_error_response(exc: ApiError) -> _ErrorContract:
     return contract if contract == observed else _INTERNAL_ERROR_CONTRACT
 
 
-def _correlation_id(request: Request) -> str | None:
-    value = getattr(request.state, "correlation_id", None)
-    return value if isinstance(value, str) else None
+_correlation_id = get_request_correlation_id
 
 
 def _route_template(request: Request) -> str:

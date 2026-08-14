@@ -1,4 +1,4 @@
-"""Security tables — security schema (revisions 003, 080).
+"""Security tables — security schema (revisions 003, 080, 082).
 
 Part of the src/dnd_ai/persistence/tables package. See
 src/dnd_ai/persistence/tables/__init__.py for the metadata-authority note
@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     PrimaryKeyConstraint,
+    SmallInteger,
     Table,
     Text,
     UniqueConstraint,
@@ -802,3 +803,76 @@ Index(
     postgresql_where=resource_grants.c.revoked_at.is_(None),
     postgresql_nulls_not_distinct=True,
 )
+
+# ---------------------------------------------------------------------------
+# security.idempotent_requests (revision 082)
+# ---------------------------------------------------------------------------
+
+idempotent_requests = Table(
+    "idempotent_requests",
+    metadata,
+    _uuid_pk("idempotent_request_id"),
+    Column(
+        "actor_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "idempotency_key",
+        Text(),
+        nullable=False,
+        comment=(
+            "Client-supplied Idempotency-Key header value, bounded and character-"
+            "restricted (dnd_ai.api.deps.get_idempotency_key) before it ever reaches "
+            "this column or any log line — the same discipline "
+            "dnd_ai.api.correlation applies to X-Correlation-Id."
+        ),
+    ),
+    Column(
+        "request_fingerprint",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of the canonical (command_name, path parameters, "
+            "request body) tuple (dnd_ai.api.idempotency.compute_request_fingerprint). "
+            "A replay whose fingerprint does not match this value — a different "
+            "command or a different payload reusing the same key — is rejected as "
+            "a fixed, non-disclosing conflict rather than replayed or silently "
+            "applied."
+        ),
+    ),
+    Column("correlation_id", UUID()),
+    Column("response_status_code", SmallInteger()),
+    Column(
+        "response_body",
+        JSONB(),
+        comment=(
+            "The exact response body this command already returned to this same "
+            "authenticated caller for this key; replayed verbatim on a matching "
+            "retry rather than re-running the command."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("completed_at", TIMESTAMP(timezone=True)),
+    UniqueConstraint(
+        "actor_user_id", "campaign_id", "idempotency_key", name="ux_idempotent_requests_scope"
+    ),
+    schema="security",
+    comment=(
+        "Durable Idempotency-Key store for command endpoints (docs/PLAN.md §25 "
+        '"retries do not duplicate effects"). One row reserves (actor_user_id, '
+        "campaign_id, idempotency_key) for the lifetime of the reserving "
+        "transaction; a rolled-back or failed command releases the key "
+        "automatically because its INSERT is part of the same rolled-back "
+        "transaction. See src/dnd_ai/api/idempotency.py."
+    ),
+)
+
+Index("ix_idempotent_requests_campaign_id", idempotent_requests.c.campaign_id)

@@ -39,6 +39,20 @@ from starlette.responses import Response
 
 CORRELATION_ID_HEADER = "X-Correlation-Id"
 
+
+def get_request_correlation_id(request: Request) -> str | None:
+    """The current request's correlation ID, as `CorrelationIdMiddleware`
+    already validated and attached to `request.state.correlation_id` — a
+    canonical, lowercase UUID string, or `None` if the middleware hasn't
+    run (e.g. a unit test constructing a bare `Request`). FastAPI-dependency
+    shaped (takes `Request`, nothing else) so route handlers can depend on
+    it directly; `dnd_ai.api.errors._correlation_id` reads the exact same
+    attribute for error envelopes/log lines rather than duplicating this
+    logic."""
+    value = getattr(request.state, "correlation_id", None)
+    return value if isinstance(value, str) else None
+
+
 _CANONICAL_UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
