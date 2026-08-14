@@ -55,6 +55,7 @@ from .events import EventParticipant, _insert_event_row
 class TransferItemPossessionResult:
     inventory_entry_id: uuid.UUID
     event_id: uuid.UUID
+    world_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class IdentifyItemResult:
     event_id: uuid.UUID
     previous_level: str | None
     new_level: str
+    world_id: uuid.UUID
 
 
 def _item_instance_world(connection: Connection, item_instance_id: uuid.UUID) -> uuid.UUID:
@@ -242,7 +244,9 @@ def _transfer_item_possession_impl(
         },
     )
 
-    return TransferItemPossessionResult(inventory_entry_id=inventory_entry_id, event_id=event_id)
+    return TransferItemPossessionResult(
+        inventory_entry_id=inventory_entry_id, event_id=event_id, world_id=world_id
+    )
 
 
 def transfer_item_possession(
@@ -434,6 +438,7 @@ def _identify_item_impl(
         event_id=event_id,
         previous_level=previous_level,
         new_level=new_level,
+        world_id=world_id,
     )
 
 

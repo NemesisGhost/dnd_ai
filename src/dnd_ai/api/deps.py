@@ -12,6 +12,7 @@ through the API just means the API layer, not the command, now owns that
 boundary.
 """
 
+import re
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -19,6 +20,14 @@ from fastapi import Depends, Header
 from sqlalchemy import Connection, Engine, create_engine
 
 from dnd_ai.config import settings
+
+# Mirrors dnd_ai.api.correlation's own reasoning for X-Correlation-Id:
+# bound length and character set before a client-supplied header value
+# ever reaches a database column, a log line, or an error response.
+# Unlike a correlation ID, a malformed key is not silently replaced with a
+# generated one — that would silently defeat the caller's own idempotency
+# contract — so it is rejected outright instead.
+_IDEMPOTENCY_KEY_PATTERN = re.compile(r"[A-Za-z0-9._~-]{1,255}")
 
 _engine: Engine | None = None
 
@@ -56,13 +65,27 @@ def get_connection(engine: Annotated[Engine, Depends(get_engine)]) -> Iterator[C
 def get_idempotency_key(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> str | None:
-    """Placeholder passthrough for the `Idempotency-Key` request header.
+    """The `Idempotency-Key` request header, validated to a bounded,
+    restricted character set before it can reach `dnd_ai.api.idempotency`'s
+    durable store, any log line, or any error response — never trusted
+    verbatim (see `_IDEMPOTENCY_KEY_PATTERN` above).
 
-    Storing and deduplicating against it is deferred to the first mutating
-    command endpoint that needs it — most Phase 6-9 commands already derive
-    their own idempotency from domain state (e.g. unique constraints on the
-    row a retried command would otherwise duplicate), per
-    docs/DEVELOPMENT.md §9. A generic dedup store is only worth building
-    once a concrete command shows that isn't enough.
+    A missing header returns `None` (the caller does not want idempotent
+    handling for this request); a present-but-malformed value raises a
+    plain `ValueError`, mapped by the existing generic handler
+    (`dnd_ai.api.errors.handle_value_error`) to a fixed, non-disclosing
+    400 — never silently replaced with a generated value, since that would
+    defeat the caller's own idempotency contract without telling it.
+
+    Storing and deduplicating against a well-formed key is
+    `dnd_ai.api.idempotency`'s job, not this dependency's — this function
+    only validates and passes the value through, the same "header
+    extraction, not the whole mechanism" scope
+    `dnd_ai.api.auth.get_verified_token_claims` keeps relative to
+    `get_authenticated_user_id`.
     """
+    if idempotency_key is None:
+        return None
+    if not _IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key):
+        raise ValueError("Idempotency-Key header is malformed.")
     return idempotency_key

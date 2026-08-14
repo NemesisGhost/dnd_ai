@@ -1011,6 +1011,26 @@ Clients—including the web portal, Foundry, imports and any future Discord inte
 
 **Timeline scope (step 3).** `campaign.campaigns.timeline_id` is single-valued and non-nullable — one campaign resolves access against exactly one timeline, its own. A caller-supplied `timeline_id` is accepted only when it equals the campaign's own; any other value — a different same-world timeline, a branch/descendant of the campaign's own timeline, or a timeline from a different world — raises `UnauthorizedTimelineError` rather than being used to select timeline-scoped character-relationship capabilities or resource grants. §19.2 and §19.6 place *narrower* timeline scoping on the individual relationship/grant row that needs it, not on substituting a different timeline for the whole resolution; nothing in the domain model gives one campaign more than one timeline to resolve access against. `UnauthorizedTimelineError` is a `dnd_ai.domain.errors.DomainAuthorizationError` — its constructor argument (with the supplied/campaign/canonical timeline IDs) is available via `str(self)` for local/interactive debugging only, never for a response *or* a log line; `dnd_ai.api.errors`' `SafeMessageError` handler maps every instance, automatically and regardless of which endpoint raised it, to a fixed 404 and logs only the exception's class, status/error code, correlation ID, and route template (see that module's `_log_error`). Covered by `tests/database/test_access_resolution.py`'s "Timeline scope" section, including a same-world non-branch timeline, a branch of the campaign's own timeline, and a different-world timeline, plus `tests/unit/test_api_app.py`'s API-level disclosure and logging regressions.
 
+#### 19.8 Durable command idempotency
+
+##### `security.idempotent_requests`
+
+Delivered by revision 082 (Phase 10 workstream 6 correction pass), first used by `dnd_ai.api.items`. Backs `dnd_ai.api.deps.get_idempotency_key`'s `Idempotency-Key` request header with durable, PostgreSQL-backed deduplication — closing the PLAN.md §25 "retries do not duplicate effects" gap the item command endpoints originally left open.
+
+Key columns:
+
+- `idempotent_request_id UUID PK`
+- `actor_user_id UUID FK -> security.users, ON DELETE CASCADE`
+- `campaign_id UUID FK -> campaign.campaigns, ON DELETE CASCADE`
+- `idempotency_key TEXT` — the client-supplied header value, bounded and character-restricted before it reaches this column
+- `request_fingerprint TEXT` — sha256 of the canonical (command name, path parameters, request body) tuple
+- `correlation_id UUID NULL`
+- `response_status_code SMALLINT NULL`, `response_body JSONB NULL`, `completed_at TIMESTAMPTZ NULL` — all three NULL until the command completes, all three set together (`ck_idempotent_requests_completion_consistent`)
+
+Unique on `(actor_user_id, campaign_id, idempotency_key)`. A row is reserved (`INSERT ... ON CONFLICT DO NOTHING`) before the command runs and completed with its response before the same transaction commits — see `dnd_ai.api.idempotency`'s module docstring for the full concurrency argument (the unique index itself, not application-level locking, serializes concurrent requests for the same key) and for why a rolled-back or failed command never permanently consumes a key.
+
+Deliberately **not** under `audit`: `audit.*` tables are append-only to normal application roles (conventions §24.2) and outlive the records they describe, by design. This table is the opposite on both counts — reserved, updated once, and disposable cache state, not history — so it carries real `ON DELETE CASCADE` foreign keys rather than `audit.change_log`'s deliberately unconstrained columns.
+
 ### Audit
 
 - `audit.change_log`

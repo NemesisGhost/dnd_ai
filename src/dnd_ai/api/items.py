@@ -49,23 +49,30 @@ the same reliance on a database constraint (rather than a duplicate
 application-layer lookup) `dnd_ai.commands.items`' own module docstring
 describes.
 
-Idempotency: neither command has a natural per-request idempotency key the
-way `narrative.encounter_turns`' `UNIQUE(encounter_round_id,
-participant_id)` gives `resolve_combat_turn`. A retried transfer/identify
-request is not rejected as a conflict — it is applied again, updating the
-same `campaign.inventory_entries`/`knowledge.item_identification` row to
-the (already-current) requested state and recording a second `narrative.
-events` row. This mirrors the underlying commands' own behavior (already
-exercised by `tests/scenario/test_item_commands.py`'s "transferring an
-already-placed item updates the same row" case) — no bespoke idempotency-
-key store is introduced here, consistent with `dnd_ai.api.deps.
-get_idempotency_key`'s "most commands already derive their own idempotency
-from domain state" scoping note; a genuine duplicate-request problem is
-future scope once a concrete caller demonstrates it.
+Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
+`security.idempotent_requests` (migration 082). When a client supplies an
+`Idempotency-Key` header, each route reserves `(actor_user_id, campaign_id,
+idempotency_key)` before running its command and completes that reservation
+with the command's actual response before returning — both inside the
+request's own transaction, so a retried request either replays the
+original response with no new event/effect/audit row, or (a different
+payload or command reusing the same key) gets a fixed, non-disclosing 409
+without touching anything. See `dnd_ai.api.idempotency`'s module docstring
+for the full concurrency argument. A request with no `Idempotency-Key`
+header is not deduplicated at all, matching every other command endpoint in
+this codebase today.
+
+Auditing: every successful call inserts one `audit.change_log` row
+(`dnd_ai.api.audit.record_change_log`) identifying the authenticated
+`actor_user_id` (never `actor_entity_id` — see that module's docstring for
+why the two must not be conflated), the request's correlation ID, the
+command name, the affected record/entity/world, and the resulting
+`event_id` — on the same connection, so it commits atomically with the
+command it describes.
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -75,7 +82,10 @@ from dnd_ai.commands.items import _identify_item_impl, _transfer_item_possession
 from dnd_ai.domain.access import AccessContext
 
 from .access import require_campaign_capability
-from .deps import get_connection
+from .audit import record_change_log
+from .correlation import get_request_correlation_id
+from .deps import get_connection, get_idempotency_key
+from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["items"])
 
@@ -84,6 +94,20 @@ router = APIRouter(tags=["items"])
 # why every route here requires it rather than a narrower, character-
 # scoped capability.
 _ITEM_MANAGE_CAPABILITY = "canon.edit"
+
+# audit.change_log.command_name / the idempotency store's fingerprinted
+# command_name — one literal per route, never derived from request data.
+_TRANSFER_COMMAND_NAME = "transfer_item_possession"
+_IDENTIFY_COMMAND_NAME = "identify_item"
+
+# audit.change_actions.code (revision 007 seed) both routes record: each
+# call updates an existing conceptual resource's possession/identification
+# state, whether or not a campaign.inventory_entries/knowledge.
+# item_identification row already existed — "updated" fits a first
+# placement/identification too, the same way dnd_ai.commands.items' own
+# module docstring treats "insert vs. update the state row" as an
+# implementation detail of one logical operation, not two.
+_UPDATED_CHANGE_ACTION = "updated"
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +163,28 @@ def transfer_item_possession_endpoint(
     body: TransferItemPossessionRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_ITEM_MANAGE_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> TransferItemPossessionResponse:
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {
+            "item_instance_id": str(item_instance_id),
+            **body.model_dump(mode="json"),
+        }
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_TRANSFER_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return TransferItemPossessionResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
     result = _transfer_item_possession_impl(
         connection,
         item_instance_id=item_instance_id,
@@ -153,9 +198,34 @@ def transfer_item_possession_endpoint(
         session_id=body.session_id,
         event_details=body.event_details,
     )
-    return TransferItemPossessionResponse(
+
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="campaign",
+        table_name="inventory_entries",
+        record_id=result.inventory_entry_id,
+        entity_id=item_instance_id,
+        world_id=result.world_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_TRANSFER_COMMAND_NAME,
+        event_id=result.event_id,
+    )
+
+    response = TransferItemPossessionResponse(
         inventory_entry_id=result.inventory_entry_id, event_id=result.event_id
     )
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response
 
 
 @router.post(
@@ -169,7 +239,28 @@ def identify_item_endpoint(
     body: IdentifyItemRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_ITEM_MANAGE_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> IdentifyItemResponse:
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {
+            "item_instance_id": str(item_instance_id),
+            **body.model_dump(mode="json"),
+        }
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_IDENTIFY_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return IdentifyItemResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
     result = _identify_item_impl(
         connection,
         item_instance_id=item_instance_id,
@@ -183,9 +274,34 @@ def identify_item_endpoint(
         session_id=body.session_id,
         event_details=body.event_details,
     )
-    return IdentifyItemResponse(
+
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="knowledge",
+        table_name="item_identification",
+        record_id=result.item_identification_id,
+        entity_id=item_instance_id,
+        world_id=result.world_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_IDENTIFY_COMMAND_NAME,
+        event_id=result.event_id,
+    )
+
+    response = IdentifyItemResponse(
         item_identification_id=result.item_identification_id,
         event_id=result.event_id,
         previous_level=result.previous_level,
         new_level=result.new_level,
     )
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response
