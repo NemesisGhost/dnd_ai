@@ -29,18 +29,42 @@ bespoke idempotency-key store is needed for this endpoint yet, consistent
 with `dnd_ai.api.deps.get_idempotency_key`'s own "most commands already
 derive their own idempotency from domain state" scoping note.
 
-Lifecycle: `_lock_encounter()` (shared by `_resolve_combat_turn_impl` and
-`_end_encounter_impl`) requires the locked encounter to be `'active'`,
-raising `dnd_ai.commands.encounters.EncounterNotActiveError` — a
-`SafeMessageError` the existing generic handler maps to a fixed,
-non-disclosing 409 — otherwise. This also covers a repeated or genuinely
-concurrent `end` request: the second caller only proceeds past the shared
-`FOR UPDATE` lock once the first has committed, observes the already-
-`'completed'` status, and is rejected before touching any other row, so
-at most one completion event/`resulting_event_id` is ever recorded per
-encounter. `end`'s outcomes list is validated the same way, before any
-mutation: every `participant_entity_id` must already be a participant in
-the encounter, and duplicates are rejected — both raise a plain
+Cross-campaign encounter ownership: `turns` and `end` pass the URL's own
+(already-authorized) `campaign_id` straight through to
+`_resolve_combat_turn_impl`/`_end_encounter_impl`, which require it to
+match the *locked* encounter's own `campaign_id`
+(`dnd_ai.commands.encounters._lock_encounter`'s `expected_campaign_id`),
+atomically with acquiring the encounter's `FOR UPDATE` lock — never via a
+separate, earlier, unlocked "does this encounter belong to my campaign"
+query. An earlier version of this module ran exactly that kind of
+separate check (`_verify_encounter_in_campaign`, since removed) before
+calling into the command layer at all; since `narrative.encounters.
+campaign_id` is mutable, that left a TOCTOU window open — a concurrent
+transaction could reparent the encounter to a different, same-timeline
+campaign between the unlocked check and the command's own later lock, and
+the caller (still only authorized for the *original* campaign) would then
+mutate an encounter it no longer owned. `_lock_encounter` now checks
+ownership against the row its own lock holds, which a concurrent
+reparenting `UPDATE` must also wait behind — see that function's and
+`EncounterNotFoundError`'s own docstrings for the full account. A
+nonexistent encounter and a campaign mismatch both raise
+`EncounterNotFoundError` — a `SafeMessageError` the existing generic
+handler maps to a fixed, non-disclosing 404 — identically, so a caller
+can never distinguish "doesn't exist" from "belongs to someone else."
+
+Lifecycle: only once ownership passes does `_lock_encounter()` (shared by
+`_resolve_combat_turn_impl` and `_end_encounter_impl`) also require the
+locked encounter to be `'active'`, raising `dnd_ai.commands.encounters.
+EncounterNotActiveError` — a `SafeMessageError` the existing generic
+handler maps to a fixed, non-disclosing 409 — otherwise. This also covers
+a repeated or genuinely concurrent `end` request: the second caller only
+proceeds past the shared `FOR UPDATE` lock once the first has committed,
+observes the already-`'completed'` status, and is rejected before
+touching any other row, so at most one completion event/
+`resulting_event_id` is ever recorded per encounter. `end`'s outcomes
+list is validated the same way, after ownership and lifecycle but before
+any mutation: every `participant_entity_id` must already be a participant
+in the encounter, and duplicates are rejected — both raise a plain
 `ValueError`, mapped by the existing generic handler to a fixed, non-
 disclosing 400, exactly like every other unclassified domain validation
 failure in this codebase.
@@ -67,7 +91,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection
 
 from dnd_ai.commands.encounters import (
     _end_encounter_impl,
@@ -78,7 +102,6 @@ from dnd_ai.domain.access import AccessContext
 
 from .access import require_campaign_capability
 from .deps import get_connection
-from .errors import NotFoundError
 
 router = APIRouter(tags=["encounters"])
 
@@ -149,26 +172,6 @@ class EndEncounterResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _verify_encounter_in_campaign(
-    connection: Connection, *, encounter_id: uuid.UUID, campaign_id: uuid.UUID
-) -> None:
-    """Raises NotFoundError unless `encounter_id` both exists and belongs to
-    `campaign_id` — a caller already authorized for one campaign must never
-    be able to target an encounter that belongs to a different one (or to
-    none) merely by guessing its ID."""
-    row = connection.execute(
-        text("SELECT campaign_id FROM narrative.encounters WHERE encounter_id = :e"),
-        {"e": encounter_id},
-    ).first()
-    if row is None or row.campaign_id != campaign_id:
-        raise NotFoundError()
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -216,7 +219,6 @@ def resolve_combat_turn_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> ResolveCombatTurnResponse:
-    _verify_encounter_in_campaign(connection, encounter_id=encounter_id, campaign_id=campaign_id)
     result = _resolve_combat_turn_impl(
         connection,
         encounter_id=encounter_id,
@@ -262,7 +264,6 @@ def end_encounter_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> EndEncounterResponse:
-    _verify_encounter_in_campaign(connection, encounter_id=encounter_id, campaign_id=campaign_id)
     result = _end_encounter_impl(
         connection,
         encounter_id=encounter_id,

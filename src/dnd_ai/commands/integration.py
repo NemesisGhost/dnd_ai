@@ -654,6 +654,23 @@ def apply_foundry_combat_sync(
     module's docstring for the full three-step transaction design, the
     single-connection/advisory-lock concurrency model, and the
     replay/retry/conflict rules.
+
+    Deliberately calls _resolve_combat_turn_impl() with no campaign_id
+    (leaving _lock_encounter's own expected_campaign_id check unscoped),
+    not an oversight: this module's integration.* schema (revision 079)
+    scopes an external_system_id to a world_id only — see
+    integration.external_systems' own schema — never to a campaign, so
+    there is no authoritative campaign_id this function could check an
+    inbound Foundry combat turn against yet. It still resolves against
+    encounter_id's own real, current, FOR-UPDATE-locked timeline/status
+    (dnd_ai.commands.encounters._lock_encounter), so a nonexistent or
+    non-active encounter is still rejected exactly as it would be with a
+    campaign supplied — only the campaign-ownership check itself is
+    skipped. Phase 11 (Foundry MVP) is where Foundry users get mapped to
+    authenticated platform users and campaign membership, at which point
+    this function's caller — not this function itself, which has no
+    notion of an authenticated request — would be the place to resolve
+    and pass an authoritative campaign_id.
     """
     payload = _canonical_payload(
         encounter_id=encounter_id,

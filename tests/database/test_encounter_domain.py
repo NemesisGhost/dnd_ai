@@ -421,11 +421,24 @@ def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
     insert_started = threading.Event()
     insert_done = threading.Event()
     results: dict[str, uuid.UUID] = {}
+    pids: dict[str, int] = {}
     errors: dict[str, Exception] = {}
 
     def _insert() -> None:
         try:
             with postgres_engine.connect() as connection:
+                # Captured before the (blocking) INSERT so the main thread
+                # can identify this exact backend in pg_stat_activity
+                # deterministically — matching on query *text* is fragile:
+                # the literal SQL psycopg sends is this triple-quoted
+                # string verbatim, including its own leading newline/
+                # indentation, so pg_stat_activity.query never actually
+                # begins with "INSERT" (an earlier version of this test
+                # matched `query ILIKE 'INSERT INTO narrative.encounters%'`
+                # — a pattern with no leading wildcard — and so never
+                # matched anything, at any point, in any run). A backend
+                # PID is exact and format-independent.
+                pids["insert"] = connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 insert_started.set()
                 encounter_id = connection.execute(
                     text("""
@@ -477,19 +490,23 @@ def test_a_share_lock_on_encounters_blocks_a_concurrent_insert_until_released(
         # that run after it. If this still isn't enough on some run, that
         # is this sandbox continuing to degrade, not a regression here.
         assert insert_started.wait(timeout=180), "insert thread never started"
+        insert_pid = pids["insert"]
 
         # Poll pg_stat_activity server-side for confirmation the INSERT is
         # genuinely blocked on our lock, rather than trusting a fixed
-        # client-side sleep to have been long enough.
+        # client-side sleep to have been long enough. Matched by the exact
+        # backend pid captured above — deterministic and format-
+        # independent, unlike matching on query text (see _insert()'s own
+        # comment on why an earlier version of this pattern never matched).
         deadline = time.monotonic() + 60
         blocked = False
         while time.monotonic() < deadline:
             waiting = lock_connection.execute(
                 text("""
                     SELECT count(*) FROM pg_stat_activity
-                    WHERE wait_event_type = 'Lock'
-                      AND query ILIKE 'INSERT INTO narrative.encounters%'
-                """)
+                    WHERE pid = :pid AND wait_event_type = 'Lock'
+                """),
+                {"pid": insert_pid},
             ).scalar()
             if waiting:
                 blocked = True

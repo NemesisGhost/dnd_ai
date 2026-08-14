@@ -23,6 +23,16 @@ docstring. Revision 081 adds the equivalent database-level guard as
 defense in depth, extending narrative.enforce_encounter_world() the same
 way narrative.events (revision 057) and interaction.interactions
 (revision 061) already validate their own campaign_id/session_id chain.
+
+resolve_combat_turn and end_encounter both require the encounter they
+operate on to belong to the caller-supplied campaign_id, checked
+atomically under _lock_encounter's own FOR UPDATE lock — never against an
+earlier, separate, unlocked read, which narrative.encounters.campaign_id
+being mutable would otherwise leave open to a same-timeline reparenting
+race. See _lock_encounter's and EncounterNotFoundError's own docstrings
+for the full account, including the deliberate campaign_id=None
+"unscoped" mode dnd_ai.commands.integration.apply_foundry_combat_sync()
+currently relies on.
 """
 
 import json
@@ -61,6 +71,34 @@ class SessionNotInCampaignError(DomainAuthorizationError):
     session_id are included only in the constructor's `detail` argument
     (`str(self)`), never in `safe_message` — see `SafeMessageError`'s own
     contract for why that distinction matters."""
+
+
+class EncounterNotFoundError(DomainAuthorizationError):
+    """Raised by `_lock_encounter()` when the locked `encounter_id` does
+    not exist, or — when `expected_campaign_id` was supplied — belongs to
+    a different campaign than expected. Both cases raise this identical
+    error: confirming that an encounter exists but belongs to a different
+    campaign would itself disclose cross-campaign information to a caller
+    only authorized for the campaign it expected
+    (docs/architecture/DATABASE_MODEL.md §19.7), the same reasoning
+    `SessionNotInCampaignError` already applies to `session_id`.
+
+    This is also what closes the campaign-ownership TOCTOU a *separate*,
+    earlier, unlocked "does this encounter belong to my campaign" read
+    would otherwise leave open: `narrative.encounters.campaign_id` is
+    mutable (deliberately — see revision 081's own reparenting analysis),
+    so nothing stops a concurrent transaction from reparenting an
+    encounter to a different campaign on the same timeline between an
+    earlier check and a later mutation. Checking ownership against the
+    *locked* row, in the same `SELECT ... FOR UPDATE` a reparenting
+    `UPDATE` would also have to wait behind, means there is no window
+    where a caller can observe one owner and mutate under another — see
+    `_lock_encounter()`'s own docstring for the full account.
+
+    Inherits `DomainAuthorizationError`'s fixed 404 contract; the actual
+    `encounter_id` and expected/actual `campaign_id` are available only
+    via `str(self)` for local/server-side debugging, never in
+    `safe_message`."""
 
 
 class EncounterNotActiveError(SafeMessageError):
@@ -228,31 +266,82 @@ def start_encounter(
         )
 
 
-def _lock_encounter(connection: Connection, encounter_id: uuid.UUID) -> uuid.UUID:
-    """Acquire an exclusive row lock on the encounter (a structural row that
-    always exists) before touching its rounds/turns, and return its
-    timeline_id.
+def _lock_encounter(
+    connection: Connection,
+    encounter_id: uuid.UUID,
+    *,
+    expected_campaign_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Acquire an exclusive row lock on the encounter (a structural row
+    that always exists), atomically verify campaign ownership when
+    `expected_campaign_id` is supplied, and return the locked row's
+    `timeline_id`. Every mutating caller (`_resolve_combat_turn_impl`,
+    `_end_encounter_impl`) calls this before touching any other row.
 
-    Raises EncounterNotActiveError if the locked row's own status isn't
-    'active' — every caller (resolve_combat_turn, end_encounter) requires
-    an active encounter, so this is enforced once, here, under the same
-    FOR UPDATE lock rather than re-checked independently by each. This is
-    also what makes a second, concurrent end_encounter/resolve_combat_turn
-    call for the same encounter safe: FOR UPDATE serializes the two
-    callers, so the second one only proceeds past this SELECT once the
-    first has committed — at which point it observes the first caller's
-    already-'completed' (or otherwise non-'active') status and is rejected
-    here, before touching any other row, rather than racing to insert a
-    second completion event or overwrite resulting_event_id."""
+    Ownership check order matters and is deliberate: existence and
+    campaign ownership are checked *first*, against the just-locked row,
+    before the lifecycle (`status`) check below, and long before any
+    session-scope validation or mutation a caller performs afterward. A
+    caller must never learn an encounter's lifecycle state, or have any
+    side effect occur, for an encounter it is not authorized to touch.
+
+    `expected_campaign_id` is checked against the row this `SELECT ... FOR
+    UPDATE` itself locks, not against an earlier, separate, unlocked read
+    — this is what closes the campaign-ownership TOCTOU an earlier check
+    (e.g. an API layer's own prior "does this encounter belong to my
+    campaign" query, run *before* this lock) would otherwise leave open:
+    `narrative.encounters.campaign_id` is mutable (deliberately — revision
+    081's own reparenting analysis explains why no immutability guard was
+    added), so nothing would stop a concurrent transaction from
+    reparenting the encounter to a different campaign on the same
+    timeline between that earlier read and a later mutation. A concurrent
+    `UPDATE narrative.encounters SET campaign_id = ...` for this same row
+    needs the identical row lock this `SELECT ... FOR UPDATE` holds, so
+    the two can never interleave: whichever reaches this row first — this
+    lock, or a reparenting `UPDATE` — the other blocks until the first
+    commits, and only then proceeds against the row's *true*, current,
+    fully-committed `campaign_id`. There is no window in which this check
+    can observe a stale owner.
+
+    `expected_campaign_id=None` is a deliberate "unscoped" mode, not an
+    oversight: `dnd_ai.commands.integration.apply_foundry_combat_sync()`
+    is the one current caller that needs it, since Phase 9's `integration.*`
+    schema scopes an external system to a `world_id` only, never a
+    campaign (docs/architecture/DATABASE_MODEL.md §19) — there is no
+    authoritative campaign to check a Foundry-originated combat turn
+    against yet. Phase 11 is where Foundry's own campaign-scoped
+    authorization is wired up; see that function's own docstring.
+
+    A nonexistent encounter and a campaign mismatch both raise the
+    identical `EncounterNotFoundError` (a fixed, non-disclosing 404) — see
+    that class's own docstring for why they must be indistinguishable.
+
+    Only once ownership passes does this also check the locked row's own
+    status: raises `EncounterNotActiveError` if it isn't `'active'` — every
+    caller requires an active encounter, so this is enforced once, here,
+    under the same lock rather than re-checked independently by each. This
+    is also what makes a second, concurrent `end_encounter`/
+    `resolve_combat_turn` call for the same encounter safe: `FOR UPDATE`
+    serializes the two callers, so the second one only proceeds past this
+    `SELECT` once the first has committed — at which point it observes the
+    first caller's already-`'completed'` (or otherwise non-`'active'`)
+    status and is rejected here, before touching any other row, rather
+    than racing to insert a second completion event or overwrite
+    `resulting_event_id`."""
     row = connection.execute(
         text(
-            "SELECT timeline_id, status FROM narrative.encounters "
+            "SELECT timeline_id, status, campaign_id FROM narrative.encounters "
             "WHERE encounter_id = :e FOR UPDATE"
         ),
         {"e": encounter_id},
     ).first()
     if row is None:
-        raise ValueError(f"encounter {encounter_id} does not exist")
+        raise EncounterNotFoundError(f"encounter {encounter_id} does not exist")
+    if expected_campaign_id is not None and row.campaign_id != expected_campaign_id:
+        raise EncounterNotFoundError(
+            f"encounter {encounter_id} belongs to campaign {row.campaign_id!r}, "
+            f"not the expected campaign {expected_campaign_id!r}"
+        )
     if row.status != "active":
         raise EncounterNotActiveError(
             f"encounter {encounter_id} is not active (status={row.status!r})"
@@ -356,11 +445,20 @@ def _resolve_combat_turn_impl(
     (no hit/miss distinction reported). See the inline comment above the
     damage-application check for the full reasoning.
 
+    campaign_id, when set, is required to match the locked encounter's own
+    campaign_id (_lock_encounter's expected_campaign_id) — a caller that
+    supplies a campaign_id is asserting the encounter belongs to it, and a
+    mismatch (including a same-timeline reparenting race — see
+    _lock_encounter's own docstring) raises EncounterNotFoundError before
+    anything else runs. campaign_id=None (apply_foundry_combat_sync's
+    current usage) skips this check — see _lock_encounter's docstring for
+    why that is deliberate, not an oversight.
+
     Validates session_id/campaign_id agreement (_validate_session_campaign)
     immediately after locking the encounter, before _get_or_create_round's
     own possible INSERT or any other mutation.
     """
-    timeline_id = _lock_encounter(connection, encounter_id)
+    timeline_id = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
     _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     encounter_round_id = _get_or_create_round(
         connection, encounter_id=encounter_id, round_number=round_number
@@ -670,12 +768,13 @@ def _end_encounter_impl(
 ) -> EndEncounterResult:
     """The actual work of end_encounter(), on a connection the caller
     already has open — see _resolve_combat_turn_impl's docstring for the
-    composition pattern this mirrors. Validates session_id/campaign_id
-    agreement (_validate_session_campaign) immediately after locking the
-    encounter, before _validate_outcome_participants or any mutation —
-    session_id here lands on the completion event _insert_event_row()
-    creates below, not on the encounter row itself."""
-    timeline_id = _lock_encounter(connection, encounter_id)
+    composition pattern this mirrors, and for the campaign_id/
+    expected_campaign_id contract this shares with it. Validates session_id/
+    campaign_id agreement (_validate_session_campaign) immediately after
+    locking the encounter, before _validate_outcome_participants or any
+    mutation — session_id here lands on the completion event
+    _insert_event_row() creates below, not on the encounter row itself."""
+    timeline_id = _lock_encounter(connection, encounter_id, expected_campaign_id=campaign_id)
     _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     _validate_outcome_participants(connection, encounter_id=encounter_id, outcomes=outcomes)
 
