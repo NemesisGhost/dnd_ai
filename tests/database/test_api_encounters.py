@@ -87,6 +87,84 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        # None of campaign.campaigns/.sessions or security.roles/.role_
+        # capabilities/.campaign_memberships/.membership_roles are entity-
+        # rooted or reached by DELETE FROM core.worlds below — that DELETE
+        # would normally cascade to them via campaign.timelines (ON DELETE
+        # CASCADE), but session_replication_role = replica disables cascade
+        # the same way it disables the FK enforcement this cleanup relies on
+        # to delete out of dependency order, so every one of them survives
+        # this cleanup indefinitely unless deleted explicitly. That's
+        # ordinarily harmless leaked test data, except revision 080 (already
+        # on main) attached a DEFERRABLE INITIALLY DEFERRED constraint
+        # trigger to several of these tables (campaign.campaigns,
+        # security.roles/.role_capabilities/.campaign_memberships/
+        # .membership_roles among them) — a later UPDATE/ALTER TABLE on any
+        # of them, in the same pytest session, queues that trigger against
+        # whatever rows still exist and can then fail outright (observed:
+        # tests/database/test_seed_idempotency.py replaying revision 024's
+        # downgrade(), which follows an UPDATE campaign.campaigns with an
+        # ALTER TABLE on the same table in one transaction — PostgreSQL
+        # refuses that while a trigger event is pending). Deleted explicitly
+        # here, in dependency order (children first), scoped by timeline_id
+        # (not just the fixture's own campaign_id) to catch every campaign
+        # this test created, including each test body's own ad-hoc "other
+        # campaign".
+        cleanup.execute(
+            text("""
+                DELETE FROM security.membership_roles WHERE role_id IN (
+                    SELECT role_id FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    )
+                )
+            """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("""
+                DELETE FROM security.role_capabilities WHERE role_id IN (
+                    SELECT role_id FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    )
+                )
+            """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.roles WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.campaign_memberships WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM campaign.sessions WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
+            {
+                "users": [
+                    fixture.gm_user_id,
+                    fixture.capless_user_id,
+                    fixture.outsider_user_id,
+                ]
+            },
+        )
         cleanup.execute(
             text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
         )
