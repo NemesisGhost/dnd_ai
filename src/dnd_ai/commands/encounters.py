@@ -58,33 +58,18 @@ from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
+from ._shared import SessionNotInCampaignError as SessionNotInCampaignError
 from ._shared import lookup_id
+from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
-
-class SessionNotInCampaignError(DomainAuthorizationError):
-    """Raised by `_start_encounter_impl()` when a supplied `session_id`
-    does not resolve to a `campaign.sessions` row belonging exactly to the
-    supplied `campaign_id` — including a nonexistent session and a
-    session that belongs to a different (even same-world) campaign.
-    `campaign_id=None` with a `session_id` supplied is also rejected here:
-    a session always belongs to exactly one campaign
-    (`campaign.sessions.campaign_id NOT NULL`), so "no campaign at all"
-    can never be the campaign a real session belongs to — the same rule
-    `narrative.enforce_event_consistency()` (revision 057) and
-    `interaction.enforce_interaction_consistency()` (revision 061) already
-    apply to `narrative.events`/`interaction.interactions`, and revision
-    081 now applies to `narrative.encounters` at the database layer too
-    (see that migration).
-
-    Inherits `DomainAuthorizationError`'s fixed 404 contract deliberately:
-    confirming that a session exists but belongs to a different campaign
-    would itself disclose cross-campaign information to a caller who is
-    only authorized for the campaign named in the request
-    (docs/architecture/DATABASE_MODEL.md §19.7). The supplied campaign_id/
-    session_id are included only in the constructor's `detail` argument
-    (`str(self)`), never in `safe_message` — see `SafeMessageError`'s own
-    contract for why that distinction matters."""
+# SessionNotInCampaignError and _validate_session_campaign moved to
+# dnd_ai.commands._shared once dnd_ai.commands.items needed the identical
+# check — re-exported/aliased here (rather than dropped) so existing
+# imports of dnd_ai.commands.encounters.SessionNotInCampaignError and this
+# module's own internal callers below keep working unchanged. See
+# _shared.SessionNotInCampaignError/.validate_session_campaign for the
+# full docstrings.
 
 
 class EncounterNotFoundError(DomainAuthorizationError):
@@ -175,69 +160,6 @@ class ResolveCombatTurnResult:
 @dataclass(frozen=True)
 class EndEncounterResult:
     event_id: uuid.UUID
-
-
-def _validate_session_campaign(
-    connection: Connection, *, campaign_id: uuid.UUID | None, session_id: uuid.UUID | None
-) -> None:
-    """Rejects a caller-supplied session_id that does not belong exactly to
-    campaign_id, before anything is inserted or updated. Called by
-    _start_encounter_impl (session_id lands on narrative.encounters
-    itself), _resolve_combat_turn_impl (session_id lands on the
-    interaction.interactions row it creates), and _end_encounter_impl
-    (session_id lands on the narrative.events row end_encounter's
-    completion event creates) — the same rule, applied consistently
-    everywhere a request can supply a session_id alongside a trusted
-    campaign_id, not just at creation.
-
-    campaign_id here must always be the *authoritative* campaign, not
-    merely an asserted one: _start_encounter_impl has no encounter yet, so
-    its own campaign_id argument (the one about to be persisted) is
-    authoritative by construction. _resolve_combat_turn_impl and
-    _end_encounter_impl instead pass the just-locked encounter's actual
-    campaign_id (LockedEncounter.campaign_id from _lock_encounter) — never
-    their own campaign_id argument, which is only an ownership assertion
-    that may deliberately be None (unscoped) even when the encounter is
-    genuinely campaign-owned. Validating a supplied session_id against an
-    unscoped None would wrongly reject a real, in-campaign session for
-    every unscoped caller (Foundry today); validating it against the
-    encounter's true campaign is both correct and — since a real session
-    always has a non-NULL campaign_id — still rejects a session on a
-    genuinely campaign-less encounter, which no session can ever belong
-    to.
-
-    Without this, a caller-supplied session_id could reference a
-    campaign.sessions row belonging to a same-world but different
-    campaign than the caller is authorized for (or acting on behalf of),
-    since a normal foreign key only proves the session exists, never that
-    it belongs to the given campaign — a durable cross-campaign session
-    linkage the API's own campaign-scoped authorization
-    (dnd_ai.api.access.require_campaign_capability) never catches, since
-    campaign_id itself is trusted (it comes from the URL path, already
-    authorized, or — for turns/end — from the locked encounter itself)
-    while session_id is caller-supplied request data.
-    narrative.encounters, interaction.interactions, and narrative.events
-    each independently validate this same rule at the database layer too
-    (narrative.enforce_encounter_world() extended by revision 081,
-    interaction.enforce_interaction_consistency() revision 061,
-    narrative.enforce_event_consistency() revision 057) — this function is
-    what turns a violation into a clean, fixed 404
-    (SessionNotInCampaignError) at the point a normal API request would
-    hit it, rather than only the relevant database trigger's generic 500
-    fallback a caller should never normally reach."""
-    if session_id is None:
-        return
-
-    session_campaign_id = connection.execute(
-        text("SELECT campaign_id FROM campaign.sessions WHERE session_id = :session"),
-        {"session": session_id},
-    ).scalar()
-
-    if session_campaign_id is None or campaign_id is None or session_campaign_id != campaign_id:
-        raise SessionNotInCampaignError(
-            f"session {session_id} does not belong to campaign {campaign_id!r} "
-            f"(session's actual campaign: {session_campaign_id!r})"
-        )
 
 
 def _start_encounter_impl(

@@ -11,8 +11,9 @@ Gateway, RDS, or another cloud adapter may be added as isolated optional
 deployment adapters, but none is required for production."
 
 OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
-is delivered and used by the first command endpoints below
-(`dnd_ai.api.encounters`) via `dnd_ai.api.access`. This module remains the
+is delivered and used by the command endpoints below
+(`dnd_ai.api.encounters`, `dnd_ai.api.items`) via `dnd_ai.api.access`. This
+module remains the
 plumbing every router builds on: app factory, error contract, correlation
 IDs, health/readiness, per-request transaction management, and
 authentication — routers register their own paths, this module only
@@ -33,6 +34,7 @@ from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine
 from .encounters import router as encounters_router
 from .errors import install_error_handlers
+from .items import router as items_router
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(encounters_router)
+    app.include_router(items_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
