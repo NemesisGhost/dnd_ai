@@ -11,11 +11,11 @@ is delivered and used by the command endpoints below
 (`dnd_ai.api.encounters`, `dnd_ai.api.items`, `dnd_ai.api.quests`,
 `dnd_ai.api.relationships`, `dnd_ai.api.events`, `dnd_ai.api.interactions`,
 `dnd_ai.api.integration`) and the query endpoints (`dnd_ai.api.dungeon`,
-`dnd_ai.api.characters`) via `dnd_ai.api.access`. This module remains the
-plumbing every router builds on: app factory, error contract, correlation
-IDs, health/readiness, per-request transaction management, and
-authentication — routers register their own paths, this module only
-mounts them.
+`dnd_ai.api.characters`, `dnd_ai.api.knowledge`) via `dnd_ai.api.access`.
+This module remains the plumbing every router builds on: app factory,
+error contract, correlation IDs, health/readiness, per-request transaction
+management, and authentication — routers register their own paths, this
+module only mounts them.
 """
 
 import logging
@@ -40,6 +40,7 @@ from .events import router as events_router
 from .integration import router as integration_router
 from .interactions import router as interactions_router
 from .items import router as items_router
+from .knowledge import router as knowledge_router
 from .quests import router as quests_router
 from .relationships import router as relationships_router
 
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(integration_router)
     app.include_router(interactions_router)
     app.include_router(items_router)
+    app.include_router(knowledge_router)
     app.include_router(quests_router)
     app.include_router(relationships_router)
 
