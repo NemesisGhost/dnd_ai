@@ -56,11 +56,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection
 
 from dnd_ai.commands.events import EventParticipant, _record_event_impl
 from dnd_ai.domain.access import AccessContext
 
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
@@ -113,19 +114,6 @@ class RecordEventResponse(BaseModel):
     event_id: uuid.UUID
 
 
-def _timeline_world_id(connection: Connection, timeline_id: uuid.UUID) -> uuid.UUID:
-    """The campaign's own pinned timeline's world — the same inline lookup
-    `dnd_ai.commands.encounters` already performs at each of its own
-    campaign-scoped entry points, used here so record_event's world_id
-    argument is always server-resolved, never caller-supplied."""
-    value = connection.execute(
-        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
-        {"t": timeline_id},
-    ).scalar()
-    assert isinstance(value, uuid.UUID)
-    return value
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -162,7 +150,7 @@ def record_event_endpoint(
             return RecordEventResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
-    world_id = _timeline_world_id(connection, access.timeline_id)
+    world_id = timeline_world_id(connection, access.timeline_id)
 
     result = _record_event_impl(
         connection,
