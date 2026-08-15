@@ -11,8 +11,19 @@ Covers: access control (non-member 404, capless-member 403), current-
 session/prior-session-recap resolution, recent-event ordering by fictional
 world time (most recent first), that `voided` events are excluded for
 every caller, that `draft` events are additionally excluded for a non-GM
-caller, cross-campaign event exclusion, and the empty-campaign default
-(no sessions/events at all).
+caller, cross-campaign event exclusion, the empty-campaign default (no
+sessions/events at all), and — the untargeted-`canon.edit` correction
+pass's central concern — that a `security.resource_grants` `event_id`
+target is honored per event even though this endpoint returns a *list*:
+a direct or access-group-inherited deny hides one specific draft from an
+otherwise-role-derived GM, a targeted allow exposes one specific draft to
+an otherwise non-GM caller (and only that one), mixed grants across
+several events in the same response resolve independently per event, a
+denied draft never consumes one of the response's `_RECENT_EVENTS_LIMIT`
+slots (an older, genuinely visible event backfills it instead), ordering
+stays deterministic regardless of grant status, and `recorded`/`corrected`
+visibility and universal `voided` exclusion are both unaffected by any
+event-targeted `canon.edit` grant.
 """
 
 import uuid
@@ -28,10 +39,13 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
     make_event,
     make_membership_role,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_session,
@@ -135,9 +149,11 @@ class Fixture:
         canon_edit_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
+        self.canon_edit_capability_id = canon_edit_id
 
         self.gm_user_id = make_user(connection, "Summary Query GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = gm_membership_id
         gm_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
@@ -149,6 +165,7 @@ class Fixture:
         player_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.player_user_id
         )
+        self.player_membership_id = player_membership_id
         player_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"player_{uuid.uuid4().hex[:8]}"
         )
@@ -209,6 +226,39 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         cleanup.execute(
             text(
                 "DELETE FROM security.roles WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        # security.resource_grants/access_group_memberships/access_groups
+        # are created ad hoc by individual tests below (the untargeted
+        # canon.edit correction pass's event-targeted deny/allow regression
+        # tests), never by the shared Fixture itself — cleaned up here,
+        # scoped by timeline_id (covers any campaign a test creates under
+        # fixture.timeline_id too, including the dedicated "limit" campaign
+        # some tests use), before the campaign_memberships/access_groups
+        # rows they reference are removed. See tests/database/
+        # test_api_characters.py's identical cleanup for the same pattern.
+        cleanup.execute(
+            text(
+                "DELETE FROM security.resource_grants WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("""
+                DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                    SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    )
+                )
+            """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.access_groups WHERE campaign_id IN "
                 "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
             ),
             {"t": fixture.timeline_id},
@@ -372,3 +422,301 @@ def test_events_from_a_different_campaign_are_excluded(
     assert response.status_code == 200, response.text
     names = {e["name"] for e in response.json()["recent_events"]}
     assert "Other Campaign Event" not in names
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides for per-event draft visibility
+# (canon.edit, event_id target)
+#
+# get_campaign_summary_endpoint used to compute one untargeted
+# access.has_capability("canon.edit") boolean for the whole recent_events
+# list, so an event-targeted security.resource_grants deny/allow was never
+# consulted at all. These tests prove the fixed, per-event resolution
+# (AccessContext.resource_grant_targets, applied inside
+# dnd_ai.queries.summary.get_campaign_summary_view's own query) honors a
+# targeted deny/allow per row, that a denied draft never consumes a
+# response slot, that ordering stays deterministic, and that
+# recorded/corrected visibility and universal voided exclusion are
+# unaffected by any event-targeted canon.edit grant.
+# ---------------------------------------------------------------------------
+
+
+def test_a_direct_event_targeted_deny_hides_that_draft_from_a_role_derived_gm(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=f.draft_event_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = [e["event_id"] for e in response.json()["recent_events"]]
+    assert str(f.draft_event_id) not in event_ids
+    assert event_ids == [str(f.recorded_new_event_id), str(f.recorded_old_event_id)]
+
+
+def test_an_event_targeted_deny_via_access_group_also_hides_the_draft(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.gm_membership_id — proving the fix applies uniformly regardless of
+    how the grant reaches the caller."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.gm_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=f.draft_event_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = {e["event_id"] for e in response.json()["recent_events"]}
+    assert str(f.draft_event_id) not in event_ids
+
+
+def test_a_targeted_allow_exposes_only_that_draft_to_a_non_gm_caller(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.player_user_id holds campaign.view only — no role-derived
+    canon.edit. A second, ungranted draft event proves the allow exposes
+    exactly the one targeted draft, not every draft — an allow is not a
+    backdoor into include_draft_events entirely."""
+    with postgres_engine.begin() as setup:
+        other_draft_time_id = make_world_time(setup, f.world_id, 250)
+        other_draft_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            other_draft_time_id,
+            campaign_id=f.campaign_id,
+            event_status_code="draft",
+            name="Other Draft Event",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=f.draft_event_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = {e["event_id"] for e in response.json()["recent_events"]}
+    assert event_ids == {
+        str(f.draft_event_id),
+        str(f.recorded_new_event_id),
+        str(f.recorded_old_event_id),
+    }
+    assert str(other_draft_event_id) not in event_ids
+
+
+def test_mixed_allow_and_deny_grants_are_evaluated_independently_per_event(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A role-derived GM with three drafts in play at once: one explicitly
+    denied (hidden despite the role-derived baseline), one explicitly
+    allowed (redundant with the baseline but must not be disturbed by the
+    other grant), and one with no grant at all (visible on the baseline
+    alone) — proving each event's visibility is resolved from its own
+    grant, never contaminated by another event's, and that ordering by
+    fictional world time still holds regardless of grant status."""
+    with postgres_engine.begin() as setup:
+        denied_time_id = make_world_time(setup, f.world_id, 350)
+        denied_draft_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            denied_time_id,
+            campaign_id=f.campaign_id,
+            event_status_code="draft",
+            name="Denied Draft",
+        )
+        allowed_time_id = make_world_time(setup, f.world_id, 250)
+        allowed_draft_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            allowed_time_id,
+            campaign_id=f.campaign_id,
+            event_status_code="draft",
+            name="Allowed Draft",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=denied_draft_event_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=allowed_draft_event_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = [e["event_id"] for e in response.json()["recent_events"]]
+    assert str(denied_draft_event_id) not in event_ids
+    # World-time sort keys: denied_draft=350 (excluded), f.draft_event_id=300,
+    # allowed_draft=250, recorded_new=200, recorded_old=100 — most-recent-
+    # first ordering must hold across this mix of baseline-only, denied,
+    # and allowed rows exactly as it would with no grants at all.
+    assert event_ids == [
+        str(f.draft_event_id),
+        str(allowed_draft_event_id),
+        str(f.recorded_new_event_id),
+        str(f.recorded_old_event_id),
+    ]
+
+
+def test_a_denied_recent_draft_does_not_consume_the_limit_slot(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A dedicated campaign with exactly 20 recorded events plus one more
+    recent draft denied to the GM. Filtering the draft out only after a
+    LIMIT 20 fetch would let it consume a slot and push the oldest of the
+    20 recorded events out of the response; filtering it out inside the
+    query itself (this fix) must return all 20 recorded events instead."""
+    with postgres_engine.begin() as setup:
+        limit_campaign_id = make_campaign(
+            setup, f.timeline_id, "Limit Campaign", lifecycle_status_code="pending"
+        )
+        limit_gm_membership_id = make_campaign_membership(setup, limit_campaign_id, f.gm_user_id)
+        limit_gm_role_id = make_role(
+            setup, campaign_id=limit_campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
+        )
+        view_capability_id = lookup_id(
+            setup, "security", "capabilities", "capability_id", "campaign.view"
+        )
+        make_role_capability(setup, limit_gm_role_id, view_capability_id)
+        make_role_capability(setup, limit_gm_role_id, f.canon_edit_capability_id)
+        make_membership_role(setup, limit_gm_membership_id, limit_gm_role_id)
+
+        recorded_event_ids = []
+        for sort_key in range(20):
+            world_time_id = make_world_time(setup, f.world_id, sort_key)
+            recorded_event_ids.append(
+                make_event(
+                    setup,
+                    f.world_id,
+                    f.timeline_id,
+                    world_time_id,
+                    campaign_id=limit_campaign_id,
+                    event_status_code="recorded",
+                    name=f"Recorded {sort_key}",
+                )
+            )
+        newest_draft_time_id = make_world_time(setup, f.world_id, 999)
+        newest_draft_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            newest_draft_time_id,
+            campaign_id=limit_campaign_id,
+            event_status_code="draft",
+            name="Newest Draft",
+        )
+        make_resource_grant(
+            setup,
+            limit_campaign_id,
+            f.canon_edit_capability_id,
+            event_id=newest_draft_event_id,
+            grantee_campaign_membership_id=limit_gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f, campaign_id=limit_campaign_id))
+    assert response.status_code == 200, response.text
+    event_ids = [e["event_id"] for e in response.json()["recent_events"]]
+    assert len(event_ids) == 20
+    assert str(newest_draft_event_id) not in event_ids
+    assert set(event_ids) == {str(event_id) for event_id in recorded_event_ids}
+
+
+def test_a_canon_edit_grant_does_not_affect_recorded_or_corrected_event_visibility(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A deny targeted at a recorded event, and one targeted at a corrected
+    event, both for a caller with no role-derived canon.edit at all — the
+    draft/non-draft split in dnd_ai.queries.summary bypasses grant
+    resolution entirely for non-draft rows, so neither grant has any effect
+    and both remain visible exactly as an ungranted caller would see
+    them."""
+    with postgres_engine.begin() as setup:
+        corrected_time_id = make_world_time(setup, f.world_id, 150)
+        corrected_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            corrected_time_id,
+            campaign_id=f.campaign_id,
+            event_status_code="corrected",
+            name="Corrected Event",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=f.recorded_new_event_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=corrected_event_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = {e["event_id"] for e in response.json()["recent_events"]}
+    assert str(f.recorded_new_event_id) in event_ids
+    assert str(corrected_event_id) in event_ids
+
+
+def test_a_voided_event_stays_excluded_even_with_a_targeted_allow(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            event_id=f.voided_event_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_summary_url(f))
+    assert response.status_code == 200, response.text
+    event_ids = {e["event_id"] for e in response.json()["recent_events"]}
+    assert str(f.voided_event_id) not in event_ids

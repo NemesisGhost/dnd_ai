@@ -121,6 +121,42 @@ class AccessContext:
             return True
         return baseline
 
+    def resource_grant_targets(
+        self, capability_code: str, field_name: str
+    ) -> tuple[frozenset[uuid.UUID], frozenset[uuid.UUID]]:
+        """The resource IDs of `field_name` (one of `_TARGET_COLUMNS`) for
+        which an active, resolved resource grant sets `capability_code` to
+        `deny`/`allow` respectively.
+
+        `has_capability()` resolves deny-overrides-allow-overrides-baseline
+        for one resource at a time — the right shape for a single-resource
+        endpoint, but a *list* endpoint (many rows, one baseline capability
+        check, individually-targetable resource grants layered on top) has
+        no single resource to pass it. Calling `has_capability()` once per
+        row would work but means re-deriving the same `grant_effects` scan
+        per row; this instead exposes the two sets once, so a caller can
+        push per-row visibility into a SQL `WHERE`/`CASE` (denied IDs
+        excluded outright, allowed IDs included regardless of the row's own
+        baseline) without loading unfiltered rows just to discard them
+        after the fact. A row's own baseline — the role/character-
+        relationship check alone, with no resource target — is still the
+        caller's own responsibility, exactly as it is for `has_capability()`
+        when no resource-target keyword is supplied.
+        """
+        if field_name not in _TARGET_COLUMNS:
+            raise ValueError(f"{field_name!r} is not a resource-grant target column")
+        denied = frozenset(
+            target_id
+            for (target_field, target_id), effects in self.grant_effects.items()
+            if target_field == field_name and effects.get(capability_code) == "deny"
+        )
+        allowed = frozenset(
+            target_id
+            for (target_field, target_id), effects in self.grant_effects.items()
+            if target_field == field_name and effects.get(capability_code) == "allow"
+        )
+        return denied, allowed
+
 
 def resolve_user_by_external_identity(
     connection: Connection, *, issuer: str, subject: str

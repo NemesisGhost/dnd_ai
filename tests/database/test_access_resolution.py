@@ -411,6 +411,85 @@ def test_has_capability_rejects_more_than_one_target(db_connection: Connection, 
 
 
 # ---------------------------------------------------------------------------
+# resource_grant_targets — per-row authorization for list endpoints
+# (dnd_ai.api.summary's campaign-summary correction pass)
+# ---------------------------------------------------------------------------
+
+
+def test_resource_grant_targets_returns_denied_and_allowed_ids_separately(
+    db_connection: Connection, f: Fixture
+) -> None:
+    other_event_world_time_id = make_world_time(db_connection, f.world_id, 200)
+    other_event_id = make_event(
+        db_connection,
+        f.world_id,
+        f.timeline_id,
+        other_event_world_time_id,
+        campaign_id=f.campaign_id,
+    )
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.role_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        event_id=f.event_id,
+        effect="deny",
+    )
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.role_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        event_id=other_event_id,
+        effect="allow",
+    )
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
+    assert ctx is not None
+    denied, allowed = ctx.resource_grant_targets("test.role_capability", field_name="event_id")
+    assert denied == frozenset({f.event_id})
+    assert allowed == frozenset({other_event_id})
+
+
+def test_resource_grant_targets_ignores_other_capabilities_and_target_fields(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """A grant for a different capability, and a grant targeting a
+    different field (quest_id rather than event_id), must not leak into
+    either returned set — resource_grant_targets is scoped to exactly the
+    (capability_code, field_name) pair it was asked about."""
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.role_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        quest_id=f.quest_id,
+        effect="deny",
+    )
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.relationship_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        event_id=f.event_id,
+        effect="deny",
+    )
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
+    assert ctx is not None
+    denied, allowed = ctx.resource_grant_targets("test.role_capability", field_name="event_id")
+    assert denied == frozenset()
+    assert allowed == frozenset()
+
+
+def test_resource_grant_targets_rejects_an_unknown_field_name(
+    db_connection: Connection, f: Fixture
+) -> None:
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
+    assert ctx is not None
+    with pytest.raises(ValueError, match="not a resource-grant target column"):
+        ctx.resource_grant_targets("test.role_capability", field_name="not_a_real_column")
+
+
+# ---------------------------------------------------------------------------
 # External identity resolution (§19.7 step 1)
 # ---------------------------------------------------------------------------
 

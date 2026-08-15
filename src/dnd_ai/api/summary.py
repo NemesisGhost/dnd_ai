@@ -20,13 +20,22 @@ other Phase 10 read endpoint uses). A caller additionally holding
 `canon.edit` (a GM) also sees `draft` (not-yet-finalized) events; everyone
 else sees only `recorded`/`corrected` ones — see `dnd_ai.queries.summary`'s
 own docstring for why this is the one genuinely audience-split piece of
-this read. This `canon.edit` check (`access.has_capability(
-_DRAFT_EVENTS_CAPABILITY)`) is deliberately untargeted: it gates a *list*
-of recent events, decided before the query runs and with no single
-`event_id` to check against, so there is no `security.resource_grants`
-target to consult here — a genuinely campaign-wide capability check,
-unlike the resource-scoped `canon.edit` checks in
-`dnd_ai.api.characters`/`.knowledge`/`.quests`/`.dungeon`/`.relationships`.
+this read. `access.has_capability(_DRAFT_EVENTS_CAPABILITY)` with no
+resource target supplies only the *baseline* for that split — the role/
+character-relationship check alone. Returning a list rather than one
+resource does not make `security.resource_grants`'s `event_id` target
+inapplicable; it only means the per-resource deny-overrides-allow-
+overrides-baseline resolution `has_capability()` performs for one resource
+has to be applied per row instead. `access.resource_grant_targets(
+_DRAFT_EVENTS_CAPABILITY, field_name="event_id")` resolves the two sets of
+event-targeted overrides once — `denied_draft_event_ids` (an explicit deny
+that overrides even a role-derived GM's baseline allow for that one draft)
+and `allowed_draft_event_ids` (an explicit allow that lets an otherwise
+non-GM caller see that one draft) — and `get_campaign_summary_view` applies
+both per row, inside its own query, before the response's
+`_RECENT_EVENTS_LIMIT` cap is applied; see that module's docstring for why
+filtering after the cap would be wrong (a denied draft would consume a
+slot and push an older, genuinely visible event out of the response).
 This route is a read: no idempotency key, no `audit.change_log` row, for
 the same reasons every other Phase 10 read endpoint has neither.
 """
@@ -98,10 +107,15 @@ def get_campaign_summary_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CampaignSummaryResponse:
+    denied_draft_event_ids, allowed_draft_event_ids = access.resource_grant_targets(
+        _DRAFT_EVENTS_CAPABILITY, field_name="event_id"
+    )
     view = get_campaign_summary_view(
         connection,
         campaign_id=campaign_id,
         include_draft_events=access.has_capability(_DRAFT_EVENTS_CAPABILITY),
+        denied_draft_event_ids=denied_draft_event_ids,
+        allowed_draft_event_ids=allowed_draft_event_ids,
     )
 
     return CampaignSummaryResponse(

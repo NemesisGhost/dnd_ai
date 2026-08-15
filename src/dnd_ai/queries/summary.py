@@ -29,9 +29,34 @@ read regardless of audience. Session state and the prior-session recap
 carry no such split in this schema and are returned identically to any
 `campaign.view` caller.
 
+Per-event overrides: `include_draft_events` is only the *baseline* —
+`security.resource_grants` supports an `event_id` target, and a grant
+targeting one specific draft event's `canon.edit` must still apply even
+though this endpoint returns a *list*, not one single resource. Returning
+a list is not a reason resource-targeted grants stop applying — it only
+means the per-resource deny-overrides-allow-overrides-baseline resolution
+`dnd_ai.domain.access.AccessContext.has_capability()` performs for one
+resource has to be applied per *row* instead of once for the whole
+response. `denied_draft_event_ids`/`allowed_draft_event_ids` carry that
+resolution in (typically from `AccessContext.resource_grant_targets()`):
+a draft event in `denied_draft_event_ids` is excluded even when
+`include_draft_events` is True (an explicit deny overriding a role-derived
+GM allow), and a draft event in `allowed_draft_event_ids` is included even
+when `include_draft_events` is False (an explicit allow substituting for a
+caller with no role-derived `canon.edit` at all) — mirroring
+`has_capability()`'s own precedence exactly, just evaluated inside the
+query's own `WHERE` clause instead of after fetching. This is deliberate:
+filtering after `LIMIT` would let a denied draft consume one of the
+`_RECENT_EVENTS_LIMIT` slots and silently push an older, genuinely visible
+event out of the response; filtering before `LIMIT` (SQL-side, still one
+bounded, indexed query — no unbounded campaign history is ever loaded)
+keeps the "up to the most recent visible events" contract exact regardless
+of how many drafts a particular caller happens to be denied.
+
 This module is framework-free and performs no authorization of its own:
-`include_draft_events` must already be an authorized decision (a resolved
-`canon.edit` capability check) by the time it reaches here.
+`include_draft_events` and `denied_draft_event_ids`/`allowed_draft_event_ids`
+must already be authorized decisions (resolved `canon.edit` capability
+checks) by the time they reach here.
 """
 
 import uuid
@@ -74,7 +99,12 @@ class CampaignSummaryView:
 
 
 def get_campaign_summary_view(
-    connection: Connection, *, campaign_id: uuid.UUID, include_draft_events: bool
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    include_draft_events: bool,
+    denied_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
+    allowed_draft_event_ids: frozenset[uuid.UUID] = frozenset(),
 ) -> CampaignSummaryView:
     """The current session, the most recently completed session's own
     recap text, and up to the most recent `_RECENT_EVENTS_LIMIT` events
@@ -82,7 +112,11 @@ def get_campaign_summary_view(
     (`require_campaign_capability`) — unlike every world-scoped query in
     this package, no existence/cross-world check is needed here: a
     campaign that resolved access at all already exists, and every table
-    this function reads is scoped by `campaign_id` directly."""
+    this function reads is scoped by `campaign_id` directly.
+
+    `denied_draft_event_ids`/`allowed_draft_event_ids` override
+    `include_draft_events` per event — see this module's docstring for why
+    and for the precedence rule (deny beats allow beats baseline)."""
     current_session_row = (
         connection.execute(
             text("""
@@ -133,13 +167,24 @@ def get_campaign_summary_view(
             JOIN core.world_times wt ON wt.world_time_id = e.world_time_id
             WHERE e.campaign_id = :campaign
               AND es.code != 'voided'
-              AND (:include_draft OR es.code != 'draft')
+              AND (
+                    es.code != 'draft'
+                    OR (
+                          NOT (e.event_id = ANY(CAST(:denied_draft_events AS uuid[])))
+                          AND (
+                                :include_draft
+                                OR e.event_id = ANY(CAST(:allowed_draft_events AS uuid[]))
+                              )
+                       )
+                  )
             ORDER BY wt.sort_key DESC, e.created_at DESC
             LIMIT :event_limit
         """),
         {
             "campaign": campaign_id,
             "include_draft": include_draft_events,
+            "denied_draft_events": list(denied_draft_event_ids),
+            "allowed_draft_events": list(allowed_draft_event_ids),
             "event_limit": _RECENT_EVENTS_LIMIT,
         },
     ).mappings()
