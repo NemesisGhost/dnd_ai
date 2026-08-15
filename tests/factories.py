@@ -1821,6 +1821,8 @@ def make_organization(
     headquarters_location_id: uuid.UUID | None = None,
     founded_world_time_id: uuid.UUID | None = None,
     dissolved_world_time_id: uuid.UUID | None = None,
+    public_description: str | None = None,
+    internal_description: str | None = None,
 ) -> uuid.UUID:
     """A core.entities row plus its world.organizations row. Returns the
     shared UUID (the organization_id, same as the entity_id).
@@ -1849,11 +1851,12 @@ def make_organization(
         text("""
             INSERT INTO world.organizations
                 (organization_id, organization_type_id, parent_organization_id,
-                 founded_world_time_id, dissolved_world_time_id, headquarters_location_id)
+                 founded_world_time_id, dissolved_world_time_id, headquarters_location_id,
+                 public_description, internal_description)
             VALUES (
                 :id,
                 (SELECT organization_type_id FROM world.organization_types WHERE code = :otc),
-                :parent, :founded, :dissolved, :hq
+                :parent, :founded, :dissolved, :hq, :public_desc, :internal_desc
             )
         """),
         {
@@ -1863,6 +1866,8 @@ def make_organization(
             "founded": founded_world_time_id,
             "dissolved": dissolved_world_time_id,
             "hq": headquarters_location_id,
+            "public_desc": public_description,
+            "internal_desc": internal_description,
         },
     )
     return organization_id

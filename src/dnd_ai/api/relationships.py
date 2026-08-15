@@ -73,6 +73,17 @@ this first cut is conservative rather than guessing a per-holder
 character-relationship rule. This route is a read: no idempotency key, no
 `audit.change_log` row, for the same reasons `dnd_ai.api.dungeon`'s read
 endpoint has neither.
+
+Phase 10 workstream 19 added the organization read side, a sibling to
+workstream 15's relationship read over the other half of this module's
+own command domain: `GET /campaigns/{campaign_id}/organizations/
+{organization_id}` (`dnd_ai.queries.organization.get_organization_view`),
+also requiring only `campaign.view`. Unlike the relationship read, the
+audience split here follows the schema's own column names directly:
+`world.organizations.internal_description` is returned only to a caller
+holding `canon.edit`, `None` otherwise — see `dnd_ai.queries.
+organization`'s own docstring. Also a read: no idempotency key, no
+`audit.change_log` row.
 """
 
 import uuid
@@ -87,6 +98,7 @@ from dnd_ai.commands.relationships import (
     _update_organization_status_impl,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.organization import get_organization_view
 from dnd_ai.queries.relationship import get_relationship_view
 
 from ._shared import timeline_world_id
@@ -196,6 +208,20 @@ class RelationshipResponse(BaseModel):
     # Empty for a caller who does not hold canon.edit — see this module's
     # docstring; never partially populated.
     subjective_states: list[RelationshipStateResponse]
+
+
+class OrganizationResponse(BaseModel):
+    organization_id: uuid.UUID
+    organization_type_code: str
+    parent_organization_id: uuid.UUID | None
+    founded_world_time_id: uuid.UUID | None
+    dissolved_world_time_id: uuid.UUID | None
+    headquarters_location_id: uuid.UUID | None
+    public_description: str | None
+    # None for a caller who does not hold canon.edit — see this module's
+    # docstring.
+    internal_description: str | None
+    status_code: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -442,3 +468,42 @@ def update_organization_status_endpoint(
         )
 
     return response
+
+
+@router.get(
+    "/campaigns/{campaign_id}/organizations/{organization_id}",
+    response_model=OrganizationResponse,
+    status_code=200,
+)
+def get_organization_endpoint(
+    organization_id: uuid.UUID,
+    # campaign_id is not otherwise used in this body — require_campaign_
+    # capability's own returned dependency callable declares campaign_id
+    # itself and binds it from the URL path independently, the same way
+    # dnd_ai.api.characters' identical read endpoint already does.
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_RELATIONSHIP_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> OrganizationResponse:
+    include_internal_description = access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY)
+
+    view = get_organization_view(
+        connection,
+        organization_id=organization_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        include_internal_description=include_internal_description,
+    )
+
+    return OrganizationResponse(
+        organization_id=view.organization_id,
+        organization_type_code=view.organization_type_code,
+        parent_organization_id=view.parent_organization_id,
+        founded_world_time_id=view.founded_world_time_id,
+        dissolved_world_time_id=view.dissolved_world_time_id,
+        headquarters_location_id=view.headquarters_location_id,
+        public_description=view.public_description,
+        internal_description=view.internal_description,
+        status_code=view.status_code,
+    )
