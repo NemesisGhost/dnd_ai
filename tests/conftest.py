@@ -30,6 +30,7 @@ Markers (unit, database, scenario) are registered in pyproject.toml, not here.
 
 import os
 import subprocess
+import sys
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -164,8 +165,12 @@ def _test_engine_kwargs() -> dict[str, object]:
 
 
 def _run_alembic_upgrade(database_url: str) -> None:
+    # sys.executable -m alembic rather than the "alembic" console-script
+    # entry point: identical behavior, but doesn't depend on a separate
+    # PATH-resolved executable existing/being runnable at all — the
+    # interpreter running this test session is already known-good.
     subprocess.run(
-        ["alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
         check=True,
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": database_url},

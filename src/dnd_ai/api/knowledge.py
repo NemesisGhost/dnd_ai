@@ -13,7 +13,11 @@ mutation endpoint — so this module is query-only, the same shape
 
 Authorization: requires `campaign.view` (the base gate every other read
 endpoint in this phase uses), then the same GM/party-perspective split
-`dnd_ai.api.dungeon` established: a caller holding `canon.edit` sees the
+`dnd_ai.api.dungeon` established: a caller holding `canon.edit` for this
+exact `knowledge_item_id` (`access.has_capability(...,
+knowledge_item_id=knowledge_item_id)` — never checked without a target,
+which would skip any item-scoped `security.resource_grants` deny and let
+a role-derived GM bypass an explicit, targeted restriction) sees the
 item's own ground truth regardless of any party's belief; anyone else
 must supply an authorized `character_id`/`party_id` pair
 (`dnd_ai.api.access.resolve_party_perspective`, `character.view_knowledge`)
@@ -84,7 +88,10 @@ def get_knowledge_endpoint(
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> KnowledgeResponse:
-    include_ground_truth = access.has_capability(_KNOWLEDGE_GROUND_TRUTH_CAPABILITY)
+    include_ground_truth = access.has_capability(
+        _KNOWLEDGE_GROUND_TRUTH_CAPABILITY,
+        knowledge_item_id=knowledge_item_id,
+    )
     authorized_party_id = (
         None
         if include_ground_truth

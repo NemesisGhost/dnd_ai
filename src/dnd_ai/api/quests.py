@@ -67,10 +67,15 @@ Phase 10 workstream 14 added the read side over the same URL prefix:
 `GET /campaigns/{campaign_id}/quests/{quest_id}`
 (`dnd_ai.queries.quest.get_quest_view`), requiring only `campaign.view`
 (the read-only counterpart to every command route's `canon.edit`, matching
-`dnd_ai.api.dungeon`/`.characters`). Audience filtering and party-
-perspective authorization (`dnd_ai.api.access.resolve_party_perspective`,
-optional `character_id`/`party_id` query parameters) mirror `dnd_ai.api.
-dungeon`'s exactly — see `dnd_ai.queries.quest`'s own docstring for how
+`dnd_ai.api.dungeon`/`.characters`). Audience filtering — a caller holding
+`canon.edit` for this exact `quest_id` (`access.has_capability(...,
+quest_id=quest_id)` — never checked without a target, which would skip
+any quest-scoped `security.resource_grants` deny and let a role-derived
+GM bypass an explicit, targeted restriction) sees every objective
+regardless of `visibility_policy` — and party-perspective authorization
+(`dnd_ai.api.access.resolve_party_perspective`, optional
+`character_id`/`party_id` query parameters) mirror `dnd_ai.api.dungeon`'s
+exactly — see `dnd_ai.queries.quest`'s own docstring for how
 `narrative.quest_objectives.visibility_policy` drives it. This route is a
 read: no idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
@@ -268,7 +273,7 @@ def get_quest_endpoint(
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> QuestResponse:
-    include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY)
+    include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)
     authorized_party_id = (
         None
         if include_hidden

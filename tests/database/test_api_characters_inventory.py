@@ -31,6 +31,8 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
     make_character,
@@ -44,6 +46,7 @@ from tests.factories import (
     make_membership_character_relationship,
     make_membership_role,
     make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_ruleset_version_for_world,
@@ -167,6 +170,8 @@ class Fixture:
             connection, "security", "capabilities", "capability_id", "character.view_summary"
         )
 
+        self.canon_edit_capability_id = canon_edit_id
+
         base_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"viewer_{uuid.uuid4().hex[:8]}"
         )
@@ -174,6 +179,7 @@ class Fixture:
 
         self.gm_user_id = make_user(connection, "Inventory Query GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = gm_membership_id
         gm_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
@@ -197,6 +203,36 @@ class Fixture:
             self.full_view_relationship_type_id,
             timeline_id=self.timeline_id,
         )
+
+        # Holds role-derived canon.edit *and* an independent
+        # character.view_full relationship for f.character_id, so a
+        # targeted canon.edit deny for that character still leaves
+        # resolve_character_view_tier satisfied via the relationship —
+        # isolating the reveal_all_properties regression from the tier
+        # check itself.
+        self.privileged_user_id = make_user(connection, "Inventory Query Privileged Member")
+        privileged_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.privileged_user_id
+        )
+        self.privileged_membership_id = privileged_membership_id
+        make_membership_role(connection, privileged_membership_id, gm_role_id)
+        make_membership_character_relationship(
+            connection,
+            privileged_membership_id,
+            self.character_id,
+            self.full_view_relationship_type_id,
+            timeline_id=self.timeline_id,
+        )
+
+        # Holds campaign.view only — no role-derived canon.edit, no
+        # character relationship — proving a targeted canon.edit allow can
+        # substitute for both at once.
+        self.base_view_user_id = make_user(connection, "Inventory Query Base Viewer")
+        base_view_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.base_view_user_id
+        )
+        self.base_view_membership_id = base_view_membership_id
+        make_membership_role(connection, base_view_membership_id, base_role_id)
 
         self.summary_view_user_id = make_user(connection, "Inventory Query Summary Viewer")
         summary_view_membership_id = make_campaign_membership(
@@ -256,6 +292,46 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                             SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                                 SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                             )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            # security.resource_grants/access_group_memberships/
+            # access_groups are created ad hoc by individual tests below
+            # (the untargeted canon.edit correction pass's deny/allow-grant
+            # regression tests), never by the shared Fixture itself —
+            # cleaned up here, scoped by campaign_id, before the
+            # campaign_memberships/access_groups rows they reference are
+            # removed. See tests/database/test_api_characters.py's
+            # identical cleanup for the same pattern.
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.resource_grants WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                        SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_groups WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                         )
                     )
                 """),
@@ -366,6 +442,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             {
                 "users": [
                     fixture.gm_user_id,
+                    fixture.privileged_user_id,
+                    fixture.base_view_user_id,
                     fixture.full_view_user_id,
                     fixture.summary_view_user_id,
                     fixture.capless_user_id,
@@ -461,6 +539,112 @@ def test_a_gm_sees_full_properties_regardless_of_identification_state(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.gm_user_id) as client:
+        response = client.get(_inventory_url(f))
+    assert response.status_code == 200, response.text
+    items = _by_item_id(response.json())
+
+    unidentified_ring = items[str(f.ring_item_id)]
+    assert unidentified_ring["identification_level"] == "unidentified"
+    assert unidentified_ring["properties"] == {"bonus": "+2 AC", "curse": "binds permanently"}
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides for the reveal_all_properties (canon.edit) check
+#
+# dnd_ai.api.characters.get_character_inventory_endpoint used to check
+# canon.edit with no character_id target, so a character-scoped
+# security.resource_grants deny never reached it and a role-derived GM
+# always saw every item's hidden properties. These tests prove the fixed,
+# character_id-scoped check honors a targeted deny/allow, while inventory
+# access itself (governed by resolve_character_view_tier, already
+# character_id-scoped from an earlier correction pass) is unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_deny_for_canon_edit_hides_properties_but_leaves_inventory_accessible(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.privileged_user_id holds role-derived canon.edit *and* an
+    independent character.view_full relationship for f.character_id — the
+    pre-correction-pass bug ignored a deny targeting this exact character
+    and always revealed every item's hidden properties anyway. The
+    character.view_full relationship keeps resolve_character_view_tier
+    satisfied on its own merits, isolating this regression to
+    reveal_all_properties specifically."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.privileged_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(_inventory_url(f))
+    assert response.status_code == 200, response.text
+    items = _by_item_id(response.json())
+
+    unidentified_ring = items[str(f.ring_item_id)]
+    assert unidentified_ring["identification_level"] == "unidentified"
+    assert unidentified_ring["properties"] is None
+
+    full = items[str(f.full_item_id)]
+    assert full["identification_level"] == "fully_identified"
+    assert full["properties"] == {"damage": "1d8 radiant"}
+
+
+def test_a_targeted_deny_via_access_group_hides_properties_but_leaves_inventory_accessible(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.privileged_membership_id — proving the fix applies uniformly
+    regardless of how the grant reaches the caller."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.privileged_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(_inventory_url(f))
+    assert response.status_code == 200, response.text
+    items = _by_item_id(response.json())
+
+    unidentified_ring = items[str(f.ring_item_id)]
+    assert unidentified_ring["identification_level"] == "unidentified"
+    assert unidentified_ring["properties"] is None
+
+
+def test_a_targeted_canon_edit_allow_reveals_properties_without_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.base_view_user_id holds campaign.view only — no role-derived
+    canon.edit, no character.view_full/view_summary relationship. A
+    canon.edit allow targeted at f.character_id both unlocks inventory
+    access at all (via resolve_character_view_tier's own identical,
+    already-fixed character_id-scoped check) and reveals every item's
+    hidden properties — proving the targeted-allow path this correction
+    pass preserves."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.base_view_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.base_view_user_id) as client:
         response = client.get(_inventory_url(f))
     assert response.status_code == 200, response.text
     items = _by_item_id(response.json())

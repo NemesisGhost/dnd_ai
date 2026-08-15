@@ -37,6 +37,8 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_area_connection,
     make_area_feature,
     make_area_hazard,
@@ -55,6 +57,7 @@ from tests.factories import (
     make_party_discovery,
     make_party_membership,
     make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -228,6 +231,38 @@ class Fixture:
             connection, self.timeline_id, self.party_b_id, self.character_b_id, self.world_time_id
         )
 
+        self.canon_edit_capability_id = canon_edit_id
+
+        # Holds role-derived canon.edit *and* an independent
+        # character.view_knowledge relationship for character_a (the same
+        # relationship player_user holds), so a targeted canon.edit deny
+        # for area_a_id still leaves an authorized party perspective
+        # available — isolating the include_hidden regression from
+        # party-perspective authorization itself.
+        self.privileged_user_id = make_user(connection, "Dungeon API Privileged Member")
+        privileged_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.privileged_user_id
+        )
+        self.privileged_membership_id = privileged_membership_id
+        make_membership_role(connection, privileged_membership_id, gm_role_id)
+        make_membership_character_relationship(
+            connection,
+            privileged_membership_id,
+            self.character_a_id,
+            self.controller_relationship_type_id,
+            timeline_id=self.timeline_id,
+        )
+
+        # Holds campaign.view only — no role-derived canon.edit, no
+        # character relationship — proving a targeted canon.edit allow can
+        # unlock every structural child, hidden included, without either.
+        self.base_view_user_id = make_user(connection, "Dungeon API Base Viewer")
+        base_view_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.base_view_user_id
+        )
+        self.base_view_membership_id = base_view_membership_id
+        make_membership_role(connection, base_view_membership_id, player_role_id)
+
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
         self.capless_user_id = make_user(connection, "Dungeon API Capless Member")
@@ -294,6 +329,46 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             cleanup.execute(
                 text("""
                     DELETE FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            # security.resource_grants/access_group_memberships/
+            # access_groups are created ad hoc by individual tests below
+            # (the untargeted canon.edit correction pass's deny/allow-grant
+            # regression tests), never by the shared Fixture itself —
+            # cleaned up here, scoped by campaign_id, before the
+            # campaign_memberships/access_groups rows they reference are
+            # removed. See tests/database/test_api_characters.py's
+            # identical cleanup for the same pattern.
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.resource_grants WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                        SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_groups WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                         )
@@ -380,6 +455,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 "users": [
                     fixture.gm_user_id,
                     fixture.player_user_id,
+                    fixture.privileged_user_id,
+                    fixture.base_view_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
                 ]
@@ -540,6 +617,133 @@ def test_location_state_defaults_when_no_state_row_exists(
     assert body["is_destroyed"] is False
     assert body["alarm_level"] == 0
     assert body["condition_notes"] is None
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides for the include_hidden (canon.edit) check
+#
+# dnd_ai.api.dungeon.get_dungeon_area_endpoint used to check canon.edit
+# with no entity_id target, so an entity-scoped security.resource_grants
+# deny never reached it and a role-derived GM always saw every structural
+# child. These tests prove the fixed, entity_id-scoped check (targeting
+# area_a_id, which doubles as its own core.entities.entity_id) honors a
+# targeted deny/allow, and that a caller denied full visibility for one
+# area still falls through cleanly to an authorized party perspective.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_deny_for_canon_edit_falls_through_to_party_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.privileged_user_id holds role-derived canon.edit *and* an
+    independent character.view_knowledge relationship for character_a (the
+    same relationship player_user holds) — the pre-correction-pass bug
+    ignored a deny targeting this exact area and always returned every
+    structural child regardless of is_hidden anyway. The view_knowledge
+    relationship keeps resolve_party_perspective satisfied on its own
+    merits, isolating this regression to include_hidden specifically."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.area_a_id,
+            grantee_campaign_membership_id=f.privileged_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.party_id)},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert {feat["area_feature_id"] for feat in body["features"]} == {
+        str(f.visible_feature_id),
+        str(f.hidden_feature_id),
+    }
+    assert {haz["area_hazard_id"] for haz in body["hazards"]} == {str(f.visible_hazard_id)}
+    assert {ia["area_interactable_id"] for ia in body["interactables"]} == {
+        str(f.visible_interactable_id)
+    }
+    assert {c["area_connection_id"] for c in body["connections"]} == {str(f.visible_connection_id)}
+
+
+def test_a_targeted_deny_via_access_group_falls_through_to_party_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.privileged_membership_id — proving the fix applies uniformly
+    regardless of how the grant reaches the caller."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.privileged_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.area_a_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.party_id)},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {feat["area_feature_id"] for feat in body["features"]} == {
+        str(f.visible_feature_id),
+        str(f.hidden_feature_id),
+    }
+    assert {haz["area_hazard_id"] for haz in body["hazards"]} == {str(f.visible_hazard_id)}
+
+
+def test_a_targeted_canon_edit_allow_reveals_every_structural_child_without_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.base_view_user_id holds campaign.view only — no role-derived
+    canon.edit, no character.view_knowledge relationship. A canon.edit
+    allow targeted at f.area_a_id unlocks every structural child regardless
+    of is_hidden without supplying (or being authorized for) any party
+    perspective at all — proving the targeted-allow path this correction
+    pass preserves."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.area_a_id,
+            grantee_campaign_membership_id=f.base_view_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.base_view_user_id) as client:
+        response = client.get(_area_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert {feat["area_feature_id"] for feat in body["features"]} == {
+        str(f.visible_feature_id),
+        str(f.hidden_feature_id),
+    }
+    assert {haz["area_hazard_id"] for haz in body["hazards"]} == {
+        str(f.visible_hazard_id),
+        str(f.hidden_hazard_id),
+    }
+    assert {ia["area_interactable_id"] for ia in body["interactables"]} == {
+        str(f.visible_interactable_id),
+        str(f.hidden_interactable_id),
+    }
+    assert {c["area_connection_id"] for c in body["connections"]} == {
+        str(f.visible_connection_id),
+        str(f.hidden_connection_id),
+    }
 
 
 # ---------------------------------------------------------------------------

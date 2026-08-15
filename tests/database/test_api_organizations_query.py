@@ -29,11 +29,14 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
     make_membership_role,
     make_organization,
     make_organization_state,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -78,8 +81,11 @@ class Fixture:
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
 
+        self.canon_edit_capability_id = canon_edit_id
+
         self.gm_user_id = make_user(connection, "Organization Query GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = gm_membership_id
         gm_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
@@ -91,6 +97,7 @@ class Fixture:
         player_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.player_user_id
         )
+        self.player_membership_id = player_membership_id
         player_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"player_{uuid.uuid4().hex[:8]}"
         )
@@ -144,6 +151,46 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             cleanup.execute(
                 text("""
                     DELETE FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            # security.resource_grants/access_group_memberships/
+            # access_groups are created ad hoc by individual tests below
+            # (the untargeted canon.edit correction pass's deny/allow-grant
+            # regression tests), never by the shared Fixture itself —
+            # cleaned up here, scoped by campaign_id, before the
+            # campaign_memberships/access_groups rows they reference are
+            # removed. See tests/database/test_api_characters.py's
+            # identical cleanup for the same pattern.
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.resource_grants WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                        SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_groups WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                         )
@@ -260,6 +307,100 @@ def test_status_code_is_none_when_no_state_row_exists(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status_code"] is None
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides for the include_internal_description
+# (canon.edit) check
+#
+# get_organization_endpoint used to check canon.edit with no entity_id
+# target, so an entity-scoped security.resource_grants deny never reached
+# it and a role-derived GM always saw the internal description. These
+# tests prove the fixed, entity_id-scoped check (targeting
+# f.organization_id, which is the entity_id directly — world.organizations
+# rows are core.entities rows via class-table inheritance) honors a
+# targeted deny/allow, falling through to the same non-GM response a
+# caller who was never granted canon.edit at all receives.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_deny_for_canon_edit_hides_the_internal_description(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.gm_user_id holds role-derived canon.edit — the pre-correction-pass
+    bug ignored a deny targeting this exact organization and always
+    revealed the internal description anyway. campaign.view (also
+    role-derived) is unaffected by this entity-scoped deny, so the GM still
+    sees the response, just without the internal description — identical
+    to what a non-GM sees."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.organization_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_organization_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["public_description"] == "A merchants' guild."
+    assert body["internal_description"] is None
+    assert body["status_code"] == "active"
+
+
+def test_a_targeted_deny_via_access_group_hides_the_internal_description(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.gm_membership_id — proving the fix applies uniformly regardless of
+    how the grant reaches the caller."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.gm_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.organization_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_organization_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["internal_description"] is None
+
+
+def test_a_targeted_canon_edit_allow_reveals_the_internal_description_without_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.player_user_id holds campaign.view only — no role-derived
+    canon.edit. A canon.edit allow targeted at f.organization_id reveals
+    the internal description without a canon.edit role at all — proving
+    the targeted-allow path this correction pass preserves."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            entity_id=f.organization_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_organization_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["public_description"] == "A merchants' guild."
+    assert body["internal_description"] == "Actually a front for smuggling."
 
 
 # ---------------------------------------------------------------------------

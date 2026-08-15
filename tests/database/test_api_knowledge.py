@@ -32,6 +32,8 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
     make_campaign_party,
@@ -44,6 +46,7 @@ from tests.factories import (
     make_party_knowledge,
     make_party_membership,
     make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -163,6 +166,38 @@ class Fixture:
             timeline_id=self.timeline_id,
         )
 
+        self.canon_edit_capability_id = canon_edit_id
+
+        # Holds role-derived canon.edit *and* an independent
+        # character.view_knowledge relationship for f.character_id, so a
+        # targeted canon.edit deny for a specific knowledge item still
+        # leaves an authorized party perspective available — isolating the
+        # include_ground_truth regression from party-perspective
+        # authorization itself.
+        self.privileged_user_id = make_user(connection, "Knowledge Query Privileged Member")
+        privileged_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.privileged_user_id
+        )
+        self.privileged_membership_id = privileged_membership_id
+        make_membership_role(connection, privileged_membership_id, gm_role_id)
+        make_membership_character_relationship(
+            connection,
+            privileged_membership_id,
+            self.character_id,
+            self.relationship_type_id,
+            timeline_id=self.timeline_id,
+        )
+
+        # Holds campaign.view only — no role-derived canon.edit, no
+        # character relationship — proving a targeted canon.edit allow can
+        # unlock ground truth without either.
+        self.base_view_user_id = make_user(connection, "Knowledge Query Base Viewer")
+        base_view_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.base_view_user_id
+        )
+        self.base_view_membership_id = base_view_membership_id
+        make_membership_role(connection, base_view_membership_id, player_role_id)
+
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
         self.capless_user_id = make_user(connection, "Knowledge Query Capless Member")
@@ -224,6 +259,46 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             cleanup.execute(
                 text("""
                     DELETE FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            # security.resource_grants/access_group_memberships/
+            # access_groups are created ad hoc by individual tests below
+            # (the untargeted canon.edit correction pass's deny/allow-grant
+            # regression tests), never by the shared Fixture itself —
+            # cleaned up here, scoped by campaign_id, before the
+            # campaign_memberships/access_groups rows they reference are
+            # removed. See tests/database/test_api_characters.py's
+            # identical cleanup for the same pattern.
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.resource_grants WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                        SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_groups WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                         )
@@ -308,6 +383,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 "users": [
                     fixture.gm_user_id,
                     fixture.player_user_id,
+                    fixture.privileged_user_id,
+                    fixture.base_view_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
                 ]
@@ -410,6 +487,109 @@ def test_an_authorized_party_sees_its_own_distorted_interpretation_not_ground_tr
     body = response.json()
     assert body["statement"] == ("Everyone says it's cursed, but I've heard it grants wishes.")
     assert body["statement"] != "The idol grants wishes."
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides for the include_ground_truth (canon.edit) check
+#
+# dnd_ai.api.knowledge.get_knowledge_endpoint used to check canon.edit with
+# no knowledge_item_id target, so an item-scoped security.resource_grants
+# deny never reached it and a role-derived GM always saw ground truth.
+# These tests prove the fixed, knowledge_item_id-scoped check honors a
+# targeted deny/allow, and that a caller denied ground truth for one item
+# still falls through cleanly to an authorized party perspective.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_deny_for_canon_edit_falls_through_to_party_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.privileged_user_id holds role-derived canon.edit *and* an
+    independent character.view_knowledge relationship for f.character_id —
+    the pre-correction-pass bug ignored a deny targeting this exact
+    knowledge item and always returned ground truth anyway. The
+    view_knowledge relationship keeps resolve_party_perspective satisfied
+    on its own merits, isolating this regression to include_ground_truth
+    specifically: with ground truth denied, the caller sees the party's own
+    distorted interpretation instead."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.distorted_item_id,
+            grantee_campaign_membership_id=f.privileged_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(
+            _knowledge_url(f, f.distorted_item_id),
+            params={"character_id": str(f.character_id), "party_id": str(f.party_id)},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["statement"] == ("Everyone says it's cursed, but I've heard it grants wishes.")
+    assert body["statement"] != "The idol grants wishes."
+    assert body["truth_status_code"] is None
+    assert body["sensitivity"] is None
+
+
+def test_a_targeted_deny_via_access_group_falls_through_to_party_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.privileged_membership_id — proving the fix applies uniformly
+    regardless of how the grant reaches the caller."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.privileged_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.distorted_item_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.privileged_user_id) as client:
+        response = client.get(
+            _knowledge_url(f, f.distorted_item_id),
+            params={"character_id": str(f.character_id), "party_id": str(f.party_id)},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["statement"] == ("Everyone says it's cursed, but I've heard it grants wishes.")
+    assert body["truth_status_code"] is None
+
+
+def test_a_targeted_canon_edit_allow_reveals_ground_truth_without_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.base_view_user_id holds campaign.view only — no role-derived
+    canon.edit, no character.view_knowledge relationship. A canon.edit
+    allow targeted at f.accurate_item_id unlocks ground truth without
+    supplying (or being authorized for) any party perspective at all —
+    proving the targeted-allow path this correction pass preserves."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.accurate_item_id,
+            grantee_campaign_membership_id=f.base_view_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.base_view_user_id) as client:
+        response = client.get(_knowledge_url(f, f.accurate_item_id))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["statement"] == "The idol is cursed."
+    assert body["truth_status_code"] == "true"
+    assert body["sensitivity"] is not None
 
 
 # ---------------------------------------------------------------------------

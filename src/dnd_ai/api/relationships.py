@@ -70,9 +70,16 @@ caller; each participant's own *subjective* state row (affinity, trust,
 private interpretation, ...) is returned only to a caller holding
 `canon.edit` — see `dnd_ai.queries.relationship`'s own docstring for why
 this first cut is conservative rather than guessing a per-holder
-character-relationship rule. This route is a read: no idempotency key, no
-`audit.change_log` row, for the same reasons `dnd_ai.api.dungeon`'s read
-endpoint has neither.
+character-relationship rule. This `canon.edit` check
+(`access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY)`) is deliberately
+untargeted: `security.resource_grants` has no `relationship_id` target
+kind at all (a relationship connects two or more participants of equal
+standing with no single entity identity of its own — the same reason
+`entity_id=None` above), so there is no per-relationship grant to consult
+and this remains a genuinely campaign-wide capability check, unlike the
+`entity_id`-scoped organization check below. This route is a read: no
+idempotency key, no `audit.change_log` row, for the same reasons
+`dnd_ai.api.dungeon`'s read endpoint has neither.
 
 Phase 10 workstream 19 added the organization read side, a sibling to
 workstream 15's relationship read over the other half of this module's
@@ -81,9 +88,14 @@ own command domain: `GET /campaigns/{campaign_id}/organizations/
 also requiring only `campaign.view`. Unlike the relationship read, the
 audience split here follows the schema's own column names directly:
 `world.organizations.internal_description` is returned only to a caller
-holding `canon.edit`, `None` otherwise — see `dnd_ai.queries.
-organization`'s own docstring. Also a read: no idempotency key, no
-`audit.change_log` row.
+holding `canon.edit` for this exact `organization_id`
+(`access.has_capability(..., entity_id=organization_id)` — never checked
+without a target, which would skip any entity-scoped
+`security.resource_grants` deny and let a role-derived GM bypass an
+explicit, targeted restriction; `organization_id` *is* the entity_id
+directly, per this module's own auditing note above), `None` otherwise —
+see `dnd_ai.queries.organization`'s own docstring. Also a read: no
+idempotency key, no `audit.change_log` row.
 """
 
 import uuid
@@ -486,7 +498,9 @@ def get_organization_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> OrganizationResponse:
-    include_internal_description = access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY)
+    include_internal_description = access.has_capability(
+        _RELATIONSHIP_MANAGE_CAPABILITY, entity_id=organization_id
+    )
 
     view = get_organization_view(
         connection,

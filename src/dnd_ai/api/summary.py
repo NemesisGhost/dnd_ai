@@ -20,8 +20,15 @@ other Phase 10 read endpoint uses). A caller additionally holding
 `canon.edit` (a GM) also sees `draft` (not-yet-finalized) events; everyone
 else sees only `recorded`/`corrected` ones — see `dnd_ai.queries.summary`'s
 own docstring for why this is the one genuinely audience-split piece of
-this read. This route is a read: no idempotency key, no `audit.change_log`
-row, for the same reasons every other Phase 10 read endpoint has neither.
+this read. This `canon.edit` check (`access.has_capability(
+_DRAFT_EVENTS_CAPABILITY)`) is deliberately untargeted: it gates a *list*
+of recent events, decided before the query runs and with no single
+`event_id` to check against, so there is no `security.resource_grants`
+target to consult here — a genuinely campaign-wide capability check,
+unlike the resource-scoped `canon.edit` checks in
+`dnd_ai.api.characters`/`.knowledge`/`.quests`/`.dungeon`/`.relationships`.
+This route is a read: no idempotency key, no `audit.change_log` row, for
+the same reasons every other Phase 10 read endpoint has neither.
 """
 
 import uuid

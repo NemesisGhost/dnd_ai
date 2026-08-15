@@ -45,11 +45,17 @@ returning `False` (summary-only) is treated as unauthorized here too,
 since inventory contents are full-detail data with no separate summary
 form; the same `CharacterViewNotAuthorizedError` fixed 404 that route
 already raises for "neither capability held" now also covers "only the
-summary tier applies." A caller holding `canon.edit` additionally sees
-every item's hidden mechanical properties regardless of identification
-state — see `dnd_ai.queries.inventory`'s own docstring for why
-identification is otherwise resolved only from the holder's own
-perspective, never an arbitrary caller-supplied knower.
+summary tier applies." A caller holding `canon.edit` for this exact
+`character_id` (`access.has_capability(..., character_id=character_id)` —
+never checked without a target, which would skip any character-scoped
+`security.resource_grants` deny and let a role-derived GM bypass an
+explicit, targeted restriction; see `dnd_ai.api.access.
+resolve_character_view_tier`'s own docstring for the identical reasoning
+its own `canon.edit` check already follows) additionally sees every item's
+hidden mechanical properties regardless of identification state — see
+`dnd_ai.queries.inventory`'s own docstring for why identification is
+otherwise resolved only from the holder's own perspective, never an
+arbitrary caller-supplied knower.
 """
 
 import uuid
@@ -229,7 +235,9 @@ def get_character_inventory_endpoint(
         holder_entity_id=character_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        reveal_all_properties=access.has_capability(_CHARACTER_MANAGE_CAPABILITY),
+        reveal_all_properties=access.has_capability(
+            _CHARACTER_MANAGE_CAPABILITY, character_id=character_id
+        ),
     )
 
     return [

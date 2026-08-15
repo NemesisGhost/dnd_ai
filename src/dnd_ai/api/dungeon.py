@@ -14,11 +14,21 @@ requirement, and the capability this codebase's own seed data
 (`database/seeds/security.capabilities.yaml`) names for exactly this
 purpose. Unlike every command router so far, this endpoint's *response
 shape* also depends on the resolved `AccessContext`: a caller who
-additionally holds `canon.edit` (a GM) receives every structural child of
-the area regardless of `is_hidden`; anyone else receives only what their
-party has discovered (`dnd_ai.queries.dungeon`'s own audience-filtering
-contract) — the GM/player/observer distinction docs/PLAN.md §25 step 15
-requires of this vertical slice's summary and detail reads.
+additionally holds `canon.edit` for this exact `dungeon_area_id`
+(`access.has_capability(..., entity_id=dungeon_area_id)` — never checked
+without a target, which would skip any entity-scoped
+`security.resource_grants` deny and let a role-derived GM bypass an
+explicit, targeted restriction; see `dnd_ai.api.characters`'s identical
+reasoning for its own `canon.edit` check. `dungeon_area_id` doubles as the
+area's own `core.entities.entity_id` — class-table inheritance chains
+`core.entities -> world.locations -> world.dungeon_areas` through one
+shared UUID, per `dnd_ai.queries.dungeon.get_dungeon_area_view`'s own
+`core.entities` join — so it is a valid `entity_id` target) receives every
+structural child of the area regardless of `is_hidden`; anyone else
+receives only what their party has discovered (`dnd_ai.queries.dungeon`'s
+own audience-filtering contract) — the GM/player/observer distinction
+docs/PLAN.md §25 step 15 requires of this vertical slice's summary and
+detail reads.
 
 Party scope: optional `character_id`/`party_id` query parameters together
 select whose discoveries filter the response for a non-GM caller — both
@@ -173,7 +183,12 @@ def get_dungeon_area_endpoint(
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> DungeonAreaResponse:
-    include_hidden = access.has_capability(_DUNGEON_MANAGE_CAPABILITY)
+    # dungeon_area_id doubles as the area's own core.entities.entity_id
+    # (class-table inheritance: core.entities -> world.locations ->
+    # world.dungeon_areas share one UUID — see dnd_ai.queries.dungeon.
+    # get_dungeon_area_view's own core.entities join), so it is a valid
+    # security.resource_grants.entity_id target.
+    include_hidden = access.has_capability(_DUNGEON_MANAGE_CAPABILITY, entity_id=dungeon_area_id)
     # A GM never needs an authorized party perspective — every structural
     # child is already returned regardless of is_hidden, so
     # character_id/party_id are left unresolved for that caller.
