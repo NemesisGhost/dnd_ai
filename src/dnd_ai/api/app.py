@@ -13,10 +13,14 @@ is delivered and used by the command endpoints below
 `dnd_ai.api.integration`, `dnd_ai.api.memberships`,
 `dnd_ai.api.access_grants`) and the query endpoints (`dnd_ai.api.dungeon`,
 `dnd_ai.api.characters`, `dnd_ai.api.knowledge`, `dnd_ai.api.summary`) via
-`dnd_ai.api.access`. This module remains the plumbing every router builds
-on: app factory, error contract, correlation IDs, health/readiness,
-per-request transaction management, and authentication — routers register
-their own paths, this module only mounts them.
+`dnd_ai.api.access`. `dnd_ai.api.campaigns` is the one exception: it has no
+campaign yet to resolve `dnd_ai.api.access.require_campaign_capability`
+against, so it authenticates the caller directly via `dnd_ai.api.auth.
+get_authenticated_user_id` instead — see its own module docstring. This
+module remains the plumbing every router builds on: app factory, error
+contract, correlation IDs, health/readiness, per-request transaction
+management, and authentication — routers register their own paths, this
+module only mounts them.
 """
 
 import logging
@@ -32,6 +36,7 @@ from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, settings
 
 from .access_grants import router as access_grants_router
 from .auth import dispose_jwks_client
+from .campaigns import router as campaigns_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
@@ -87,6 +92,7 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
+    app.include_router(campaigns_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounters_router)
