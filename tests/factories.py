@@ -528,6 +528,18 @@ def make_party(connection: Connection, world_id: uuid.UUID, name: str = "The Com
     return value
 
 
+def make_campaign_party(
+    connection: Connection, campaign_id: uuid.UUID, party_id: uuid.UUID
+) -> None:
+    """Associates a party with a campaign via campaign.campaign_parties
+    (revision 010) — a pure composite-PK join table, so there is no
+    surrogate id to return."""
+    connection.execute(
+        text("INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:c, :p)"),
+        {"c": campaign_id, "p": party_id},
+    )
+
+
 def make_ruleset_version(connection: Connection, code: str | None = None) -> uuid.UUID:
     """A bare ruleset + ruleset_version, with no world association.
 
