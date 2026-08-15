@@ -1,0 +1,328 @@
+"""Command endpoints over `dnd_ai.commands.relationships` — Phase 10
+workstream 8, continuing "command endpoints over the existing
+command/application services" (docs/PLAN.md Phase 10) into the
+relationship/organization domain after workstream 5's encounter endpoints
+(`dnd_ai.api.encounters`), workstream 6's item endpoints
+(`dnd_ai.api.items`), and workstream 7's quest endpoint
+(`dnd_ai.api.quests`). Exposes `evolve_relationship_reaction` and
+`update_organization_status` (docs/PHASE8_VERIFICATION.md) over HTTP, on
+the same already-delivered OIDC authentication (`dnd_ai.api.auth`),
+transaction management (`dnd_ai.api.deps`), and access resolution
+(`dnd_ai.api.access`, `dnd_ai.domain.access`) every other command router
+uses.
+
+Both routes run on the request's own `get_connection` transaction and call
+the connection-taking `_..._impl` form of their command (never the public
+engine-based wrapper, which would open a second, nested transaction) —
+identical to every route in `dnd_ai.api.encounters`/`.items`/`.quests`.
+
+Authorization: both routes require the `canon.edit` role capability in the
+target campaign (`dnd_ai.api.access.require_campaign_capability`), the same
+capability every other command router uses. Relationship reaction/
+organization status changes are treated as GM/adapter-level canon
+mutations for this first cut, the same deliberate scoping every other
+command router's own docstring records.
+
+Cross-campaign session integrity: both routes pass the URL's own (already-
+authorized) `campaign_id` and the request body's caller-supplied
+`session_id` straight through to their respective `_..._impl` function,
+which validates the two agree
+(`dnd_ai.commands._shared.validate_session_campaign`) before mutating
+anything, raising `SessionNotInCampaignError` — a `SafeMessageError` the
+existing generic handler maps to a fixed, non-disclosing 404 — for a
+nonexistent or foreign-campaign session.
+
+Like `dnd_ai.api.items`/`.quests`, there is no encounter-style "does this
+resource belong to my campaign" ownership check here: neither
+`world.relationships`/`campaign.relationship_state` nor
+`world.organizations`/`campaign.organization_state` carries a `campaign_id`
+at all — they are scoped by `timeline_id`, always taken from the resolved
+`AccessContext` (the campaign's own pinned timeline), never from the
+request body.
+
+Auditing: `entity_id` differs deliberately between the two routes.
+`world.organizations` rows are `core.entities` rows (class-table
+inheritance, CLAUDE.md rule 4 — `organization_id` *is* the entity_id), so
+`update_organization_status_endpoint` records `entity_id=organization_id`
+directly. `world.relationships` rows are not `core.entities` rows at all —
+a relationship connects entities but has no entity identity of its own,
+the same reason `dnd_ai.commands.quests`' workstream 7 correction pass
+resolved `quest_objective_id` (also not an entity) to its *owning* quest's
+`entity_id` instead. A relationship has no single owning entity to resolve
+to (it may connect two or more participants of equal standing), so
+`evolve_relationship_reaction_endpoint` records `entity_id=None` — matching
+`audit.change_log.entity_id`'s own documented contract, "the core.entities
+row this change concerns, *when there is one*" (migration 007).
+
+Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
+`security.idempotent_requests` (migration 082) — identical mechanism to
+every other command router; see `dnd_ai.api.items`'s module docstring for
+the full concurrency argument.
+"""
+
+import uuid
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import Connection
+
+from dnd_ai.commands.relationships import (
+    _evolve_relationship_reaction_impl,
+    _update_organization_status_impl,
+)
+from dnd_ai.domain.access import AccessContext
+
+from .access import require_campaign_capability
+from .audit import record_change_log
+from .correlation import get_request_correlation_id
+from .deps import get_connection, get_idempotency_key
+from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+
+router = APIRouter(tags=["relationships"])
+
+# Relationship reaction/organization status changes are canon-affecting
+# mutations (docs/architecture/DATABASE_MODEL.md §12.3) — see this module's
+# docstring for why every route here requires it rather than a narrower,
+# character-scoped capability.
+_RELATIONSHIP_MANAGE_CAPABILITY = "canon.edit"
+
+# audit.change_log.command_name / the idempotency store's fingerprinted
+# command_name — one literal per route, never derived from request data.
+_EVOLVE_REACTION_COMMAND_NAME = "evolve_relationship_reaction"
+_UPDATE_ORGANIZATION_STATUS_COMMAND_NAME = "update_organization_status"
+
+# audit.change_actions.code (revision 007 seed): each call updates an
+# existing conceptual resource's relationship/organization state, whether
+# or not a campaign.relationship_state/.organization_state row already
+# existed — "updated" fits a first transition too, the same way every
+# other command router in this codebase treats "insert vs. update the
+# state row" as an implementation detail of one logical operation.
+_UPDATED_CHANGE_ACTION = "updated"
+
+
+# ---------------------------------------------------------------------------
+# Request/response contracts
+# ---------------------------------------------------------------------------
+
+
+class EvolveRelationshipReactionRequest(BaseModel):
+    world_time_id: uuid.UUID
+    new_status_code: str
+    perspective_holder_entity_id: uuid.UUID | None = None
+    affinity: int | None = None
+    trust: int | None = None
+    respect: int | None = None
+    fear: int | None = None
+    obligation: int | None = None
+    emotional_tone: str | None = None
+    private_interpretation: str | None = None
+    actor_entity_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    cause_interaction_id: uuid.UUID | None = None
+    cause_event_id: uuid.UUID | None = None
+    event_details: str | None = None
+
+
+class EvolveRelationshipReactionResponse(BaseModel):
+    relationship_state_id: uuid.UUID
+    event_id: uuid.UUID
+    previous_status_code: str | None
+    new_status_code: str
+
+
+class UpdateOrganizationStatusRequest(BaseModel):
+    world_time_id: uuid.UUID
+    new_status_code: str
+    actor_entity_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    cause_interaction_id: uuid.UUID | None = None
+    cause_event_id: uuid.UUID | None = None
+    event_details: str | None = None
+
+
+class UpdateOrganizationStatusResponse(BaseModel):
+    organization_state_id: uuid.UUID
+    event_id: uuid.UUID
+    previous_status_code: str | None
+    new_status_code: str
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/campaigns/{campaign_id}/relationships/{relationship_id}/evolve",
+    response_model=EvolveRelationshipReactionResponse,
+    status_code=200,
+)
+def evolve_relationship_reaction_endpoint(
+    campaign_id: uuid.UUID,
+    relationship_id: uuid.UUID,
+    body: EvolveRelationshipReactionRequest,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_RELATIONSHIP_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> EvolveRelationshipReactionResponse:
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {
+            "relationship_id": str(relationship_id),
+            **body.model_dump(mode="json"),
+        }
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_EVOLVE_REACTION_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return EvolveRelationshipReactionResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
+    result = _evolve_relationship_reaction_impl(
+        connection,
+        relationship_id=relationship_id,
+        timeline_id=access.timeline_id,
+        world_time_id=body.world_time_id,
+        new_status_code=body.new_status_code,
+        perspective_holder_entity_id=body.perspective_holder_entity_id,
+        affinity=body.affinity,
+        trust=body.trust,
+        respect=body.respect,
+        fear=body.fear,
+        obligation=body.obligation,
+        emotional_tone=body.emotional_tone,
+        private_interpretation=body.private_interpretation,
+        actor_entity_id=body.actor_entity_id,
+        campaign_id=campaign_id,
+        session_id=body.session_id,
+        cause_interaction_id=body.cause_interaction_id,
+        cause_event_id=body.cause_event_id,
+        event_details=body.event_details,
+    )
+
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="campaign",
+        table_name="relationship_state",
+        record_id=result.relationship_state_id,
+        # world.relationships rows have no core.entities identity of their
+        # own — see this module's docstring for why entity_id is None here,
+        # unlike update_organization_status_endpoint below.
+        entity_id=None,
+        world_id=result.world_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_EVOLVE_REACTION_COMMAND_NAME,
+        event_id=result.event_id,
+    )
+
+    response = EvolveRelationshipReactionResponse(
+        relationship_state_id=result.relationship_state_id,
+        event_id=result.event_id,
+        previous_status_code=result.previous_status_code,
+        new_status_code=result.new_status_code,
+    )
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response
+
+
+@router.post(
+    "/campaigns/{campaign_id}/organizations/{organization_id}/status",
+    response_model=UpdateOrganizationStatusResponse,
+    status_code=200,
+)
+def update_organization_status_endpoint(
+    campaign_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    body: UpdateOrganizationStatusRequest,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_RELATIONSHIP_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+) -> UpdateOrganizationStatusResponse:
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {
+            "organization_id": str(organization_id),
+            **body.model_dump(mode="json"),
+        }
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_UPDATE_ORGANIZATION_STATUS_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return UpdateOrganizationStatusResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
+    result = _update_organization_status_impl(
+        connection,
+        organization_id=organization_id,
+        timeline_id=access.timeline_id,
+        world_time_id=body.world_time_id,
+        new_status_code=body.new_status_code,
+        actor_entity_id=body.actor_entity_id,
+        campaign_id=campaign_id,
+        session_id=body.session_id,
+        cause_interaction_id=body.cause_interaction_id,
+        cause_event_id=body.cause_event_id,
+        event_details=body.event_details,
+    )
+
+    record_change_log(
+        connection,
+        change_action_code=_UPDATED_CHANGE_ACTION,
+        schema_name="campaign",
+        table_name="organization_state",
+        record_id=result.organization_state_id,
+        # world.organizations rows are core.entities rows (class-table
+        # inheritance) — organization_id is the entity_id directly.
+        entity_id=organization_id,
+        world_id=result.world_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        command_name=_UPDATE_ORGANIZATION_STATUS_COMMAND_NAME,
+        event_id=result.event_id,
+    )
+
+    response = UpdateOrganizationStatusResponse(
+        organization_state_id=result.organization_state_id,
+        event_id=result.event_id,
+        previous_status_code=result.previous_status_code,
+        new_status_code=result.new_status_code,
+    )
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response
