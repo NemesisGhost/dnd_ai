@@ -14,6 +14,21 @@ action. interaction.actions supports several ordered actions per
 interaction (docs/architecture/DATABASE_MODEL.md §16), but nothing in this
 phase's exit criteria needs more than one — a multi-action command can be
 added if a caller needs it rather than built ahead of that need.
+
+Both commands are split into a connection-taking `_..._impl` plus a thin
+engine-based public wrapper — the same composition
+`dnd_ai.commands.encounters`/`.items`/`.quests`/`.relationships` use — so
+Phase 10's API layer (`dnd_ai.api.interactions`) can run either on the
+request's own transaction instead of opening a second, nested one.
+`_perform_interaction_impl` validates a caller-supplied `session_id`
+against `campaign_id` (`dnd_ai.commands._shared.validate_session_campaign`)
+before writing anything, the same guard every other command in this
+package applies. `_resolve_check_impl` has no caller-supplied `campaign_id`
+of its own to validate a `session_id` against — the interaction it
+resolves against already carries its own authoritative `campaign_id` — so
+it instead accepts an optional `expected_campaign_id` an API caller passes
+to assert that authoritative value matches the campaign named in the
+request, via `_lock_interaction_for_check_resolution` below.
 """
 
 import json
@@ -22,8 +37,37 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
+
+from ._shared import lookup_id, validate_session_campaign
 from .events import EventParticipant, _insert_event_row
+
+
+class InteractionNotFoundError(DomainAuthorizationError):
+    """Raised by `_lock_interaction_for_check_resolution()` when the
+    `check_request_id` it was given does not resolve to an existing
+    `interaction.check_requests` row, or — when `expected_campaign_id` was
+    supplied — resolves to one whose parent interaction belongs to a
+    different campaign than expected. Both cases raise this identical
+    error, mirroring `dnd_ai.commands.encounters.EncounterNotFoundError`:
+    confirming that an interaction exists but belongs to a different
+    campaign would itself disclose cross-campaign information to a caller
+    only authorized for the campaign it expected."""
+
+
+class InteractionNotOpenError(SafeMessageError):
+    """Raised by `_lock_interaction_for_check_resolution()` when the
+    interaction it just locked has already reached a terminal status
+    (resolved/failed/cancelled) — the request was well-formed, but the
+    interaction's own state has since moved on (already fully resolved, or
+    administratively cancelled), so this maps to HTTP 409, not 400. A
+    `ValueError` subclass (via `SafeMessageError`), so existing callers
+    matching on `ValueError` with "terminal" in the message continue to
+    work unchanged; `safe_message` itself stays fixed and generic."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The interaction is not open for further check resolution."
 
 
 @dataclass(frozen=True)
@@ -56,8 +100,140 @@ class CheckRequestSpec:
 class PerformInteractionResult:
     interaction_id: uuid.UUID
     action_id: uuid.UUID
+    world_id: uuid.UUID
     target_ids: tuple[uuid.UUID, ...] = field(default_factory=tuple)
     check_request_ids: tuple[uuid.UUID, ...] = field(default_factory=tuple)
+
+
+def _perform_interaction_impl(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    actor_entity_id: uuid.UUID,
+    interaction_type_code: str = "other",
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    action_description: str | None = None,
+    targets: tuple[TargetSpec, ...] = (),
+    check_requests: tuple[CheckRequestSpec, ...] = (),
+) -> PerformInteractionResult:
+    """The actual work of perform_interaction(), on a connection the caller
+    already has open — see dnd_ai.commands.encounters._resolve_combat_turn_
+    impl's docstring for the composable-implementation/public-wrapper
+    pattern this mirrors. A caller that owns the surrounding transaction
+    itself (e.g. the API layer's per-request connection) calls this
+    directly.
+
+    Validates session_id/campaign_id agreement (validate_session_campaign)
+    before inserting anything — see that function's own docstring."""
+    validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+
+    world_id = connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": timeline_id},
+    ).scalar()
+    assert isinstance(world_id, uuid.UUID)
+
+    interaction_id = connection.execute(
+        text("""
+            INSERT INTO interaction.interactions
+                (timeline_id, campaign_id, session_id, interaction_type_id, world_time_id)
+            VALUES (
+                :timeline, :campaign, :session,
+                (SELECT interaction_type_id FROM interaction.interaction_types WHERE code = :itc),
+                :world_time
+            )
+            RETURNING interaction_id
+        """),
+        {
+            "timeline": timeline_id,
+            "campaign": campaign_id,
+            "session": session_id,
+            "itc": interaction_type_code,
+            "world_time": world_time_id,
+        },
+    ).scalar()
+    assert isinstance(interaction_id, uuid.UUID)
+
+    action_id = connection.execute(
+        text("""
+            INSERT INTO interaction.actions (interaction_id, actor_entity_id, description)
+            VALUES (:interaction, :actor, :description)
+            RETURNING action_id
+        """),
+        {
+            "interaction": interaction_id,
+            "actor": actor_entity_id,
+            "description": action_description,
+        },
+    ).scalar()
+    assert isinstance(action_id, uuid.UUID)
+
+    target_ids: list[uuid.UUID] = []
+    for target in targets:
+        target_id = connection.execute(
+            text("""
+                INSERT INTO interaction.targets
+                    (action_id, target_entity_id, target_area_connection_id,
+                     target_area_feature_id, target_area_hazard_id,
+                     target_area_interactable_id, target_component, target_description)
+                VALUES (:action, :entity, :conn, :feature, :hazard, :interactable, :component,
+                        :description)
+                RETURNING target_id
+            """),
+            {
+                "action": action_id,
+                "entity": target.target_entity_id,
+                "conn": target.target_area_connection_id,
+                "feature": target.target_area_feature_id,
+                "hazard": target.target_area_hazard_id,
+                "interactable": target.target_area_interactable_id,
+                "component": target.target_component,
+                "description": target.target_description,
+            },
+        ).scalar()
+        assert isinstance(target_id, uuid.UUID)
+        target_ids.append(target_id)
+
+    check_request_ids: list[uuid.UUID] = []
+    for check_request in check_requests:
+        resolved_target_id = (
+            target_ids[check_request.target_index]
+            if check_request.target_index is not None
+            else None
+        )
+        check_request_id = connection.execute(
+            text("""
+                INSERT INTO interaction.check_requests
+                    (action_id, actor_entity_id, check_kind, ability_id, skill_id, difficulty,
+                     advantage_state, stakes, target_id)
+                VALUES (:action, :actor, :kind, :ability, :skill, :difficulty, :advantage,
+                        :stakes, :target)
+                RETURNING check_request_id
+            """),
+            {
+                "action": action_id,
+                "actor": actor_entity_id,
+                "kind": check_request.check_kind,
+                "ability": check_request.ability_id,
+                "skill": check_request.skill_id,
+                "difficulty": check_request.difficulty,
+                "advantage": check_request.advantage_state,
+                "stakes": check_request.stakes,
+                "target": resolved_target_id,
+            },
+        ).scalar()
+        assert isinstance(check_request_id, uuid.UUID)
+        check_request_ids.append(check_request_id)
+
+    return PerformInteractionResult(
+        interaction_id=interaction_id,
+        action_id=action_id,
+        world_id=world_id,
+        target_ids=tuple(target_ids),
+        check_request_ids=tuple(check_request_ids),
+    )
 
 
 def perform_interaction(
@@ -73,110 +249,30 @@ def perform_interaction(
     targets: tuple[TargetSpec, ...] = (),
     check_requests: tuple[CheckRequestSpec, ...] = (),
 ) -> PerformInteractionResult:
+    """Record a structured attempt by an actor. Public convenience API:
+    opens and commits its own transaction. See _perform_interaction_impl()
+    for the composable form a caller with its own transaction (e.g. an API
+    command endpoint) uses instead."""
     with engine.begin() as connection:
-        interaction_id = connection.execute(
-            text("""
-                INSERT INTO interaction.interactions
-                    (timeline_id, campaign_id, session_id, interaction_type_id, world_time_id)
-                VALUES (
-                    :timeline, :campaign, :session,
-                    (SELECT interaction_type_id FROM interaction.interaction_types WHERE code = :itc),
-                    :world_time
-                )
-                RETURNING interaction_id
-            """),
-            {
-                "timeline": timeline_id,
-                "campaign": campaign_id,
-                "session": session_id,
-                "itc": interaction_type_code,
-                "world_time": world_time_id,
-            },
-        ).scalar()
-        assert isinstance(interaction_id, uuid.UUID)
-
-        action_id = connection.execute(
-            text("""
-                INSERT INTO interaction.actions (interaction_id, actor_entity_id, description)
-                VALUES (:interaction, :actor, :description)
-                RETURNING action_id
-            """),
-            {
-                "interaction": interaction_id,
-                "actor": actor_entity_id,
-                "description": action_description,
-            },
-        ).scalar()
-        assert isinstance(action_id, uuid.UUID)
-
-        target_ids: list[uuid.UUID] = []
-        for target in targets:
-            target_id = connection.execute(
-                text("""
-                    INSERT INTO interaction.targets
-                        (action_id, target_entity_id, target_area_connection_id,
-                         target_area_feature_id, target_area_hazard_id,
-                         target_area_interactable_id, target_component, target_description)
-                    VALUES (:action, :entity, :conn, :feature, :hazard, :interactable, :component,
-                            :description)
-                    RETURNING target_id
-                """),
-                {
-                    "action": action_id,
-                    "entity": target.target_entity_id,
-                    "conn": target.target_area_connection_id,
-                    "feature": target.target_area_feature_id,
-                    "hazard": target.target_area_hazard_id,
-                    "interactable": target.target_area_interactable_id,
-                    "component": target.target_component,
-                    "description": target.target_description,
-                },
-            ).scalar()
-            assert isinstance(target_id, uuid.UUID)
-            target_ids.append(target_id)
-
-        check_request_ids: list[uuid.UUID] = []
-        for check_request in check_requests:
-            resolved_target_id = (
-                target_ids[check_request.target_index]
-                if check_request.target_index is not None
-                else None
-            )
-            check_request_id = connection.execute(
-                text("""
-                    INSERT INTO interaction.check_requests
-                        (action_id, actor_entity_id, check_kind, ability_id, skill_id, difficulty,
-                         advantage_state, stakes, target_id)
-                    VALUES (:action, :actor, :kind, :ability, :skill, :difficulty, :advantage,
-                            :stakes, :target)
-                    RETURNING check_request_id
-                """),
-                {
-                    "action": action_id,
-                    "actor": actor_entity_id,
-                    "kind": check_request.check_kind,
-                    "ability": check_request.ability_id,
-                    "skill": check_request.skill_id,
-                    "difficulty": check_request.difficulty,
-                    "advantage": check_request.advantage_state,
-                    "stakes": check_request.stakes,
-                    "target": resolved_target_id,
-                },
-            ).scalar()
-            assert isinstance(check_request_id, uuid.UUID)
-            check_request_ids.append(check_request_id)
-
-    return PerformInteractionResult(
-        interaction_id=interaction_id,
-        action_id=action_id,
-        target_ids=tuple(target_ids),
-        check_request_ids=tuple(check_request_ids),
-    )
+        return _perform_interaction_impl(
+            connection,
+            timeline_id=timeline_id,
+            world_time_id=world_time_id,
+            actor_entity_id=actor_entity_id,
+            interaction_type_code=interaction_type_code,
+            campaign_id=campaign_id,
+            session_id=session_id,
+            action_description=action_description,
+            targets=targets,
+            check_requests=check_requests,
+        )
 
 
 @dataclass(frozen=True)
 class ResolveCheckResult:
     check_result_id: uuid.UUID
+    world_id: uuid.UUID
+    actor_entity_id: uuid.UUID
     event_id: uuid.UUID | None = None
     area_connection_opened: bool = False
 
@@ -226,45 +322,69 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
 _TERMINAL_INTERACTION_STATUSES = frozenset({"resolved", "failed", "cancelled"})
 
 
-def _interaction_id_for_check_request(
-    connection: Connection, check_request_id: uuid.UUID
-) -> uuid.UUID:
-    interaction_id = connection.execute(
+@dataclass(frozen=True)
+class LockedInteraction:
+    """What `_lock_interaction_for_check_resolution()` actually found and
+    locked — `interaction_id`/`campaign_id` are the interaction's own,
+    authoritative, just-locked values, never the caller's
+    `expected_campaign_id` argument (which the two are only guaranteed to
+    agree with when it was supplied — a mismatch raises
+    `InteractionNotFoundError` before this is ever constructed)."""
+
+    interaction_id: uuid.UUID
+    campaign_id: uuid.UUID | None
+
+
+def _lock_interaction_for_check_resolution(
+    connection: Connection,
+    check_request_id: uuid.UUID,
+    *,
+    expected_campaign_id: uuid.UUID | None = None,
+) -> LockedInteraction:
+    """Resolve check_request_id's parent interaction and acquire an
+    exclusive row lock on it before any check result is recorded against
+    it, so two resolve_check() calls against the same interaction (e.g. two
+    of its check_requests resolving concurrently) serialize rather than
+    both reading the same "not yet finished" state, and so a concurrent
+    campaign reparenting can't race a caller's own ownership check the way
+    a separate, unlocked read would (mirrors
+    dnd_ai.commands.encounters._lock_encounter's identical reasoning).
+
+    Raises InteractionNotFoundError for a nonexistent check_request_id, or
+    — when expected_campaign_id is supplied — one whose parent interaction
+    belongs to a different campaign than expected: both map to a fixed,
+    non-disclosing 404 rather than distinguishing "doesn't exist" from
+    "exists but isn't yours". Raises InteractionNotOpenError (HTTP 409) if
+    the interaction has already reached a terminal status — a check cannot
+    be resolved against an interaction that has already finished
+    (interaction.enforce_check_result_interaction_open(), revision 070,
+    enforces the same rule at the database level as a second, independent
+    guard).
+    """
+    row = connection.execute(
         text("""
-            SELECT i.interaction_id
+            SELECT i.interaction_id, i.campaign_id, i.status
             FROM interaction.check_requests cr
             JOIN interaction.actions a ON a.action_id = cr.action_id
             JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
             WHERE cr.check_request_id = :check_request_id
+            FOR UPDATE OF i
         """),
         {"check_request_id": check_request_id},
-    ).scalar()
-    if interaction_id is None:
-        raise ValueError(f"check request {check_request_id} does not exist")
-    assert isinstance(interaction_id, uuid.UUID)
-    return interaction_id
-
-
-def _lock_interaction_for_resolution(connection: Connection, interaction_id: uuid.UUID) -> None:
-    """Acquire an exclusive row lock on the parent interaction before any
-    check result is recorded against it, so two resolve_check() calls
-    against the same interaction (e.g. two of its check_requests resolving
-    concurrently) serialize rather than both reading the same "not yet
-    finished" state. Raises if the interaction has already reached a
-    terminal status — a check cannot be resolved against an interaction
-    that has already finished (interaction.enforce_check_result_interaction_
-    open(), revision 070, enforces the same rule at the database level as a
-    second, independent guard).
-    """
-    status = connection.execute(
-        text("SELECT status FROM interaction.interactions WHERE interaction_id = :i FOR UPDATE"),
-        {"i": interaction_id},
-    ).scalar()
-    if status in _TERMINAL_INTERACTION_STATUSES:
-        raise ValueError(
-            f"interaction {interaction_id} has status {status!r} and cannot accept another "
-            "check resolution — resolved, failed, and cancelled interactions are terminal"
+    ).one_or_none()
+    if row is None:
+        raise InteractionNotFoundError(f"check request {check_request_id} does not exist")
+    if expected_campaign_id is not None and row.campaign_id != expected_campaign_id:
+        raise InteractionNotFoundError(
+            f"interaction {row.interaction_id} belongs to campaign {row.campaign_id!r}, "
+            f"not {expected_campaign_id!r}"
         )
+    if row.status in _TERMINAL_INTERACTION_STATUSES:
+        raise InteractionNotOpenError(
+            f"interaction {row.interaction_id} has status {row.status!r} and cannot accept "
+            "another check resolution — resolved, failed, and cancelled interactions are terminal"
+        )
+    return LockedInteraction(interaction_id=row.interaction_id, campaign_id=row.campaign_id)
 
 
 def _lock_area_connection(connection: Connection, area_connection_id: uuid.UUID) -> None:
@@ -389,8 +509,8 @@ def _resolve_interaction(
         )
 
 
-def resolve_check(
-    engine: Engine,
+def _resolve_check_impl(
+    connection: Connection,
     *,
     check_request_id: uuid.UUID,
     degree_of_success: str,
@@ -400,8 +520,16 @@ def resolve_check(
     is_visible_to_players: bool = True,
     external_system_source: str | None = None,
     event_details: str | None = None,
+    expected_campaign_id: uuid.UUID | None = None,
 ) -> ResolveCheckResult:
-    """Record a check's outcome and, when it satisfies a conditional route's
+    """The actual work of resolve_check(), on a connection the caller
+    already has open — see dnd_ai.commands.encounters._resolve_combat_turn_
+    impl's docstring for the composable-implementation/public-wrapper
+    pattern this mirrors. A caller that owns the surrounding transaction
+    itself (e.g. the API layer's per-request connection) calls this
+    directly.
+
+    Record a check's outcome and, when it satisfies a conditional route's
     requirement (world.conditional_route_requirement_satisfied), record the
     resulting event and open the route atomically. A check with no
     conditional-route target, or one that doesn't satisfy the requirement,
@@ -414,12 +542,18 @@ def resolve_check(
     072) — never before the last outstanding check_request has a result,
     and never more than once.
 
-    The parent interaction is locked (_lock_interaction_for_resolution)
-    before anything else happens: this both rejects resolving a check whose
-    interaction has already reached a terminal status, and — since the lock
-    is held until commit — serializes concurrent resolve_check() calls
-    against the same interaction, so two of its check_requests resolving at
-    once can't both miscount how many are still outstanding.
+    The parent interaction is resolved and locked
+    (_lock_interaction_for_check_resolution) before anything else happens:
+    this both rejects resolving a check whose interaction has already
+    reached a terminal status or belongs to a different campaign than
+    expected_campaign_id, and — since the lock is held until commit —
+    serializes concurrent resolve_check() calls against the same
+    interaction, so two of its check_requests resolving at once can't both
+    miscount how many are still outstanding. expected_campaign_id=None
+    skips only the ownership assertion, mirroring
+    dnd_ai.commands.encounters._lock_encounter's identical parameter — a
+    direct/administrative caller with no campaign context of its own to
+    assert.
 
     Concurrent resolve_check() calls targeting the same conditional route
     are additionally serialized by _lock_area_connection: the second caller
@@ -431,88 +565,123 @@ def resolve_check(
     above) and, unchanged, when they belong to two different interactions
     entirely (not covered by the interaction-level lock at all).
     """
-    with engine.begin() as connection:
-        interaction_id = _interaction_id_for_check_request(connection, check_request_id)
-        _lock_interaction_for_resolution(connection, interaction_id)
+    locked = _lock_interaction_for_check_resolution(
+        connection, check_request_id, expected_campaign_id=expected_campaign_id
+    )
+    interaction_id = locked.interaction_id
 
-        check_result_id = connection.execute(
-            text("""
-                INSERT INTO interaction.check_results
-                    (check_request_id, roll, total_modifier, total, degree_of_success,
-                     is_visible_to_players, external_system_source)
-                VALUES (:request, :roll, :total_modifier, :total, :degree, :visible, :source)
-                RETURNING check_result_id
-            """),
-            {
-                "request": check_request_id,
-                "roll": roll,
-                "total_modifier": total_modifier,
-                "total": total,
-                "degree": degree_of_success,
-                "visible": is_visible_to_players,
-                "source": external_system_source,
-            },
+    check_result_id = connection.execute(
+        text("""
+            INSERT INTO interaction.check_results
+                (check_request_id, roll, total_modifier, total, degree_of_success,
+                 is_visible_to_players, external_system_source)
+            VALUES (:request, :roll, :total_modifier, :total, :degree, :visible, :source)
+            RETURNING check_result_id
+        """),
+        {
+            "request": check_request_id,
+            "roll": roll,
+            "total_modifier": total_modifier,
+            "total": total,
+            "degree": degree_of_success,
+            "visible": is_visible_to_players,
+            "source": external_system_source,
+        },
+    ).scalar()
+    assert isinstance(check_result_id, uuid.UUID)
+
+    context = _check_context(connection, check_request_id)
+    target_area_connection_id = context.target_area_connection_id
+
+    event_id: uuid.UUID | None = None
+    area_connection_opened = False
+
+    if target_area_connection_id is not None:
+        _lock_area_connection(connection, target_area_connection_id)
+
+        satisfied = connection.execute(
+            text("SELECT world.conditional_route_requirement_satisfied(:ac, :cr)"),
+            {"ac": target_area_connection_id, "cr": check_result_id},
         ).scalar()
-        assert isinstance(check_result_id, uuid.UUID)
 
-        context = _check_context(connection, check_request_id)
-        target_area_connection_id = context.target_area_connection_id
-
-        event_id: uuid.UUID | None = None
-        area_connection_opened = False
-
-        if target_area_connection_id is not None:
-            _lock_area_connection(connection, target_area_connection_id)
-
-            satisfied = connection.execute(
-                text("SELECT world.conditional_route_requirement_satisfied(:ac, :cr)"),
-                {"ac": target_area_connection_id, "cr": check_result_id},
-            ).scalar()
-
-            if satisfied:
-                previous_status_code = _area_connection_status(
-                    connection, context.timeline_id, target_area_connection_id
+        if satisfied:
+            previous_status_code = _area_connection_status(
+                connection, context.timeline_id, target_area_connection_id
+            )
+            if previous_status_code != "open":
+                event_id = _insert_event_row(
+                    connection,
+                    world_id=context.world_id,
+                    timeline_id=context.timeline_id,
+                    world_time_id=context.world_time_id,
+                    event_type_code="mechanism_activated",
+                    name="Conditional route requirement satisfied",
+                    details=event_details,
+                    campaign_id=context.campaign_id,
+                    session_id=context.session_id,
+                    participants=(
+                        EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),
+                    ),
+                    cause_interaction_id=context.interaction_id,
                 )
-                if previous_status_code != "open":
-                    event_id = _insert_event_row(
-                        connection,
-                        world_id=context.world_id,
-                        timeline_id=context.timeline_id,
-                        world_time_id=context.world_time_id,
-                        event_type_code="mechanism_activated",
-                        name="Conditional route requirement satisfied",
-                        details=event_details,
-                        campaign_id=context.campaign_id,
-                        session_id=context.session_id,
-                        participants=(
-                            EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),
-                        ),
-                        cause_interaction_id=context.interaction_id,
-                    )
-                    _open_area_connection(
-                        connection,
-                        timeline_id=context.timeline_id,
-                        area_connection_id=target_area_connection_id,
-                        event_id=event_id,
-                        world_time_id=context.world_time_id,
-                        previous_status_code=previous_status_code,
-                    )
-                    area_connection_opened = True
+                _open_area_connection(
+                    connection,
+                    timeline_id=context.timeline_id,
+                    area_connection_id=target_area_connection_id,
+                    event_id=event_id,
+                    world_time_id=context.world_time_id,
+                    previous_status_code=previous_status_code,
+                )
+                area_connection_opened = True
 
-        _resolve_interaction(
-            connection,
-            interaction_id=interaction_id,
-            event_id=event_id,
-            description=(
-                f"Check satisfied area connection {target_area_connection_id}'s requirement; "
-                "route opened."
-                if area_connection_opened
-                else None
-            ),
-        )
+    _resolve_interaction(
+        connection,
+        interaction_id=interaction_id,
+        event_id=event_id,
+        description=(
+            f"Check satisfied area connection {target_area_connection_id}'s requirement; "
+            "route opened."
+            if area_connection_opened
+            else None
+        ),
+    )
 
     return ResolveCheckResult(
         check_result_id=check_result_id,
+        world_id=context.world_id,
+        actor_entity_id=context.actor_entity_id,
         event_id=event_id,
         area_connection_opened=area_connection_opened,
     )
+
+
+def resolve_check(
+    engine: Engine,
+    *,
+    check_request_id: uuid.UUID,
+    degree_of_success: str,
+    roll: int | None = None,
+    total_modifier: int | None = None,
+    total: int | None = None,
+    is_visible_to_players: bool = True,
+    external_system_source: str | None = None,
+    event_details: str | None = None,
+    expected_campaign_id: uuid.UUID | None = None,
+) -> ResolveCheckResult:
+    """Record a check's outcome, atomically reacting to it when narratively
+    significant. Public convenience API: opens and commits its own
+    transaction. See _resolve_check_impl() for the composable form a caller
+    with its own transaction (e.g. an API command endpoint) uses instead."""
+    with engine.begin() as connection:
+        return _resolve_check_impl(
+            connection,
+            check_request_id=check_request_id,
+            degree_of_success=degree_of_success,
+            roll=roll,
+            total_modifier=total_modifier,
+            total=total,
+            is_visible_to_players=is_visible_to_players,
+            external_system_source=external_system_source,
+            event_details=event_details,
+            expected_campaign_id=expected_campaign_id,
+        )

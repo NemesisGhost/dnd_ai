@@ -9,7 +9,8 @@ application behavior to any specific hosting platform.
 OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
 is delivered and used by the command endpoints below
 (`dnd_ai.api.encounters`, `dnd_ai.api.items`, `dnd_ai.api.quests`,
-`dnd_ai.api.relationships`) via `dnd_ai.api.access`. This module remains the
+`dnd_ai.api.relationships`, `dnd_ai.api.events`, `dnd_ai.api.interactions`)
+via `dnd_ai.api.access`. This module remains the
 plumbing every router builds on: app factory, error contract, correlation
 IDs, health/readiness, per-request transaction management, and
 authentication — routers register their own paths, this module only
@@ -30,6 +31,8 @@ from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine
 from .encounters import router as encounters_router
 from .errors import install_error_handlers
+from .events import router as events_router
+from .interactions import router as interactions_router
 from .items import router as items_router
 from .quests import router as quests_router
 from .relationships import router as relationships_router
@@ -51,6 +54,8 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(encounters_router)
+    app.include_router(events_router)
+    app.include_router(interactions_router)
     app.include_router(items_router)
     app.include_router(quests_router)
     app.include_router(relationships_router)
