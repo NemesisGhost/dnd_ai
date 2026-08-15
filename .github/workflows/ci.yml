@@ -132,29 +132,61 @@ jobs:
     # database over the compose-internal network — see Dockerfile and
     # compose.yaml.
     #
-    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and API_DATABASE_URL have
-    # no fallback default in compose.yaml (see its header comment) — CI
-    # must supply all three explicitly, and the two URLs must agree with
-    # POSTGRES_PASSWORD on the same password. All three values are
-    # disposable: a fresh tmpfs-backed container per run, never reused,
-    # never exposed on a host port, not a real secret. Both URLs address
-    # `db` (the compose service name), not `localhost` — `migrate`/`api`
-    # reach it over the compose-internal network, not a published host port.
+    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and the
+    # three API_OIDC_* settings have no fallback default in compose.yaml
+    # (see its header comment) — CI must supply all six explicitly, and
+    # the two database URLs must agree with POSTGRES_PASSWORD on the same
+    # password. All six values are disposable: a fresh tmpfs-backed
+    # container per run, never reused, never exposed on a host port, not a
+    # real secret. The database URLs address `db` (the compose service
+    # name), not `localhost` — `migrate`/`api` reach it over the
+    # compose-internal network, not a published host port. The OIDC values
+    # are syntactically valid (HTTPS, well-formed — dnd_ai.config requires
+    # this since api always runs with DND_AI_ENVIRONMENT=production) but
+    # deliberately never resolved against a live identity provider: PyJWT's
+    # PyJWKClient fetches lazily, so constructing api's JWKS client at
+    # startup makes no network call by itself, and this job's own
+    # unauthenticated-request smoke test below never sends a token that
+    # would trigger one either.
     env:
       POSTGRES_PASSWORD: ci_disposable_password
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
       API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
+      API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
+      API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate compose configuration
         run: docker compose -f compose.yaml -f compose.ci.yaml config
 
-      - name: Check CI compose config publishes no db/api port and mounts PostgreSQL 18 correctly
-        # Regression guard for issue-2/issue-1: asserts the *merged,
-        # interpolated* config, not just the source YAML (tests/unit/
-        # test_compose_files.py already covers the source files without
-        # Docker) — see scripts/check_compose_config.py.
+      - name: Verify compose config fails when a required OIDC variable is missing
+        # Regression guard for the Phase 10 workstream 11 correction pass:
+        # proves API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL truly
+        # have no fallback the way POSTGRES_PASSWORD/MIGRATION_DATABASE_URL/
+        # API_DATABASE_URL already do — omitting any one of them must fail
+        # Compose's own config resolution outright, not silently render an
+        # empty string that would only surface later as a runtime 500.
+        # `env -u VAR` unsets just that one variable for this command while
+        # every other required variable inherited from the job's own `env:`
+        # above stays set.
+        run: |
+          set -e
+          for var in API_OIDC_ISSUER API_OIDC_AUDIENCE API_OIDC_JWKS_URL; do
+            if env -u "$var" docker compose -f compose.yaml -f compose.ci.yaml config >/dev/null 2>&1; then
+              echo "compose config unexpectedly succeeded with $var unset" >&2
+              exit 1
+            fi
+          done
+          echo "compose config correctly fails when any required OIDC variable is missing"
+
+      - name: Check CI compose config publishes no db/api port, mounts PostgreSQL 18, and configures api for production
+        # Regression guard for issue-2/issue-1, and for the Phase 10
+        # workstream 11 correction pass: asserts the *merged, interpolated*
+        # config, not just the source YAML (tests/unit/test_compose_files.py
+        # already covers the source files without Docker) — see
+        # scripts/check_compose_config.py.
         run: |
           docker compose -f compose.yaml -f compose.ci.yaml config --format json \
             | python3 scripts/check_compose_config.py
@@ -203,6 +235,50 @@ jobs:
           print('readyz ok')
           "
 
+      - name: Verify an authenticated route rejects a request with no Authorization header
+        # Proves OIDC/authentication wiring is actually active in this exact
+        # deployment configuration — get_jwks_client() successfully
+        # constructs its client from the now-required DND_AI_OIDC_*
+        # settings — without making a live JWKS network request:
+        # PyJWKClient fetches lazily, and get_verified_token_claims rejects
+        # a request with no Authorization header before ever calling
+        # jwks_client.get_signing_key(). Before the Phase 10 workstream 11
+        # correction pass, this same request returned a generic 500
+        # (config.py's oidc_jwks_url assertion failing, since the container
+        # silently ran in "local" mode with no OIDC configured) rather than
+        # the fixed 401 contract dnd_ai.api.errors.UnauthorizedError
+        # defines. campaign_id in the URL and the body's own IDs are
+        # arbitrary, well-formed UUIDs — access resolution never runs far
+        # enough to look any of them up, since authentication itself is
+        # rejected first.
+        run: |
+          docker compose -f compose.yaml -f compose.ci.yaml exec -T api python -c "
+          import json
+          import urllib.error
+          import urllib.request
+
+          body = json.dumps(
+              {
+                  'world_time_id': '00000000-0000-0000-0000-000000000000',
+                  'event_type_code': 'other',
+                  'name': 'ci smoke test',
+              }
+          ).encode()
+          request = urllib.request.Request(
+              'http://localhost:8000/campaigns/00000000-0000-0000-0000-000000000000/events',
+              data=body,
+              headers={'Content-Type': 'application/json'},
+              method='POST',
+          )
+          try:
+              urllib.request.urlopen(request, timeout=5)
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 401, exc.code
+          else:
+              raise AssertionError('expected HTTP 401, got a successful response')
+          print('unauthenticated command request correctly rejected with 401')
+          "
+
       - name: Tear down
         if: always()
         run: docker compose -f compose.yaml -f compose.ci.yaml down -v
@@ -225,11 +301,15 @@ jobs:
       # Never actually used — this job only starts `db` — but `docker
       # compose` interpolates every service's environment block up front,
       # regardless of which service is targeted, so `migrate`'s required
-      # MIGRATION_DATABASE_URL and `api`'s required API_DATABASE_URL (no
-      # fallback default, by design) must still resolve or `up -d db`
-      # below fails at config-parsing time before it starts anything.
+      # MIGRATION_DATABASE_URL and `api`'s required API_DATABASE_URL/
+      # API_OIDC_* (no fallback default, by design) must still resolve or
+      # `up -d db` below fails at config-parsing time before it starts
+      # anything.
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
       API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
+      API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
+      API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
