@@ -1,12 +1,17 @@
 """Command endpoints over `dnd_ai.commands.access_grants` — Phase 10
-workstream 21, continuing "many-to-many user-character relationships and
+workstream 21 (extended by workstream 25 to the full target/temporal
+scope), continuing "many-to-many user-character relationships and
 resource-access grants sufficient for the vertical slice" (docs/PLAN.md
 Phase 10 deliverable list) after workstream 20's campaign
 membership/role-assignment endpoints. Exposes `grant_character_relationship`,
 `revoke_character_relationship`, `create_resource_grant`, and
 `revoke_resource_grant` over HTTP, on the same already-delivered OIDC
 authentication, transaction management, and access resolution every other
-command router uses.
+command router uses. `CreateResourceGrantRequest` exposes all six
+`security.resource_grants` target kinds and `GrantCharacterRelationshipRequest`
+exposes the full `timeline_id`/`effective_from_world_time_id`/`effective_
+to_world_time_id` temporal scope — see `dnd_ai.commands.access_grants`'
+own module docstring for the validation each one gets.
 
 Every route runs on the request's own `get_connection` transaction — these
 commands take a `Connection` directly (no `_impl`/engine-wrapper split;
@@ -80,6 +85,9 @@ _UPDATED_CHANGE_ACTION = "updated"
 class GrantCharacterRelationshipRequest(BaseModel):
     character_id: uuid.UUID
     relationship_type_code: str
+    timeline_id: uuid.UUID | None = None
+    effective_from_world_time_id: uuid.UUID | None = None
+    effective_to_world_time_id: uuid.UUID | None = None
 
 
 class CharacterRelationshipResponse(BaseModel):
@@ -87,11 +95,16 @@ class CharacterRelationshipResponse(BaseModel):
 
 
 class CreateResourceGrantRequest(BaseModel):
-    character_id: uuid.UUID
     capability_code: str
     effect: str = "allow"
     grantee_campaign_membership_id: uuid.UUID | None = None
     grantee_access_group_id: uuid.UUID | None = None
+    character_id: uuid.UUID | None = None
+    entity_id: uuid.UUID | None = None
+    knowledge_item_id: uuid.UUID | None = None
+    quest_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    event_id: uuid.UUID | None = None
     reason: str | None = None
 
 
@@ -147,6 +160,9 @@ def grant_character_relationship_endpoint(
         campaign_id=campaign_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         granted_by_membership_id=access.campaign_membership_id,
+        timeline_id=body.timeline_id,
+        effective_from_world_time_id=body.effective_from_world_time_id,
+        effective_to_world_time_id=body.effective_to_world_time_id,
     )
 
     record_change_log(
@@ -252,6 +268,11 @@ def create_resource_grant_endpoint(
         grantee_campaign_membership_id=body.grantee_campaign_membership_id,
         grantee_access_group_id=body.grantee_access_group_id,
         character_id=body.character_id,
+        entity_id=body.entity_id,
+        knowledge_item_id=body.knowledge_item_id,
+        quest_id=body.quest_id,
+        session_id=body.session_id,
+        event_id=body.event_id,
         capability_code=body.capability_code,
         effect=body.effect,
         expected_world_id=timeline_world_id(connection, access.timeline_id),

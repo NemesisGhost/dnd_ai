@@ -9,14 +9,19 @@ verification.
 
 Covers: access control (non-member 404, capless-member 403), character-
 relationship granting (success, duplicate-active-type 409, a foreign-world
-character rejected, a foreign-campaign membership rejected) and revocation
-(success, idempotent no-op retry, cross-campaign rejection), resource-
-grant creation via both grantee kinds (membership and access group;
-neither/both supplied rejected by the database's own `CHECK` constraint,
-a foreign-world character rejected, a foreign-campaign grantee of either
-kind rejected, duplicate-active 409) and revocation (success, idempotent
-no-op retry, cross-campaign rejection), and idempotent replay for both
-create-shaped commands.
+character rejected, a foreign-campaign membership rejected), its temporal
+bounds (workstream 25: timeline scoping and both open-ended and fully
+bounded fictional-time ranges, an end without a start rejected, an end
+before the start rejected, a foreign-world timeline/world-time rejected),
+and revocation (success, idempotent no-op retry, cross-campaign
+rejection); resource-grant creation via both grantee kinds (membership and
+access group; neither/both supplied rejected by the database's own `CHECK`
+constraint, a foreign-world character rejected, a foreign-campaign grantee
+of either kind rejected, duplicate-active 409), all six target kinds
+(workstream 25 added entity/knowledge-item/quest/session/event, with a
+foreign-world quest and a foreign-campaign session/event each rejected),
+and revocation (success, idempotent no-op retry, cross-campaign
+rejection); idempotent replay for both create-shaped commands.
 """
 
 import uuid
@@ -35,12 +40,19 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_character,
+    make_entity,
+    make_entity_type,
+    make_event,
+    make_knowledge_item,
     make_membership_role,
+    make_quest,
     make_role,
     make_role_capability,
+    make_session,
     make_timeline,
     make_user,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -105,6 +117,41 @@ class Fixture:
 
         # Never given a membership at all.
         self.outsider_user_id = make_user(connection, "Access Grant API Outsider")
+
+        # --- Workstream 25: the five resource-grant target kinds beyond
+        # character_id, plus the world-time/timeline fixtures for
+        # grant_character_relationship's temporal-bound extension. ---
+        entity_type_id = make_entity_type(connection, f"{slug.replace('-', '_')}_generic_entity")
+        self.entity_id = make_entity(connection, self.world_id, entity_type_id)
+        self.quest_id = make_quest(connection, self.world_id)
+        self.foreign_world_quest_id = make_quest(connection, self.other_world_id)
+        self.knowledge_item_id = make_knowledge_item(connection, self.world_id)
+        self.session_id = make_session(connection, self.campaign_id, 1)
+        self.foreign_campaign_session_id = make_session(connection, self.other_campaign_id, 1)
+
+        self.world_time_id = make_world_time(connection, self.world_id, 1)
+        self.later_world_time_id = make_world_time(connection, self.world_id, 2)
+        self.foreign_world_time_id = make_world_time(connection, self.other_world_id, 1)
+        self.foreign_timeline_id = make_timeline(
+            connection, self.other_world_id, "Foreign Timeline"
+        )
+
+        self.event_id = make_event(
+            connection,
+            self.world_id,
+            self.timeline_id,
+            self.world_time_id,
+            campaign_id=self.campaign_id,
+        )
+        # Same world (self.other_campaign_id shares self.timeline_id), but a
+        # different campaign — proves the event-specific campaign check.
+        self.foreign_campaign_event_id = make_event(
+            connection,
+            self.world_id,
+            self.timeline_id,
+            self.world_time_id,
+            campaign_id=self.other_campaign_id,
+        )
 
 
 @pytest.fixture
@@ -394,6 +441,150 @@ def test_a_sequential_replay_of_grant_relationship_returns_the_original_response
     assert second.json() == first.json()
 
 
+# ---------------------------------------------------------------------------
+# grant_character_relationship — temporal bounds (workstream 25)
+# ---------------------------------------------------------------------------
+
+
+def test_granting_a_timeline_scoped_relationship_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "timeline_id": str(f.timeline_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    with postgres_engine.connect() as verify:
+        timeline_id = verify.execute(
+            text(
+                "SELECT timeline_id FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": uuid.UUID(response.json()["membership_character_relationship_id"])},
+        ).scalar_one()
+        assert timeline_id == f.timeline_id
+
+
+def test_granting_a_relationship_with_a_foreign_world_timeline_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "timeline_id": str(f.foreign_timeline_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_granting_an_open_ended_bounded_relationship_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_from_world_time_id": str(f.world_time_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT effective_from_world_time_id, effective_to_world_time_id,
+                       lower(effective_period) AS lower_bound, upper_inf(effective_period) AS open
+                FROM security.membership_character_relationships
+                WHERE membership_character_relationship_id = :r
+            """),
+            {"r": uuid.UUID(response.json()["membership_character_relationship_id"])},
+        ).one()
+        assert row.effective_from_world_time_id == f.world_time_id
+        assert row.effective_to_world_time_id is None
+        assert row.open is True
+
+
+def test_granting_a_fully_bounded_relationship_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_from_world_time_id": str(f.world_time_id),
+                "effective_to_world_time_id": str(f.later_world_time_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    with postgres_engine.connect() as verify:
+        upper_inf = verify.execute(
+            text(
+                "SELECT upper_inf(effective_period) FROM "
+                "security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": uuid.UUID(response.json()["membership_character_relationship_id"])},
+        ).scalar_one()
+        assert upper_inf is False
+
+
+def test_granting_a_relationship_with_an_end_but_no_start_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_to_world_time_id": str(f.later_world_time_id),
+            },
+        )
+    assert response.status_code == 400, response.text
+
+
+def test_granting_a_relationship_with_an_end_before_the_start_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_from_world_time_id": str(f.later_world_time_id),
+                "effective_to_world_time_id": str(f.world_time_id),
+            },
+        )
+    assert response.status_code == 400, response.text
+
+
+def test_granting_a_relationship_with_a_foreign_world_time_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_from_world_time_id": str(f.foreign_world_time_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
 def test_revoking_a_character_relationship_succeeds(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
@@ -566,6 +757,137 @@ def test_creating_a_resource_grant_for_a_foreign_campaign_access_group_is_reject
                 "character_id": str(f.character_id),
                 "capability_code": "character.view_summary",
                 "grantee_access_group_id": str(f.foreign_access_group_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+# ---------------------------------------------------------------------------
+# create_resource_grant — the remaining five target kinds (workstream 25)
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_resource_grant_targeting_an_entity_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "entity_id": str(f.entity_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    with postgres_engine.connect() as verify:
+        entity_id = verify.execute(
+            text("SELECT entity_id FROM security.resource_grants WHERE resource_grant_id = :g"),
+            {"g": uuid.UUID(response.json()["resource_grant_id"])},
+        ).scalar_one()
+        assert entity_id == f.entity_id
+
+
+def test_creating_a_resource_grant_targeting_a_knowledge_item_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "knowledge_item_id": str(f.knowledge_item_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+
+
+def test_creating_a_resource_grant_targeting_a_quest_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "quest_id": str(f.quest_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+
+
+def test_creating_a_resource_grant_targeting_a_foreign_world_quest_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "quest_id": str(f.foreign_world_quest_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_creating_a_resource_grant_targeting_a_session_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "session_id": str(f.session_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+
+
+def test_creating_a_resource_grant_targeting_a_foreign_campaign_session_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "session_id": str(f.foreign_campaign_session_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_creating_a_resource_grant_targeting_an_event_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "event_id": str(f.event_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+
+
+def test_creating_a_resource_grant_targeting_a_foreign_campaign_event_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "event_id": str(f.foreign_campaign_event_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
     assert response.status_code == 404, response.text
