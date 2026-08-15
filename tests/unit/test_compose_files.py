@@ -96,3 +96,60 @@ def test_migrate_service_requires_an_explicit_database_url() -> None:
     # variables directly — that's the exact pattern this fix replaced.
     assert "POSTGRES_PASSWORD" not in database_url
     assert "POSTGRES_USER" not in database_url
+
+
+def test_api_service_requires_an_explicit_database_url() -> None:
+    # Same reasoning as test_migrate_service_requires_an_explicit_database_url
+    # above, applied to the api service's DND_AI_DATABASE_URL — a distinct
+    # host-side variable (API_DATABASE_URL) from MIGRATION_DATABASE_URL, per
+    # compose.yaml's own comment on why (no least-privileged application
+    # database role exists yet).
+    api = _load("compose.yaml")["services"]["api"]
+    database_url = api["environment"]["DND_AI_DATABASE_URL"]
+    assert "API_DATABASE_URL" in database_url
+    assert ":?" in database_url, "API_DATABASE_URL must be required, not defaulted"
+    assert ":-" not in database_url, "API_DATABASE_URL must not have a fallback default"
+    assert "POSTGRES_PASSWORD" not in database_url
+    assert "POSTGRES_USER" not in database_url
+
+
+def test_base_compose_does_not_publish_a_host_port_for_api() -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert "ports" not in api, (
+        "compose.yaml's api service must not publish a host port by default — "
+        "see compose.yaml's header comment. Local development gets one from "
+        "compose.override.yaml instead."
+    )
+
+
+def test_dev_override_binds_the_api_published_port_to_localhost_only() -> None:
+    api = _load("compose.override.yaml")["services"]["api"]
+    (port_entry,) = api["ports"]
+    assert port_entry.startswith("127.0.0.1:"), (
+        f"compose.override.yaml must bind to 127.0.0.1, not every interface: {port_entry!r}"
+    )
+
+
+def test_api_service_is_not_gated_behind_a_tools_profile() -> None:
+    # Unlike migrate (a one-off job), api is a standing service that plain
+    # `docker compose up` must start — see compose.yaml's own comment on
+    # this distinction.
+    api = _load("compose.yaml")["services"]["api"]
+    assert "profiles" not in api
+
+
+def test_api_service_builds_from_the_same_dockerfile_as_migrate() -> None:
+    services = _load("compose.yaml")["services"]
+    assert services["api"]["build"] == services["migrate"]["build"]
+
+
+def test_api_healthcheck_targets_healthz_not_readyz() -> None:
+    # /healthz is deliberately DB-independent (dnd_ai.api.app's own
+    # docstring) — a container healthcheck that instead depended on the
+    # database would make the container look unhealthy during a database
+    # outage rather than merely not-ready, the exact failure mode /healthz
+    # exists to avoid.
+    api = _load("compose.yaml")["services"]["api"]
+    test_command = " ".join(api["healthcheck"]["test"])
+    assert "/healthz" in test_command
+    assert "/readyz" not in test_command

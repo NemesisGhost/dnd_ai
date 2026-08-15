@@ -16,12 +16,18 @@ pytestmark = pytest.mark.unit
 
 
 def _config(
-    *, ports: list[object] | None = None, volume_target: str = "/var/lib/postgresql"
+    *,
+    ports: list[object] | None = None,
+    volume_target: str = "/var/lib/postgresql",
+    api_ports: list[object] | None = None,
 ) -> dict:
     db: dict[str, object] = {"volumes": [{"type": "volume", "target": volume_target}]}
     if ports is not None:
         db["ports"] = ports
-    return {"services": {"db": db}}
+    api: dict[str, object] = {}
+    if api_ports is not None:
+        api["ports"] = api_ports
+    return {"services": {"db": db, "api": api}}
 
 
 def test_passes_with_no_ports_and_correct_mount() -> None:
@@ -40,6 +46,20 @@ def test_fails_when_a_host_port_is_published() -> None:
 def test_fails_when_ports_list_is_nonempty_even_with_odd_shape() -> None:
     with pytest.raises(ComposeConfigError):
         check_no_published_ports(_config(ports=["5432:5432"]))
+
+
+def test_passes_when_api_publishes_no_port() -> None:
+    check_no_published_ports(_config(api_ports=None), "api")
+
+
+def test_fails_when_api_publishes_a_host_port() -> None:
+    with pytest.raises(ComposeConfigError, match="publishes host port.*`api`"):
+        check_no_published_ports(_config(api_ports=[{"target": 8000, "published": "8000"}]), "api")
+
+
+def test_check_config_fails_when_api_publishes_a_host_port() -> None:
+    with pytest.raises(ComposeConfigError, match="`api`"):
+        check_config(_config(api_ports=[{"target": 8000, "published": "8000"}]))
 
 
 def test_passes_with_correct_postgresql_18_mount_target() -> None:

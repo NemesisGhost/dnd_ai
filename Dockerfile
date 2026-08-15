@@ -1,11 +1,13 @@
 # Production-oriented image for the D&D AI World Platform.
 #
 # One image, multiple entrypoints (docs/DEVELOPMENT.md §2, PLAN.md §31.3):
-# migrations/seeds today, the API/worker/adapter processes once
-# src/dnd_ai/api exists. It is not a fake API image — src/dnd_ai/api has no
-# committed source yet, so the only real runnable role today is the
-# database toolchain (Alembic). The default command applies migrations to
-# whatever DATABASE_URL points at.
+# the database toolchain (Alembic) and the FastAPI application under
+# Uvicorn both run from this same image today; a background worker/Discord
+# adapter would too, once that role has committed source. Role selection
+# happens entirely via each compose.yaml service's own `command:` — the
+# ENTRYPOINT below never changes. The default command (no `command:`
+# override) applies migrations to whatever DATABASE_URL points at; see
+# compose.yaml's `api` service for the Uvicorn invocation.
 #
 # Built and run via compose.yaml — see docs/DEVELOPMENT.md §3 for the
 # self-hosted workflow.

@@ -476,8 +476,8 @@ The import subsystem is intentionally isolated from canonical tables until promo
 | Deployable | Self-hosted target | Notes |
 |---|---|---|
 | PostgreSQL | `db` service in `compose.yaml`, PostgreSQL 18, persistent named volume | Source of truth (§2) |
-| Migrations and batch jobs | `migrate` service in `compose.yaml`, built from the shared `Dockerfile` | Runs today; the one role that exists, since `src/dnd_ai/api` has no committed source |
-| Application API | Not yet built | Will be a `compose.yaml` service, same `Dockerfile`, once `src/dnd_ai/api` exists |
+| Migrations and batch jobs | `migrate` service in `compose.yaml`, built from the shared `Dockerfile` | Runs today |
+| Application API | `api` service in `compose.yaml`, FastAPI under Uvicorn, built from the shared `Dockerfile` | Runs today; publishes no host port by default (compose.override.yaml adds one for local development) — a reverse proxy is not yet built (§32 of PLAN.md, Phase 14) |
 | Background worker | Not yet built | Drains the outbox (§10), delivers integrations, processes AI proposals, once built |
 | Discord adapter | Not yet built | Outbound gateway connection, once built |
 | Object storage | Not yet decided | Import source documents, exports, image layers |

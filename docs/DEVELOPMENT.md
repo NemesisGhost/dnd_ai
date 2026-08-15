@@ -89,7 +89,7 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 
 The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering). Keep that mapping — it is how a reviewer checks that a handler didn't grow domain rules.
 
-There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints. It exists today and runs Alembic migrations by default (`compose.yaml`'s `migrate` job); `src/dnd_ai/api` has no committed source yet, so the API/worker/adapter entrypoints are added when those modules exist.
+There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints. It runs Alembic migrations by default (`compose.yaml`'s `migrate` job) and, since Phase 10, also runs the FastAPI application under Uvicorn (`compose.yaml`'s `api` service — `docker compose up -d api`, or plain `docker compose up`); the worker/Discord-adapter entrypoints are added when those modules exist. Role selection is entirely `compose.yaml`'s own per-service `command:` override — the image's `ENTRYPOINT` never changes.
 
 ### 2.1 Keep source and tests bounded by domain
 
@@ -210,18 +210,20 @@ Leaving that rule open is the failure mode to watch for; close it in the same se
 
 `compose.yaml` at the repository root is the officially supported way to run PostgreSQL for both everyday development and a real self-hosted deployment ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). It needs only Docker — no PostgreSQL install, no AWS account.
 
-**Required setup — `compose.yaml` will not start (`up`) or run migrations without it:**
+**Required setup — `compose.yaml` will not start (`up`), run migrations, or start the API without it:**
 
 ```bash
 cp .env.example .env
 # edit .env: uncomment POSTGRES_PASSWORD and set a real value, then set
-# MIGRATION_DATABASE_URL and DATABASE_URL's password segments to match it
+# MIGRATION_DATABASE_URL, API_DATABASE_URL, and DATABASE_URL's password
+# segments to match it
 ```
 
-There is deliberately **no fallback password** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` likewise refuses to run without `MIGRATION_DATABASE_URL`. Three separate settings must be kept in sync by hand — nothing derives one from another:
+There is deliberately **no fallback password** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` and `docker compose up -d api` likewise refuse to run without `MIGRATION_DATABASE_URL`/`API_DATABASE_URL` respectively. Four separate settings must be kept in sync by hand — nothing derives one from another:
 
 - `POSTGRES_PASSWORD` — read by `docker compose` to initialize PostgreSQL.
 - `MIGRATION_DATABASE_URL` — the complete SQLAlchemy URL the `migrate` service connects with, addressing `db` (the compose service name) over the compose-internal network.
+- `API_DATABASE_URL` — the complete SQLAlchemy URL the `api` service connects with, also addressing `db` over the compose-internal network. Deliberately a separate setting from `MIGRATION_DATABASE_URL`, even though both currently authenticate as the same `postgres` superuser — see `.env.example`'s comment: no least-privileged application database role exists yet.
 - `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below).
 
 `MIGRATION_DATABASE_URL` and `DATABASE_URL` are not assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` by Compose interpolation — that would be plain string substitution, not a URL encoder, and would silently break for a password containing characters that are special in a URL (`@ : / ? # [ ] %` and similar). Build each URL yourself and percent-encode the password segment if it needs one (Python: `urllib.parse.quote(password, safe="")`) — see `.env.example` for a worked example.
@@ -246,6 +248,8 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 | `POSTGRES_DB` | `dnd_ai` | Database name |
 | `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
 | `MIGRATION_DATABASE_URL` | *(none — required for `migrate`)* | The complete SQLAlchemy URL the `migrate` service connects with (host `db`, not `localhost`) — see the required-setup note above for why this is a separate variable, not derived from the three above |
+| `API_DATABASE_URL` | *(none — required for `api`)* | The complete SQLAlchemy URL the `api` service connects with (host `db`, not `localhost`) — a separate variable from `MIGRATION_DATABASE_URL` for the same reason, even though both currently use the same superuser credential |
+| `API_PORT` | `8000` | Host port the API is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
 
 **Running migrations** against the composed database:
 
@@ -253,7 +257,15 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 docker compose --profile tools run --rm migrate
 ```
 
-This builds the same `Dockerfile` image the future API/worker/adapter services will share and runs `alembic -c database/alembic.ini upgrade head` against `db` over the compose-internal network — it needs no published host port. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
+This builds the same `Dockerfile` image the `api` service (and any future worker/adapter service) shares and runs `alembic -c database/alembic.ini upgrade head` against `db` over the compose-internal network — it needs no published host port. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
+
+**Running the API** under Uvicorn, in the same container image:
+
+```bash
+docker compose up -d api      # dev: also publishes 127.0.0.1:8000 via the override
+```
+
+Unlike `migrate`, `api` is a standing service with no `profiles:` restriction, so plain `docker compose up` (no service name) starts it alongside `db`. It reaches `db` the same way `migrate` does — over the compose-internal network, no published host port in the base `compose.yaml` — and its container `HEALTHCHECK` polls `/healthz` (process liveness only, deliberately database-independent; see `dnd_ai.api.app`'s own docstring) so `docker compose up --wait`/`docker compose ps` report readiness accurately. `compose.override.yaml` additionally publishes it on `127.0.0.1:${API_PORT:-8000}` for local development, mirroring `db`'s own override; a real self-hosted deployment reaches it only through a reverse proxy instead (not yet built — [§32](PLAN.md#32-local-production-deployment-plan), Phase 14). `dnd_ai.config.Settings` needs no OIDC configuration to boot outside production (see `.env.example`'s OIDC section) — only `DND_AI_DATABASE_URL` (here, `API_DATABASE_URL` from `.env`) is required.
 
 Running the test suite or `uv run alembic` from the host against the composed database works the same way it does against a native install — point `DATABASE_URL` at `postgresql+psycopg://postgres:<your POSTGRES_PASSWORD>@localhost:5432/dnd_ai` (this needs `compose.override.yaml`'s port, i.e. plain `docker compose up -d db` with no `-f` flags) and follow [§3.4](#34-verify).
 

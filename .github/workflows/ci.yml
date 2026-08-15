@@ -126,29 +126,31 @@ jobs:
     timeout-minutes: 15
     # Builds the image compose.yaml's services run from, validates the
     # compose topology, and exercises it end to end: bring up disposable
-    # PostgreSQL, wait for it to report healthy, then run the one real
-    # containerized job that exists today (Alembic migrations — see
-    # Dockerfile and compose.yaml; src/dnd_ai/api has no committed source
-    # yet, so there is no API smoke test to run against it).
+    # PostgreSQL, wait for it to report healthy, run Alembic migrations
+    # (the `migrate` job), then build and start the `api` service and prove
+    # it can both answer a liveness check and round-trip the composed
+    # database over the compose-internal network — see Dockerfile and
+    # compose.yaml.
     #
-    # POSTGRES_PASSWORD and MIGRATION_DATABASE_URL have no fallback default
-    # in compose.yaml (see its header comment) — CI must supply both
-    # explicitly, and they must agree on the same password. Both values
-    # are disposable: a fresh tmpfs-backed container per run, never reused,
-    # never exposed on a host port, not a real secret. MIGRATION_DATABASE_URL
-    # addresses `db` (the compose service name), not `localhost` — the
-    # migrate service reaches it over the compose-internal network, not a
-    # published host port.
+    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and API_DATABASE_URL have
+    # no fallback default in compose.yaml (see its header comment) — CI
+    # must supply all three explicitly, and the two URLs must agree with
+    # POSTGRES_PASSWORD on the same password. All three values are
+    # disposable: a fresh tmpfs-backed container per run, never reused,
+    # never exposed on a host port, not a real secret. Both URLs address
+    # `db` (the compose service name), not `localhost` — `migrate`/`api`
+    # reach it over the compose-internal network, not a published host port.
     env:
       POSTGRES_PASSWORD: ci_disposable_password
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate compose configuration
         run: docker compose -f compose.yaml -f compose.ci.yaml config
 
-      - name: Check CI compose config publishes no db port and mounts PostgreSQL 18 correctly
+      - name: Check CI compose config publishes no db/api port and mounts PostgreSQL 18 correctly
         # Regression guard for issue-2/issue-1: asserts the *merged,
         # interpolated* config, not just the source YAML (tests/unit/
         # test_compose_files.py already covers the source files without
@@ -160,18 +162,46 @@ jobs:
       - name: Build application image
         # `migrate` carries `profiles: ["tools"]` (compose.yaml), which
         # `docker compose build` — like `up`/`config` — filters out unless
-        # named explicitly or activated with `--profile`; a bare `build`
-        # here silently builds nothing ("No services to build") rather
-        # than failing, confirmed locally. Name the service so this step
-        # actually proves the image builds instead of relying on `run
-        # --rm migrate` below to build it implicitly on first use.
-        run: docker compose -f compose.yaml -f compose.ci.yaml build migrate
+        # named explicitly or activated with `--profile`; `api` carries no
+        # such restriction, so a bare `build` would build it alone and
+        # silently skip `migrate`. Name both services explicitly so this
+        # step actually proves both images build instead of relying on
+        # `run --rm migrate`/`up api` below to build them implicitly on
+        # first use.
+        run: docker compose -f compose.yaml -f compose.ci.yaml build migrate api
 
       - name: Start disposable PostgreSQL and wait for health
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d --wait --wait-timeout 60 db
 
       - name: Run migrations against the composed database (smoke test)
         run: docker compose -f compose.yaml -f compose.ci.yaml run --rm migrate
+
+      - name: Start the api service and wait for its own health check
+        # /healthz (this service's HEALTHCHECK, compose.yaml) is
+        # deliberately DB-independent — proves the container itself boots
+        # and Uvicorn answers, not database connectivity (that's the next
+        # step). `--wait` blocks until Compose reports it healthy or the
+        # timeout is reached, the same mechanism already used for `db`
+        # above.
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d --wait --wait-timeout 60 api
+
+      - name: Verify the api service reaches the migrated database (smoke test)
+        # Proves the full round trip this job exists to check: the built
+        # image, Uvicorn, and a real PostgreSQL connection over the
+        # compose-internal network all work together — /readyz performs an
+        # actual database round trip (dnd_ai.api.app's own docstring), so a
+        # non-200 response or a thrown exception here means api can boot
+        # but not actually serve traffic. No curl/wget in this image (see
+        # compose.yaml's healthcheck comment), so this uses the same
+        # Python-standard-library one-liner the container's own
+        # HEALTHCHECK does.
+        run: |
+          docker compose -f compose.yaml -f compose.ci.yaml exec -T api python -c "
+          import urllib.request
+          with urllib.request.urlopen('http://localhost:8000/readyz', timeout=5) as resp:
+              assert resp.status == 200, resp.status
+          print('readyz ok')
+          "
 
       - name: Tear down
         if: always()
@@ -195,10 +225,11 @@ jobs:
       # Never actually used — this job only starts `db` — but `docker
       # compose` interpolates every service's environment block up front,
       # regardless of which service is targeted, so `migrate`'s required
-      # MIGRATION_DATABASE_URL (no fallback default, by design) must still
-      # resolve or `up -d db` below fails at config-parsing time before it
-      # starts anything.
+      # MIGRATION_DATABASE_URL and `api`'s required API_DATABASE_URL (no
+      # fallback default, by design) must still resolve or `up -d db`
+      # below fails at config-parsing time before it starts anything.
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

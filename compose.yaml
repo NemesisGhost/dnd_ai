@@ -19,16 +19,21 @@
 #     restricted to a "safe" subset. See .env.example.
 #
 # Usage:
-#   cp .env.example .env              # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required
+#   cp .env.example .env              # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and API_DATABASE_URL — all required
 #   docker compose up -d db           # start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
 #   docker compose --profile tools run --rm migrate   # apply migrations
+#   docker compose up -d api          # start the FastAPI application under Uvicorn (dev: also publishes 127.0.0.1:8000 via the override)
 #   docker compose down               # stop; add -v to also drop the data volume
 #
-# There is no "api" service yet: src/dnd_ai/api has no committed source
-# (docs/DEVELOPMENT.md §2), so there is nothing runnable to containerize
-# beyond the database toolchain in the `migrate` service below. Add an
-# "api" service here, built from the same Dockerfile with a different
-# command, once that module exists (docs/PLAN.md §31.3).
+# `api` (below) is the FastAPI application (src/dnd_ai/api) under Uvicorn —
+# the same image the `migrate` job already builds, with a different
+# command selecting this role (docs/DEVELOPMENT.md §2, PLAN.md §31.3).
+# Like `db`, it publishes no host port in this base file by design
+# (compose.override.yaml adds a 127.0.0.1-only one for local development);
+# a real self-hosted deployment reaches it only through a reverse proxy —
+# not yet built here, see PLAN.md §32 (Phase 14). No background
+# worker/Discord-adapter service exists yet either; add one the same way
+# once that role has committed source to run.
 
 services:
   db:
@@ -74,10 +79,10 @@ services:
       start_period: 10s
 
   # One-off job, not started by `docker compose up`. Runs Alembic to head
-  # against the `db` service, using the same image the future API/worker/
-  # adapter services will share (docs/DEVELOPMENT.md §2). Reaches `db` over
-  # the compose-internal network by service name — this needs no published
-  # host port.
+  # against the `db` service, using the same image the `api` service below
+  # (and any future worker/adapter service) shares (docs/DEVELOPMENT.md §2).
+  # Reaches `db` over the compose-internal network by service name — this
+  # needs no published host port.
   migrate:
     build:
       context: .
@@ -99,6 +104,59 @@ services:
       db:
         condition: service_healthy
     command: ["alembic", "-c", "database/alembic.ini", "upgrade", "head"]
+
+  # The FastAPI application (src/dnd_ai/api) under Uvicorn (docs/PLAN.md
+  # Phase 10 deliverable "a FastAPI application entry point executed by
+  # Uvicorn and containerized as a portable service"; ADR 0013). Built from
+  # the same image `migrate` uses — the entrypoint stays `uv run --no-sync`
+  # (Dockerfile); only `command:` below selects this role, the same
+  # mechanism `migrate`'s own `command:` already uses. Reaches `db` over
+  # the compose-internal network by service name, exactly like `migrate` —
+  # this service needs no published host port either, and publishes none
+  # here by design (see this file's header comment); a real self-hosted
+  # deployment sits behind a reverse proxy instead, not yet built (PLAN.md
+  # §32, Phase 14). Started by plain `docker compose up` (no `profiles:`
+  # restriction) since, unlike `migrate`, it is a standing service, not a
+  # one-off job.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "dnd_ai.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # API_DATABASE_URL is a complete SQLAlchemy URL you supply yourself
+      # (see .env.example) — same reasoning as MIGRATION_DATABASE_URL above,
+      # and a deliberately distinct setting from it even though both
+      # currently authenticate as the same postgres superuser (see
+      # .env.example's comment: no least-privileged application database
+      # role exists yet). dnd_ai.config.Settings reads DND_AI_DATABASE_URL
+      # specifically — this is the container-side variable name the
+      # application process actually looks up, not API_DATABASE_URL itself
+      # (that name only exists on the host side, in .env).
+      DND_AI_DATABASE_URL: ${API_DATABASE_URL:?API_DATABASE_URL is required — copy .env.example to .env and set it before starting the api service}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # /healthz is deliberately DB-independent (dnd_ai.api.app's own
+      # docstring) — cheap process liveness only, not a readiness probe.
+      # `python` resolves via this image's own PATH (Dockerfile: `PATH=
+      # "/app/.venv/bin:${PATH}"`) without needing `uv run`, since a Docker
+      # HEALTHCHECK exec bypasses ENTRYPOINT entirely; no curl/wget exists
+      # in this python:3.12-slim-bookworm base image, so this uses only the
+      # Python standard library already available in the image.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
   # Persistent by default — normal self-hosted use expects data to survive

@@ -804,15 +804,16 @@ Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase dev
 
 ### If you are self-hosting
 
-`compose.yaml` at the repository root is the officially supported deployment topology — PostgreSQL 18 with persistent storage, plus a `migrate` job built from the shared `Dockerfile`:
+`compose.yaml` at the repository root is the officially supported deployment topology — PostgreSQL 18 with persistent storage, a `migrate` job, and an `api` service (FastAPI under Uvicorn), both built from the shared `Dockerfile`:
 
 ```bash
-cp .env.example .env   # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required, no defaults
+cp .env.example .env   # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and API_DATABASE_URL — all required, no defaults
 docker compose up -d db                          # start PostgreSQL
 docker compose --profile tools run --rm migrate   # apply migrations
+docker compose up -d api                          # start the API
 ```
 
-See [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup) for start/stop, backup, and upgrade guidance, and [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for why this replaced AWS as the default. There is no `api` service yet — `src/dnd_ai/api` has no committed source (see [Repository Structure](#repository-structure)).
+See [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup) for start/stop, backup, and upgrade guidance, and [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for why this replaced AWS as the default. Neither `db` nor `api` publishes a host port by default (`compose.override.yaml` adds 127.0.0.1-only ones for local development) — a real self-hosted deployment reaches `api` through a reverse proxy instead, not yet built (PLAN.md §32, Phase 14).
 
 ### If you are deploying to AWS (optional)
 

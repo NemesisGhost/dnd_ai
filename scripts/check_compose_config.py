@@ -5,18 +5,18 @@ Usage (CI only — needs a real `docker compose`, not a source-level check):
     docker compose -f compose.yaml -f compose.ci.yaml config --format json \
       | python3 scripts/check_compose_config.py
 
-Reads the merged config as JSON from stdin and checks the `db` service:
+Reads the merged config as JSON from stdin and checks:
 
-  - publishes no host ports — CI must never expose PostgreSQL on a host
-    port (compose.yaml's base topology publishes none by design; this
-    guards against a future regression re-adding one to compose.yaml or
-    compose.ci.yaml).
-  - mounts its data volume at /var/lib/postgresql, the PostgreSQL 18
+  - `db` and `api` publish no host ports — CI must never expose PostgreSQL
+    or the API on a host port (compose.yaml's base topology publishes
+    neither by design; this guards against a future regression re-adding
+    one to compose.yaml or compose.ci.yaml).
+  - `db` mounts its data volume at /var/lib/postgresql, the PostgreSQL 18
     image's actual data-directory parent (PGDATA defaults to
     /var/lib/postgresql/18/docker) — not /var/lib/postgresql/data, the
     pre-18 convention that would silently miss where the server writes.
 
-Deliberately checks these two specific invariants rather than diffing the
+Deliberately checks these specific invariants rather than diffing the
 whole rendered document, so an unrelated, intentional change to the merged
 config doesn't fail this check.
 
@@ -36,14 +36,14 @@ class ComposeConfigError(RuntimeError):
     """One of the invariants below did not hold."""
 
 
-def check_no_published_ports(config: dict[str, Any]) -> None:
-    db = config["services"]["db"]
-    ports = db.get("ports") or []
+def check_no_published_ports(config: dict[str, Any], service_name: str = "db") -> None:
+    service = config["services"][service_name]
+    ports = service.get("ports") or []
     if ports:
         raise ComposeConfigError(
-            f"CI's merged compose config publishes host port(s) for `db`: {ports!r} "
-            "— compose.yaml or compose.ci.yaml regressed; CI must never expose "
-            "PostgreSQL on a host port (see compose.yaml's header comment)."
+            f"CI's merged compose config publishes host port(s) for `{service_name}`: "
+            f"{ports!r} — compose.yaml or compose.ci.yaml regressed; CI must never expose "
+            f"{service_name} on a host port (see compose.yaml's header comment)."
         )
 
 
@@ -60,7 +60,8 @@ def check_data_volume_mount(config: dict[str, Any]) -> None:
 
 
 def check_config(config: dict[str, Any]) -> None:
-    check_no_published_ports(config)
+    check_no_published_ports(config, "db")
+    check_no_published_ports(config, "api")
     check_data_volume_mount(config)
 
 
@@ -72,7 +73,7 @@ def main() -> None:
         print(f"FAIL: {exc}", file=sys.stderr)
         sys.exit(1)
     print(
-        "PASS: CI compose config publishes no db host port and mounts "
+        "PASS: CI compose config publishes no db/api host port and mounts "
         "PostgreSQL 18's data directory correctly."
     )
 
