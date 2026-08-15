@@ -458,6 +458,41 @@ def test_discovery_is_not_recorded_twice_for_the_same_party(
         assert count == 1
 
 
+def test_a_successful_check_discovers_a_restricted_fact_about_an_entity(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """docs/PLAN.md §25 step 13: "talk to the NPC and receive restricted
+    knowledge" — target_entity_id has no is_hidden gate (an NPC's own
+    existence is never secret), unlike the four structural-child kinds."""
+    with postgres_engine.begin() as connection:
+        npc_id = make_character(connection, f.world_id, name="Villager")
+        knowledge_item_id = make_knowledge_item(connection, f.world_id, subject_entity_id=npc_id)
+
+    result_perform = perform_interaction(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_1,
+        actor_entity_id=f.actor_id,
+        interaction_type_code="converse",
+        targets=(TargetSpec(target_entity_id=npc_id),),
+        check_requests=(
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=10, skill_id=f.skill_id, target_index=0
+            ),
+        ),
+    )
+    result = resolve_check(
+        postgres_engine,
+        check_request_id=result_perform.check_request_ids[0],
+        roll=15,
+        total_modifier=1,
+        total=16,
+        degree_of_success="success",
+        party_id=f.party_id,
+    )
+    assert result.discovered_knowledge_item_id == knowledge_item_id
+
+
 def test_a_failed_search_does_not_discover_the_hidden_hazard(
     postgres_engine: Engine, f: Fixture
 ) -> None:

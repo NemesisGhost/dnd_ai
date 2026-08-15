@@ -49,7 +49,9 @@ column the check's own target row carries (docs/PLAN.md §25 steps 8-11):
   `party_id` has not yet discovered it via a matching `knowledge.
   knowledge_items` row — the write-side counterpart to `dnd_ai.queries.
   dungeon`'s own read-side discovery filtering (see `_maybe_discover_
-  target()`'s own docstring).
+  target()`'s own docstring). `target_entity_id` (an NPC) is discoverable
+  the same way but with no `is_hidden` gate — "talk to the NPC and
+  receive restricted knowledge" (docs/PLAN.md §25 step 13).
 
 The first three are mutually exclusive by construction (`interaction.
 targets`' own "at most one target column set" shape), but discovery is
@@ -322,6 +324,7 @@ class _CheckContext:
     world_id: uuid.UUID
     campaign_id: uuid.UUID | None
     session_id: uuid.UUID | None
+    target_entity_id: uuid.UUID | None
     target_area_connection_id: uuid.UUID | None
     target_area_feature_id: uuid.UUID | None
     target_area_hazard_id: uuid.UUID | None
@@ -334,7 +337,7 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
             text("""
             SELECT cr.actor_entity_id, i.interaction_id, it.code AS interaction_type_code,
                    i.timeline_id, i.world_time_id, i.campaign_id, i.session_id, t.world_id,
-                   tgt.target_area_connection_id, tgt.target_area_feature_id,
+                   tgt.target_entity_id, tgt.target_area_connection_id, tgt.target_area_feature_id,
                    tgt.target_area_hazard_id, tgt.target_area_interactable_id
             FROM interaction.check_requests cr
             JOIN interaction.actions a ON a.action_id = cr.action_id
@@ -358,6 +361,7 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
         world_id=row["world_id"],
         campaign_id=row["campaign_id"],
         session_id=row["session_id"],
+        target_entity_id=row["target_entity_id"],
         target_area_connection_id=row["target_area_connection_id"],
         target_area_feature_id=row["target_area_feature_id"],
         target_area_hazard_id=row["target_area_hazard_id"],
@@ -708,11 +712,19 @@ _HIDDEN_TARGET_TABLES: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _resolve_hidden_target(context: _CheckContext) -> tuple[str, uuid.UUID] | None:
-    """Whichever one of the four hidden-eligible target kinds this check's
-    target hit, or `None` if it targeted a bare entity or nothing at all
-    (`interaction.targets`' own "at most one target column set" shape
-    means at most one of these is ever non-`None`)."""
+def _resolve_discoverable_target(context: _CheckContext) -> tuple[str, uuid.UUID] | None:
+    """Whichever one of the five discoverable target kinds this check's
+    target hit, or `None` if it targeted nothing at all (`interaction.
+    targets`' own "at most one target column set" shape means at most one
+    of these is ever non-`None`). `target_entity_id` (a bare entity — an
+    NPC, docs/PLAN.md §25 step 13's "talk to the NPC and receive
+    restricted knowledge") is checked first and separately from the four
+    hidden-eligible structural-child kinds: `core.entities` has no
+    `is_hidden` column of its own — an NPC's *existence* is never secret,
+    only specific facts about it are, so this kind skips that gate
+    entirely in `_maybe_discover_target()` below."""
+    if context.target_entity_id is not None:
+        return "target_entity_id", context.target_entity_id
     for column in _HIDDEN_TARGET_TABLES:
         value = getattr(context, column)
         if value is not None:
@@ -723,29 +735,35 @@ def _resolve_hidden_target(context: _CheckContext) -> tuple[str, uuid.UUID] | No
 def _maybe_discover_target(
     connection: Connection, *, context: _CheckContext, party_id: uuid.UUID | None
 ) -> tuple[uuid.UUID, uuid.UUID] | None:
-    """Reveals the check's own target to `party_id`, when it is hidden, a
-    `knowledge.knowledge_items` row names it as `subject_area_*_id`, and
-    `party_id` has not already discovered it — the write-side counterpart
-    to `dnd_ai.queries.dungeon.get_dungeon_area_view`'s identical
-    discovery-eligibility join (see that module's own docstring for why a
-    hidden, undiscovered child must be indistinguishable from one that
-    doesn't exist). Returns `(event_id, knowledge_item_id)` when a
-    discovery was recorded, else `None` — no target, no `party_id`, not
-    hidden, no matching knowledge item, or already discovered."""
+    """Reveals the check's own target to `party_id`, when a `knowledge.
+    knowledge_items` row names it as subject and `party_id` has not
+    already discovered it — the write-side counterpart to `dnd_ai.queries.
+    dungeon.get_dungeon_area_view`'s identical discovery-eligibility join
+    (see that module's own docstring for why a hidden, undiscovered child
+    must be indistinguishable from one that doesn't exist). A structural
+    target (connection/feature/hazard/interactable) is additionally
+    required to be `is_hidden`; a bare `target_entity_id` (an NPC) has no
+    such gate — see `_resolve_discoverable_target()`'s own docstring.
+    Returns `(event_id, knowledge_item_id)` when a discovery was recorded,
+    else `None` — no target, no `party_id`, not hidden, no matching
+    knowledge item, or already discovered."""
     if party_id is None:
         return None
-    resolved = _resolve_hidden_target(context)
+    resolved = _resolve_discoverable_target(context)
     if resolved is None:
         return None
     target_column, target_id = resolved
-    table, pk_column, subject_column = _HIDDEN_TARGET_TABLES[target_column]
 
-    is_hidden = connection.execute(
-        text(f"SELECT is_hidden FROM {table} WHERE {pk_column} = :target"),  # noqa: S608
-        {"target": target_id},
-    ).scalar()
-    if not is_hidden:
-        return None
+    if target_column == "target_entity_id":
+        subject_column = "subject_entity_id"
+    else:
+        table, pk_column, subject_column = _HIDDEN_TARGET_TABLES[target_column]
+        is_hidden = connection.execute(
+            text(f"SELECT is_hidden FROM {table} WHERE {pk_column} = :target"),  # noqa: S608
+            {"target": target_id},
+        ).scalar()
+        if not is_hidden:
+            return None
 
     knowledge_item_id = connection.execute(
         text(
