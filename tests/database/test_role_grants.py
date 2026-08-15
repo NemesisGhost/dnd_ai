@@ -323,6 +323,78 @@ def test_migration_owner_cannot_log_in(db_connection: Connection) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# app_read_write's privilege boundaries — the constrained identity the
+# containerized `api` service connects as (compose.yaml's own comment on
+# that service). Static, catalog-level checks only; a real authenticated
+# connection as app_read_write, proving these boundaries are enforced in
+# practice rather than merely declared, lives in
+# tests/database/test_app_read_write_role.py.
+# ---------------------------------------------------------------------------
+
+
+def test_app_read_write_is_not_a_superuser(db_connection: Connection) -> None:
+    is_superuser = db_connection.execute(
+        text("SELECT rolsuper FROM pg_roles WHERE rolname = 'app_read_write'")
+    ).scalar()
+    assert is_superuser is False
+
+
+def test_app_read_write_cannot_create_databases(db_connection: Connection) -> None:
+    can_createdb = db_connection.execute(
+        text("SELECT rolcreatedb FROM pg_roles WHERE rolname = 'app_read_write'")
+    ).scalar()
+    assert can_createdb is False
+
+
+def test_app_read_write_cannot_create_roles(db_connection: Connection) -> None:
+    can_createrole = db_connection.execute(
+        text("SELECT rolcreaterole FROM pg_roles WHERE rolname = 'app_read_write'")
+    ).scalar()
+    assert can_createrole is False
+
+
+def test_app_read_write_cannot_bypass_row_level_security(db_connection: Connection) -> None:
+    can_bypass_rls = db_connection.execute(
+        text("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'app_read_write'")
+    ).scalar()
+    assert can_bypass_rls is False
+
+
+def test_app_read_write_is_not_a_member_of_migration_owner(db_connection: Connection) -> None:
+    is_member = db_connection.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_auth_members m
+                JOIN pg_roles r ON r.oid = m.roleid
+                JOIN pg_roles mem ON mem.oid = m.member
+                WHERE r.rolname = 'migration_owner' AND mem.rolname = 'app_read_write'
+            )
+        """)
+    ).scalar()
+    assert is_member is False, (
+        "app_read_write is a member of migration_owner — it would inherit every "
+        "privilege migration_owner has, including implicit ownership of everything "
+        "migration_owner owns, defeating the entire ADR 0009 split for this role."
+    )
+
+
+def test_app_read_write_owns_no_schema(db_connection: Connection) -> None:
+    owned_schemas = [
+        row.schema_name
+        for row in db_connection.execute(
+            text(
+                "SELECT nspname AS schema_name FROM pg_namespace n "
+                "JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname = 'app_read_write'"
+            )
+        )
+    ]
+    assert not owned_schemas, (
+        f"app_read_write owns schema(s) {owned_schemas} — schema objects must be owned by "
+        "migration_owner only (ADR 0009), never a login role."
+    )
+
+
 def test_managed_tables_covers_every_table_in_every_managed_schema(
     db_connection: Connection,
 ) -> None:

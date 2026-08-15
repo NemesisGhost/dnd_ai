@@ -135,13 +135,19 @@ jobs:
     # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and the
     # three API_OIDC_* settings have no fallback default in compose.yaml
     # (see its header comment) — CI must supply all six explicitly, and
-    # the two database URLs must agree with POSTGRES_PASSWORD on the same
-    # password. All six values are disposable: a fresh tmpfs-backed
-    # container per run, never reused, never exposed on a host port, not a
-    # real secret. The database URLs address `db` (the compose service
-    # name), not `localhost` — `migrate`/`api` reach it over the
-    # compose-internal network, not a published host port. The OIDC values
-    # are syntactically valid (HTTPS, well-formed — dnd_ai.config requires
+    # the two database URLs must agree with POSTGRES_PASSWORD (for
+    # `migrate`) or API_READ_WRITE_PASSWORD (for `api`, provisioned below)
+    # on the same password. All values are disposable: a fresh
+    # tmpfs-backed container per run, never reused, never exposed on a
+    # host port, not a real secret. `api` connects as **app_read_write**,
+    # never `postgres`/`migration_runner`/`migration_owner` — the same
+    # production security boundary compose.yaml's own comment on that
+    # service documents; API_DATABASE_URL below reflects that identity,
+    # not the migration/superuser one MIGRATION_DATABASE_URL uses. The
+    # database URLs address `db` (the compose service name), not
+    # `localhost` — `migrate`/`api` reach it over the compose-internal
+    # network, not a published host port. The OIDC values are
+    # syntactically valid (HTTPS, well-formed — dnd_ai.config requires
     # this since api always runs with DND_AI_ENVIRONMENT=production) but
     # deliberately never resolved against a live identity provider: PyJWT's
     # PyJWKClient fetches lazily, so constructing api's JWKS client at
@@ -151,12 +157,29 @@ jobs:
     env:
       POSTGRES_PASSWORD: ci_disposable_password
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
-      API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_READ_WRITE_PASSWORD: ci_disposable_app_read_write_password
+      API_DATABASE_URL: postgresql+psycopg://app_read_write:ci_disposable_app_read_write_password@db:5432/dnd_ai
       API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
       API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
       API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        # Needed in this job specifically to run scripts/operations/
+        # database_recovery.py's set-role-password below — every other
+        # step in this job only ever shells out to `docker compose`.
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
 
       - name: Validate compose configuration
         run: docker compose -f compose.yaml -f compose.ci.yaml config
@@ -207,6 +230,83 @@ jobs:
 
       - name: Run migrations against the composed database (smoke test)
         run: docker compose -f compose.yaml -f compose.ci.yaml run --rm migrate
+
+      - name: Provision app_read_write's password (the real deployment path)
+        # Exercises the actual documented/scripted provisioning step
+        # (docs/DEVELOPMENT.md §3.6, docs/operations/DATABASE_RECOVERY.md's
+        # "Provisioning application-role credentials") — not a hand-rolled
+        # equivalent — so this job proves the real tool works, not just
+        # that *some* SQL could set a password. API_READ_WRITE_PASSWORD is
+        # read from this job's own env (see the job-level env: block
+        # above), never passed as a --password flag. `--env-file
+        # .env.example` is a real, already-committed file
+        # database_recovery.py's own argument parsing requires to exist —
+        # every line that would set a variable in it is commented out, so
+        # it contributes nothing; every value `docker compose` actually
+        # needs for interpolation here already comes from this job's own
+        # real environment (this job's `env:` block above), which always
+        # takes precedence over `--env-file` content regardless — verified
+        # directly (`docker compose --env-file .env.example ... config`
+        # resolves POSTGRES_PASSWORD from the real environment) before
+        # relying on it here.
+        run: |
+          uv run python scripts/operations/database_recovery.py set-role-password \
+            --role app_read_write \
+            --password-env-var API_READ_WRITE_PASSWORD \
+            --project dnd_ai \
+            --env-file .env.example \
+            --compose-file compose.yaml \
+            --compose-file compose.ci.yaml
+
+      - name: Verify the provisioned password (verify-roles)
+        # Confirms the step above actually took, the same way
+        # docs/DEVELOPMENT.md §3.6 asks an operator to before starting
+        # `api` — fails the job loudly here rather than surfacing only as
+        # a mysterious authentication failure several steps later.
+        run: |
+          uv run python scripts/operations/database_recovery.py verify-roles \
+            --project dnd_ai --env-file .env.example --compose-file compose.yaml \
+            --compose-file compose.ci.yaml
+
+      - name: Verify app_read_write's live privilege boundaries (the exact deployment credential)
+        # Requirement: connect using the exact credential API_DATABASE_URL
+        # configures below, prove normal DML works, and prove schema DDL/
+        # role management is rejected — against *this job's own* db
+        # container (a separate, disposable instance from postgres-
+        # verification's own — tests/database/test_app_read_write_role.py
+        # covers that job's instance; this covers this one, end to end
+        # through the same compose project this job's api service itself
+        # connects through). PGPASSWORD is passed as an exec'd-process
+        # environment variable, not a psql command-line flag, so it never
+        # appears in that process's own argv (`ps`/`docker top`) — even
+        # though this is an openly disposable CI-only password already
+        # visible in this workflow file's own source, matching the
+        # discipline set_role-password itself uses for a real one.
+        run: |
+          set -e
+          echo "-- SELECT works --"
+          docker compose -f compose.yaml -f compose.ci.yaml exec -T -e PGPASSWORD="$API_READ_WRITE_PASSWORD" \
+            db psql -U app_read_write -d dnd_ai -c "SELECT current_user, count(*) FROM core.worlds;"
+
+          echo "-- CREATE TABLE must be rejected --"
+          if docker compose -f compose.yaml -f compose.ci.yaml exec -T -e PGPASSWORD="$API_READ_WRITE_PASSWORD" \
+            db psql -U app_read_write -d dnd_ai -c "CREATE TABLE core.ci_privilege_probe (id int);" > /tmp/create_probe.log 2>&1; then
+            echo "app_read_write was able to CREATE TABLE — privilege boundary violated" >&2
+            cat /tmp/create_probe.log >&2
+            exit 1
+          fi
+          grep -qi "permission denied" /tmp/create_probe.log
+
+          echo "-- SET ROLE migration_owner must be rejected --"
+          if docker compose -f compose.yaml -f compose.ci.yaml exec -T -e PGPASSWORD="$API_READ_WRITE_PASSWORD" \
+            db psql -U app_read_write -d dnd_ai -c "SET ROLE migration_owner;" > /tmp/setrole_probe.log 2>&1; then
+            echo "app_read_write was able to SET ROLE migration_owner — privilege boundary violated" >&2
+            cat /tmp/setrole_probe.log >&2
+            exit 1
+          fi
+          grep -qi "permission denied" /tmp/setrole_probe.log
+
+          echo "app_read_write's live privilege boundaries confirmed"
 
       - name: Start the api service and wait for its own health check
         # /healthz (this service's HEALTHCHECK, compose.yaml) is
@@ -306,7 +406,7 @@ jobs:
       # `up -d db` below fails at config-parsing time before it starts
       # anything.
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
-      API_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
+      API_DATABASE_URL: postgresql+psycopg://app_read_write:ci_disposable_password@db:5432/dnd_ai
       API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
       API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
       API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks

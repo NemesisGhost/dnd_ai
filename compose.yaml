@@ -18,11 +18,16 @@
 #     characters can be percent-encoded correctly instead of being
 #     restricted to a "safe" subset. See .env.example.
 #
-# Usage:
+# Usage — this exact order matters, see the `api` service's own comment
+# below for why steps 3-4 must both complete before step 5:
 #   cp .env.example .env              # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL — all required
-#   docker compose up -d db           # start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
-#   docker compose --profile tools run --rm migrate   # apply migrations
-#   docker compose up -d api          # start the FastAPI application under Uvicorn (dev: also publishes 127.0.0.1:8000 via the override)
+#   docker compose up -d db           # 1. start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
+#   docker compose --profile tools run --rm migrate   # 2. apply migrations (creates app_read_write, among five other roles)
+#   uv run python scripts/operations/database_recovery.py set-role-password \  # 3. provision app_read_write's password
+#     --role app_read_write --password-env-var APP_READ_WRITE_PASSWORD \
+#     --project dnd_ai --env-file .env --compose-file compose.yaml
+#   # 4. build API_DATABASE_URL from that password (percent-encoded) and set it in .env — see .env.example
+#   docker compose up -d api          # 5. start the FastAPI application under Uvicorn (dev: also publishes 127.0.0.1:8000 via the override)
 #   docker compose down               # stop; add -v to also drop the data volume
 #
 # `api` (below) is the FastAPI application (src/dnd_ai/api) under Uvicorn —
@@ -32,12 +37,27 @@
 # variable — see that service's own comment below) and therefore requires
 # a real, HTTPS OIDC provider configured via API_OIDC_ISSUER/
 # API_OIDC_AUDIENCE/API_OIDC_JWKS_URL; there is no way to start this
-# service without one. Like `db`, it publishes no host port in this base
-# file by design (compose.override.yaml adds a 127.0.0.1-only one for
-# local development); a real self-hosted deployment reaches it only
-# through a reverse proxy — not yet built here, see PLAN.md §32 (Phase
-# 14). No background worker/Discord-adapter service exists yet either; add
-# one the same way once that role has committed source to run.
+# service without one. It also always connects to PostgreSQL as
+# app_read_write, never postgres/migration_runner/migration_owner (see
+# that service's DND_AI_DATABASE_URL comment below) — a role with no
+# schema-DDL, role-management, or migration_owner-membership privilege at
+# all, only DML on application tables. This service's `depends_on: db:
+# condition: service_healthy` guarantees PostgreSQL itself is reachable
+# before `api` starts, but Compose has no equivalent built-in mechanism
+# for a `profiles: ["tools"]` one-off job like `migrate`, or for a step
+# external to Compose entirely like `set-role-password` — steps 2 and 3 in
+# the Usage sequence above are a documented, must-run-first manual
+# sequence, the same way `migrate` already was before this correction pass
+# added `set-role-password` to it. `verify-roles` (same script) reports,
+# per LOGIN role, whether its password has actually been set — run it
+# after step 3 to confirm before proceeding to step 5, and periodically
+# thereafter to confirm the deployment stayed correctly provisioned. Like
+# `db`, `api` publishes no host port in this base file by design
+# (compose.override.yaml adds a 127.0.0.1-only one for local development);
+# a real self-hosted deployment reaches it only through a reverse proxy —
+# not yet built here, see PLAN.md §32 (Phase 14). No background
+# worker/Discord-adapter service exists yet either; add one the same way
+# once that role has committed source to run.
 
 services:
   db:
@@ -144,15 +164,27 @@ services:
       # below actually required — see dnd_ai.config's own model_validator.
       DND_AI_ENVIRONMENT: production
       # API_DATABASE_URL is a complete SQLAlchemy URL you supply yourself
-      # (see .env.example) — same reasoning as MIGRATION_DATABASE_URL above,
-      # and a deliberately distinct setting from it even though both
-      # currently authenticate as the same postgres superuser (see
-      # .env.example's comment: no least-privileged application database
-      # role exists yet). dnd_ai.config.Settings reads DND_AI_DATABASE_URL
-      # specifically — this is the container-side variable name the
-      # application process actually looks up, not API_DATABASE_URL itself
-      # (that name only exists on the host side, in .env).
-      DND_AI_DATABASE_URL: ${API_DATABASE_URL:?API_DATABASE_URL is required — copy .env.example to .env and set it before starting the api service}
+      # (see .env.example) — same reasoning as MIGRATION_DATABASE_URL above
+      # (percent-encode the password segment; never assembled from
+      # POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB by Compose
+      # interpolation), but a deliberately distinct setting and, unlike
+      # MIGRATION_DATABASE_URL, a deliberately DIFFERENT identity: this URL
+      # MUST authenticate as app_read_write (001_bootstrap's DML-only
+      # login role — SELECT/INSERT/UPDATE/DELETE on application tables,
+      # no schema DDL, no role management, no membership in
+      # migration_owner) — NEVER postgres, migration_runner, or
+      # migration_owner. Provision app_read_write's password with
+      # `scripts/operations/database_recovery.py set-role-password --role
+      # app_read_write ...` (docs/DEVELOPMENT.md §3.6) after migrations
+      # have created the role and before this service ever starts —
+      # running the API as a superuser or migration identity is a
+      # production security boundary this file enforces by requiring a
+      # role-scoped URL here, not an accepted interim state.
+      # dnd_ai.config.Settings reads DND_AI_DATABASE_URL specifically —
+      # this is the container-side variable name the application process
+      # actually looks up, not API_DATABASE_URL itself (that name only
+      # exists on the host side, in .env).
+      DND_AI_DATABASE_URL: ${API_DATABASE_URL:?API_DATABASE_URL is required — copy .env.example to .env and set it before starting the api service. Must authenticate as app_read_write, never postgres/migration_runner/migration_owner}
       # API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL are deployment-
       # supplied — point them at whatever standards-compliant OIDC provider
       # this deployment actually uses (see .env.example). All three are

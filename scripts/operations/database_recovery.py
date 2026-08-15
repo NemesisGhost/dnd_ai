@@ -138,6 +138,15 @@ REQUIRED_ROLES: dict[str, bool] = {
     "admin_maintenance": True,
 }
 
+# The five LOGIN roles — the only roles `set-role-password` (below) may ever
+# target. migration_owner is deliberately excluded even though it's a valid
+# role name: it is NOLOGIN by design (see the role-model note in
+# 001_bootstrap.py) and a password on a role that can never authenticate
+# would be meaningless at best; `--role` uses this exact set as its
+# argparse `choices`, so an unrecognized or NOLOGIN role name is rejected
+# by argument parsing itself, before any subprocess runs.
+LOGIN_ROLES: tuple[str, ...] = tuple(name for name, is_login in REQUIRED_ROLES.items() if is_login)
+
 # Extensions 001_bootstrap always installs; btree_gist is installed later
 # (revision 009) and is only expected once a database is at or past that
 # revision, so its absence is reported, not treated as a hard failure.
@@ -228,6 +237,36 @@ def _reject_reserved_db_name(label: str, name: str) -> None:
 def _validate_file_exists(label: str, path: Path) -> None:
     if not path.is_file():
         raise OperationError(f"{label} {path} does not exist or is not a regular file.")
+
+
+def _pg_string_literal(value: str) -> str:
+    """Quote `value` as a PostgreSQL string literal, safe to splice directly
+    into SQL text (never a command-line argument — see `cmd_set_role_password`'s
+    own docstring for why a credential must never appear as one).
+
+    PostgreSQL's `standard_conforming_strings` has defaulted to `on` since
+    9.1 (this project never turns it off, and never uses `E''`-escape
+    strings anywhere), so the only special character in a plain `'...'`
+    literal is the quote character itself — escaped by doubling it, the
+    standard SQL mechanism, not a project-specific convention. A NUL byte
+    can never appear in a PostgreSQL `text` value at all (the server
+    itself rejects it), so one here is refused outright as an unusable
+    password rather than silently truncated or mis-escaped.
+
+    This is deliberately simpler than the `format(..., %L) \\gexec`
+    indirection `_grant_create_on_database` uses elsewhere in this module:
+    that pattern exists so a *database name* — interpolated into an
+    f-string with '%I'` before this function ever runs — can be safely
+    identifier-quoted *server-side* without this script needing its own
+    identifier-quoting rules. A password is only ever used as a string
+    *literal*, never an identifier, so client-side literal-quoting alone
+    (this function) is the complete, correct answer for it — adding a
+    second, server-side quoting layer on top would not close any gap this
+    one leaves open.
+    """
+    if "\x00" in value:
+        raise OperationError("password must not contain a NUL byte — PostgreSQL cannot store one.")
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _validate_compose_selection(
@@ -568,6 +607,67 @@ def check_roles(target: ComposeSelection, connect_user: str) -> tuple[Report, di
     missing = [name for name in REQUIRED_ROLES if name not in found]
     ok, detail = _check(not missing, "all six roles exist", f"missing roles: {', '.join(missing)}")
     report.add("roles exist", ok, detail)
+
+    # LOGIN-role password provisioning (docs/DEVELOPMENT.md §3.6's required
+    # `migrate` -> `set-role-password` -> `up -d api` sequence). Deliberately
+    # `hard=False` (WARN, not FAIL): `bootstrap-roles` calls this function
+    # immediately after creating fresh roles, before an operator has had any
+    # chance to run `set-role-password` yet — a hard failure here would
+    # break that already-passing flow. A standalone `verify-roles` run,
+    # which is what an operator actually runs to confirm the full sequence
+    # completed, still surfaces a missing password as a visible line in the
+    # printed report; it just doesn't fail the exit code `bootstrap-roles`
+    # itself gates on. `pg_authid` (unlike `pg_roles`) exposes the real
+    # `rolpassword` value to a superuser connection — never selected or
+    # printed here, only whether it `IS NOT NULL`.
+    login_role_list = ", ".join(
+        f"'{name}'" for name, is_login in REQUIRED_ROLES.items() if is_login
+    )
+    password_result = compose_run(
+        target,
+        "exec",
+        "-T",
+        "db",
+        "psql",
+        "-U",
+        connect_user,
+        "-d",
+        MAINTENANCE_DATABASE,
+        "-t",
+        "-A",
+        "-F",
+        ",",
+        "-c",
+        f"SELECT rolname, rolpassword IS NOT NULL FROM pg_catalog.pg_authid "
+        f"WHERE rolname IN ({login_role_list}) ORDER BY rolname;",
+        capture=True,
+    )
+    if password_result.returncode != 0:
+        report.add(
+            "LOGIN role password provisioning",
+            False,
+            f"could not query pg_authid (needs a superuser connection): "
+            f"{password_result.stderr.strip()}",
+            hard=False,
+        )
+    else:
+        has_password: dict[str, bool] = {}
+        for line in password_result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            name, _, has_pw = line.partition(",")
+            has_password[name] = has_pw.strip() == "t"
+        for name, is_login in REQUIRED_ROLES.items():
+            if not is_login or name not in has_password:
+                continue
+            ok, detail = _check(
+                has_password[name],
+                "password set",
+                "NO PASSWORD SET — this role cannot authenticate yet; run "
+                f"`set-role-password --role {name}` before anything connects as it",
+            )
+            report.add(f"role {name} password", ok, detail, hard=False)
 
     for name, expect_login in REQUIRED_ROLES.items():
         if name not in found:
@@ -1491,6 +1591,179 @@ def cmd_bootstrap_roles(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# set-role-password
+# ---------------------------------------------------------------------------
+
+
+def _read_role_password(args: argparse.Namespace) -> str:
+    """Resolve the password to set from exactly one of `--password-env-var`/
+    `--password-file` — mirroring `dnd_ai.config.Settings`' own established
+    "environment variable or host-mounted secret file" duality
+    (docs/LOCAL_DEPLOYMENT.md), rather than inventing a third convention
+    for this one script. Never accepted as a bare `--password` flag: a
+    CLI-argument value is visible in `ps`/`docker top`/shell history for as
+    long as this process runs, which is exactly the exposure this function
+    exists to avoid — see `cmd_set_role_password`'s own docstring.
+
+    A file-sourced secret has exactly one trailing newline stripped (the
+    conventional shape a file written by `printf '%s' "$PASSWORD" >
+    secret_file` or a Docker/Compose secrets mount produces) — never a full
+    `.strip()`, which would silently corrupt a password containing
+    meaningful leading/trailing whitespace instead of merely accommodating
+    a text editor's trailing newline.
+    """
+    sources = [name for name in ("password_env_var", "password_file") if getattr(args, name)]
+    if len(sources) != 1:
+        raise OperationError(
+            f"exactly one of --password-env-var/--password-file is required (got {len(sources)})."
+        )
+
+    if args.password_env_var:
+        value = os.environ.get(args.password_env_var)
+        if value is None:
+            raise OperationError(
+                f"--password-env-var names {args.password_env_var!r}, but that environment "
+                "variable is not set in this process's own environment."
+            )
+    else:
+        path = Path(args.password_file)
+        _validate_file_exists("--password-file", path)
+        raw = path.read_text(encoding="utf-8")
+        value = raw[:-2] if raw.endswith("\r\n") else raw[:-1] if raw.endswith("\n") else raw
+
+    if not value:
+        raise OperationError("the resolved password is empty — refusing to set an empty password.")
+    return value
+
+
+def cmd_set_role_password(args: argparse.Namespace) -> int:
+    """Set (or rotate) one LOGIN role's password — the provisioning step
+    that must run after `bootstrap-roles`/`migrate` creates the role and
+    before any service authenticates as it (docs/DEVELOPMENT.md §3.6's
+    required `migrate` -> `set-role-password` -> `up -d api` sequence).
+
+    `--role` is restricted to `LOGIN_ROLES` by `argparse`'s own `choices=`
+    — this can never target `migration_owner` (NOLOGIN by design) or an
+    arbitrary string, so the role name is always one of five known-safe
+    literals by the time any SQL is built, the same trust level this
+    module already extends to its hardcoded schema-name list elsewhere.
+
+    The password itself never appears as a subprocess argument, in this
+    script's own stdout/stderr, or in the announced `argv` line `run()`
+    already prints for every subprocess it invokes: it is read from
+    `--password-env-var`/`--password-file` (`_read_role_password`),
+    escaped as a SQL string literal in this process (`_pg_string_literal`),
+    and reaches PostgreSQL only inside the STDIN payload of a piped `psql`
+    invocation — `run()`/`compose_run()` print the argument list a
+    subprocess was invoked with, never its `input_text`, exactly the
+    pattern `_grant_create_on_database` already established for a
+    non-secret value; here it also keeps a genuinely secret one out of
+    `docker top`/`ps`/shell history, which a `-v name=value` command-line
+    argument would not.
+
+    Docker-ephemeral, not destructive: `ALTER ROLE ... PASSWORD` mutates
+    exactly one role's credential, nothing else — no table, schema, or
+    other role is touched, so this runs no `--confirm-*` gate the way
+    `restore`/`bootstrap-roles` do for genuinely destructive operations.
+    Idempotent and safe to repeat: rerunning with the same or a different
+    password simply overwrites the previous one — the standard rotation
+    path this same command also serves, satisfying "keep migration and
+    application credentials independently rotatable" without a separate
+    "rotate" command that would only duplicate this one.
+    """
+    target = ComposeSelection(
+        project=args.project,
+        env_file=Path(args.env_file),
+        compose_files=tuple(Path(f) for f in args.compose_file),
+    )
+    target.validate_files_exist()
+    password = _read_role_password(args)
+
+    announce("set-role-password", target, role=args.role, connect_user=args.connect_user)
+
+    reachable, detail = check_server_reachable(
+        ComposeTarget(
+            project=target.project,
+            env_file=target.env_file,
+            compose_files=target.compose_files,
+            db_user=args.connect_user,
+            db_name=MAINTENANCE_DATABASE,
+        )
+    )
+    if not reachable:
+        print(f"\npreflight failed — server not reachable: {detail}", file=sys.stderr)
+        return 1
+
+    exists_result = compose_run(
+        target,
+        "exec",
+        "-T",
+        "db",
+        "psql",
+        "-U",
+        args.connect_user,
+        "-d",
+        MAINTENANCE_DATABASE,
+        "-t",
+        "-A",
+        "-c",
+        f"SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname = '{args.role}';",
+        capture=True,
+    )
+    role_status = exists_result.stdout.strip() if exists_result.returncode == 0 else None
+    if role_status is None:
+        print(
+            f"\npreflight failed — could not query for role {args.role!r}: "
+            f"{exists_result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 1
+    if role_status == "":
+        print(
+            f"\npreflight failed — role {args.role!r} does not exist yet. Run `migrate` (which "
+            "applies 001_bootstrap) or `bootstrap-roles` first.",
+            file=sys.stderr,
+        )
+        return 1
+    if role_status != "t":
+        print(
+            f"\npreflight failed — role {args.role!r} exists but is NOLOGIN; refusing to set a "
+            "password on a role that can never authenticate with one.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"\n-- setting password for role {args.role!r} --")
+    sql = f"ALTER ROLE {args.role} WITH LOGIN PASSWORD {_pg_string_literal(password)};"
+    result = compose_run(
+        target,
+        "exec",
+        "-T",
+        "db",
+        "psql",
+        "-U",
+        args.connect_user,
+        "-d",
+        MAINTENANCE_DATABASE,
+        input_text=sql,
+    )
+    if result.returncode != 0:
+        print(f"\nALTER ROLE failed for {args.role!r}.", file=sys.stderr)
+        return 1
+
+    print(
+        f"\nset-role-password: complete. {args.role!r}'s password was set. Nothing above ever "
+        "printed the password itself.\n\n"
+        "Next: build the corresponding application URL yourself (this script never does) — "
+        f"postgresql+psycopg://{args.role}:<percent-encoded password>@db:5432/<database>. "
+        "Percent-encode the password segment if it contains URL-special characters "
+        '(Python: urllib.parse.quote(password, safe="")), the same requirement '
+        ".env.example documents for MIGRATION_DATABASE_URL/API_DATABASE_URL."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # restore
 # ---------------------------------------------------------------------------
 
@@ -2194,6 +2467,44 @@ def build_parser() -> argparse.ArgumentParser:
         "this flag records operator intent, it does not replace that check.",
     )
     p_bootstrap.set_defaults(func=cmd_bootstrap_roles)
+
+    p_set_password = sub.add_parser(
+        "set-role-password",
+        help="Set or rotate one LOGIN role's password (docker-ephemeral: exec against the "
+        "running 'db' container; mutates exactly that one role's credential, nothing else). "
+        "Required after bootstrap-roles/migrate creates a role and before any service "
+        "authenticates as it — see docs/DEVELOPMENT.md §3.6.",
+    )
+    _add_target_args(p_set_password, with_db=False)
+    p_set_password.add_argument(
+        "--role",
+        required=True,
+        choices=LOGIN_ROLES,
+        help="Which LOGIN role to set the password for. migration_owner is never a valid "
+        "choice — it is NOLOGIN by design and can never authenticate with a password.",
+    )
+    p_set_password.add_argument(
+        "--connect-user",
+        default="postgres",
+        help="Superuser (or a role with CREATEROLE) to connect and issue ALTER ROLE as "
+        "(default: postgres).",
+    )
+    password_source = p_set_password.add_mutually_exclusive_group(required=True)
+    password_source.add_argument(
+        "--password-env-var",
+        default=None,
+        help="Name of an environment variable, already set in this process's own "
+        "environment, holding the new password. The password itself is never accepted as "
+        "a command-line flag — that would leave it visible in `ps`/`docker top`/shell "
+        "history for as long as this process runs.",
+    )
+    password_source.add_argument(
+        "--password-file",
+        default=None,
+        help="Host path to a file containing the new password (e.g. a Docker/Compose "
+        "secrets mount) — a single trailing newline is stripped, nothing else.",
+    )
+    p_set_password.set_defaults(func=cmd_set_role_password)
 
     p_restore = sub.add_parser(
         "restore", help="Force-drop/recreate the target database and restore a dump."

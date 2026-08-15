@@ -215,18 +215,18 @@ Leaving that rule open is the failure mode to watch for; close it in the same se
 ```bash
 cp .env.example .env
 # edit .env: uncomment POSTGRES_PASSWORD and set a real value, then set
-# MIGRATION_DATABASE_URL, API_DATABASE_URL, API_OIDC_ISSUER/
-# API_OIDC_AUDIENCE/API_OIDC_JWKS_URL, and DATABASE_URL's password
-# segments to match it
+# MIGRATION_DATABASE_URL, APP_READ_WRITE_PASSWORD, API_DATABASE_URL,
+# API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL, and DATABASE_URL's
+# password segments to match it
 ```
 
-There is deliberately **no fallback password or configuration value** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential, and nothing lets the `api` service silently boot with authentication unconfigured. `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` and `docker compose up -d api` likewise refuse to run without `MIGRATION_DATABASE_URL`/(`API_DATABASE_URL` and all three `API_OIDC_*` variables) respectively. Seven separate settings must be kept in sync by hand — nothing derives one from another:
+There is deliberately **no fallback password or configuration value** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential, and nothing lets the `api` service silently boot with authentication unconfigured (or, per the correction below, running as a database superuser). `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` and `docker compose up -d api` likewise refuse to run without `MIGRATION_DATABASE_URL`/(`API_DATABASE_URL` and all three `API_OIDC_*` variables) respectively. Settings must be kept in sync by hand — nothing derives one from another:
 
 - `POSTGRES_PASSWORD` — read by `docker compose` to initialize PostgreSQL.
 - `MIGRATION_DATABASE_URL` — the complete SQLAlchemy URL the `migrate` service connects with, addressing `db` (the compose service name) over the compose-internal network.
-- `API_DATABASE_URL` — the complete SQLAlchemy URL the `api` service connects with, also addressing `db` over the compose-internal network. Deliberately a separate setting from `MIGRATION_DATABASE_URL`, even though both currently authenticate as the same `postgres` superuser — see `.env.example`'s comment: no least-privileged application database role exists yet.
+- `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` — `api` connects to PostgreSQL as **`app_read_write`**, the DML-only login role `001_bootstrap` creates (`docs/DATABASE_CONVENTIONS.md` §27.1, ADR 0009) — never `postgres`, `migration_runner`, or `migration_owner`. This is a production security boundary, not an interim convenience: `app_read_write` holds `SELECT`/`INSERT`/`UPDATE`/`DELETE` on application tables only — no schema DDL, no role management, no membership in `migration_owner`, not a superuser, not a schema owner, no `CREATEDB`/`CREATEROLE`/`BYPASSRLS`. `001_bootstrap` creates the role with no password, so it cannot authenticate until you provision one — see "Provisioning the `app_read_write` credential" below — then build `API_DATABASE_URL` from that password yourself, the same percent-encoding rule as `MIGRATION_DATABASE_URL`.
 - `API_OIDC_ISSUER`/`API_OIDC_AUDIENCE`/`API_OIDC_JWKS_URL` — the `api` service's OIDC provider settings, required together with no fallback. `compose.yaml` runs `api` with `DND_AI_ENVIRONMENT=production` unconditionally (a fixed value in `compose.yaml` itself — this file is the self-hosted/production deployment topology, not a "local" convenience default), so `dnd_ai.config.Settings` additionally requires the issuer and JWKS URL to be absolute, credential-free, fragment-free **HTTPS** URLs with a host, and the audience to be non-empty with no leading/trailing whitespace — see `.env.example`'s OIDC section for the full rule and why running the API directly on the host (outside Docker) is different.
-- `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below).
+- `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below). This one still authenticates as `postgres` — it is the admin/test connection developers and CI use directly, unrelated to what the containerized `api` service connects as.
 
 `MIGRATION_DATABASE_URL` and `DATABASE_URL` are not assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` by Compose interpolation — that would be plain string substitution, not a URL encoder, and would silently break for a password containing characters that are special in a URL (`@ : / ? # [ ] %` and similar). Build each URL yourself and percent-encode the password segment if it needs one (Python: `urllib.parse.quote(password, safe="")`) — see `.env.example` for a worked example.
 
@@ -250,7 +250,8 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 | `POSTGRES_DB` | `dnd_ai` | Database name |
 | `POSTGRES_PORT` | `5432` | Host port PostgreSQL is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
 | `MIGRATION_DATABASE_URL` | *(none — required for `migrate`)* | The complete SQLAlchemy URL the `migrate` service connects with (host `db`, not `localhost`) — see the required-setup note above for why this is a separate variable, not derived from the three above |
-| `API_DATABASE_URL` | *(none — required for `api`)* | The complete SQLAlchemy URL the `api` service connects with (host `db`, not `localhost`) — a separate variable from `MIGRATION_DATABASE_URL` for the same reason, even though both currently use the same superuser credential |
+| `APP_READ_WRITE_PASSWORD` | *(none — required to provision `app_read_write`)* | Read only by `set-role-password` (below), from this shell's own environment — never by Compose or the application |
+| `API_DATABASE_URL` | *(none — required for `api`)* | The complete SQLAlchemy URL the `api` service connects with (host `db`, not `localhost`) — MUST authenticate as `app_read_write`, never `postgres`/`migration_runner`/`migration_owner` |
 | `API_OIDC_ISSUER` | *(none — required for `api`)* | The `api` service's OIDC issuer URL — must be absolute HTTPS with a host, no embedded credentials, no fragment (`api` always runs with `DND_AI_ENVIRONMENT=production`) |
 | `API_OIDC_AUDIENCE` | *(none — required for `api`)* | The `api` service's expected token audience — non-empty, no leading/trailing whitespace |
 | `API_OIDC_JWKS_URL` | *(none — required for `api`)* | The `api` service's JWKS endpoint — same HTTPS/host/no-credentials/no-fragment rule as `API_OIDC_ISSUER` |
@@ -262,7 +263,25 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 docker compose --profile tools run --rm migrate
 ```
 
-This builds the same `Dockerfile` image the `api` service (and any future worker/adapter service) shares and runs `alembic -c database/alembic.ini upgrade head` against `db` over the compose-internal network — it needs no published host port. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service.
+This builds the same `Dockerfile` image the `api` service (and any future worker/adapter service) shares and runs `alembic -c database/alembic.ini upgrade head` against `db` over the compose-internal network — it needs no published host port. It is not started by plain `docker compose up` — `profiles: ["tools"]` keeps it a deliberate one-off action, not a standing service. This is also what creates all six roles from `001_bootstrap` (§27.1), including `app_read_write` — with no password set yet.
+
+**Provisioning the `app_read_write` credential** — required after `migrate`, before `docker compose up -d api`:
+
+```bash
+export APP_READ_WRITE_PASSWORD=<a real value>   # never commit this; a shell export, not a file
+uv run python scripts/operations/database_recovery.py set-role-password \
+  --role app_read_write --password-env-var APP_READ_WRITE_PASSWORD \
+  --project dnd_ai --env-file .env --compose-file compose.yaml
+```
+
+`app_read_write` is created with no password by `001_bootstrap` — password authentication is refused until this step runs. `set-role-password` reads the new password from `--password-env-var` (a variable already set in *this* process's own shell — never accepted as a `--password` flag, which would leave it visible in `ps`/`docker top`/shell history for as long as the command runs) or `--password-file` (a mounted secret), escapes it as a SQL literal in-process, and sends it to `psql` only over stdin — never a command-line argument, never printed by this script or by Compose. `--role` accepts only the five real LOGIN roles (never `migration_owner`, which is `NOLOGIN` by design). The `ALTER ROLE ... PASSWORD` this issues is idempotent: rerunning it with a new value simply rotates the password, so this is also the rotation path — migration and application credentials stay independently rotatable because they are always two different roles with two different passwords. Once it succeeds, build `API_DATABASE_URL` yourself from the same password (percent-encoded, the same rule `MIGRATION_DATABASE_URL` already follows) and set it in `.env`, then confirm the password actually took before starting `api`:
+
+```bash
+uv run python scripts/operations/database_recovery.py verify-roles \
+  --project dnd_ai --env-file .env --compose-file compose.yaml
+```
+
+This needs only the already-running `db` container (no image build, no application database touched). Its report includes one line per LOGIN role confirming a password is actually set; confirm `app_read_write`'s before proceeding to `docker compose up -d api`. Running the API before this step doesn't create a security hole (password auth still fails closed — the container just can't reach the database at all, so every DB-touching request fails), but it is a functional footgun this sequence, and `verify-roles`' automated check, both exist to prevent.
 
 **Running the API** under Uvicorn, in the same container image:
 
@@ -270,7 +289,7 @@ This builds the same `Dockerfile` image the `api` service (and any future worker
 docker compose up -d api      # dev: also publishes 127.0.0.1:8000 via the override
 ```
 
-Unlike `migrate`, `api` is a standing service with no `profiles:` restriction, so plain `docker compose up` (no service name) starts it alongside `db`. It reaches `db` the same way `migrate` does — over the compose-internal network, no published host port in the base `compose.yaml` — and its container `HEALTHCHECK` polls `/healthz` (process liveness only, deliberately database-independent; see `dnd_ai.api.app`'s own docstring) so `docker compose up --wait`/`docker compose ps` report readiness accurately. `compose.override.yaml` additionally publishes it on `127.0.0.1:${API_PORT:-8000}` for local development, mirroring `db`'s own override; a real self-hosted deployment reaches it only through a reverse proxy instead (not yet built — [§32](PLAN.md#32-local-production-deployment-plan), Phase 14).
+Unlike `migrate`, `api` is a standing service with no `profiles:` restriction, so plain `docker compose up` (no service name) starts it alongside `db` — but see the required ordering above: `migrate` and `set-role-password` must both have already succeeded, since Compose's own `depends_on` has no equivalent mechanism for a `profiles: ["tools"]` one-off job or a step external to Compose entirely. It reaches `db` over the compose-internal network — no published host port in the base `compose.yaml`, same as `migrate` — authenticating as `app_read_write` (never `postgres`/`migration_runner`/`migration_owner` — see the `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` note above; this is a production security boundary, not a documented "future hardening" item). Its container `HEALTHCHECK` polls `/healthz` (process liveness only, deliberately database-independent; see `dnd_ai.api.app`'s own docstring) so `docker compose up --wait`/`docker compose ps` report readiness accurately — it does not, and cannot, detect a missing `app_read_write` password, which is exactly why `verify-roles` is a separate, required step rather than something the healthcheck alone catches. `compose.override.yaml` additionally publishes `api` on `127.0.0.1:${API_PORT:-8000}` for local development, mirroring `db`'s own override; a real self-hosted deployment reaches it only through a reverse proxy instead (not yet built — [§32](PLAN.md#32-local-production-deployment-plan), Phase 14).
 
 `api` always runs with `DND_AI_ENVIRONMENT=production` (a fixed value in `compose.yaml` itself, not read from `.env`) — this file is the self-hosted/production deployment topology, not a "local" convenience default, so it must never be possible to start this service without a real OIDC provider configured and have every authenticated route silently fail closed with a generic 500 instead of the intended 401. `API_OIDC_ISSUER`/`API_OIDC_AUDIENCE`/`API_OIDC_JWKS_URL` are therefore required with no fallback, exactly like `API_DATABASE_URL` — `dnd_ai.config.Settings` also additionally requires the issuer/JWKS URL to be HTTPS in this mode. To exercise an authenticated route locally without standing up a real OIDC provider, run the API directly on the host instead (`uv run uvicorn dnd_ai.api.app:app --reload`, `DND_AI_ENVIRONMENT` left at its "local" default) — see `.env.example`'s OIDC section for the two paths and how their requirements differ.
 
