@@ -26,6 +26,8 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
     make_character,
@@ -40,6 +42,7 @@ from tests.factories import (
     make_membership_role,
     make_relationship_type_capability,
     make_resource_definition,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_ruleset_version_for_world,
@@ -108,43 +111,45 @@ class Fixture:
             connection, self.other_world_id, species_id=other_species_id, name="Borin"
         )
 
-        view_capability_id = lookup_id(
+        self.view_capability_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "campaign.view"
         )
-        canon_edit_id = lookup_id(
+        self.canon_edit_capability_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
-        view_full_capability_id = lookup_id(
+        self.view_full_capability_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "character.view_full"
         )
-        view_summary_capability_id = lookup_id(
+        self.view_summary_capability_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "character.view_summary"
         )
 
         base_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"viewer_{uuid.uuid4().hex[:8]}"
         )
-        make_role_capability(connection, base_role_id, view_capability_id)
+        make_role_capability(connection, base_role_id, self.view_capability_id)
 
         self.gm_user_id = make_user(connection, "Character API GM")
-        gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.gm_user_id
+        )
         gm_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
-        make_role_capability(connection, gm_role_id, view_capability_id)
-        make_role_capability(connection, gm_role_id, canon_edit_id)
-        make_membership_role(connection, gm_membership_id, gm_role_id)
+        make_role_capability(connection, gm_role_id, self.view_capability_id)
+        make_role_capability(connection, gm_role_id, self.canon_edit_capability_id)
+        make_membership_role(connection, self.gm_membership_id, gm_role_id)
 
         # security.character_relationship_types is a global lookup table,
         # not scoped by world — cleanup below deletes both specific rows
         # explicitly by id.
         self.full_view_relationship_type_id = make_character_relationship_type(connection)
         make_relationship_type_capability(
-            connection, self.full_view_relationship_type_id, view_full_capability_id
+            connection, self.full_view_relationship_type_id, self.view_full_capability_id
         )
         self.summary_view_relationship_type_id = make_character_relationship_type(connection)
         make_relationship_type_capability(
-            connection, self.summary_view_relationship_type_id, view_summary_capability_id
+            connection, self.summary_view_relationship_type_id, self.view_summary_capability_id
         )
 
         self.full_view_user_id = make_user(connection, "Character API Full Viewer")
@@ -180,10 +185,10 @@ class Fixture:
         self.no_character_capability_user_id = make_user(
             connection, "Character API No Character Capability"
         )
-        no_cap_membership_id = make_campaign_membership(
+        self.no_character_capability_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.no_character_capability_user_id
         )
-        make_membership_role(connection, no_cap_membership_id, base_role_id)
+        make_membership_role(connection, self.no_character_capability_membership_id, base_role_id)
 
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
@@ -249,6 +254,45 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             cleanup.execute(
                 text("""
                     DELETE FROM security.roles WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            # security.resource_grants/access_group_memberships/
+            # access_groups are created ad hoc by individual tests below
+            # (the workstream 13 correction pass's deny/allow-grant
+            # regression tests), never by the shared Fixture itself —
+            # cleaned up here, scoped by campaign_id, before the
+            # campaign_memberships/access_groups rows they reference are
+            # removed.
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.resource_grants WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                            SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_group_memberships WHERE access_group_id IN (
+                        SELECT access_group_id FROM security.access_groups WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.access_groups WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
                         )
@@ -448,6 +492,115 @@ def test_a_gm_gets_full_tier_without_any_character_specific_relationship(
     assert body["current_hit_points"] == 7
     assert body["conditions"] == [
         {"condition_code": "poisoned", "source_description": "stepped in ooze"}
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Resource-grant overrides on canon.edit (workstream 13 correction pass —
+# dnd_ai.api.access.resolve_character_view_tier previously checked
+# access.has_capability("canon.edit") with no character_id, which skips
+# AccessContext.has_capability's resource-grant lookup entirely: a
+# character-targeted deny could never override a role-derived GM, and a
+# character-targeted allow could never substitute for one. Every check
+# below now passes character_id=character_id, matching the
+# character.view_full/character.view_summary checks either side of it.
+# ---------------------------------------------------------------------------
+
+
+def test_a_character_targeted_deny_for_canon_edit_overrides_role_derived_canon_edit(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.gm_user_id holds role-derived canon.edit — the pre-correction-pass
+    bug ignored a deny targeting this exact character and always granted
+    full access anyway. A parallel character.view_summary allow grant
+    (rather than granting nothing at all) proves the tier resolution falls
+    through to summary specifically, not merely "some check happened to
+    fail" — the deny is honored for canon.edit alone, view_summary still
+    applies on its own merits."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_summary_capability_id,
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["name"] == "Aria"
+    assert body["current_hit_points"] is None
+    assert body["conditions"] is None
+
+
+def test_a_character_targeted_deny_via_access_group_overrides_role_derived_canon_edit(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Identical to the direct-membership deny above, but inherited through
+    security.access_group_memberships rather than granted straight to
+    f.gm_membership_id — proving the character_id fix applies uniformly
+    regardless of how the grant reaches the caller. No compensating allow
+    grant here, so the GM is left with no applicable capability at all for
+    this character and the fixed 404 contract applies."""
+    with postgres_engine.begin() as setup:
+        access_group_id = make_access_group(setup, f.campaign_id)
+        make_access_group_membership(setup, access_group_id, f.gm_membership_id)
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_access_group_id=access_group_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+def test_a_character_targeted_canon_edit_allow_grants_full_access_without_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.no_character_capability_user_id holds campaign.view only — no
+    canon.edit role, no character.view_full/view_summary relationship for
+    this character. AccessContext.has_capability's own allow-grant
+    semantics ("an allow... at the same or broader path" — §19.6) already
+    support this once character_id reaches the canon.edit check; this
+    proves the fix actually wires that through end to end at the API
+    layer."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            character_id=f.character_id,
+            grantee_campaign_membership_id=f.no_character_capability_membership_id,
+            effect="allow",
+        )
+
+    with client_factory(f.no_character_capability_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["current_hit_points"] == 7
+    assert body["conditions"] == [
+        {"condition_code": "poisoned", "source_description": "stepped in ooze"}
+    ]
+    assert body["resources"] == [
+        {"resource_code": "ki_points", "current_amount": 2, "maximum_amount": 4}
     ]
 
 

@@ -206,8 +206,22 @@ def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUI
     do for every other capability check in this codebase. Pure — resolves
     entirely from the already-loaded `AccessContext`, no database access,
     since (unlike `resolve_party_perspective`) there is no further fact
-    about the fictional world to verify here."""
-    if access.has_capability("canon.edit"):
+    about the fictional world to verify here.
+
+    Every check below passes `character_id=character_id` — including the
+    `canon.edit` one, even though role-derived `canon.edit` never needs a
+    resource target to establish its own baseline
+    (`AccessContext.has_capability`'s `baseline` is role-only when
+    `character_id` is omitted). Omitting `character_id` on the `canon.edit`
+    check would skip `has_capability`'s resource-grant lookup entirely — a
+    `security.resource_grants` row explicitly denying `canon.edit` for this
+    exact `character_id` (§19.6: "an explicit deny overrides an allow at
+    the same or broader path") would then never be consulted at all, and a
+    role-derived GM would see full detail regardless. Supplying
+    `character_id` here costs nothing when no such grant exists (baseline
+    still resolves from `role_capabilities` exactly as before) and closes
+    that gap when one does."""
+    if access.has_capability("canon.edit", character_id=character_id):
         return True
     if access.has_capability("character.view_full", character_id=character_id):
         return True
