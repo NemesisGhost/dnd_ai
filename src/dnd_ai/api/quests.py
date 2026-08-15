@@ -62,6 +62,18 @@ with the command it describes. `entity_id` is the owning quest's
 row this change concerns (`audit.change_log.entity_id`'s documented
 contract, migration 007) — never `quest_objective_id`, which is a
 `narrative.quest_objectives` row with no entity identity of its own.
+
+Phase 10 workstream 14 added the read side over the same URL prefix:
+`GET /campaigns/{campaign_id}/quests/{quest_id}`
+(`dnd_ai.queries.quest.get_quest_view`), requiring only `campaign.view`
+(the read-only counterpart to every command route's `canon.edit`, matching
+`dnd_ai.api.dungeon`/`.characters`). Audience filtering and party-
+perspective authorization (`dnd_ai.api.access.resolve_party_perspective`,
+optional `character_id`/`party_id` query parameters) mirror `dnd_ai.api.
+dungeon`'s exactly — see `dnd_ai.queries.quest`'s own docstring for how
+`narrative.quest_objectives.visibility_policy` drives it. This route is a
+read: no idempotency key, no `audit.change_log` row, for the same reasons
+`dnd_ai.api.dungeon`'s read endpoint has neither.
 """
 
 import uuid
@@ -73,8 +85,10 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.quests import _advance_objective_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.quest import get_quest_view
 
-from .access import require_campaign_capability
+from ._shared import timeline_world_id
+from .access import require_campaign_capability, resolve_party_perspective
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
@@ -87,6 +101,10 @@ router = APIRouter(tags=["quests"])
 # why this route requires it rather than a narrower, character-scoped
 # capability.
 _QUEST_MANAGE_CAPABILITY = "canon.edit"
+
+# The read-only counterpart to _QUEST_MANAGE_CAPABILITY — see this
+# module's docstring.
+_QUEST_VIEW_CAPABILITY = "campaign.view"
 
 # audit.change_log.command_name / the idempotency store's fingerprinted
 # command_name — one literal per route, never derived from request data.
@@ -121,6 +139,33 @@ class AdvanceObjectiveResponse(BaseModel):
     event_id: uuid.UUID
     previous_status_code: str | None
     new_status_code: str
+
+
+class QuestObjectiveResponse(BaseModel):
+    quest_objective_id: uuid.UUID
+    name: str
+    description: str | None
+    requirement_level: str
+    completion_mode: str
+    visibility_policy: str
+    quantity_required: int | None
+    status_code: str | None
+
+
+class QuestStageResponse(BaseModel):
+    quest_stage_id: uuid.UUID
+    name: str
+    description: str | None
+    sequence_number: int
+    stage_type: str
+    objectives: list[QuestObjectiveResponse]
+
+
+class QuestResponse(BaseModel):
+    quest_id: uuid.UUID
+    name: str
+    status_code: str | None
+    stages: list[QuestStageResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -208,3 +253,68 @@ def advance_objective_endpoint(
         )
 
     return response
+
+
+@router.get(
+    "/campaigns/{campaign_id}/quests/{quest_id}",
+    response_model=QuestResponse,
+    status_code=200,
+)
+def get_quest_endpoint(
+    campaign_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_QUEST_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    character_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
+) -> QuestResponse:
+    include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY)
+    authorized_party_id = (
+        None
+        if include_hidden
+        else resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+    )
+
+    view = get_quest_view(
+        connection,
+        quest_id=quest_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        party_id=authorized_party_id,
+        include_hidden=include_hidden,
+    )
+
+    return QuestResponse(
+        quest_id=view.quest_id,
+        name=view.name,
+        status_code=view.status_code,
+        stages=[
+            QuestStageResponse(
+                quest_stage_id=stage.quest_stage_id,
+                name=stage.name,
+                description=stage.description,
+                sequence_number=stage.sequence_number,
+                stage_type=stage.stage_type,
+                objectives=[
+                    QuestObjectiveResponse(
+                        quest_objective_id=o.quest_objective_id,
+                        name=o.name,
+                        description=o.description,
+                        requirement_level=o.requirement_level,
+                        completion_mode=o.completion_mode,
+                        visibility_policy=o.visibility_policy,
+                        quantity_required=o.quantity_required,
+                        status_code=o.status_code,
+                    )
+                    for o in stage.objectives
+                ],
+            )
+            for stage in view.stages
+        ],
+    )
