@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id
+from ._shared import lookup_id, validate_session_campaign
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,54 @@ def _insert_event_row(
     return event_id
 
 
+def _record_event_impl(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    event_type_code: str,
+    name: str,
+    event_status_code: str = "recorded",
+    details: str | None = None,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    participants: tuple[EventParticipant, ...] = (),
+    cause_event_id: uuid.UUID | None = None,
+    cause_interaction_id: uuid.UUID | None = None,
+    cause_description: str | None = None,
+) -> RecordEventResult:
+    """The actual work of record_event(), on a connection the caller already
+    has open — see dnd_ai.commands.encounters._resolve_combat_turn_impl's
+    docstring for the composable-implementation/public-wrapper pattern this
+    mirrors. A caller that owns the surrounding transaction itself (e.g. the
+    API layer's per-request connection, or resolve_check() composing this
+    alongside its own state change) calls this directly.
+
+    Validates a caller-supplied session_id against campaign_id
+    (dnd_ai.commands._shared.validate_session_campaign) before writing
+    anything — the same guard every other command in this package applies
+    to its own caller-supplied session_id."""
+    validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+    event_id = _insert_event_row(
+        connection,
+        world_id=world_id,
+        timeline_id=timeline_id,
+        world_time_id=world_time_id,
+        event_type_code=event_type_code,
+        event_status_code=event_status_code,
+        details=details,
+        name=name,
+        campaign_id=campaign_id,
+        session_id=session_id,
+        participants=participants,
+        cause_event_id=cause_event_id,
+        cause_interaction_id=cause_interaction_id,
+        cause_description=cause_description,
+    )
+    return RecordEventResult(event_id=event_id)
+
+
 def record_event(
     engine: Engine,
     *,
@@ -165,12 +213,12 @@ def record_event(
     cause_description: str | None = None,
 ) -> RecordEventResult:
     """Record a standalone narrative event — the `RecordEvent` command from
-    docs/ENTITY_LIFECYCLE.md §21. Owns its own transaction: a caller with
-    other state changes to commit alongside the event (e.g. resolve_check)
-    should use _insert_event_row directly inside its own transaction instead.
-    """
+    docs/ENTITY_LIFECYCLE.md §21. Public convenience API: opens and commits
+    its own transaction. See _record_event_impl() for the composable form a
+    caller with its own transaction (e.g. an API command endpoint, or
+    resolve_check()'s own use of _insert_event_row directly) uses instead."""
     with engine.begin() as connection:
-        event_id = _insert_event_row(
+        return _record_event_impl(
             connection,
             world_id=world_id,
             timeline_id=timeline_id,
@@ -186,4 +234,3 @@ def record_event(
             cause_interaction_id=cause_interaction_id,
             cause_description=cause_description,
         )
-    return RecordEventResult(event_id=event_id)

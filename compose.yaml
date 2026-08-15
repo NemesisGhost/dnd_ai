@@ -18,17 +18,46 @@
 #     characters can be percent-encoded correctly instead of being
 #     restricted to a "safe" subset. See .env.example.
 #
-# Usage:
-#   cp .env.example .env              # then set POSTGRES_PASSWORD and MIGRATION_DATABASE_URL — both required
-#   docker compose up -d db           # start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
-#   docker compose --profile tools run --rm migrate   # apply migrations
+# Usage — this exact order matters, see the `api` service's own comment
+# below for why steps 3-4 must both complete before step 5:
+#   cp .env.example .env              # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL — all required
+#   docker compose up -d db           # 1. start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
+#   docker compose --profile tools run --rm migrate   # 2. apply migrations (creates app_read_write, among five other roles)
+#   uv run python scripts/operations/database_recovery.py set-role-password \  # 3. provision app_read_write's password
+#     --role app_read_write --password-env-var APP_READ_WRITE_PASSWORD \
+#     --project dnd_ai --env-file .env --compose-file compose.yaml
+#   # 4. build API_DATABASE_URL from that password (percent-encoded) and set it in .env — see .env.example
+#   docker compose up -d api          # 5. start the FastAPI application under Uvicorn (dev: also publishes 127.0.0.1:8000 via the override)
 #   docker compose down               # stop; add -v to also drop the data volume
 #
-# There is no "api" service yet: src/dnd_ai/api has no committed source
-# (docs/DEVELOPMENT.md §2), so there is nothing runnable to containerize
-# beyond the database toolchain in the `migrate` service below. Add an
-# "api" service here, built from the same Dockerfile with a different
-# command, once that module exists (docs/PLAN.md §31.3).
+# `api` (below) is the FastAPI application (src/dnd_ai/api) under Uvicorn —
+# the same image the `migrate` job already builds, with a different
+# command selecting this role (docs/DEVELOPMENT.md §2, PLAN.md §31.3). It
+# always runs with DND_AI_ENVIRONMENT=production (a fixed literal, not a
+# variable — see that service's own comment below) and therefore requires
+# a real, HTTPS OIDC provider configured via API_OIDC_ISSUER/
+# API_OIDC_AUDIENCE/API_OIDC_JWKS_URL; there is no way to start this
+# service without one. It also always connects to PostgreSQL as
+# app_read_write, never postgres/migration_runner/migration_owner (see
+# that service's DND_AI_DATABASE_URL comment below) — a role with no
+# schema-DDL, role-management, or migration_owner-membership privilege at
+# all, only DML on application tables. This service's `depends_on: db:
+# condition: service_healthy` guarantees PostgreSQL itself is reachable
+# before `api` starts, but Compose has no equivalent built-in mechanism
+# for a `profiles: ["tools"]` one-off job like `migrate`, or for a step
+# external to Compose entirely like `set-role-password` — steps 2 and 3 in
+# the Usage sequence above are a documented, must-run-first manual
+# sequence, the same way `migrate` already was before this correction pass
+# added `set-role-password` to it. `verify-roles` (same script) reports,
+# per LOGIN role, whether its password has actually been set — run it
+# after step 3 to confirm before proceeding to step 5, and periodically
+# thereafter to confirm the deployment stayed correctly provisioned. Like
+# `db`, `api` publishes no host port in this base file by design
+# (compose.override.yaml adds a 127.0.0.1-only one for local development);
+# a real self-hosted deployment reaches it only through a reverse proxy —
+# not yet built here, see PLAN.md §32 (Phase 14). No background
+# worker/Discord-adapter service exists yet either; add one the same way
+# once that role has committed source to run.
 
 services:
   db:
@@ -74,10 +103,10 @@ services:
       start_period: 10s
 
   # One-off job, not started by `docker compose up`. Runs Alembic to head
-  # against the `db` service, using the same image the future API/worker/
-  # adapter services will share (docs/DEVELOPMENT.md §2). Reaches `db` over
-  # the compose-internal network by service name — this needs no published
-  # host port.
+  # against the `db` service, using the same image the `api` service below
+  # (and any future worker/adapter service) shares (docs/DEVELOPMENT.md §2).
+  # Reaches `db` over the compose-internal network by service name — this
+  # needs no published host port.
   migrate:
     build:
       context: .
@@ -99,6 +128,99 @@ services:
       db:
         condition: service_healthy
     command: ["alembic", "-c", "database/alembic.ini", "upgrade", "head"]
+
+  # The FastAPI application (src/dnd_ai/api) under Uvicorn (docs/PLAN.md
+  # Phase 10 deliverable "a FastAPI application entry point executed by
+  # Uvicorn and containerized as a portable service"; ADR 0013). Built from
+  # the same image `migrate` uses — the entrypoint stays `uv run --no-sync`
+  # (Dockerfile); only `command:` below selects this role, the same
+  # mechanism `migrate`'s own `command:` already uses. Reaches `db` over
+  # the compose-internal network by service name, exactly like `migrate` —
+  # this service needs no published host port either, and publishes none
+  # here by design (see this file's header comment); a real self-hosted
+  # deployment sits behind a reverse proxy instead, not yet built (PLAN.md
+  # §32, Phase 14). Started by plain `docker compose up` (no `profiles:`
+  # restriction) since, unlike `migrate`, it is a standing service, not a
+  # one-off job.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "dnd_ai.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # DND_AI_ENVIRONMENT is a fixed literal, never a variable — this file
+      # *is* the self-hosted/production deployment topology (this file's
+      # own header comment: "the production/self-hosted default"), so the
+      # container must never be able to silently boot in dnd_ai.config's
+      # "local" default merely because a host-side variable was left unset.
+      # "local" skips loading OIDC settings and disables production's
+      # fail-closed/HTTPS validation (dnd_ai.config.Settings) — running
+      # this container that way previously let it pass /healthz and
+      # /readyz while every authenticated route failed closed with a
+      # generic 500 (dnd_ai.api.auth.get_jwks_client()'s own assertion that
+      # oidc_jwks_url is configured), not the intended 401. Forcing
+      # "production" here is what makes the three DND_AI_OIDC_* variables
+      # below actually required — see dnd_ai.config's own model_validator.
+      DND_AI_ENVIRONMENT: production
+      # API_DATABASE_URL is a complete SQLAlchemy URL you supply yourself
+      # (see .env.example) — same reasoning as MIGRATION_DATABASE_URL above
+      # (percent-encode the password segment; never assembled from
+      # POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB by Compose
+      # interpolation), but a deliberately distinct setting and, unlike
+      # MIGRATION_DATABASE_URL, a deliberately DIFFERENT identity: this URL
+      # MUST authenticate as app_read_write (001_bootstrap's DML-only
+      # login role — SELECT/INSERT/UPDATE/DELETE on application tables,
+      # no schema DDL, no role management, no membership in
+      # migration_owner) — NEVER postgres, migration_runner, or
+      # migration_owner. Provision app_read_write's password with
+      # `scripts/operations/database_recovery.py set-role-password --role
+      # app_read_write ...` (docs/DEVELOPMENT.md §3.6) after migrations
+      # have created the role and before this service ever starts —
+      # running the API as a superuser or migration identity is a
+      # production security boundary this file enforces by requiring a
+      # role-scoped URL here, not an accepted interim state.
+      # dnd_ai.config.Settings reads DND_AI_DATABASE_URL specifically —
+      # this is the container-side variable name the application process
+      # actually looks up, not API_DATABASE_URL itself (that name only
+      # exists on the host side, in .env).
+      DND_AI_DATABASE_URL: ${API_DATABASE_URL:?API_DATABASE_URL is required — copy .env.example to .env and set it before starting the api service. Must authenticate as app_read_write, never postgres/migration_runner/migration_owner}
+      # API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL are deployment-
+      # supplied — point them at whatever standards-compliant OIDC provider
+      # this deployment actually uses (see .env.example). All three are
+      # required together with no fallback default, matching
+      # dnd_ai.config.Settings' own production all-or-nothing rule — a
+      # partially configured OIDC provider can never actually serve an
+      # authenticated route, so Compose refuses to start rather than let
+      # the container boot into that state. DND_AI_ENVIRONMENT=production
+      # above additionally requires dnd_ai.config to reject a non-HTTPS
+      # issuer/JWKS URL, embedded credentials, or a URL fragment — see that
+      # module's own docstring for the full validation this enforces.
+      DND_AI_OIDC_ISSUER: ${API_OIDC_ISSUER:?API_OIDC_ISSUER is required — copy .env.example to .env and set it to your OIDC provider's issuer URL (HTTPS) before starting the api service}
+      DND_AI_OIDC_AUDIENCE: ${API_OIDC_AUDIENCE:?API_OIDC_AUDIENCE is required — copy .env.example to .env and set it to your OIDC provider's audience before starting the api service}
+      DND_AI_OIDC_JWKS_URL: ${API_OIDC_JWKS_URL:?API_OIDC_JWKS_URL is required — copy .env.example to .env and set it to your OIDC provider's JWKS URL (HTTPS) before starting the api service}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # /healthz is deliberately DB-independent (dnd_ai.api.app's own
+      # docstring) — cheap process liveness only, not a readiness probe.
+      # `python` resolves via this image's own PATH (Dockerfile: `PATH=
+      # "/app/.venv/bin:${PATH}"`) without needing `uv run`, since a Docker
+      # HEALTHCHECK exec bypasses ENTRYPOINT entirely; no curl/wget exists
+      # in this python:3.12-slim-bookworm base image, so this uses only the
+      # Python standard library already available in the image.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
   # Persistent by default — normal self-hosted use expects data to survive

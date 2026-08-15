@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from dnd_ai.config import (
     _APPLICATION_SETTINGS_ENV_VARS,
     _NON_APPLICATION_DND_AI_ENV_VARS,
+    PRODUCTION_REQUIRED_DATABASE_ROLE,
     Settings,
     _load_settings,
     _reject_unrecognized_env_vars,
@@ -109,13 +110,15 @@ def test_production_without_database_url_raises(monkeypatch: pytest.MonkeyPatch)
 
 def test_production_with_prefixed_database_url_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
-    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
     settings = Settings()
     assert settings.environment == "production"
-    assert settings.database_url == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
+    assert settings.database_url == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
 
 
 def test_production_with_only_legacy_database_url_still_raises(
@@ -129,6 +132,112 @@ def test_production_with_only_legacy_database_url_still_raises(
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://legacy:legacy@dbhost/dnd_ai")
     with pytest.raises(ValidationError, match="DND_AI_DATABASE_URL"):
         Settings()
+
+
+# ---------------------------------------------------------------------------
+# database_url identity — production must connect as app_read_write, never
+# postgres/migration_runner/migration_owner (in-process). This is the
+# static half of the enforcement only: it proves what the configured URL
+# *claims*; tests/database/test_database_identity_enforcement.py proves
+# what a real connection actually authenticates as.
+# ---------------------------------------------------------------------------
+
+
+def test_production_rejects_the_postgres_superuser_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://postgres:prod@dbhost/dnd_ai")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="app_read_write"):
+        Settings()
+
+
+def test_production_rejects_the_migration_runner_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://migration_runner:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="app_read_write"):
+        Settings()
+
+
+def test_production_rejects_the_migration_owner_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """migration_owner is NOLOGIN (001_bootstrap) so a real connection could
+    never actually use it — this only proves the URL-identity check itself
+    rejects the name, independent of whether PostgreSQL would also refuse
+    the login."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://migration_owner:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="app_read_write"):
+        Settings()
+
+
+def test_production_accepts_the_app_read_write_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert PRODUCTION_REQUIRED_DATABASE_ROLE == "app_read_write"
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    settings = Settings()
+    assert settings.database_url == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+
+
+def test_the_identity_check_does_not_apply_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """local/test intentionally connect as the postgres admin credential —
+    this check must never fire there."""
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://postgres:postgres@dbhost/db")
+    settings = Settings()  # must not raise
+    assert settings.environment == "local"
+
+
+def test_production_rejects_an_unparseable_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv("DND_AI_DATABASE_URL", "not a valid url::: at all")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError, match="DND_AI_DATABASE_URL"):
+        Settings()
+
+
+def test_the_identity_check_failure_never_leaks_the_url_or_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement: the failure contract must not leak credentials or the
+    database URL — only the fixed expected-role literal may appear."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL",
+        "postgresql+psycopg://postgres:super-secret-password@dbhost/dnd_ai",
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    message = str(excinfo.value)
+    assert "super-secret-password" not in message
+    assert "dbhost" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +255,9 @@ def test_oidc_settings_default_to_none_outside_production() -> None:
 
 def test_production_without_oidc_settings_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
-    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
     with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
         Settings()
 
@@ -163,7 +274,9 @@ def test_production_with_partial_oidc_settings_raises(
     present_fields: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
-    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
     for name, value in present_fields.items():
         monkeypatch.setenv(name, value)
     with pytest.raises(ValidationError):
@@ -172,7 +285,9 @@ def test_production_with_partial_oidc_settings_raises(
 
 def test_production_with_all_oidc_settings_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
-    monkeypatch.setenv("DND_AI_DATABASE_URL", "postgresql+psycopg://prod:prod@dbhost/dnd_ai")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/.well-known/jwks.json")
@@ -192,7 +307,7 @@ def test_production_with_all_oidc_settings_succeeds(monkeypatch: pytest.MonkeyPa
 
 _PRODUCTION_ENV = {
     "DND_AI_ENVIRONMENT": "production",
-    "DND_AI_DATABASE_URL": "postgresql+psycopg://prod:prod@dbhost/dnd_ai",
+    "DND_AI_DATABASE_URL": "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai",
 }
 
 
@@ -540,7 +655,7 @@ def test_production_succeeds_with_mounted_secret_file(tmp_path: Path) -> None:
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
     (secrets_dir / "dnd_ai_database_url").write_text(
-        "postgresql+psycopg://prod:prod@dbhost/dnd_ai", encoding="utf-8"
+        "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai", encoding="utf-8"
     )
     result = _run_config_import(
         {
@@ -554,7 +669,7 @@ def test_production_succeeds_with_mounted_secret_file(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["database_url"] == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
+    assert payload["database_url"] == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +691,7 @@ def test_process_environment_selects_production_env_file_is_ignored(tmp_path: Pa
     result = _run_config_import(
         {
             "DND_AI_ENVIRONMENT": "production",
-            "DND_AI_DATABASE_URL": "postgresql+psycopg://from-real-env:from-real-env@dbhost/dnd_ai",
+            "DND_AI_DATABASE_URL": "postgresql+psycopg://app_read_write:from-real-env@dbhost/dnd_ai",
             "DND_AI_OIDC_ISSUER": "https://idp.example",
             "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
             "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
@@ -586,7 +701,7 @@ def test_process_environment_selects_production_env_file_is_ignored(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["database_url"] == (
-        "postgresql+psycopg://from-real-env:from-real-env@dbhost/dnd_ai"
+        "postgresql+psycopg://app_read_write:from-real-env@dbhost/dnd_ai"
     )
 
 
@@ -622,7 +737,7 @@ def test_production_with_real_environment_plus_mounted_secret_is_accepted(
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
     (secrets_dir / "dnd_ai_database_url").write_text(
-        "postgresql+psycopg://prod:prod@dbhost/dnd_ai", encoding="utf-8"
+        "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai", encoding="utf-8"
     )
     result = _run_config_import(
         {
@@ -637,7 +752,7 @@ def test_production_with_real_environment_plus_mounted_secret_is_accepted(
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["environment"] == "production"
-    assert payload["database_url"] == "postgresql+psycopg://prod:prod@dbhost/dnd_ai"
+    assert payload["database_url"] == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
 
 
 def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) -> None:

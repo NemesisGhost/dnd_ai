@@ -100,6 +100,27 @@ or a crash-orphaned 'in_progress' (the advisory lock does not survive a
 session dying before it releases) retries under the same sync_jobs row,
 logging an additional integration.delivery_attempts row rather than a new
 job.
+
+HTTP exposure (docs/PLAN.md Phase 10, `dnd_ai.api.integration`):
+register_external_system and map_external_identifier are reachable over
+HTTP as of Phase 10 workstream 10 — both split into a connection-taking
+`_..._impl` plus a public engine-based wrapper below, the same composition
+every other command module in this package uses, so the API layer's
+per-request transaction can run either directly. apply_foundry_combat_sync
+deliberately has no HTTP endpoint yet: its own reasoning above already
+explains why it runs with no authoritative campaign_id to assert against
+("Phase 11 (Foundry MVP) is where Foundry users get mapped to
+authenticated platform users and campaign membership, at which point this
+function's caller ... would be the place to resolve and pass an
+authoritative campaign_id to assert against") — and separately, its
+three-transaction, session-scoped-advisory-lock design (this module's own
+docstring above) is deliberately incompatible with the one-transaction-
+per-request model every other API command endpoint relies on for atomic
+auditing, so giving it an endpoint now would mean either breaking that
+design or writing its audit.change_log row in a second, non-atomic
+transaction after the fact. Both are left for Phase 11, when a real
+Foundry-adapter caller and its own authorization/transaction shape are
+designed together rather than retrofitted here.
 """
 
 import contextlib
@@ -111,6 +132,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import Connection, Engine, text
+
+from dnd_ai.domain.errors import DomainAuthorizationError
 
 from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
 
@@ -134,6 +157,21 @@ class ConflictingSyncPayloadError(ValueError):
     attempt completed, failed, or crashed mid-flight."""
 
 
+class ExternalSystemNotFoundError(DomainAuthorizationError):
+    """Raised by `_map_external_identifier_impl()` when `expected_world_id`
+    is supplied and `external_system_id` either does not exist or belongs
+    to a different world. `integration.enforce_external_identifier_world()`
+    (revision 079) only guarantees `external_system_id` and `entity_id`
+    agree with *each other* — it says nothing about whether either belongs
+    to the *caller's own* authorized world, so an API caller authorized
+    only for one campaign/world could otherwise target an
+    `external_system_id` belonging to an entirely different world it has no
+    access to. Mirrors `dnd_ai.commands.encounters.EncounterNotFoundError`'s
+    reasoning: confirming a resource exists but belongs to a different
+    world would itself be a disclosure to a caller only authorized for the
+    world it expected, so both cases raise this identical, fixed 404."""
+
+
 @dataclass(frozen=True)
 class RegisterExternalSystemResult:
     external_system_id: uuid.UUID
@@ -142,6 +180,7 @@ class RegisterExternalSystemResult:
 @dataclass(frozen=True)
 class MapExternalIdentifierResult:
     external_identifier_id: uuid.UUID
+    world_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -149,6 +188,38 @@ class ApplyFoundryCombatSyncResult:
     sync_job_id: uuid.UUID
     combat_result: ResolveCombatTurnResult
     replayed: bool
+
+
+def _register_external_system_impl(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    system_type: str,
+    display_name: str,
+    external_reference: str | None = None,
+) -> RegisterExternalSystemResult:
+    """The actual work of register_external_system(), on a connection the
+    caller already has open — see dnd_ai.commands.encounters.
+    _resolve_combat_turn_impl's docstring for the composable-
+    implementation/public-wrapper pattern this mirrors. A caller that owns
+    the surrounding transaction itself (e.g. the API layer's per-request
+    connection) calls this directly."""
+    external_system_id = connection.execute(
+        text("""
+            INSERT INTO integration.external_systems
+                (world_id, system_type, display_name, external_reference)
+            VALUES (:world, :type, :name, :reference)
+            RETURNING external_system_id
+        """),
+        {
+            "world": world_id,
+            "type": system_type,
+            "name": display_name,
+            "reference": external_reference,
+        },
+    ).scalar()
+    assert isinstance(external_system_id, uuid.UUID)
+    return RegisterExternalSystemResult(external_system_id=external_system_id)
 
 
 def register_external_system(
@@ -159,23 +230,96 @@ def register_external_system(
     display_name: str,
     external_reference: str | None = None,
 ) -> RegisterExternalSystemResult:
+    """Register an external system (e.g. a Foundry world, a Discord guild)
+    for a world. Public convenience API: opens and commits its own
+    transaction. See _register_external_system_impl() for the composable
+    form a caller with its own transaction (e.g. an API command endpoint)
+    uses instead."""
     with engine.begin() as connection:
-        external_system_id = connection.execute(
-            text("""
-                INSERT INTO integration.external_systems
-                    (world_id, system_type, display_name, external_reference)
-                VALUES (:world, :type, :name, :reference)
-                RETURNING external_system_id
-            """),
-            {
-                "world": world_id,
-                "type": system_type,
-                "name": display_name,
-                "reference": external_reference,
-            },
-        ).scalar()
-        assert isinstance(external_system_id, uuid.UUID)
-    return RegisterExternalSystemResult(external_system_id=external_system_id)
+        return _register_external_system_impl(
+            connection,
+            world_id=world_id,
+            system_type=system_type,
+            display_name=display_name,
+            external_reference=external_reference,
+        )
+
+
+def _external_system_world(connection: Connection, external_system_id: uuid.UUID) -> uuid.UUID:
+    value = connection.execute(
+        text("SELECT world_id FROM integration.external_systems WHERE external_system_id = :s"),
+        {"s": external_system_id},
+    ).scalar()
+    if value is None:
+        raise ExternalSystemNotFoundError(f"external system {external_system_id} does not exist")
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _map_external_identifier_impl(
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    entity_id: uuid.UUID,
+    external_kind: str,
+    external_id: str,
+    expected_world_id: uuid.UUID | None = None,
+) -> MapExternalIdentifierResult:
+    """The actual work of map_external_identifier(), on a connection the
+    caller already has open — see dnd_ai.commands.encounters.
+    _resolve_combat_turn_impl's docstring for the composable-
+    implementation/public-wrapper pattern this mirrors. A caller that owns
+    the surrounding transaction itself (e.g. the API layer's per-request
+    connection) calls this directly.
+
+    Create or refresh the mapping between an internal entity and its
+    representation in an external system. Upserts on
+    ux_external_identifiers_system_kind_external so re-registering the same
+    external object is idempotent.
+
+    expected_world_id, when supplied, asserts external_system_id belongs to
+    that world before writing anything (_external_system_world, raising
+    ExternalSystemNotFoundError otherwise) — external_system_id's own
+    world_id is immutable once created (no command in this codebase ever
+    reparents an integration.external_systems row to a different world), so
+    a plain SELECT suffices here; unlike dnd_ai.commands.encounters.
+    _lock_encounter, there is no concurrent-mutation race this check needs
+    a row lock to close. expected_world_id=None (every direct/
+    administrative caller today) skips only this assertion, the same
+    "unscoped mode" dnd_ai.commands.encounters._lock_encounter's own
+    expected_campaign_id=None already establishes."""
+    world_id: uuid.UUID | None = None
+    if expected_world_id is not None:
+        world_id = _external_system_world(connection, external_system_id)
+        if world_id != expected_world_id:
+            raise ExternalSystemNotFoundError(
+                f"external system {external_system_id} belongs to world {world_id!r}, "
+                f"not {expected_world_id!r}"
+            )
+
+    value = connection.execute(
+        text("""
+            INSERT INTO integration.external_identifiers
+                (external_system_id, entity_id, external_kind, external_id, last_synced_at)
+            VALUES (:system, :entity, :kind, :external, now())
+            ON CONFLICT (external_system_id, external_kind, external_id)
+            DO UPDATE SET entity_id = EXCLUDED.entity_id, last_synced_at = now(),
+                          updated_at = now()
+            RETURNING external_identifier_id
+        """),
+        {
+            "system": external_system_id,
+            "entity": entity_id,
+            "kind": external_kind,
+            "external": external_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+
+    if world_id is None:
+        world_id = _external_system_world(connection, external_system_id)
+
+    return MapExternalIdentifierResult(external_identifier_id=value, world_id=world_id)
 
 
 def map_external_identifier(
@@ -185,31 +329,22 @@ def map_external_identifier(
     entity_id: uuid.UUID,
     external_kind: str,
     external_id: str,
+    expected_world_id: uuid.UUID | None = None,
 ) -> MapExternalIdentifierResult:
     """Create or refresh the mapping between an internal entity and its
-    representation in an external system. Upserts on
-    ux_external_identifiers_system_kind_external so re-registering the same
-    external object is idempotent."""
+    representation in an external system. Public convenience API: opens and
+    commits its own transaction. See _map_external_identifier_impl() for
+    the composable form a caller with its own transaction (e.g. an API
+    command endpoint) uses instead."""
     with engine.begin() as connection:
-        value = connection.execute(
-            text("""
-                INSERT INTO integration.external_identifiers
-                    (external_system_id, entity_id, external_kind, external_id, last_synced_at)
-                VALUES (:system, :entity, :kind, :external, now())
-                ON CONFLICT (external_system_id, external_kind, external_id)
-                DO UPDATE SET entity_id = EXCLUDED.entity_id, last_synced_at = now(),
-                              updated_at = now()
-                RETURNING external_identifier_id
-            """),
-            {
-                "system": external_system_id,
-                "entity": entity_id,
-                "kind": external_kind,
-                "external": external_id,
-            },
-        ).scalar()
-        assert isinstance(value, uuid.UUID)
-    return MapExternalIdentifierResult(external_identifier_id=value)
+        return _map_external_identifier_impl(
+            connection,
+            external_system_id=external_system_id,
+            entity_id=entity_id,
+            external_kind=external_kind,
+            external_id=external_id,
+            expected_world_id=expected_world_id,
+        )
 
 
 def _canonical_payload(

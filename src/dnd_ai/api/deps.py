@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import Depends, Header
-from sqlalchemy import Connection, Engine, create_engine
+from sqlalchemy import Connection, Engine, create_engine, text
 
 from dnd_ai.config import settings
 
@@ -50,6 +50,51 @@ def dispose_engine() -> None:
     if _engine is not None:
         _engine.dispose()
         _engine = None
+
+
+class DatabaseIdentityError(RuntimeError):
+    """Raised when a live database connection does not authenticate as the
+    exact role production requires. `dnd_ai.config.Settings` already
+    refuses to start if the *configured* `DND_AI_DATABASE_URL` doesn't
+    name that role, but a URL string is only a claim about identity, not
+    proof of it — this proves what PostgreSQL actually granted the
+    session, catching a connection pooler/proxy that maps the credential
+    to a different login role, or an implicit/explicit `SET ROLE` that
+    changes the effective identity after authentication. Carries a fixed,
+    non-disclosing message only — matching `dnd_ai.api.app.readyz`'s own
+    established discipline of never logging a driver exception's message
+    or traceback, since either can embed the DSN, host, or username; never
+    the database URL or password."""
+
+
+def _check_database_identity(connection: Connection, *, expected_role: str) -> None:
+    """`session_user` is who authenticated the connection; `current_user`
+    is the role currently in effect for privilege checks — normally the
+    same, but an implicit or explicit `SET ROLE` (or `SET SESSION
+    AUTHORIZATION`) can make them diverge. Checking only one of the two
+    would let that diversion slip past unnoticed, so both must equal
+    `expected_role`."""
+    row = connection.execute(text("SELECT session_user, current_user")).one()
+    session_user, current_user = row[0], row[1]
+    if session_user != expected_role or current_user != expected_role:
+        raise DatabaseIdentityError(
+            f"Database connection is not authenticated as {expected_role!r} "
+            "(checked both session_user and current_user) — refusing to start."
+        )
+
+
+def verify_database_identity(engine: Engine, *, expected_role: str) -> None:
+    """Live counterpart to `dnd_ai.config.Settings`'s static URL-identity
+    check (see that module's docstring). Opens a real connection through
+    `engine` and confirms the session actually authenticated as
+    `expected_role`, rather than trusting that the configured URL's
+    username is what PostgreSQL actually granted. Called from
+    `dnd_ai.api.app`'s lifespan startup, only when
+    `settings.environment == "production"` — outside production this is
+    never invoked, so local/test connections (which routinely use the
+    `postgres` admin credential on purpose) are unaffected."""
+    with engine.connect() as connection:
+        _check_database_identity(connection, expected_role=expected_role)
 
 
 def get_connection(engine: Annotated[Engine, Depends(get_engine)]) -> Iterator[Connection]:

@@ -160,7 +160,7 @@ The repository-native fix is to let Alembic recreate the roles before restoring 
 - **Alembic recreates the repository-defined roles and grants**, exactly as `001_bootstrap` defines them. That's schema-level structure, not credentials.
 - **Not recovered by either the dump or the migration**: any password set on a login role after `001_bootstrap` created it, credentials issued by an external identity system, role memberships added by hand after bootstrap, `ALTER ROLE ... SET` session defaults, or any other post-deployment role change.
 - **After restoring onto a new cluster, rotate or reapply runtime credentials yourself**, as a deliberate step — from your deployment's own secret-management process, never the dump file, this documentation, or the repository. `restore` (below) prints a reminder of this at the end; it does not and cannot do it for you.
-- If your deployment currently connects to PostgreSQL as the bootstrap superuser (`POSTGRES_USER`, `postgres` by default) rather than one of the five login roles, that is acceptable only because today's topology runs nothing but `alembic upgrade head` against the database — not the intended eventual model once `src/dnd_ai/api` exists ([DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles)).
+- The bootstrap superuser (`POSTGRES_USER`, `postgres` by default) is for this recovery tooling and the `migrate` job only — never for `src/dnd_ai/api`. `api` must connect as `app_read_write` and nothing else; this is enforced twice, not merely documented: `compose.yaml` requires a separate `API_DATABASE_URL` with no fallback default, and `dnd_ai.config.Settings`/`dnd_ai.api.deps.verify_database_identity` refuse to start the process at all — checking both the configured URL's identity and the live connection's `session_user`/`current_user` — if it is ever pointed at `postgres`, `migration_runner`, or `migration_owner` ([DATABASE_CONVENTIONS.md §27.1](../DATABASE_CONVENTIONS.md#271-database-roles)).
 
 Do not "solve" any of the above by indiscriminately restoring a `pg_dumpall --globals-only` capture — see why, further down.
 
@@ -237,13 +237,13 @@ Run `preflight --for restore-fresh --dump-file <dump>` (plus the same `--project
 
 **Restoring a dump created by a newer application/schema revision into an older application image is unsupported** — make sure the `migrate` image you're running already knows about the dump's revision (or later) before proceeding.
 
-After it finishes: reapply or rotate runtime credentials for `migration_runner`/`app_read_write`/`app_read_only`/`integration_worker`/`admin_maintenance` from your own secret-management process (`restore` prints this reminder; it can't do it for you — see "What role bootstrap does not recover" above), then run `verify` (below) before treating the deployment as authoritative.
+After it finishes: reapply or rotate runtime credentials for `migration_runner`/`app_read_write`/`app_read_only`/`integration_worker`/`admin_maintenance` with `set-role-password` (below) — `restore` prints this reminder; it can't do it for you, since it never accepts or stores a password itself (see "What role bootstrap does not recover" above and "Provisioning application-role credentials" below) — then run `verify` (below) before treating the deployment as authoritative.
 
 ## Existing-cluster restore
 
 Use this when the **cluster itself survives** but the application database is gone, corrupt, or otherwise unusable — an ordinary in-place recovery, not a new cluster. The key difference from fresh-cluster mode: migrations must never be asked to connect to a database that might not exist or might be the thing that's broken, and this preflight is built so it structurally cannot — it never tries to connect to a possibly-corrupt target before recreating it.
 
-**Quiesce every other consumer first** — `dropdb --force` (step below) disconnects anything still connected, and discovering what was still connected *while* it happens is worse than confirming there's nothing left beforehand. Stop the future API service, background worker, Discord/FoundryVTT adapters, or any other process connected to the target database (none exist as committed services yet — `src/dnd_ai/api` has no source, per [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout) — so this is a no-op today, but becomes **mandatory** once any of them does), and close any interactive `psql`/GUI session or scheduled job. Re-confirm the project immediately before continuing:
+**Quiesce every other consumer first** — `dropdb --force` (step below) disconnects anything still connected, and discovering what was still connected *while* it happens is worse than confirming there's nothing left beforehand. Stop the `api` service (`docker compose stop api`), any background worker/Discord/FoundryVTT adapters once they exist as committed services (per [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout)), and close any interactive `psql`/GUI session or scheduled job connected to the target database. Re-confirm the project immediately before continuing:
 
 ```bash
 docker compose -p "<your-project>" -f compose.yaml ps
@@ -303,6 +303,35 @@ uv run python scripts/operations/database_recovery.py bootstrap-roles \
 **`preflight --for bootstrap-roles` cannot run this active check** — the temporary database doesn't exist yet when `preflight` runs standalone, so there is nothing to connect to. It instead confirms the temporary name is syntactically safe, reserved-name-clean, and **not already in use — a database already existing under that name is a hard preflight failure**, since `bootstrap-roles` itself will refuse to reuse it, and a failed existence query is reported and hard-fails distinctly from "confirmed absent" rather than being treated as if the database were absent. `preflight` explicitly says in its output that it cannot perform the same battery `bootstrap-roles` itself does, rather than implying parity.
 
 Once roles are confirmed, re-run the `restore --mode existing` command above — it will now find all six roles and proceed. After it finishes, reapply/rotate runtime credentials and run `verify`, the same as fresh-cluster mode.
+
+## Provisioning application-role credentials
+
+`001_bootstrap` creates all five LOGIN roles (`migration_runner`, `app_read_write`, `app_read_only`, `integration_worker`, `admin_maintenance`) with **no password** — password authentication is refused until one is set. `bootstrap-roles`/`restore` only ever prove the roles exist with the right attributes; neither one, and no other command in this script, ever accepts, stores, or prints a password on your behalf (this module's own docstring: "This script never reads or prints POSTGRES_PASSWORD ... or any other credential"). `set-role-password` is the one command that does, and it is required — not optional — before anything connects as the role it targets. In particular: **`docker compose up -d api` must never run before `set-role-password --role app_read_write` has succeeded** — `api` always connects to PostgreSQL as `app_read_write` (`compose.yaml`'s own comment on that service), never `postgres`/`migration_runner`/`migration_owner`, and there is no Compose-native ordering guarantee for a step external to Compose entirely, the same limitation that already made `migrate` (a `profiles: ["tools"]` one-off job) a manual, documented first step rather than something `depends_on` could express.
+
+```bash
+export APP_READ_WRITE_PASSWORD=<a real value>   # a shell export, never a file this repo tracks
+uv run python scripts/operations/database_recovery.py set-role-password \
+  --role app_read_write \
+  --password-env-var APP_READ_WRITE_PASSWORD \
+  --project "<your-project>" \
+  --env-file .env \
+  --compose-file compose.yaml
+```
+
+The password is read from `--password-env-var` (a variable already set in *this* process's own environment) or `--password-file` (a mounted secret) — never accepted as a `--password` flag, which would put it in `ps`/`docker top`/shell history for as long as the process ran. It reaches PostgreSQL only inside the STDIN payload of a piped `psql ALTER ROLE ...` statement, escaped as a SQL string literal in-process (`_pg_string_literal` — doubling embedded quotes is the standard SQL mechanism, not a project-specific one) — never a command-line argument, never printed by this script, by `run()`'s own argv-only diagnostic line, or by Compose. `--role` accepts only the five real LOGIN roles (`argparse`'s own `choices=`); `migration_owner` is not a valid choice at all — it is `NOLOGIN` by design (§27.1) and a password on it would be meaningless.
+
+This mutates exactly one role's credential and nothing else, so — unlike `restore`/`bootstrap-roles` — it carries no `--confirm-*` gate. It is fully idempotent: rerun it any time, with a new value, to rotate that role's password without touching any other role's — migration and application credentials stay independently rotatable because they are always two separate roles with two separate passwords, never a shared one.
+
+**Confirm it actually took before starting anything that depends on it:**
+
+```bash
+uv run python scripts/operations/database_recovery.py verify-roles \
+  --project "<your-project>" --env-file .env --compose-file compose.yaml
+```
+
+`verify-roles`' report (via `check_roles`) now includes one line per LOGIN role reading `[PASS] role app_read_write password: password set` or `[WARN] role app_read_write password: NO PASSWORD SET — ...`. It is deliberately a `WARN`, not a hard failure that would flip the command's exit code — `bootstrap-roles` calls this same check immediately after creating fresh roles, before any operator has had a chance to run `set-role-password` yet, and a hard failure there would break that already-working flow. Read the report itself, not just the exit code: a `WARN` line here after you believe the full `migrate` → `set-role-password` → `up -d api` sequence has completed means it has not, and `api` will be unable to authenticate at all until it is fixed.
+
+Once you build `API_DATABASE_URL` from the new password (percent-encoded — the same rule `MIGRATION_DATABASE_URL` already follows, see `.env.example`) and set it in `.env`, `docker compose up -d api` is safe to run.
 
 ## Verification
 

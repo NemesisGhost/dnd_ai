@@ -84,6 +84,20 @@ authorization check of its own — true for `start`'s `session_id` (lands
 on `narrative.encounters` itself), `turns`' `session_id` (lands on the
 `interaction.interactions` row that turn creates), and `end`'s
 `session_id` (lands on the completion `narrative.events` row) alike.
+
+Phase 10 workstream 17 added the read side over the same URL prefix:
+`GET /campaigns/{campaign_id}/encounters/{encounter_id}`
+(`dnd_ai.queries.encounter.get_encounter_view`), requiring only
+`campaign.view` (the read-only counterpart to every command route's
+`canon.edit`). Unlike every other Phase 10 query, there is no audience
+filtering here at all — see `dnd_ai.queries.encounter`'s own docstring for
+why a resolved combat outcome carries no GM-only/undiscovered content the
+way a dungeon secret or a hidden quest objective does. Ownership reuses
+the same `campaign_id`-column check every command route above performs,
+via the same `EncounterNotFoundError` (re-exported by `dnd_ai.queries.
+encounter`, not duplicated). This route is a read: no idempotency key, no
+`audit.change_log` row, for the same reasons `dnd_ai.api.dungeon`'s read
+endpoint has neither.
 """
 
 import uuid
@@ -99,6 +113,7 @@ from dnd_ai.commands.encounters import (
     _start_encounter_impl,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.encounter import get_encounter_view
 
 from .access import require_campaign_capability
 from .deps import get_connection
@@ -110,6 +125,10 @@ router = APIRouter(tags=["encounters"])
 # route here requires it rather than a narrower, character-scoped
 # capability.
 _ENCOUNTER_MANAGE_CAPABILITY = "canon.edit"
+
+# The read-only counterpart to _ENCOUNTER_MANAGE_CAPABILITY — see this
+# module's docstring.
+_ENCOUNTER_VIEW_CAPABILITY = "campaign.view"
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +188,50 @@ class EndEncounterRequest(BaseModel):
 
 class EndEncounterResponse(BaseModel):
     event_id: uuid.UUID
+
+
+class EncounterParticipantResponse(BaseModel):
+    encounter_participant_id: uuid.UUID
+    participant_entity_id: uuid.UUID
+    side: str
+    initiative: int | None
+    outcome: str | None
+
+
+class CombatActionResponse(BaseModel):
+    action_kind: str
+    item_instance_id: uuid.UUID | None
+    spell_id: uuid.UUID | None
+    hit: bool | None
+    damage_amount: int | None
+    damage_type_code: str | None
+    resulting_condition_code: str | None
+
+
+class EncounterTurnResponse(BaseModel):
+    encounter_turn_id: uuid.UUID
+    participant_id: uuid.UUID
+    turn_order: int
+    notes: str | None
+    combat_action: CombatActionResponse | None
+
+
+class EncounterRoundResponse(BaseModel):
+    encounter_round_id: uuid.UUID
+    round_number: int
+    turns: list[EncounterTurnResponse]
+
+
+class EncounterDetailResponse(BaseModel):
+    encounter_id: uuid.UUID
+    status: str
+    current_round: int
+    summary: str | None
+    location_id: uuid.UUID | None
+    world_time_id: uuid.UUID
+    resulting_event_id: uuid.UUID | None
+    participants: list[EncounterParticipantResponse]
+    rounds: list[EncounterRoundResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +337,72 @@ def end_encounter_endpoint(
         session_id=body.session_id,
     )
     return EndEncounterResponse(event_id=result.event_id)
+
+
+@router.get(
+    "/campaigns/{campaign_id}/encounters/{encounter_id}",
+    response_model=EncounterDetailResponse,
+    status_code=200,
+)
+def get_encounter_endpoint(
+    campaign_id: uuid.UUID,
+    encounter_id: uuid.UUID,
+    # Enforces campaign.view; the resolved AccessContext itself isn't
+    # needed — this route applies no audience filtering (see this
+    # module's docstring), so no further AccessContext field is used the
+    # way other read endpoints use access.timeline_id/has_capability.
+    _access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_ENCOUNTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> EncounterDetailResponse:
+    view = get_encounter_view(connection, encounter_id=encounter_id, campaign_id=campaign_id)
+
+    return EncounterDetailResponse(
+        encounter_id=view.encounter_id,
+        status=view.status,
+        current_round=view.current_round,
+        summary=view.summary,
+        location_id=view.location_id,
+        world_time_id=view.world_time_id,
+        resulting_event_id=view.resulting_event_id,
+        participants=[
+            EncounterParticipantResponse(
+                encounter_participant_id=p.encounter_participant_id,
+                participant_entity_id=p.participant_entity_id,
+                side=p.side,
+                initiative=p.initiative,
+                outcome=p.outcome,
+            )
+            for p in view.participants
+        ],
+        rounds=[
+            EncounterRoundResponse(
+                encounter_round_id=r.encounter_round_id,
+                round_number=r.round_number,
+                turns=[
+                    EncounterTurnResponse(
+                        encounter_turn_id=t.encounter_turn_id,
+                        participant_id=t.participant_id,
+                        turn_order=t.turn_order,
+                        notes=t.notes,
+                        combat_action=(
+                            None
+                            if t.combat_action is None
+                            else CombatActionResponse(
+                                action_kind=t.combat_action.action_kind,
+                                item_instance_id=t.combat_action.item_instance_id,
+                                spell_id=t.combat_action.spell_id,
+                                hit=t.combat_action.hit,
+                                damage_amount=t.combat_action.damage_amount,
+                                damage_type_code=t.combat_action.damage_type_code,
+                                resulting_condition_code=t.combat_action.resulting_condition_code,
+                            )
+                        ),
+                    )
+                    for t in r.turns
+                ],
+            )
+            for r in view.rounds
+        ],
+    )

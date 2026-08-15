@@ -100,6 +100,20 @@ redirect-scheme enforcement applied to the actual JWKS network fetch
 (`OIDC_PRODUCTION_URL_SCHEMES`/`OIDC_LOCAL_URL_SCHEMES` below are the
 single shared source of truth both modules validate against).
 
+`database_url` carries one more production-only rule beyond the one
+above: `Settings()` also parses it (with SQLAlchemy's own URL parser, not
+string splitting) and refuses to start unless its username is exactly
+`PRODUCTION_REQUIRED_DATABASE_ROLE` (`app_read_write`) —
+`_require_app_read_write_identity_in_production` below. This is the
+static half of that enforcement only; it proves what the configured URL
+*claims*, not what a real connection actually authenticates as.
+`dnd_ai.api.deps.verify_database_identity` proves the live half, run from
+`dnd_ai.api.app`'s lifespan startup against `session_user`/`current_user`
+on an actual connection, so a stale `postgres`/`migration_runner` URL (or
+a connection pooler/`SET ROLE` that silently changes the effective
+identity after authentication) can never again start this service and
+pass health checks the way it once did.
+
 Host-mounted secret files (docs/LOCAL_DEPLOYMENT.md "Compose
 responsibilities and network policy" — "credentials in host-readable
 environment/secret files or mounted secrets outside the repository") are
@@ -125,8 +139,21 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import make_url
+from sqlalchemy.exc import ArgumentError
 
 _LOCAL_DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai"
+
+# The exact login role the containerized `api` service must authenticate
+# to PostgreSQL as, once DND_AI_ENVIRONMENT=production — 001_bootstrap's
+# DML-only role (SELECT/INSERT/UPDATE/DELETE on application tables, no
+# schema DDL, no role management, no migration_owner membership; see
+# docs/DATABASE_CONVENTIONS.md §27.1). Public (no leading underscore) so
+# this one literal is shared by both halves of the enforcement: the static
+# check below (what the configured URL claims) and
+# dnd_ai.api.deps.verify_database_identity (what a real connection actually
+# authenticated as — a URL string is only a claim, not proof, of identity).
+PRODUCTION_REQUIRED_DATABASE_ROLE = "app_read_write"
 
 _SECRETS_DIR = os.environ.get("DND_AI_SECRETS_DIR", "/run/secrets")
 
@@ -312,6 +339,50 @@ class Settings(BaseSettings):
             if self.legacy_database_url is not None
             else _LOCAL_DEV_DATABASE_URL
         )
+        return self
+
+    @model_validator(mode="after")
+    def _require_app_read_write_identity_in_production(self) -> "Settings":
+        """Static half of the app_read_write enforcement (finding: a stale
+        `postgres`/`migration_runner` URL previously started the container
+        successfully and passed /healthz and /readyz, silently recreating
+        the exact privileged-API defect 083_schema_usage_grants/690a928
+        already fixed once). The live half —
+        `dnd_ai.api.deps.verify_database_identity`, checked against a real
+        connection's `session_user`/`current_user` — runs separately from
+        `dnd_ai.api.app`'s lifespan startup, since a URL string is only a
+        claim about identity, not proof of it (a connection pooler, an
+        implicit/explicit `SET ROLE`, or plain misconfiguration could all
+        make the two disagree).
+
+        Runs after `_resolve_database_url` (definition order — pydantic v2
+        executes same-mode model validators in the order they're defined),
+        so `self.database_url` is always populated by the time this runs.
+        Parses with SQLAlchemy's own URL parser (`make_url`), never by
+        splitting the string — a URL can legally contain `@`, `:`, or `/`
+        inside a percent-encoded password, which naive splitting would get
+        wrong. Never includes `self.database_url` itself, or any parsed
+        password, in the raised error — only the fixed expected-role
+        literal; a role name is not a secret, but a full connection URL can
+        embed one.
+        """
+        if self.environment != "production":
+            return self
+        assert self.database_url is not None
+        try:
+            parsed_url = make_url(self.database_url)
+        except ArgumentError as exc:
+            raise ValueError(
+                "DND_AI_DATABASE_URL could not be parsed as a database URL when "
+                "DND_AI_ENVIRONMENT=production."
+            ) from exc
+        if parsed_url.username != PRODUCTION_REQUIRED_DATABASE_ROLE:
+            raise ValueError(
+                "DND_AI_DATABASE_URL must authenticate as the "
+                f"{PRODUCTION_REQUIRED_DATABASE_ROLE!r} role when DND_AI_ENVIRONMENT=production "
+                "— the postgres superuser, migration_runner, and migration_owner credentials "
+                "must never be used by the api service (docs/DATABASE_CONVENTIONS.md §27.1)."
+            )
         return self
 
     @model_validator(mode="after")

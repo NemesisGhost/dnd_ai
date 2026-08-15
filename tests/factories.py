@@ -14,6 +14,7 @@ lands, rather than growing them into a parallel write path.
 
 import json
 import uuid
+from datetime import datetime
 
 from sqlalchemy import Connection, text
 
@@ -540,6 +541,42 @@ def make_campaign_party(
     )
 
 
+def make_party_membership(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    member_entity_id: uuid.UUID,
+    effective_from_world_time_id: uuid.UUID,
+    *,
+    effective_to_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `campaign.party_memberships` row (migration 009) — the timeline-
+    scoped, temporal record of a character belonging to a party. Leaving
+    `effective_to_world_time_id` unset (the default) produces an
+    open-ended membership, this table's own documented "the single
+    representation of 'still a member'" — the exact contract
+    `dnd_ai.api.access.resolve_party_perspective` relies on to authorize a
+    party perspective."""
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.party_memberships
+                (timeline_id, party_id, member_entity_id, effective_from_world_time_id,
+                 effective_to_world_time_id)
+            VALUES (:timeline, :party, :member, :from_time, :to_time)
+            RETURNING party_membership_id
+        """),
+        {
+            "timeline": timeline_id,
+            "party": party_id,
+            "member": member_entity_id,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_ruleset_version(connection: Connection, code: str | None = None) -> uuid.UUID:
     """A bare ruleset + ruleset_version, with no world association.
 
@@ -825,21 +862,30 @@ def make_session(
     *,
     start_world_time_id: uuid.UUID | None = None,
     end_world_time_id: uuid.UUID | None = None,
+    lifecycle_status_code: str = "active",
+    title: str | None = None,
+    summary: str | None = None,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO campaign.sessions
-                (campaign_id, session_number, lifecycle_status_id,
-                 start_world_time_id, end_world_time_id)
-            VALUES (:c, :n, :status, :start, :end)
+                (campaign_id, session_number, lifecycle_status_id, start_world_time_id,
+                 end_world_time_id, title, summary, started_at, ended_at)
+            VALUES (:c, :n, :status, :start, :end, :title, :summary, :started, :ended)
             RETURNING session_id
         """),
         {
             "c": campaign_id,
             "n": session_number,
-            "status": status_id(connection, "lifecycle_statuses", "active"),
+            "status": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
             "start": start_world_time_id,
             "end": end_world_time_id,
+            "title": title,
+            "summary": summary,
+            "started": started_at,
+            "ended": ended_at,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
@@ -1634,6 +1680,45 @@ def make_party_knowledge(
     return value
 
 
+def make_party_discovery(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    *,
+    party_id: uuid.UUID | None = None,
+    knower_entity_id: uuid.UUID | None = None,
+    discovered_via_interaction_id: uuid.UUID | None = None,
+    discovered_via_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `knowledge.party_discoveries` row — the discovery record used to
+    reveal a hidden dungeon feature/hazard/interactable/connection to
+    `dnd_ai.queries.dungeon.get_dungeon_area_view` (docs/architecture/
+    DATABASE_MODEL.md §9.3, §15). Exactly one of party_id/knower_entity_id
+    must be supplied, mirroring the table's own check constraint; at most
+    one of discovered_via_interaction_id/discovered_via_event_id may be
+    supplied (revision 063), and both may be omitted (an ambient/unrecorded
+    discovery)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.party_discoveries
+                (timeline_id, knowledge_item_id, party_id, knower_entity_id,
+                 discovered_via_interaction_id, discovered_via_event_id)
+            VALUES (:timeline, :item, :party, :knower, :via_interaction, :via_event)
+            RETURNING party_discovery_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": knowledge_item_id,
+            "party": party_id,
+            "knower": knower_entity_id,
+            "via_interaction": discovered_via_interaction_id,
+            "via_event": discovered_via_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_relationship(
     connection: Connection,
     world_id: uuid.UUID,
@@ -1746,6 +1831,8 @@ def make_organization(
     headquarters_location_id: uuid.UUID | None = None,
     founded_world_time_id: uuid.UUID | None = None,
     dissolved_world_time_id: uuid.UUID | None = None,
+    public_description: str | None = None,
+    internal_description: str | None = None,
 ) -> uuid.UUID:
     """A core.entities row plus its world.organizations row. Returns the
     shared UUID (the organization_id, same as the entity_id).
@@ -1774,11 +1861,12 @@ def make_organization(
         text("""
             INSERT INTO world.organizations
                 (organization_id, organization_type_id, parent_organization_id,
-                 founded_world_time_id, dissolved_world_time_id, headquarters_location_id)
+                 founded_world_time_id, dissolved_world_time_id, headquarters_location_id,
+                 public_description, internal_description)
             VALUES (
                 :id,
                 (SELECT organization_type_id FROM world.organization_types WHERE code = :otc),
-                :parent, :founded, :dissolved, :hq
+                :parent, :founded, :dissolved, :hq, :public_desc, :internal_desc
             )
         """),
         {
@@ -1788,6 +1876,8 @@ def make_organization(
             "founded": founded_world_time_id,
             "dissolved": dissolved_world_time_id,
             "hq": headquarters_location_id,
+            "public_desc": public_description,
+            "internal_desc": internal_description,
         },
     )
     return organization_id
@@ -2134,6 +2224,7 @@ def make_item_definition(
     requires_attunement: bool = False,
     weight: float | None = None,
     base_cost_gp: float | None = None,
+    properties: dict[str, object] | None = None,
 ) -> uuid.UUID:
     if code is None:
         code = f"item_{uuid.uuid4().hex[:8]}"
@@ -2141,8 +2232,9 @@ def make_item_definition(
         text("""
             INSERT INTO rules.item_definitions
                 (ruleset_version_id, item_category_id, code, display_name, rarity,
-                 requires_attunement, weight, base_cost_gp)
-            VALUES (:version, :category, :code, :name, :rarity, :attunement, :weight, :cost)
+                 requires_attunement, weight, base_cost_gp, properties_jsonb)
+            VALUES (:version, :category, :code, :name, :rarity, :attunement, :weight, :cost,
+                    :properties)
             RETURNING item_definition_id
         """),
         {
@@ -2154,6 +2246,7 @@ def make_item_definition(
             "attunement": requires_attunement,
             "weight": weight,
             "cost": base_cost_gp,
+            "properties": json.dumps(properties) if properties is not None else None,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
@@ -2531,6 +2624,117 @@ def make_character_state(
             "maximum": maximum_hit_points,
         },
     )
+
+
+def make_condition(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "poisoned"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.conditions (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING condition_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_resource_definition(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "ki_points"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.resource_definitions (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING resource_definition_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_condition(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    condition_id: uuid.UUID,
+    *,
+    source_description: str | None = None,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO campaign.character_conditions
+                (timeline_id, character_id, condition_id, source_description)
+            VALUES (:timeline, :character, :condition, :source)
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "condition": condition_id,
+            "source": source_description,
+        },
+    )
+
+
+def make_character_resource(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    resource_definition_id: uuid.UUID,
+    *,
+    current_amount: int = 1,
+    maximum_amount: int = 1,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO campaign.character_resources
+                (timeline_id, character_id, resource_definition_id, current_amount, maximum_amount)
+            VALUES (:timeline, :character, :resource, :current, :maximum)
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "resource": resource_definition_id,
+            "current": current_amount,
+            "maximum": maximum_amount,
+        },
+    )
+
+
+def make_character_location_history(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    location_id: uuid.UUID,
+    arrived_at_world_time_id: uuid.UUID,
+    *,
+    departed_at_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `campaign.character_location_history` row. Leaving
+    `departed_at_world_time_id` unset (the default) produces the character's
+    current location — at most one such open row per `(timeline,
+    character)`, enforced by a partial unique index (revision 042/043)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.character_location_history
+                (timeline_id, character_id, location_id, arrived_at_world_time_id,
+                 departed_at_world_time_id)
+            VALUES (:timeline, :character, :location, :arrived, :departed)
+            RETURNING character_location_history_id
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "location": location_id,
+            "arrived": arrived_at_world_time_id,
+            "departed": departed_at_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
 
 
 def make_external_system(

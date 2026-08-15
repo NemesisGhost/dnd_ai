@@ -5,14 +5,18 @@
 # compose explicitly with `-f compose.yaml -f compose.ci.yaml`, which
 # disables Compose's automatic override discovery entirely.
 #
-# Publishes PostgreSQL on 127.0.0.1 only — not every interface — so running
-# this on a laptop connected to an untrusted network doesn't expose the
-# database beyond the machine itself. If you are self-hosting for real
-# external access, don't copy this file's port mapping into that
-# deployment; add a deliberate, reviewed mapping (and firewall rules)
-# instead — see docs/DEVELOPMENT.md §3.6.
+# Publishes PostgreSQL and the API on 127.0.0.1 only — not every interface
+# — so running this on a laptop connected to an untrusted network doesn't
+# expose either beyond the machine itself. If you are self-hosting for real
+# external access, don't copy this file's port mappings into that
+# deployment; add a deliberate, reviewed mapping (and firewall rules) —
+# and, for the API, a reverse proxy (PLAN.md §32, Phase 14) — instead. See
+# docs/DEVELOPMENT.md §3.6.
 
 services:
   db:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+  api:
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
