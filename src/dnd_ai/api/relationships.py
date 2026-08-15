@@ -58,6 +58,21 @@ Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
 `security.idempotent_requests` (migration 082) — identical mechanism to
 every other command router; see `dnd_ai.api.items`'s module docstring for
 the full concurrency argument.
+
+Phase 10 workstream 15 added the read side over the same URL prefix:
+`GET /campaigns/{campaign_id}/relationships/{relationship_id}`
+(`dnd_ai.queries.relationship.get_relationship_view`), requiring only
+`campaign.view` (the read-only counterpart to every command route's
+`canon.edit`, matching `dnd_ai.api.dungeon`/`.characters`/`.quests`'s own
+read endpoints). Participants and the shared, objective
+`campaign.relationship_state` row are always returned to any authorized
+caller; each participant's own *subjective* state row (affinity, trust,
+private interpretation, ...) is returned only to a caller holding
+`canon.edit` — see `dnd_ai.queries.relationship`'s own docstring for why
+this first cut is conservative rather than guessing a per-holder
+character-relationship rule. This route is a read: no idempotency key, no
+`audit.change_log` row, for the same reasons `dnd_ai.api.dungeon`'s read
+endpoint has neither.
 """
 
 import uuid
@@ -72,7 +87,9 @@ from dnd_ai.commands.relationships import (
     _update_organization_status_impl,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.relationship import get_relationship_view
 
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
@@ -86,6 +103,11 @@ router = APIRouter(tags=["relationships"])
 # docstring for why every route here requires it rather than a narrower,
 # character-scoped capability.
 _RELATIONSHIP_MANAGE_CAPABILITY = "canon.edit"
+
+# The read-only counterpart to _RELATIONSHIP_MANAGE_CAPABILITY — see this
+# module's docstring. Also the capability that additionally unlocks
+# subjective relationship-state rows for the GET route below.
+_RELATIONSHIP_VIEW_CAPABILITY = "campaign.view"
 
 # audit.change_log.command_name / the idempotency store's fingerprinted
 # command_name — one literal per route, never derived from request data.
@@ -146,6 +168,34 @@ class UpdateOrganizationStatusResponse(BaseModel):
     event_id: uuid.UUID
     previous_status_code: str | None
     new_status_code: str
+
+
+class RelationshipParticipantResponse(BaseModel):
+    entity_id: uuid.UUID
+    role_code: str
+
+
+class RelationshipStateResponse(BaseModel):
+    perspective_holder_entity_id: uuid.UUID | None
+    status_code: str
+    affinity: int | None
+    trust: int | None
+    respect: int | None
+    fear: int | None
+    obligation: int | None
+    emotional_tone: str | None
+    private_interpretation: str | None
+
+
+class RelationshipResponse(BaseModel):
+    relationship_id: uuid.UUID
+    relationship_type_code: str
+    description: str | None
+    participants: list[RelationshipParticipantResponse]
+    shared_state: RelationshipStateResponse | None
+    # Empty for a caller who does not hold canon.edit — see this module's
+    # docstring; never partially populated.
+    subjective_states: list[RelationshipStateResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +293,72 @@ def evolve_relationship_reaction_endpoint(
         )
 
     return response
+
+
+@router.get(
+    "/campaigns/{campaign_id}/relationships/{relationship_id}",
+    response_model=RelationshipResponse,
+    status_code=200,
+)
+def get_relationship_endpoint(
+    relationship_id: uuid.UUID,
+    # campaign_id is not otherwise used in this body — require_campaign_
+    # capability's own returned dependency callable declares campaign_id
+    # itself and binds it from the URL path independently, the same way
+    # dnd_ai.api.characters' identical read endpoint already does.
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_RELATIONSHIP_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> RelationshipResponse:
+    include_subjective = access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY)
+
+    view = get_relationship_view(
+        connection,
+        relationship_id=relationship_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        include_subjective=include_subjective,
+    )
+
+    return RelationshipResponse(
+        relationship_id=view.relationship_id,
+        relationship_type_code=view.relationship_type_code,
+        description=view.description,
+        participants=[
+            RelationshipParticipantResponse(entity_id=p.entity_id, role_code=p.role_code)
+            for p in view.participants
+        ],
+        shared_state=(
+            None
+            if view.shared_state is None
+            else RelationshipStateResponse(
+                perspective_holder_entity_id=view.shared_state.perspective_holder_entity_id,
+                status_code=view.shared_state.status_code,
+                affinity=view.shared_state.affinity,
+                trust=view.shared_state.trust,
+                respect=view.shared_state.respect,
+                fear=view.shared_state.fear,
+                obligation=view.shared_state.obligation,
+                emotional_tone=view.shared_state.emotional_tone,
+                private_interpretation=view.shared_state.private_interpretation,
+            )
+        ),
+        subjective_states=[
+            RelationshipStateResponse(
+                perspective_holder_entity_id=s.perspective_holder_entity_id,
+                status_code=s.status_code,
+                affinity=s.affinity,
+                trust=s.trust,
+                respect=s.respect,
+                fear=s.fear,
+                obligation=s.obligation,
+                emotional_tone=s.emotional_tone,
+                private_interpretation=s.private_interpretation,
+            )
+            for s in view.subjective_states
+        ],
+    )
 
 
 @router.post(
