@@ -10,17 +10,11 @@
 
 This repository underwent a **complete architecture restart**.
 
-The pre-restart legacy code has already been **removed**: the old flat `Database/` schema, `src/lambda-functions/`, `DirectAPICalls/`, `PDFChatBot/`, the old Lambda build scripts, and the Terraform modules/environment wiring built specifically for them (`db_runner`, `lambda-api`, `lambda-with-build`, `db-schema-introspect`, `query-runner`). Don't restore any of this from git history as "existing convention" — build against the current docs instead.
+The project intentionally uses a clean architecture rather than resurrecting older prototypes. Legacy code and schema patterns from earlier iterations have been removed, and new work should follow the current docs under `docs/` instead of reintroducing previous conventions.
 
 Any existing database content will be dropped; no legacy schema or API compatibility is required.
 
-**What remains**: the generic `terraform/modules/database` and `terraform/modules/secrets` modules (RDS, VPC, KMS, Secrets Manager) and `terraform/environments/` — infrastructure organization that isn't tied to the old schema.
-
-**Current implementation status**: Phases 1 through 8 are complete and CI-verified — foundation, core world platform, timelines/campaigns, rules and shared characters, locations and dungeon play, events and interactions, quests and knowledge, and relationships/organizations. Per-phase evidence is in `docs/PHASEn_VERIFICATION.md`; [Phase 9](../docs/PLAN.md#phase-9-items-inventory-encounters-and-foundry-synchronization) (items, inventory, encounters, Foundry sync) is next. The first application-layer command handlers exist in `src/dnd_ai/commands`; no API or UI exists yet.
-
-**Verification pivot (2026-08-07)**: Phases 1–8 were developed directly against AWS `dev` RDS. From Phase 9, development runs against a **local PostgreSQL 18 server**, originally with CI against `dev` as the merge gate ([ADR 0011](../docs/adr/0011-local-first-development-aws-verified-delivery.md)). The pinned PostgreSQL major version moved 15.x → 18.x, and `dev` was replaced with a fresh PostgreSQL 18.4 instance on 2026-08-08 ([POSTGRES18_UPGRADE_PLAN.md](../docs/POSTGRES18_UPGRADE_PLAN.md)).
-
-**Deployment pivot (2026-08-11)**: Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is now the officially supported deployment topology, and CI verifies against a disposable containerized PostgreSQL 18 instance instead of AWS `dev` RDS — see [ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) (supersedes ADR 0011 and ADR 0008's deployment/merge-gate clauses) and [PLAN.md §24.0](../docs/PLAN.md#240-verification-policy). AWS RDS remains an optional, no-longer-CI-verified path.
+The project is intentionally organized around the current design documents and the self-hosted Docker deployment model. Build against the current architecture and keep phase work scoped to the matching plan entry rather than resurrecting historical implementation details.
 
 ---
 
@@ -47,8 +41,8 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 7. **Timelines only inherit parent history up to branch point** (no leakage after branch)
 8. **Knowledge is per-knower, never global** (no `is_discovered` flags on entities)
 9. **Persistent entities are archived, not deleted** (set `archived_at`, keep row)
-10. **No secrets in code or seed files** (environment variables / `.env` for self-hosted; AWS Secrets Manager for the optional AWS path)
-11. **Develop and verify against PostgreSQL 18, self-hosted** — database/scenario tests run against a local/self-hosted PostgreSQL 18 server; CI runs them against a disposable containerized PostgreSQL 18 instance and is the merge gate; deployables run via `compose.yaml`/`Dockerfile`. AWS RDS/ECS Fargate remain an optional, no-longer-verified path. A green local run is never the last word ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md))
+10. **No secrets in code or seed files** (environment variables / `.env` for self-hosted configuration)
+11. **Develop and verify against PostgreSQL 18, self-hosted** — database and scenario tests run against a local/self-hosted PostgreSQL 18 server; CI runs the same suites against a disposable containerized PostgreSQL 18 instance and is the merge gate; deployables run via `compose.yaml`/`Dockerfile` ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md))
 
 **If a task requires breaking a rule: STOP and flag it.**
 
@@ -56,9 +50,9 @@ Any existing database content will be dropped; no legacy schema or API compatibi
 
 ## Technology Stack
 
-- **Deployment**: Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) — the officially supported topology ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). AWS (RDS PostgreSQL, S3, Secrets Manager, KMS) remains an optional, no-longer-verified path
-- **IaC** (optional AWS path): Terraform (modules under `terraform/modules/`, environments under `terraform/environments/`)
-- **Database**: PostgreSQL 18.x — local/self-hosted for development and CI; AWS RDS optional for anyone who deploys there. The major version must match everywhere it runs. Migrations via Alembic
+- **Deployment**: Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) — the officially supported topology ([ADR 0012](../docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md))
+- **Infrastructure**: keep infrastructure work separate from product code; the default deployment path is the composed Docker deployment
+- **Database**: PostgreSQL 18.x — local/self-hosted for development and CI. The major version must match everywhere it runs. Migrations via Alembic
 - **Backend**: Python 3.12+, SQLAlchemy 2.x **Core** (not the ORM), psycopg 3, Pydantic v2
 - **API**: FastAPI (REST); endpoint shape still deferred by `docs/PLAN.md` §28, and `src/dnd_ai/api` has no committed source yet
 - **UI**: React (web/admin client)

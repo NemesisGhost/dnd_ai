@@ -67,7 +67,7 @@ Persistent game worlds supporting:
 
 ### Current Phase
 
-Phases 1 through 4 are complete and verified. Phase 5's production behavior and primary concurrency assertions are complete; its formal test-infrastructure/tooling closeout: a tenth review's replacement of the test-worker cleanup helper's thread-based worker with an independently terminable process was itself found, by an eleventh review, to still be able to report false success and silently discard cleanup failures, an eleventh pass fixed it, a twelfth review found the eleventh pass's own verification-tooling claim didn't hold up to its exit code and its IPC redesign still relied on an abandonable thread, a twelfth pass fixed those findings, a thirteenth review then found the twelfth pass's own missing-outcome classification, backend verification, and `Process.start()` failure handling were themselves still incomplete, a thirteenth pass fixed those findings, and a fourteenth review then found the thirteenth pass's own forced-termination classification, partial-start cleanup, and regression-test safety net were themselves still incomplete — a fourteenth pass fixed those findings and is verified locally (93 tests in `test_entity_type_change_protection.py`, 1,189 total), pending confirmation from [PR #15](https://github.com/NemesisGhost/dnd_ai/pull/15)'s own final-head CI run; [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) reflects the same status. The Phase 6 repository-context modularization gate in [PLAN.md](PLAN.md#phase-6-events-and-interactions) is closed; the Phase 5 formal-correctness gate is blocked pending that CI confirmation, so Phase 6 feature/schema work should not begin yet. The repository is still database-first: no API, UI, or external integration exists yet.
+Use [docs/PLAN.md](PLAN.md) for the active implementation phase and scope. Keep the work anchored to the current phase entry rather than using broad project-status notes as routine startup context.
 
 ### What's Being Built
 
@@ -192,9 +192,8 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 ### 10. No secrets in code or seed files
 
 ✅ **Correct**:
-- AWS Secrets Manager for credentials and API keys
-- Terraform reads secrets at apply-time (never hardcoded)
-- Environment variables from secure sources
+- Environment variables or host-mounted secret files for credentials and API keys
+- Secret values kept out of committed source files
 
 ❌ **Wrong**:
 - `DB_PASSWORD = "mypassword123"` in Python code
@@ -213,9 +212,8 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 - Installing whatever PostgreSQL major version is convenient locally — that produces green local runs that fail CI
 - Re-running a red CI job that followed a green local run, instead of investigating it as a real defect or local/CI drift
 - Deferring deployment verification until the end of the project
-- Assuming AWS credentials are needed for any of the above — they are not; AWS RDS is an optional path CI no longer verifies
 
-See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) (supersedes [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) and [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md)).
+See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).
 
 ---
 
@@ -223,11 +221,9 @@ See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-se
 
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| **Deployment** | Self-hosted Docker Compose | `compose.yaml`/`Dockerfile` — the officially supported topology, verified by CI ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) |
-| **Compute** | One shared container image | Migrations today (`compose.yaml`'s `migrate` service); API, background worker, and Discord adapter share the same image once `src/dnd_ai/api` exists. AWS ECS Fargate/Lambda remain an optional, unbuilt path — [PLAN.md §31](PLAN.md#31-aws-deployment-plan-for-application-services) |
-| **Infrastructure (optional)** | AWS | RDS PostgreSQL, S3, Secrets Manager, KMS — retained for anyone who chooses to host there instead; no longer continuously verified. The pre-restart Lambda/API Gateway wiring was removed and is not coming back |
-| **IaC (optional)** | Terraform | Modules under `terraform/modules/`, environments under `terraform/environments/`. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) |
-| **Database** | PostgreSQL 18.x | Local/self-hosted for development and CI; AWS RDS optional for `dev`/`staging`/`prod` if deployed. The major version must match everywhere it runs ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
+| **Deployment** | Self-hosted Docker Compose | `compose.yaml`/`Dockerfile` — the supported deployment topology, verified by CI ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) |
+| **Compute** | One shared container image | Migrations today (`compose.yaml`'s `migrate` service); API, background worker, and Discord adapter share the same image once `src/dnd_ai/api` exists |
+| **Database** | PostgreSQL 18.x | Local/self-hosted for development and CI. The major version must match everywhere it runs ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
 | **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
 | **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §28](PLAN.md#28-deferred-decisions) |
 | **UI** | React | Web/admin client talking to REST API; not yet started |

@@ -39,8 +39,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Lint + format | **ruff** | Both linting and formatting; no separate black/isort |
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
 | Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
-| Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The officially supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
-| AWS access (optional) | **AWS CLI v2** | Only needed if you choose to deploy the optional AWS RDS path under `terraform/`, or to change that Terraform — **not** for routine schema or application work, and not for CI. `curl` for IP lookup |
+| Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
 | UI | **React** | Not yet started; no build tooling chosen |
 
 ---
@@ -53,7 +52,6 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 .
 ├── README.md                  # Project entry point
 ├── CLAUDE.md                  # AI assistant operating instructions
-├── build.ps1                  # Terraform orchestration wrapper (optional AWS path)
 ├── pyproject.toml             # Python project + tool config (ruff, mypy, pytest)
 ├── uv.lock
 ├── .env.example
@@ -63,7 +61,6 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 ├── compose.ci.yaml            # CI override: disposable tmpfs storage
 ├── .dockerignore
 ├── docs/                      # ALL documentation (see CLAUDE.md §4)
-├── terraform/                 # Optional AWS infrastructure (see docs/INFRASTRUCTURE.md)
 ├── scripts/
 ├── database/
 │   ├── alembic.ini
@@ -92,13 +89,13 @@ The tree below is the **target**. As of Phase 6, `database/` holds the migration
 
 The directory names under `src/dnd_ai/` map onto the layers in [SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering). Keep that mapping — it is how a reviewer checks that a handler didn't grow domain rules.
 
-There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints ([PLAN.md §31.3](PLAN.md#313-packaging-and-release)). It exists today and runs Alembic migrations by default (`compose.yaml`'s `migrate` job); `src/dnd_ai/api` has no committed source yet, so the API/worker/adapter entrypoints are added when those modules exist.
+There is one `Dockerfile`, not one per service: the API, background worker, Discord adapter, and one-off jobs including migrations all run the same image with different entrypoints. It exists today and runs Alembic migrations by default (`compose.yaml`'s `migrate` job); `src/dnd_ai/api` has no committed source yet, so the API/worker/adapter entrypoints are added when those modules exist.
 
 ### 2.1 Keep source and tests bounded by domain
 
 Repository structure is also a context boundary. Do not keep adding unrelated domains or correction passes to a file merely because the file already exists.
 
-**Done.** The monolithic `src/dnd_ai/persistence/tables.py` was replaced with a `src/dnd_ai/persistence/tables/` package organized by bounded schema/domain, verified against AWS `dev` (`alembic check` reported no diff; the full `tests/unit`/`tests/database` suites pass). The shape, kept as the ongoing convention for where a new table goes:
+**Done.** The monolithic `src/dnd_ai/persistence/tables.py` was replaced with a `src/dnd_ai/persistence/tables/` package organized by bounded schema/domain. The shape, kept as the ongoing convention for where a new table goes:
 
 ```text
 src/dnd_ai/persistence/tables/

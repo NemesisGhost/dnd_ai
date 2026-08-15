@@ -40,11 +40,10 @@ see that function's docstring) — it is a startup failure, not a value that
 gets silently ignored or silently honored.
 
 Every application-owned field is namespaced under the `DND_AI_`
-environment-variable prefix so this model never collides with, or silently
-absorbs, unrelated variables the host process carries for other tooling —
-the AWS CLI, Terraform, Docker Compose itself. That namespace is shared,
-though: several other `DND_AI_*` variables are real, currently used, and
-owned by a *different* subsystem entirely — `DND_AI_TEST_DATABASE_URL`
+environment-variable prefix so this model never collides with unrelated
+variables the host process carries for other tooling. That namespace is
+shared, though: several other `DND_AI_*` variables are real, currently used,
+and owned by a *different* subsystem entirely — `DND_AI_TEST_DATABASE_URL`
 (tests/conftest.py, scripts/ci_ephemeral_database.py — the ephemeral
 per-test-run database pointer), `DND_AI_CI_DB_NAME` (the same CI scripts —
 that database's own name, for teardown), and `DND_AI_SEEDS_DIR`

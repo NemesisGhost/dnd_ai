@@ -3,12 +3,8 @@ list, docs/architecture/SYSTEM_ARCHITECTURE.md §5.2).
 
 Portable by design (ADR 0012, docs/LOCAL_DEPLOYMENT.md): FastAPI runs under
 Uvicorn, in a container or otherwise, and talks to PostgreSQL over the
-network — there is nothing AWS- or Lambda-specific in this module or
-anywhere else in this package. A Lambda ASGI adapter is not required for
-production and does not exist here; if one is ever added it belongs in an
-isolated, optional module of its own, per ADR 0012's "Lambda, Mangum, API
-Gateway, RDS, or another cloud adapter may be added as isolated optional
-deployment adapters, but none is required for production."
+network. This module is intentionally deployment-neutral and does not couple
+application behavior to any specific hosting platform.
 
 OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
 is delivered and used by the command endpoints below

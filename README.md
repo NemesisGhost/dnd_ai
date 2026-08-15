@@ -20,41 +20,25 @@ The initial rules implementation targets Dungeons & Dragons 5e (2024), but the p
 
 ---
 
-## Current Status
+## Product Overview
 
-The architecture is established and the database foundation is being implemented. Phases 1 through 8 are complete. Phase 5 delivered its gameplay schema and production invariants; revision 056 closed the last production race, and five concurrency tests prove genuine waiter resumption and independently verify final committed state. Further hypothetical failures inside test-only cleanup primitives are documented limitations, not phase blockers, unless they can realistically produce a false result, leak persistent database state, or cause demonstrated CI instability. See [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md) and the closed historical [docs/PHASE5_REMAINING_ISSUES.md](docs/PHASE5_REMAINING_ISSUES.md).
+The D&D AI World Platform is a persistent-world simulation engine for tabletop role-playing campaigns. It is built around a PostgreSQL-backed world model with branching timelines, shared campaign state, durable historical events, and rules-aware entity definitions.
 
-Phase 6 (events and interactions) delivered events, interactions, checks, effects, event causality, branch-aware inherited history, and the first application-layer command handler package (`src/dnd_ai/commands`: `RecordEvent`, `PerformInteraction`, `ResolveCheck`), then went through four correction passes closing production defects a series of exit reviews found: recorded-event immutability and deletion protection, `resolve_check()` concurrency control, interaction-resolution completeness, ruleset/test-coverage guard gaps, and — in the final pass — moving the interaction status lifecycle (`initiated → resolving → resolved`) fully into the database. [PR #16](https://github.com/NemesisGhost/dnd_ai/pull/16) merged to `main` (commit `2692f41`), and that exact merge commit reached a confirmed green CI run. See [docs/PHASE6_VERIFICATION.md](docs/PHASE6_VERIFICATION.md) for the full account.
+The system is designed to support:
 
-Phase 7 (quests and knowledge) delivered the quest domain (story arcs, quests, stages, objectives, dependencies, participants, outcomes, rewards, quest/objective state) and the knowledge-domain gaps Phase 5's pulled-forward slice deferred (temporal validity, versions, expertise, information transfers, public knowledge), then went through two correction passes. Revision 074 (part of [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17), confirmed green CI) fixed the party-knowledge exit criterion — the original test exercised an unrelated individual knower rather than `campaign.party_knowledge`, which the correction pass built — plus five other scope-guard, concurrency, and metadata gaps. A post-merge revision 075 (`075_phase7_reparent_guards`, [PR #19](https://github.com/NemesisGhost/dnd_ai/pull/19), confirmed green CI) closed reverse (parent-scope) mutation gaps: every same-world/same-scope trigger the quest/knowledge domain built validated the child row only, never re-checking when a parent row's own scope identity changed out from under already-valid dependents — the same class of gap Phase 4's revision 030 had already closed once elsewhere. See [docs/PHASE7_VERIFICATION.md](docs/PHASE7_VERIFICATION.md) for the full account and the proportional verification policy in [docs/PLAN.md §23.1](docs/PLAN.md#231-phase-exit-review) and [§25.6](docs/PLAN.md#256-proportional-test-infrastructure-policy).
+- persistent worlds that outlive any single campaign
+- multiple campaigns sharing the same timeline or branching into alternate histories
+- NPCs, organizations, locations, quests, and inventory as first-class entities
+- event-driven state changes with causal history
+- AI-assisted GM tooling without allowing AI to own canon directly
+- self-hosted deployment via Docker Compose rather than direct database writes from clients
 
-Phase 8 (relationships and organizations) delivered the universal relationship model, specialized relationships (organization memberships, employment, ownership, family, political), the organization CTI hierarchy (businesses, governments, religious organizations, military units, political factions), the religion/religious-affiliation distinction, and the two timeline-state tables (`campaign.organization_state`/`.relationship_state`) the schema had already named but no earlier phase built. Its two exit criteria — NPC/faction reactions evolving from events, and shared versus subjective relationship data staying separate — are proven by `src/dnd_ai/commands/relationships.py` and a dedicated scenario test. Drafted as revision `075_relationships_and_orgs` before Phase 7's own `075_phase7_reparent_guards` existed, [PR #18](https://github.com/NemesisGhost/dnd_ai/pull/18) forked the Alembic graph once both revisions existed side by side and failed CI at the empty-database migration step. A deployable-integrity correction pass renumbered it to `076_relationships_and_orgs` (re-chained sequentially after Phase 7's correction, no merge revision) and closed three further gaps: two world/timeline-agreement guard functions left unextended for the domain's own new columns, missing reverse-mutation guards on the relationship tables, and `world.employment_relationships` carrying two disagreeing current-records signals instead of one. All local verification (migration round trip including a full downgrade-to-base/upgrade-to-head against a disposable scratch database, `alembic check`, the full 2,058-test suite, `ruff`/`mypy`) passed against AWS `dev`. See [docs/PHASE8_VERIFICATION.md](docs/PHASE8_VERIFICATION.md) for the full account.
-
-The repository currently provides the PostgreSQL/Alembic foundation, a self-hosted Docker deployment topology (with optional AWS RDS infrastructure retained for anyone who prefers it), core world/entity/provenance schema, timelines/campaigns/parties/sessions, the initial ruleset and shared-character schema, locations and dungeon structure with typed timeline state, a knowledge/discovery model, events/interactions/checks with branch-aware history, the first application-layer command handlers, the quest domain, and the relationships/organizations domain. It does **not** yet provide a FastAPI service, React UI, Foundry or Discord integration, items/encounters, or playable campaign workflows; those remain scheduled in later phases.
-
-**Verification pivot (2026-08-07), closed 2026-08-08.** Phases 1–8 were developed directly against the deployed AWS `dev` RDS instance, per the original AWS-first policy. From Phase 9, development and testing moved to a **local PostgreSQL 18 server**, with CI against `dev` as the merge gate at the time — the reasoning is in [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md). The project's pinned PostgreSQL major version moved from 15.x to 18.x in the same change; `dev` was replaced with a fresh PostgreSQL 18.4 instance to match, per [docs/POSTGRES18_UPGRADE_PLAN.md](docs/POSTGRES18_UPGRADE_PLAN.md).
-
-**Deployment pivot (2026-08-11).** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile` at the repository root) is now the officially supported deployment topology, and CI verifies against a disposable containerized PostgreSQL 18 instance rather than AWS `dev` RDS. See [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md), which supersedes ADR 0011 and the deployment-target/merge-gate portions of ADR 0008. AWS RDS remains available as an optional, no-longer-CI-verified path (`terraform/modules/database`, `terraform/modules/secrets`, `terraform/environments/dev` are retained, unrun) — no live AWS infrastructure was changed by this pivot.
-
-This is still a restart, not an incremental evolution of the prior implementation.
-
-The repository previously contained database schema, Lambda functions, and prototype scripts from an earlier iteration of the platform (`Database/`, `DirectAPICalls/`, `PDFChatBot/`, `src/lambda-functions/`, and related build scripts). That code predated the persistent-world model described in this document and has been removed rather than extended or migrated. The Terraform configuration was trimmed to match: the generic `database` and `secrets` modules (RDS, VPC, KMS, Secrets Manager) remain, while the modules and environment wiring built specifically for the old schema and Lambda functions (`db_runner`, `lambda-api`, `lambda-with-build`, and their environment configs) were removed.
-
-The restart boundaries remain:
-
-- Any existing database content will be dropped, not migrated.
-- No legacy schema or API compatibility is required.
-- Infrastructure, application services, and integrations are being built fresh against this design rather than adapted from prior code.
-
-The operational documentation was consolidated to match: the guides describing the removed Lambda-based schema initializer and SSM SQL runner have been deleted, and the remaining Terraform guidance now lives in a single document, [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
-
-Existing campaign material (notes, PDFs, prior session content) will still be imported later through a staged, reviewed import process. Imported content will not become canonical world data until it has been validated and approved.
+The final product is a rules-aware world platform, not a one-off database or prototype toolchain.
 
 ---
 
 ## Table of Contents
 
-- [Current Status](#current-status)
 - [Project Goals](#project-goals)
 - [Design Philosophy](#design-philosophy)
 - [Core Concepts](#core-concepts)
