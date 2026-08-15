@@ -1634,6 +1634,45 @@ def make_party_knowledge(
     return value
 
 
+def make_party_discovery(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    *,
+    party_id: uuid.UUID | None = None,
+    knower_entity_id: uuid.UUID | None = None,
+    discovered_via_interaction_id: uuid.UUID | None = None,
+    discovered_via_event_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `knowledge.party_discoveries` row — the discovery record used to
+    reveal a hidden dungeon feature/hazard/interactable/connection to
+    `dnd_ai.queries.dungeon.get_dungeon_area_view` (docs/architecture/
+    DATABASE_MODEL.md §9.3, §15). Exactly one of party_id/knower_entity_id
+    must be supplied, mirroring the table's own check constraint; at most
+    one of discovered_via_interaction_id/discovered_via_event_id may be
+    supplied (revision 063), and both may be omitted (an ambient/unrecorded
+    discovery)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.party_discoveries
+                (timeline_id, knowledge_item_id, party_id, knower_entity_id,
+                 discovered_via_interaction_id, discovered_via_event_id)
+            VALUES (:timeline, :item, :party, :knower, :via_interaction, :via_event)
+            RETURNING party_discovery_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": knowledge_item_id,
+            "party": party_id,
+            "knower": knower_entity_id,
+            "via_interaction": discovered_via_interaction_id,
+            "via_event": discovered_via_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_relationship(
     connection: Connection,
     world_id: uuid.UUID,

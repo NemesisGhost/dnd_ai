@@ -25,18 +25,20 @@ scoped by `timeline_id`, like the item domain), so this is the only place
 a caller-supplied session/campaign mismatch would otherwise go unchecked.
 
 It also validates a caller-supplied `party_id` against `campaign_id`
-(`_validate_campaign_party`, below) before mutating anything: `campaign.
-campaign_parties` (revision 010) only enforces that a party and the
-campaigns using it agree on *world* — a party belonging to the right world
-but a *different* campaign on the same timeline passes that trigger
-cleanly, so nothing at the database layer stops a caller from advancing an
-objective "for" a party that has nothing to do with the campaign named in
-the request. `_validate_campaign_party` stays local to this module rather
-than moving to `dnd_ai.commands._shared` (unlike `SessionNotInCampaignError`/
-`validate_session_campaign`, which moved there once a *second* command
-needed the identical session/campaign check) — no other command needs this
-check yet, and `_shared`'s own history is to promote a helper only once a
-second caller actually needs it, not preemptively.
+(`_validate_campaign_party`, from `dnd_ai.commands._shared`) before
+mutating anything: `campaign.campaign_parties` (revision 010) only
+enforces that a party and the campaigns using it agree on *world* — a
+party belonging to the right world but a *different* campaign on the same
+timeline passes that trigger cleanly, so nothing at the database layer
+stops a caller from advancing an objective "for" a party that has nothing
+to do with the campaign named in the request. `PartyNotInCampaignError`/
+`_validate_campaign_party` originated here and moved to
+`dnd_ai.commands._shared` once `dnd_ai.queries.dungeon` needed the
+identical check (see that module's docstring and `_shared.
+PartyNotInCampaignError`'s own docstring) — the same promote-on-second-use
+history `SessionNotInCampaignError`/`validate_session_campaign` already
+went through. Both names are re-exported here unchanged for backward
+compatibility with existing imports/tests.
 """
 
 import json
@@ -45,63 +47,14 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.errors import DomainAuthorizationError
-
+from ._shared import PartyNotInCampaignError as PartyNotInCampaignError
 from ._shared import lookup_id
+from ._shared import validate_campaign_party as _validate_campaign_party
 from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
 _TERMINAL_OBJECTIVE_STATUSES = frozenset({"completed", "failed", "skipped", "superseded"})
 _ADVANCEABLE_STATUSES = frozenset({"completed", "failed"})
-
-
-class PartyNotInCampaignError(DomainAuthorizationError):
-    """Raised by `_validate_campaign_party()` when a supplied `party_id`
-    does not resolve to a `campaign.campaign_parties` row belonging exactly
-    to the supplied `campaign_id` — including a nonexistent party and a
-    party associated only with a different (even same-world) campaign.
-    `campaign_id=None` with a `party_id` supplied is also rejected: "no
-    campaign at all" can never be the campaign a real party is associated
-    with, mirroring `dnd_ai.commands._shared.SessionNotInCampaignError`'s
-    identical rule for `session_id`.
-
-    Inherits `DomainAuthorizationError`'s fixed 404 contract deliberately:
-    confirming that a party exists but belongs to a different campaign
-    would itself disclose cross-campaign information to a caller only
-    authorized for the campaign named in the request
-    (docs/architecture/DATABASE_MODEL.md §19.7). The supplied campaign_id/
-    party_id are included only in the constructor's `detail` argument
-    (`str(self)`), never in `safe_message`."""
-
-
-def _validate_campaign_party(
-    connection: Connection, *, campaign_id: uuid.UUID | None, party_id: uuid.UUID | None
-) -> None:
-    """Rejects a caller-supplied party_id that is not actually associated
-    with campaign_id, before anything is inserted or updated. Mirrors
-    `dnd_ai.commands._shared.validate_session_campaign`'s shape exactly —
-    see this module's own docstring for why campaign.campaign_parties'
-    world-agreement trigger alone isn't sufficient here.
-
-    `campaign_id = NULL`/`party_id = NULL` comparisons in the query below
-    never match (SQL NULL semantics), so a `campaign_id=None` caller with a
-    `party_id` supplied is rejected the same way a mismatched campaign
-    would be — no separate `is None` branch is needed."""
-    if party_id is None:
-        return
-
-    exists = connection.execute(
-        text(
-            "SELECT 1 FROM campaign.campaign_parties "
-            "WHERE campaign_id = :campaign AND party_id = :party"
-        ),
-        {"campaign": campaign_id, "party": party_id},
-    ).scalar()
-
-    if exists is None:
-        raise PartyNotInCampaignError(
-            f"party {party_id} is not associated with campaign {campaign_id!r}"
-        )
 
 
 @dataclass(frozen=True)
