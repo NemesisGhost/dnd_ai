@@ -2209,6 +2209,7 @@ def make_item_definition(
     requires_attunement: bool = False,
     weight: float | None = None,
     base_cost_gp: float | None = None,
+    properties: dict[str, object] | None = None,
 ) -> uuid.UUID:
     if code is None:
         code = f"item_{uuid.uuid4().hex[:8]}"
@@ -2216,8 +2217,9 @@ def make_item_definition(
         text("""
             INSERT INTO rules.item_definitions
                 (ruleset_version_id, item_category_id, code, display_name, rarity,
-                 requires_attunement, weight, base_cost_gp)
-            VALUES (:version, :category, :code, :name, :rarity, :attunement, :weight, :cost)
+                 requires_attunement, weight, base_cost_gp, properties_jsonb)
+            VALUES (:version, :category, :code, :name, :rarity, :attunement, :weight, :cost,
+                    :properties)
             RETURNING item_definition_id
         """),
         {
@@ -2229,6 +2231,7 @@ def make_item_definition(
             "attunement": requires_attunement,
             "weight": weight,
             "cost": base_cost_gp,
+            "properties": json.dumps(properties) if properties is not None else None,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

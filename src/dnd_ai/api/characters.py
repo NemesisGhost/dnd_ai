@@ -36,10 +36,24 @@ This is a read: no idempotency key, no `audit.change_log` row (a routine,
 already-authorized character read is not "sensitive" in that table's
 documented sense — see `dnd_ai.api.dungeon`'s identical reasoning) and no
 mutation of any kind.
+
+Phase 10 workstream 16 added a sub-resource:
+`GET /campaigns/{campaign_id}/characters/{character_id}/inventory`
+(`dnd_ai.queries.inventory.get_inventory_view`). It requires the *full*
+character-view tier for `character_id` — `resolve_character_view_tier`
+returning `False` (summary-only) is treated as unauthorized here too,
+since inventory contents are full-detail data with no separate summary
+form; the same `CharacterViewNotAuthorizedError` fixed 404 that route
+already raises for "neither capability held" now also covers "only the
+summary tier applies." A caller holding `canon.edit` additionally sees
+every item's hidden mechanical properties regardless of identification
+state — see `dnd_ai.queries.inventory`'s own docstring for why
+identification is otherwise resolved only from the holder's own
+perspective, never an arbitrary caller-supplied knower.
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -47,9 +61,14 @@ from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.inventory import get_inventory_view
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, resolve_character_view_tier
+from .access import (
+    CharacterViewNotAuthorizedError,
+    require_campaign_capability,
+    resolve_character_view_tier,
+)
 from .deps import get_connection
 
 router = APIRouter(tags=["characters"])
@@ -57,6 +76,10 @@ router = APIRouter(tags=["characters"])
 # The base campaign-membership gate — the same capability
 # dnd_ai.api.dungeon requires for its own read endpoint.
 _CHARACTER_VIEW_CAPABILITY = "campaign.view"
+
+# canon.edit also unlocks every item's hidden properties regardless of the
+# holder's own identification state — see this module's docstring.
+_CHARACTER_MANAGE_CAPABILITY = "canon.edit"
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +114,24 @@ class CharacterResponse(BaseModel):
     current_location_id: uuid.UUID | None
     conditions: list[CharacterConditionResponse] | None
     resources: list[CharacterResourceResponse] | None
+
+
+class InventoryItemResponse(BaseModel):
+    item_instance_id: uuid.UUID
+    display_name: str
+    item_category_code: str
+    rarity: str
+    quantity: int
+    condition_percentage: int | None
+    charges_current: int | None
+    charges_maximum: int | None
+    is_equipped: bool
+    is_destroyed: bool
+    owner_entity_id: uuid.UUID | None
+    identification_level: str
+    # None unless identification_level allows it (or the caller holds
+    # canon.edit) — see dnd_ai.queries.inventory's own docstring.
+    properties: dict[str, Any] | None
 
 
 # ---------------------------------------------------------------------------
@@ -159,3 +200,53 @@ def get_character_endpoint(
             ]
         ),
     )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/inventory",
+    response_model=list[InventoryItemResponse],
+    status_code=200,
+)
+def get_character_inventory_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> list[InventoryItemResponse]:
+    if not resolve_character_view_tier(access, character_id=character_id):
+        # The summary tier alone is not enough to see inventory contents —
+        # see this module's docstring. Raised identically to "neither
+        # capability held," which resolve_character_view_tier itself
+        # already raises for that case.
+        raise CharacterViewNotAuthorizedError(
+            f"user {access.user_id} holds only the summary tier for character {character_id}, "
+            "insufficient for inventory"
+        )
+
+    items = get_inventory_view(
+        connection,
+        holder_entity_id=character_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        reveal_all_properties=access.has_capability(_CHARACTER_MANAGE_CAPABILITY),
+    )
+
+    return [
+        InventoryItemResponse(
+            item_instance_id=item.item_instance_id,
+            display_name=item.display_name,
+            item_category_code=item.item_category_code,
+            rarity=item.rarity,
+            quantity=item.quantity,
+            condition_percentage=item.condition_percentage,
+            charges_current=item.charges_current,
+            charges_maximum=item.charges_maximum,
+            is_equipped=item.is_equipped,
+            is_destroyed=item.is_destroyed,
+            owner_entity_id=item.owner_entity_id,
+            identification_level=item.identification_level,
+            properties=item.properties,
+        )
+        for item in items
+    ]
