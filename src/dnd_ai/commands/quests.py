@@ -23,6 +23,20 @@ possession_impl` already apply — neither `narrative.quest_objectives` nor
 `campaign.objective_state` carries a `campaign_id` column at all (both are
 scoped by `timeline_id`, like the item domain), so this is the only place
 a caller-supplied session/campaign mismatch would otherwise go unchecked.
+
+It also validates a caller-supplied `party_id` against `campaign_id`
+(`_validate_campaign_party`, below) before mutating anything: `campaign.
+campaign_parties` (revision 010) only enforces that a party and the
+campaigns using it agree on *world* — a party belonging to the right world
+but a *different* campaign on the same timeline passes that trigger
+cleanly, so nothing at the database layer stops a caller from advancing an
+objective "for" a party that has nothing to do with the campaign named in
+the request. `_validate_campaign_party` stays local to this module rather
+than moving to `dnd_ai.commands._shared` (unlike `SessionNotInCampaignError`/
+`validate_session_campaign`, which moved there once a *second* command
+needed the identical session/campaign check) — no other command needs this
+check yet, and `_shared`'s own history is to promote a helper only once a
+second caller actually needs it, not preemptively.
 """
 
 import json
@@ -30,6 +44,8 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
+
+from dnd_ai.domain.errors import DomainAuthorizationError
 
 from ._shared import lookup_id
 from ._shared import validate_session_campaign as _validate_session_campaign
@@ -39,6 +55,55 @@ _TERMINAL_OBJECTIVE_STATUSES = frozenset({"completed", "failed", "skipped", "sup
 _ADVANCEABLE_STATUSES = frozenset({"completed", "failed"})
 
 
+class PartyNotInCampaignError(DomainAuthorizationError):
+    """Raised by `_validate_campaign_party()` when a supplied `party_id`
+    does not resolve to a `campaign.campaign_parties` row belonging exactly
+    to the supplied `campaign_id` — including a nonexistent party and a
+    party associated only with a different (even same-world) campaign.
+    `campaign_id=None` with a `party_id` supplied is also rejected: "no
+    campaign at all" can never be the campaign a real party is associated
+    with, mirroring `dnd_ai.commands._shared.SessionNotInCampaignError`'s
+    identical rule for `session_id`.
+
+    Inherits `DomainAuthorizationError`'s fixed 404 contract deliberately:
+    confirming that a party exists but belongs to a different campaign
+    would itself disclose cross-campaign information to a caller only
+    authorized for the campaign named in the request
+    (docs/architecture/DATABASE_MODEL.md §19.7). The supplied campaign_id/
+    party_id are included only in the constructor's `detail` argument
+    (`str(self)`), never in `safe_message`."""
+
+
+def _validate_campaign_party(
+    connection: Connection, *, campaign_id: uuid.UUID | None, party_id: uuid.UUID | None
+) -> None:
+    """Rejects a caller-supplied party_id that is not actually associated
+    with campaign_id, before anything is inserted or updated. Mirrors
+    `dnd_ai.commands._shared.validate_session_campaign`'s shape exactly —
+    see this module's own docstring for why campaign.campaign_parties'
+    world-agreement trigger alone isn't sufficient here.
+
+    `campaign_id = NULL`/`party_id = NULL` comparisons in the query below
+    never match (SQL NULL semantics), so a `campaign_id=None` caller with a
+    `party_id` supplied is rejected the same way a mismatched campaign
+    would be — no separate `is None` branch is needed."""
+    if party_id is None:
+        return
+
+    exists = connection.execute(
+        text(
+            "SELECT 1 FROM campaign.campaign_parties "
+            "WHERE campaign_id = :campaign AND party_id = :party"
+        ),
+        {"campaign": campaign_id, "party": party_id},
+    ).scalar()
+
+    if exists is None:
+        raise PartyNotInCampaignError(
+            f"party {party_id} is not associated with campaign {campaign_id!r}"
+        )
+
+
 @dataclass(frozen=True)
 class AdvanceObjectiveResult:
     objective_state_id: uuid.UUID
@@ -46,12 +111,29 @@ class AdvanceObjectiveResult:
     previous_status_code: str | None
     new_status_code: str
     world_id: uuid.UUID
+    quest_id: uuid.UUID
 
 
-def _quest_objective_world(connection: Connection, quest_objective_id: uuid.UUID) -> uuid.UUID:
-    world_id = connection.execute(
+@dataclass(frozen=True)
+class _QuestObjectiveContext:
+    """`_quest_objective_context()`'s result: the owning quest's world and
+    the quest itself. `quest_id` doubles as the quest's `core.entities.
+    entity_id` (class-table inheritance, CLAUDE.md rule 4) — `narrative.
+    quest_objectives`/`.quest_stages` have no entity identity of their own,
+    so a caller needing "the core.entities row this concerns" (e.g.
+    `dnd_ai.api.quests`' `audit.change_log.entity_id`) uses this, never
+    `quest_objective_id` itself."""
+
+    world_id: uuid.UUID
+    quest_id: uuid.UUID
+
+
+def _quest_objective_context(
+    connection: Connection, quest_objective_id: uuid.UUID
+) -> _QuestObjectiveContext:
+    row = connection.execute(
         text("""
-            SELECT e.world_id
+            SELECT e.world_id, q.quest_id
             FROM narrative.quest_objectives qo
             JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
             JOIN narrative.quests q ON q.quest_id = qs.quest_id
@@ -59,11 +141,12 @@ def _quest_objective_world(connection: Connection, quest_objective_id: uuid.UUID
             WHERE qo.quest_objective_id = :objective
         """),
         {"objective": quest_objective_id},
-    ).scalar()
-    if world_id is None:
+    ).one_or_none()
+    if row is None:
         raise ValueError(f"quest objective {quest_objective_id} does not exist")
-    assert isinstance(world_id, uuid.UUID)
-    return world_id
+    assert isinstance(row.world_id, uuid.UUID)
+    assert isinstance(row.quest_id, uuid.UUID)
+    return _QuestObjectiveContext(world_id=row.world_id, quest_id=row.quest_id)
 
 
 def _lock_quest_objective(connection: Connection, quest_objective_id: uuid.UUID) -> None:
@@ -158,10 +241,11 @@ def _advance_objective_impl(
     campaign.objective_state.
 
     Validates session_id/campaign_id agreement (_validate_session_campaign)
-    before touching any row — campaign_id here is an ordinary caller-
-    supplied assertion (there is no locked, authoritative row to derive it
-    from, unlike _lock_encounter's LockedEncounter.campaign_id), matching
-    how dnd_ai.commands.items' routes already treat it.
+    and party_id/campaign_id agreement (_validate_campaign_party) before
+    touching any row — campaign_id here is an ordinary caller-supplied
+    assertion (there is no locked, authoritative row to derive it from,
+    unlike _lock_encounter's LockedEncounter.campaign_id), matching how
+    dnd_ai.commands.items' routes already treat it.
     """
     if new_status_code not in _ADVANCEABLE_STATUSES:
         raise ValueError(
@@ -169,8 +253,10 @@ def _advance_objective_impl(
         )
 
     _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+    _validate_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
 
-    world_id = _quest_objective_world(connection, quest_objective_id)
+    context = _quest_objective_context(connection, quest_objective_id)
+    world_id = context.world_id
     _lock_quest_objective(connection, quest_objective_id)
 
     existing = _lock_objective_state(
@@ -263,6 +349,7 @@ def _advance_objective_impl(
         previous_status_code=previous_status_code,
         new_status_code=new_status_code,
         world_id=world_id,
+        quest_id=context.quest_id,
     )
 
 

@@ -19,14 +19,19 @@ capability `dnd_ai.api.encounters`/`.items` use — quest-objective
 advancement is treated as GM/adapter-level canon mutation for this first
 cut, the same deliberate scoping those modules' own docstrings record.
 
-Cross-campaign session integrity: the route passes the URL's own (already-
-authorized) `campaign_id` and the request body's caller-supplied
-`session_id` straight through to `_advance_objective_impl`, which validates
-the two agree (`dnd_ai.commands._shared.validate_session_campaign`) before
-mutating anything, raising `SessionNotInCampaignError` — a `SafeMessageError`
-the existing generic handler maps to a fixed, non-disclosing 404 — for a
-nonexistent or foreign-campaign session. See that function's docstring for
-why this can't be caught by `require_campaign_capability` alone.
+Cross-campaign session/party integrity: the route passes the URL's own
+(already-authorized) `campaign_id` and the request body's caller-supplied
+`session_id`/`party_id` straight through to `_advance_objective_impl`,
+which validates each against `campaign_id` before mutating anything —
+`dnd_ai.commands._shared.validate_session_campaign` for `session_id`,
+`dnd_ai.commands.quests._validate_campaign_party` for `party_id` — raising
+`SessionNotInCampaignError`/`PartyNotInCampaignError` (both
+`DomainAuthorizationError`s the existing generic handler maps to a fixed,
+non-disclosing 404) for a nonexistent or foreign-campaign session/party.
+See those functions' docstrings for why neither check can be caught by
+`require_campaign_capability` alone, or by `campaign.campaign_parties`'
+own world-agreement trigger, which a same-world/different-campaign party
+passes cleanly.
 
 Like `dnd_ai.api.items`, there is no encounter-style "does this resource
 belong to my campaign" ownership check here: neither
@@ -38,13 +43,25 @@ the request body.
 Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
 `security.idempotent_requests` (migration 082) — identical mechanism to
 `dnd_ai.api.items`, see that module's docstring for the full concurrency
-argument.
+argument. Both new validation checks run inside `_advance_objective_impl`,
+before any row is mutated, so a rejected call — with or without an
+`Idempotency-Key` — leaves no `campaign.objective_state` row, no
+`narrative.events`/`.event_effects` row, no `audit.change_log` row, and no
+completed `security.idempotent_requests` reservation: an unhandled
+exception rolls back the whole request transaction
+(`dnd_ai.api.deps.get_connection`), including the idempotency key's own
+reservation `INSERT`.
 
 Auditing: every successful call inserts one `audit.change_log` row
 (`dnd_ai.api.audit.record_change_log`) identifying the authenticated
-`actor_user_id`, the request's correlation ID, the command name, the
-affected record/entity/world, and the resulting `event_id` — on the same
-connection, so it commits atomically with the command it describes.
+`actor_user_id`, the request's correlation ID, the command name, and the
+resulting `event_id` — on the same connection, so it commits atomically
+with the command it describes. `entity_id` is the owning quest's
+`quest_id` (`AdvanceObjectiveResult.quest_id`,
+`dnd_ai.commands.quests._quest_objective_context`) — the `core.entities`
+row this change concerns (`audit.change_log.entity_id`'s documented
+contract, migration 007) — never `quest_objective_id`, which is a
+`narrative.quest_objectives` row with no entity identity of its own.
 """
 
 import uuid
@@ -167,7 +184,7 @@ def advance_objective_endpoint(
         schema_name="campaign",
         table_name="objective_state",
         record_id=result.objective_state_id,
-        entity_id=quest_objective_id,
+        entity_id=result.quest_id,
         world_id=result.world_id,
         actor_user_id=access.user_id,
         correlation_id=correlation_id,

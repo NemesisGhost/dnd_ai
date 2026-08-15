@@ -6,6 +6,13 @@ user_id` is overridden directly (the OIDC verification chain itself is
 already fully covered by `tests/database/test_api_auth.py`) since these
 tests exercise campaign-capability enforcement and the quest command's own
 HTTP wiring, not token verification.
+
+Includes the workstream 7 correction pass's two regressions: a `party_id`
+associated only with a different campaign on the same timeline is rejected
+(with and without an `Idempotency-Key`, proving no `campaign.objective_
+state`/event/effect/audit row and no completed idempotency reservation
+survive the rejection), and `audit.change_log.entity_id` is asserted
+against the owning quest's `quest_id`, not `quest_objective_id`.
 """
 
 import uuid
@@ -27,8 +34,10 @@ from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_campaign_party,
     make_character,
     make_membership_role,
+    make_party,
     make_quest,
     make_quest_objective,
     make_quest_stage,
@@ -71,6 +80,16 @@ class Fixture:
         self.other_session_id = make_session(connection, self.other_campaign_id, 1)
 
         self.actor_id = make_character(connection, self.world_id, name="Rin")
+
+        self.party_id = make_party(connection, self.world_id, name="The Company")
+        make_campaign_party(connection, self.campaign_id, self.party_id)
+
+        # Associated only with the *other* campaign — same world/timeline,
+        # so campaign.enforce_campaign_party_world() alone lets it through.
+        # Proves party_id is checked against campaign_id specifically, not
+        # just world agreement.
+        self.foreign_party_id = make_party(connection, self.world_id, name="Foreign Party")
+        make_campaign_party(connection, self.other_campaign_id, self.foreign_party_id)
 
         self.quest_id = make_quest(connection, self.world_id, name="Restore the Shrine")
         self.stage_id = make_quest_stage(connection, self.quest_id)
@@ -168,9 +187,23 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             ),
             {"t": fixture.timeline_id},
         )
+        # campaign.campaign_parties/.parties carry the same ON DELETE CASCADE
+        # (from campaign_id/world_id respectively) that every other table
+        # above does — suppressed identically by session_replication_role =
+        # replica, so deleted explicitly here in dependency order.
+        cleanup.execute(
+            text(
+                "DELETE FROM campaign.campaign_parties WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"t": fixture.timeline_id},
+        )
         cleanup.execute(
             text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
             {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM campaign.parties WHERE world_id = :w"), {"w": fixture.world_id}
         )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
@@ -321,8 +354,90 @@ def test_a_session_from_a_different_campaign_is_rejected(
 
 
 # ---------------------------------------------------------------------------
+# Party authorization/scope (dnd_ai.commands.quests._validate_campaign_party)
+# ---------------------------------------------------------------------------
+
+
+def test_advancing_with_a_party_from_the_correct_campaign_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _advance_url(f),
+            json={
+                "world_time_id": str(f.world_time_id),
+                "new_status_code": "completed",
+                "party_id": str(f.party_id),
+            },
+        )
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT party_id FROM campaign.objective_state "
+                "WHERE timeline_id = :t AND quest_objective_id = :o"
+            ),
+            {"t": f.timeline_id, "o": f.objective_id},
+        ).one()
+        assert row.party_id == f.party_id
+
+
+def test_a_party_from_a_different_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _advance_url(f),
+            json={
+                "world_time_id": str(f.world_time_id),
+                "new_status_code": "completed",
+                "party_id": str(f.foreign_party_id),
+            },
+        )
+    assert response.status_code == 404
+    assert _objective_state_count(postgres_engine, f.objective_id) == 0
+    assert _event_effect_count(postgres_engine, f.objective_id) == 0
+    assert len(_audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)) == 0
+
+
+def test_a_party_from_a_different_campaign_with_an_idempotency_key_leaves_no_reservation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"foreign-party-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _advance_url(f),
+            json={
+                "world_time_id": str(f.world_time_id),
+                "new_status_code": "completed",
+                "party_id": str(f.foreign_party_id),
+            },
+            headers={"Idempotency-Key": key},
+        )
+    assert response.status_code == 404
+    assert _objective_state_count(postgres_engine, f.objective_id) == 0
+    assert _event_effect_count(postgres_engine, f.objective_id) == 0
+    assert len(_audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)) == 0
+    assert (
+        _idempotent_request_count(
+            postgres_engine, user_id=f.gm_user_id, campaign_id=f.campaign_id, key=key
+        )
+        == 0
+    )
+
+
+# ---------------------------------------------------------------------------
 # Idempotency (dnd_ai.api.idempotency, security.idempotent_requests)
 # ---------------------------------------------------------------------------
+
+
+def _objective_state_count(postgres_engine: Engine, objective_id: uuid.UUID) -> int:
+    with postgres_engine.connect() as verify:
+        return verify.execute(
+            text("SELECT count(*) FROM campaign.objective_state WHERE quest_objective_id = :o"),
+            {"o": objective_id},
+        ).scalar_one()
 
 
 def _event_effect_count(postgres_engine: Engine, objective_id: uuid.UUID) -> int:
@@ -336,7 +451,7 @@ def _event_effect_count(postgres_engine: Engine, objective_id: uuid.UUID) -> int
 
 
 def _audit_log_rows(
-    postgres_engine: Engine, objective_id: uuid.UUID, command_name: str
+    postgres_engine: Engine, entity_id: uuid.UUID, command_name: str
 ) -> list[object]:
     with postgres_engine.connect() as verify:
         return list(
@@ -345,9 +460,9 @@ def _audit_log_rows(
                     SELECT actor_user_id, correlation_id, command_name, event_id, entity_id,
                            world_id, change_action_id
                     FROM audit.change_log
-                    WHERE entity_id = :o AND command_name = :c
+                    WHERE entity_id = :e AND command_name = :c
                 """),
-                {"o": objective_id, "c": command_name},
+                {"e": entity_id, "c": command_name},
             )
         )
 
@@ -379,7 +494,7 @@ def test_a_sequential_replay_returns_the_original_response_with_no_new_effects(
     assert second.json() == first.json()
 
     assert _event_effect_count(postgres_engine, f.objective_id) == 1
-    assert len(_audit_log_rows(postgres_engine, f.objective_id, _ADVANCE_OBJECTIVE_COMMAND)) == 1
+    assert len(_audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)) == 1
     assert (
         _idempotent_request_count(
             postgres_engine, user_id=f.gm_user_id, campaign_id=f.campaign_id, key=key
@@ -518,7 +633,7 @@ def test_retry_after_a_rolled_back_failure_reuses_the_key(
         == 0
     )
     assert _event_effect_count(postgres_engine, f.objective_id) == 0
-    assert len(_audit_log_rows(postgres_engine, f.objective_id, _ADVANCE_OBJECTIVE_COMMAND)) == 0
+    assert len(_audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)) == 0
 
     with client_factory(f.gm_user_id) as client:
         retried = client.post(
@@ -528,7 +643,7 @@ def test_retry_after_a_rolled_back_failure_reuses_the_key(
         )
     assert retried.status_code == 200, retried.text
     assert _event_effect_count(postgres_engine, f.objective_id) == 1
-    assert len(_audit_log_rows(postgres_engine, f.objective_id, _ADVANCE_OBJECTIVE_COMMAND)) == 1
+    assert len(_audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)) == 1
 
 
 def test_an_unauthorized_request_with_a_key_leaves_no_reservation(
@@ -575,14 +690,17 @@ def test_the_audit_row_identifies_the_authenticated_actor_not_the_in_world_actor
     assert response.status_code == 200, response.text
     event_id = uuid.UUID(response.json()["event_id"])
 
-    rows = _audit_log_rows(postgres_engine, f.objective_id, _ADVANCE_OBJECTIVE_COMMAND)
+    rows = _audit_log_rows(postgres_engine, f.quest_id, _ADVANCE_OBJECTIVE_COMMAND)
     assert len(rows) == 1
     row = rows[0]
     assert row.actor_user_id == f.gm_user_id
     assert row.correlation_id == uuid.UUID(correlation_id)
     assert row.command_name == _ADVANCE_OBJECTIVE_COMMAND
     assert row.event_id == event_id
-    assert row.entity_id == f.objective_id
+    # entity_id is the owning quest's core.entities row, not the objective
+    # itself — narrative.quest_objectives has no entity identity of its own
+    # (audit.change_log.entity_id's documented contract, migration 007).
+    assert row.entity_id == f.quest_id
     assert row.world_id == f.world_id
 
     with postgres_engine.connect() as verify:
