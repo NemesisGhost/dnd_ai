@@ -17,9 +17,10 @@ are what a passing run of this file actually proves closed that gap, not
 just a docstring's claim that it did.
 
 `app_read_write` is a cluster-wide role (PostgreSQL roles are not
-per-database), so `app_read_write_engine` below sets a test-only password
-for it directly (`ALTER ROLE ... PASSWORD`, idempotent, safe to rerun) so
-these tests are self-sufficient against a freshly migrated database —
+per-database), so the shared `app_read_write_engine` fixture
+(`tests/database/conftest.py`) sets a test-only password for it directly
+(`ALTER ROLE ... PASSWORD`, idempotent, safe to rerun) so these tests are
+self-sufficient against a freshly migrated database —
 never assuming an operator already ran `scripts/operations/
 database_recovery.py set-role-password` first. The password is a fixed,
 openly test-only literal committed here, never a real secret — the same
@@ -29,21 +30,17 @@ project already applies to CI's `ci_disposable_password`
 """
 
 import uuid
-from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import Connection, Engine, create_engine, make_url, text
+from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
 from tests.factories import make_world
 
 pytestmark = pytest.mark.database
 
-# Not a real credential — see this module's own docstring. Distinct from
-# any password used elsewhere in this repository (CI's own
-# ci_disposable_password, or a real deployment's APP_READ_WRITE_PASSWORD)
-# so a grep for this string can never be mistaken for a live secret.
-_TEST_PASSWORD = "app-read-write-test-only-password-do-not-reuse"
+# app_read_write_engine/app_read_write_connection fixtures live in
+# tests/database/conftest.py, shared with test_database_identity_enforcement.py.
 
 # The full set of DBAPI-level failures a rejected statement can surface as
 # through SQLAlchemy — mirrors tests/database/test_interactions.py's own
@@ -53,45 +50,6 @@ _TEST_PASSWORD = "app-read-write-test-only-password-do-not-reuse"
 # statement, and this module cares that the statement was rejected, not
 # which specific DBAPI exception class PostgreSQL chose to raise it as.
 DENIED_ERRORS = (DBAPIError,)
-
-
-@pytest.fixture(scope="session")
-def app_read_write_engine(postgres_engine: Engine) -> Iterator[Engine]:
-    """A second engine, connected to the SAME database as `postgres_engine`,
-    authenticated as `app_read_write` instead of the admin/superuser
-    connection every other test module uses. Session-scoped: setting a
-    cluster-wide role's password is a one-time cost per test run, not
-    per-test, and every test in this module shares the same underlying
-    grants regardless.
-    """
-    with postgres_engine.begin() as connection:
-        # A fixed, hardcoded, non-secret test literal — not user input —
-        # so direct interpolation here carries no injection risk; this is
-        # not the pattern production code should follow for a real,
-        # externally supplied password (see scripts/operations/
-        # database_recovery.py's set-role-password / _pg_string_literal
-        # for that).
-        connection.execute(text(f"ALTER ROLE app_read_write WITH PASSWORD '{_TEST_PASSWORD}'"))
-
-    url = make_url(str(postgres_engine.url)).set(username="app_read_write", password=_TEST_PASSWORD)
-    engine = create_engine(url)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-@pytest.fixture
-def app_read_write_connection(app_read_write_engine: Engine) -> Iterator[Connection]:
-    """Function-scoped connection wrapped in a transaction that always
-    rolls back — the app_read_write twin of tests/conftest.py's own
-    `db_connection` fixture."""
-    with app_read_write_engine.connect() as connection:
-        transaction = connection.begin()
-        try:
-            yield connection
-        finally:
-            transaction.rollback()
 
 
 # ---------------------------------------------------------------------------

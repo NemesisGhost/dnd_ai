@@ -16,8 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from starlette.requests import Request
 
+import dnd_ai.api.app as app_module
 from dnd_ai.api.app import create_app
 from dnd_ai.api.correlation import _sanitize_client_correlation_id
+from dnd_ai.api.deps import DatabaseIdentityError
 from dnd_ai.api.errors import (
     ApiError,
     ConflictError,
@@ -31,6 +33,66 @@ from dnd_ai.domain.access import UnauthorizedTimelineError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 pytestmark = pytest.mark.unit
+
+
+# ---------------------------------------------------------------------------
+# Lifespan startup — the live app_read_write identity check
+# (dnd_ai.api.deps.verify_database_identity), run only in production. No
+# real database is needed here: get_engine/verify_database_identity/
+# dispose_engine are stubbed at the dnd_ai.api.app module level (the exact
+# names `_lifespan` looks up as globals), so these prove `_lifespan`'s own
+# control flow — call it only in production, fail closed and dispose the
+# engine on failure, never call it at all outside production — independent
+# of tests/database/test_database_identity_enforcement.py, which proves
+# verify_database_identity's own real-connection behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_verifies_live_database_identity_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module.settings, "environment", "production")
+    monkeypatch.setattr(app_module, "get_engine", lambda: "sentinel-engine")
+    monkeypatch.setattr(app_module, "dispose_engine", lambda: None)
+    calls: list[tuple[object, str]] = []
+
+    def _fake_verify(engine: object, *, expected_role: str) -> None:
+        calls.append((engine, expected_role))
+
+    monkeypatch.setattr(app_module, "verify_database_identity", _fake_verify)
+
+    with TestClient(app_module.create_app()):
+        pass
+
+    assert calls == [("sentinel-engine", "app_read_write")]
+
+
+def test_lifespan_fails_closed_and_disposes_the_engine_on_identity_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module.settings, "environment", "production")
+    monkeypatch.setattr(app_module, "get_engine", lambda: "sentinel-engine")
+
+    def _fake_verify(engine: object, *, expected_role: str) -> None:
+        raise DatabaseIdentityError("not authenticated as the expected role")
+
+    monkeypatch.setattr(app_module, "verify_database_identity", _fake_verify)
+    dispose_calls: list[bool] = []
+    monkeypatch.setattr(app_module, "dispose_engine", lambda: dispose_calls.append(True))
+
+    with pytest.raises(DatabaseIdentityError), TestClient(app_module.create_app()):
+        pass
+
+    assert dispose_calls == [True]
+
+
+def test_lifespan_never_checks_database_identity_outside_production() -> None:
+    """Default settings.environment is "local" in this test process — the
+    check must not fire, so get_engine (and therefore any real connection)
+    is never touched."""
+    assert app_module.settings.environment != "production"
+    with TestClient(app_module.create_app()):
+        pass
 
 
 def test_healthz_returns_ok() -> None:
