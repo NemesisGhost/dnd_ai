@@ -20,17 +20,37 @@ party has discovered (`dnd_ai.queries.dungeon`'s own audience-filtering
 contract) — the GM/player/observer distinction docs/PLAN.md §25 step 15
 requires of this vertical slice's summary and detail reads.
 
-Party scope: an optional `party_id` query parameter selects whose
-discoveries filter the response for a non-GM caller (`party_id` omitted is
-a safe default — nothing is treated as discovered, so every hidden child is
-excluded). Before it reaches the query, `party_id` is validated against the
-URL's own `campaign_id`
-(`dnd_ai.commands._shared.validate_campaign_party`) — the same guard
-`dnd_ai.api.quests` already applies to a caller-supplied `party_id`, and
-for the identical reason: `knowledge.party_discoveries` is scoped by
-`timeline_id` alone, so an unvalidated `party_id` belonging to a different,
-same-timeline campaign would otherwise leak that other party's discoveries
-to a caller who was never authorized for it.
+Party scope: optional `character_id`/`party_id` query parameters together
+select whose discoveries filter the response for a non-GM caller — both
+omitted is a safe default (nothing is treated as discovered, so every
+hidden child is excluded). A `campaign.campaign_parties` association is
+*not*, by itself, ever accepted as authorization for a party perspective:
+fictional party membership in a campaign is not itself human authorization
+(docs/architecture/DATABASE_MODEL.md §15 — "a fact known by a character is
+exposed to a user only when that user has the appropriate character
+relationship and capability for the requested perspective"), so an earlier
+version of this endpoint that authorized any `party_id` merely associated
+with the caller's own campaign let any campaign member read any other
+same-campaign party's hidden discoveries by guessing or discovering its
+UUID. `dnd_ai.api.access.resolve_party_perspective` closes this: `party_id`
+is trusted only after proving the caller holds `character.view_knowledge`
+for the named `character_id` (`AccessContext.has_capability`, covering
+role capabilities, the caller's own resolved character relationship, and
+any resource-grant override) *and* that character is currently a member of
+that exact party on the campaign's own timeline
+(`campaign.party_memberships`, the "still a member" open-ended-interval
+contract migration 009 already establishes — never guessed, and never
+derived from `character_id` alone, since a character may belong to several
+parties at once). Supplying only one of `character_id`/`party_id` is
+treated identically to supplying neither (no perspective, non-hidden
+content only); supplying both but failing any of the three checks above
+raises a fixed, non-disclosing 404
+(`dnd_ai.api.access.PartyPerspectiveNotAuthorizedError`) rather than
+silently downgrading, so a genuine authorization failure is never confused
+with "no perspective requested." A caller holding `canon.edit` (GM) never
+needs a perspective at all — every structural child is returned regardless
+of `is_hidden`, so `character_id`/`party_id` are not even resolved for
+that caller.
 
 Cross-campaign/world area ownership: neither `world.dungeon_areas` nor its
 structural children carry a `campaign_id` at all (world-scoped, like the
@@ -56,12 +76,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
-from dnd_ai.commands._shared import validate_campaign_party
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.dungeon import get_dungeon_area_view
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import require_campaign_capability, resolve_party_perspective
 from .deps import get_connection
 
 router = APIRouter(tags=["dungeon"])
@@ -151,17 +170,32 @@ def get_dungeon_area_endpoint(
         AccessContext, Depends(require_campaign_capability(_DUNGEON_VIEW_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
+    character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> DungeonAreaResponse:
-    validate_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
+    include_hidden = access.has_capability(_DUNGEON_MANAGE_CAPABILITY)
+    # A GM never needs an authorized party perspective — every structural
+    # child is already returned regardless of is_hidden, so
+    # character_id/party_id are left unresolved for that caller.
+    authorized_party_id = (
+        None
+        if include_hidden
+        else resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+    )
 
     view = get_dungeon_area_view(
         connection,
         dungeon_area_id=dungeon_area_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        party_id=party_id,
-        include_hidden=access.has_capability(_DUNGEON_MANAGE_CAPABILITY),
+        party_id=authorized_party_id,
+        include_hidden=include_hidden,
     )
 
     return DungeonAreaResponse(

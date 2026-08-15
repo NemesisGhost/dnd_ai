@@ -31,12 +31,22 @@ codebase.
 without one) is a safe default, not an error: `knowledge.party_discoveries.
 party_id = NULL` never matches under normal SQL NULL semantics, so every
 hidden child is simply excluded, identically to a party with no discoveries
-yet. Callers must still have already confirmed a supplied `party_id`
-actually belongs to the caller's own campaign
-(`dnd_ai.commands._shared.validate_campaign_party`) before calling this
-function — `knowledge.party_discoveries` is scoped by `timeline_id` alone,
-so an unchecked `party_id` from a different, same-timeline campaign would
-otherwise leak that other party's discoveries.
+yet.
+
+This module is framework-free and does not authorize anything itself — a
+caller-supplied `party_id` is trusted here only because a `campaign.
+campaign_parties` association is *not*, by itself, sufficient
+authorization for a party perspective (docs/architecture/DATABASE_MODEL.md
+§15: fictional party knowledge is not itself human authorization). Every
+caller must first resolve `party_id` through `dnd_ai.api.access.
+resolve_party_perspective` — which proves the authenticated user holds
+`character.view_knowledge` for a specific character *and* that character
+is currently a member of exactly that party — before passing it here; this
+function performs no independent check of its own and would otherwise
+happily filter by any party a caller named, campaign-associated or not.
+`knowledge.party_discoveries` is scoped by `timeline_id` alone, so an
+unauthorized `party_id` would otherwise leak that party's discoveries to a
+caller with no relationship to it at all.
 """
 
 import uuid

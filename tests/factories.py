@@ -540,6 +540,42 @@ def make_campaign_party(
     )
 
 
+def make_party_membership(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    member_entity_id: uuid.UUID,
+    effective_from_world_time_id: uuid.UUID,
+    *,
+    effective_to_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `campaign.party_memberships` row (migration 009) — the timeline-
+    scoped, temporal record of a character belonging to a party. Leaving
+    `effective_to_world_time_id` unset (the default) produces an
+    open-ended membership, this table's own documented "the single
+    representation of 'still a member'" — the exact contract
+    `dnd_ai.api.access.resolve_party_perspective` relies on to authorize a
+    party perspective."""
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.party_memberships
+                (timeline_id, party_id, member_entity_id, effective_from_world_time_id,
+                 effective_to_world_time_id)
+            VALUES (:timeline, :party, :member, :from_time, :to_time)
+            RETURNING party_membership_id
+        """),
+        {
+            "timeline": timeline_id,
+            "party": party_id,
+            "member": member_entity_id,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_ruleset_version(connection: Connection, code: str | None = None) -> uuid.UUID:
     """A bare ruleset + ruleset_version, with no world association.
 

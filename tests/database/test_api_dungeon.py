@@ -11,13 +11,18 @@ Covers: access control (non-member/capless-member), GM vs. player audience
 filtering (a GM sees every structural child regardless of `is_hidden`; a
 player sees a hidden child only once their party has discovered it, and
 otherwise not at all — not merely flagged, per docs/PLAN.md §25 step 15's
-"cannot be inferred through counts... or errors"), the `party_id`/
-`campaign_id` cross-campaign rejection `dnd_ai.commands._shared.
-validate_campaign_party` now shares with `dnd_ai.api.quests`, and the
-cross-world "does this area belong to my campaign" rejection unique to
-this query (no `campaign_id` column exists on any dungeon-domain table, so
-world agreement is what stands in for it, mirroring `dnd_ai.api.
-integration`'s identical reasoning for `map_external_identifier`).
+"cannot be inferred through counts... or errors"), and — the workstream 12
+correction pass's central concern — that a `party_id` is never trusted for
+hidden-content filtering merely because it is associated with the caller's
+own campaign (`dnd_ai.api.access.resolve_party_perspective`). A `party_id`
+is authorized only paired with a `character_id` the caller holds
+`character.view_knowledge` for, and only when that character is currently
+a member of exactly that party (`campaign.party_memberships`). The fixture
+sets up two same-campaign parties, each with its own current member, so
+these tests can prove player A's authorized character unlocks party A's
+discoveries but never party B's — regardless of whether player A merely
+guesses party B's UUID or names a real member of party B that player A
+itself has no relationship to.
 """
 
 import uuid
@@ -39,17 +44,23 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_campaign_party,
+    make_character,
+    make_character_relationship_type,
     make_dungeon,
     make_dungeon_area,
     make_knowledge_item,
+    make_membership_character_relationship,
     make_membership_role,
     make_party,
     make_party_discovery,
+    make_party_membership,
+    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_timeline,
     make_user,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -59,6 +70,7 @@ class Fixture:
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
+        self.world_time_id = make_world_time(connection, self.world_id, 100)
         # "pending" sidesteps the active-campaign access-manager retention
         # invariant (revision 080) — these tests grant campaign.view/
         # canon.edit, not access.manage, and don't otherwise care about
@@ -119,6 +131,9 @@ class Fixture:
             subject_area_connection_id=self.hidden_connection_id,
         )
 
+        # Party A — the party player_user is actually entitled to see
+        # through (its character_a is a current member, and player_user
+        # holds character.view_knowledge for character_a).
         self.party_id = make_party(connection, self.world_id, name="The Company")
         make_campaign_party(connection, self.campaign_id, self.party_id)
         # Discovers only the hidden feature — proves filtering is per
@@ -129,6 +144,13 @@ class Fixture:
             self.hidden_feature_knowledge_id,
             party_id=self.party_id,
         )
+
+        # Party B — a second, real party in the *same* campaign. Nothing
+        # about player_user relates to it; used to prove that campaign
+        # association alone (or knowing/guessing its UUID) never unlocks
+        # its discoveries.
+        self.party_b_id = make_party(connection, self.world_id, name="The Rivals")
+        make_campaign_party(connection, self.campaign_id, self.party_b_id)
 
         # Associated only with the *other* campaign — same world/timeline,
         # so campaign.enforce_campaign_party_world() alone lets it through.
@@ -149,6 +171,9 @@ class Fixture:
         canon_edit_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
+        view_knowledge_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_knowledge"
+        )
 
         self.gm_user_id = make_user(connection, "Dungeon API GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
@@ -168,6 +193,40 @@ class Fixture:
         )
         make_role_capability(connection, player_role_id, view_capability_id)
         make_membership_role(connection, player_membership_id, player_role_id)
+
+        # character_a: player_user's own character — currently a member of
+        # Party A, and player_user holds character.view_knowledge for it
+        # via a real membership_character_relationship (not a blanket role
+        # capability), the same resource-scoped shape resolve_party_
+        # perspective() requires.
+        self.character_a_id = make_character(connection, self.world_id, name="Aria")
+        make_party_membership(
+            connection, self.timeline_id, self.party_id, self.character_a_id, self.world_time_id
+        )
+        # security.character_relationship_types is a global lookup table,
+        # not scoped by world — cleanup below deletes this specific row
+        # explicitly by id, the same way it must for any shared lookup row
+        # a test creates.
+        self.controller_relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(
+            connection, self.controller_relationship_type_id, view_knowledge_capability_id
+        )
+        make_membership_character_relationship(
+            connection,
+            player_membership_id,
+            self.character_a_id,
+            self.controller_relationship_type_id,
+            timeline_id=self.timeline_id,
+        )
+
+        # character_b: a real, current member of Party B — but player_user
+        # has *no* relationship to it at all. Proves a character the
+        # caller cannot view/control can't be used to unlock a party it
+        # does genuinely belong to.
+        self.character_b_id = make_character(connection, self.world_id, name="Borin")
+        make_party_membership(
+            connection, self.timeline_id, self.party_b_id, self.character_b_id, self.world_time_id
+        )
 
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
@@ -194,6 +253,20 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         # explicitly here, in dependency order, scoped to this fixture's
         # two worlds.
         for world_id in (fixture.world_id, fixture.other_world_id):
+            cleanup.execute(
+                text("""
+                    DELETE FROM security.membership_character_relationships
+                    WHERE campaign_membership_id IN (
+                        SELECT campaign_membership_id FROM security.campaign_memberships
+                        WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
             cleanup.execute(
                 text("""
                     DELETE FROM security.membership_roles WHERE role_id IN (
@@ -250,6 +323,14 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             )
             cleanup.execute(
                 text("""
+                    DELETE FROM campaign.party_memberships WHERE timeline_id IN (
+                        SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
                     DELETE FROM campaign.campaign_parties WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
@@ -274,6 +355,25 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             )
             cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
             cleanup.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world_id})
+        # security.character_relationship_types (and its capability grant)
+        # is a global lookup table, not scoped by world — the per-world
+        # loop above already removed the membership_character_relationships
+        # row referencing it, so this specific row is safe to delete here
+        # by id, the same explicit-by-id discipline every other shared
+        # lookup table in this codebase's tests already follows.
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :rt"
+            ),
+            {"rt": fixture.controller_relationship_type_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types WHERE character_relationship_type_id = :rt"
+            ),
+            {"rt": fixture.controller_relationship_type_id},
+        )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {
@@ -354,7 +454,7 @@ def test_a_gm_sees_every_structural_child_including_hidden_ones(
     }
 
 
-def test_a_player_with_no_party_sees_only_non_hidden_content(
+def test_a_player_with_no_perspective_sees_only_non_hidden_content(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.player_user_id) as client:
@@ -370,11 +470,28 @@ def test_a_player_with_no_party_sees_only_non_hidden_content(
     assert {c["area_connection_id"] for c in body["connections"]} == {str(f.visible_connection_id)}
 
 
-def test_a_player_with_a_party_sees_only_what_that_party_discovered(
+def test_supplying_only_party_id_without_a_character_is_treated_as_no_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """The pre-correction-pass shape of this request (bare party_id, no
+    character_id) must never grant hidden access on its own — it is
+    silently treated as no perspective at all, not an error and not a
+    shortcut to authorization."""
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_area_url(f), params={"party_id": str(f.party_id)})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {feat["area_feature_id"] for feat in body["features"]} == {str(f.visible_feature_id)}
+
+
+def test_a_player_with_an_authorized_character_sees_their_partys_discoveries(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.player_user_id) as client:
-        response = client.get(_area_url(f), params={"party_id": str(f.party_id)})
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.party_id)},
+        )
     assert response.status_code == 200, response.text
     body = response.json()
 
@@ -426,17 +543,74 @@ def test_location_state_defaults_when_no_state_row_exists(
 
 
 # ---------------------------------------------------------------------------
-# Party/campaign and world/campaign scope
-# (dnd_ai.commands._shared.validate_campaign_party,
-#  dnd_ai.queries.dungeon.DungeonAreaNotFoundError)
+# Party-perspective authorization
+# (dnd_ai.api.access.resolve_party_perspective, workstream 12 correction pass)
 # ---------------------------------------------------------------------------
+
+
+def test_a_players_own_character_cannot_be_used_to_view_a_different_party(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """character_a genuinely exists, is genuinely a party member, and
+    player_user genuinely holds character.view_knowledge for it — just not
+    for party_b. Proves the party/character pairing itself is checked, not
+    merely "does the caller have some authorized character.\""""
+    with client_factory(f.player_user_id) as client:
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.party_b_id)},
+        )
+    assert response.status_code == 404
+
+
+def test_an_unauthorized_character_cannot_be_used_to_unlock_a_party_it_belongs_to(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """character_b is a genuine, current member of party_b — but
+    player_user has no character.view_knowledge relationship to character_b
+    at all. Proves the capability check on the character itself is
+    enforced, not bypassable by naming a character that happens to be a
+    real party member."""
+    with client_factory(f.player_user_id) as client:
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_b_id), "party_id": str(f.party_b_id)},
+        )
+    assert response.status_code == 404
+
+
+def test_guessing_a_different_partys_uuid_does_not_change_the_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """A real, same-campaign party's UUID and a nonexistent one must be
+    rejected identically — otherwise the response itself would disclose
+    which UUIDs name real parties."""
+    with client_factory(f.player_user_id) as client:
+        real_party = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.party_b_id)},
+        )
+        nonexistent_party = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(uuid.uuid4())},
+        )
+    assert real_party.status_code == 404
+    assert nonexistent_party.status_code == 404
+    # correlation_id is a fresh per-request identifier, never a disclosure
+    # channel on its own — everything else in the error body (the part
+    # that could actually leak which UUID was real) must match exactly.
+    assert real_party.json()["error"]["code"] == nonexistent_party.json()["error"]["code"]
+    assert real_party.json()["error"]["message"] == nonexistent_party.json()["error"]["message"]
 
 
 def test_a_party_from_a_different_campaign_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.player_user_id) as client:
-        response = client.get(_area_url(f), params={"party_id": str(f.foreign_party_id)})
+        response = client.get(
+            _area_url(f),
+            params={"character_id": str(f.character_a_id), "party_id": str(f.foreign_party_id)},
+        )
     assert response.status_code == 404
 
 
