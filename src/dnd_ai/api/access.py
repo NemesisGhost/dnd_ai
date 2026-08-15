@@ -18,19 +18,21 @@ exist" from "you have no access to it"), while an authenticated member who
 simply lacks the required capability — membership itself is already not in
 question — gets `ForbiddenError`.
 
-`resolve_party_perspective()` below is the second thing this module
-resolves: not "does this caller have a campaign-wide capability" but "is
-this caller authorized to view fictional knowledge through a specific
-party's eyes." That is a materially different, resource-scoped question a
-bare `campaign.campaign_parties` association cannot answer on its own —
-see that function's own docstring for the authorization chain it requires
-and the vulnerability it closes (a same-campaign member supplying any
-other party's UUID and reading that party's hidden knowledge, since party
-membership in a campaign says nothing about which *human* is entitled to
-see through that party's eyes; docs/architecture/DATABASE_MODEL.md §15's
-own words: "A fact known by a character is exposed to a user only when
-that user has the appropriate character relationship and capability for
-the requested perspective").
+`resolve_party_perspective()` and `resolve_character_view_tier()` below
+are this module's resource-scoped resolvers: not "does this caller have a
+campaign-wide capability" but "is this caller authorized to view fictional
+knowledge through a specific party's eyes" or "...at a specific character's
+full detail." Both are materially different, resource-scoped questions a
+bare campaign-wide capability (or, for the former, a bare
+`campaign.campaign_parties` association) cannot answer on its own — see
+each function's own docstring. `resolve_party_perspective`'s docstring
+also records the vulnerability it closes (a same-campaign member supplying
+any other party's UUID and reading that party's hidden knowledge, since
+party membership in a campaign says nothing about which *human* is
+entitled to see through that party's eyes; docs/architecture/
+DATABASE_MODEL.md §15's own words: "A fact known by a character is exposed
+to a user only when that user has the appropriate character relationship
+and capability for the requested perspective").
 """
 
 import uuid
@@ -180,3 +182,37 @@ def resolve_party_perspective(
         )
 
     return party_id
+
+
+class CharacterViewNotAuthorizedError(DomainAuthorizationError):
+    """Raised by `resolve_character_view_tier()` when the caller holds
+    neither `character.view_full` nor `character.view_summary` (nor
+    `canon.edit`) for the named character — identical for a nonexistent
+    character and one the caller genuinely has no relationship to, so a
+    caller can never learn which case applied. The supplied character id is
+    included only in the constructor's `detail` argument (`str(self)`),
+    never in `safe_message`."""
+
+
+def resolve_character_view_tier(access: AccessContext, *, character_id: uuid.UUID) -> bool:
+    """Returns `True` if the caller may see a character's full mechanical
+    detail (`character.view_full`, or `canon.edit` — a GM), `False` if only
+    the summary tier (`character.view_summary`) applies. Raises
+    `CharacterViewNotAuthorizedError` if neither capability is held for
+    this specific `character_id` — checked via `AccessContext.
+    has_capability`, so a role capability, the caller's own resolved
+    `security.membership_character_relationships` row for this character,
+    and any `security.resource_grants` override all apply exactly as they
+    do for every other capability check in this codebase. Pure — resolves
+    entirely from the already-loaded `AccessContext`, no database access,
+    since (unlike `resolve_party_perspective`) there is no further fact
+    about the fictional world to verify here."""
+    if access.has_capability("canon.edit"):
+        return True
+    if access.has_capability("character.view_full", character_id=character_id):
+        return True
+    if access.has_capability("character.view_summary", character_id=character_id):
+        return False
+    raise CharacterViewNotAuthorizedError(
+        f"user {access.user_id} holds no character-view capability for character {character_id}"
+    )

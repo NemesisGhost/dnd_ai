@@ -2608,6 +2608,117 @@ def make_character_state(
     )
 
 
+def make_condition(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "poisoned"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.conditions (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING condition_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_resource_definition(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "ki_points"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.resource_definitions (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING resource_definition_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_condition(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    condition_id: uuid.UUID,
+    *,
+    source_description: str | None = None,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO campaign.character_conditions
+                (timeline_id, character_id, condition_id, source_description)
+            VALUES (:timeline, :character, :condition, :source)
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "condition": condition_id,
+            "source": source_description,
+        },
+    )
+
+
+def make_character_resource(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    resource_definition_id: uuid.UUID,
+    *,
+    current_amount: int = 1,
+    maximum_amount: int = 1,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO campaign.character_resources
+                (timeline_id, character_id, resource_definition_id, current_amount, maximum_amount)
+            VALUES (:timeline, :character, :resource, :current, :maximum)
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "resource": resource_definition_id,
+            "current": current_amount,
+            "maximum": maximum_amount,
+        },
+    )
+
+
+def make_character_location_history(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    location_id: uuid.UUID,
+    arrived_at_world_time_id: uuid.UUID,
+    *,
+    departed_at_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `campaign.character_location_history` row. Leaving
+    `departed_at_world_time_id` unset (the default) produces the character's
+    current location — at most one such open row per `(timeline,
+    character)`, enforced by a partial unique index (revision 042/043)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO campaign.character_location_history
+                (timeline_id, character_id, location_id, arrived_at_world_time_id,
+                 departed_at_world_time_id)
+            VALUES (:timeline, :character, :location, :arrived, :departed)
+            RETURNING character_location_history_id
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "location": location_id,
+            "arrived": arrived_at_world_time_id,
+            "departed": departed_at_world_time_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_external_system(
     connection: Connection,
     world_id: uuid.UUID,

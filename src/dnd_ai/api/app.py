@@ -10,11 +10,12 @@ OIDC bearer-token verification (`dnd_ai.api.auth`/`dnd_ai.domain.tokens`)
 is delivered and used by the command endpoints below
 (`dnd_ai.api.encounters`, `dnd_ai.api.items`, `dnd_ai.api.quests`,
 `dnd_ai.api.relationships`, `dnd_ai.api.events`, `dnd_ai.api.interactions`,
-`dnd_ai.api.integration`) and the query endpoints (`dnd_ai.api.dungeon`)
-via `dnd_ai.api.access`. This module remains the plumbing every router
-builds on: app factory, error contract, correlation IDs, health/readiness,
-per-request transaction management, and authentication — routers register
-their own paths, this module only mounts them.
+`dnd_ai.api.integration`) and the query endpoints (`dnd_ai.api.dungeon`,
+`dnd_ai.api.characters`) via `dnd_ai.api.access`. This module remains the
+plumbing every router builds on: app factory, error contract, correlation
+IDs, health/readiness, per-request transaction management, and
+authentication — routers register their own paths, this module only
+mounts them.
 """
 
 import logging
@@ -29,6 +30,7 @@ from starlette.responses import JSONResponse
 from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, settings
 
 from .auth import dispose_jwks_client
+from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
 from .dungeon import router as dungeon_router
@@ -79,6 +81,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="D&D AI World Platform API", lifespan=_lifespan)
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
+    app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounters_router)
     app.include_router(events_router)
