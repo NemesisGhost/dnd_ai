@@ -50,6 +50,7 @@ from .interactions import router as interactions_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
 from .memberships import router as memberships_router
+from .movement import router as movement_router
 from .quests import router as quests_router
 from .relationships import router as relationships_router
 from .summary import router as summary_router
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(items_router)
     app.include_router(knowledge_router)
     app.include_router(memberships_router)
+    app.include_router(movement_router)
     app.include_router(quests_router)
     app.include_router(relationships_router)
     app.include_router(summary_router)

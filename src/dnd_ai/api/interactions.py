@@ -69,6 +69,15 @@ Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
 `security.idempotent_requests` (migration 082) — identical mechanism to
 every other command router; see `dnd_ai.api.items`'s module docstring for
 the full concurrency argument.
+
+`resolve_check_endpoint` gained the hazard trigger/disarm, mechanism
+activation, and discovery consequences `dnd_ai.commands.interactions.
+_resolve_check_impl` added for docs/PLAN.md §25 steps 8-11 — see that
+function's own docstring. `party_id` in the request body is trusted
+directly rather than resolved through `dnd_ai.api.access.resolve_party_
+perspective`, since this route already requires `canon.edit`
+(GM/adapter-level), the same bypass every other GM-gated Phase 10 endpoint
+gives a party-perspective check.
 """
 
 import uuid
@@ -162,12 +171,22 @@ class ResolveCheckRequest(BaseModel):
     is_visible_to_players: bool = True
     external_system_source: str | None = None
     event_details: str | None = None
+    # Trusted directly, not resolved through dnd_ai.api.access.
+    # resolve_party_perspective — this route requires canon.edit
+    # (GM/adapter-level), which already bypasses a party-perspective check
+    # everywhere else in Phase 10 (see dnd_ai.commands.interactions.
+    # _resolve_check_impl's own docstring).
+    party_id: uuid.UUID | None = None
 
 
 class ResolveCheckResponse(BaseModel):
     check_result_id: uuid.UUID
     event_id: uuid.UUID | None
     area_connection_opened: bool
+    hazard_status_code: str | None
+    interactable_activated: bool
+    discovery_event_id: uuid.UUID | None
+    discovered_knowledge_item_id: uuid.UUID | None
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +342,7 @@ def resolve_check_endpoint(
         external_system_source=body.external_system_source,
         event_details=body.event_details,
         expected_campaign_id=campaign_id,
+        party_id=body.party_id,
     )
 
     record_change_log(
@@ -339,13 +359,22 @@ def resolve_check_endpoint(
         actor_user_id=access.user_id,
         correlation_id=correlation_id,
         command_name=_RESOLVE_CHECK_COMMAND_NAME,
-        event_id=result.event_id,
+        # A discovery-only outcome (no primary connection/hazard/
+        # interactable state change) still leaves result.event_id None —
+        # audit.change_log.event_id falls back to the discovery event so
+        # a real state change is never audited with no event reference at
+        # all.
+        event_id=result.event_id or result.discovery_event_id,
     )
 
     response = ResolveCheckResponse(
         check_result_id=result.check_result_id,
         event_id=result.event_id,
         area_connection_opened=result.area_connection_opened,
+        hazard_status_code=result.hazard_status_code,
+        interactable_activated=result.interactable_activated,
+        discovery_event_id=result.discovery_event_id,
+        discovered_knowledge_item_id=result.discovered_knowledge_item_id,
     )
 
     if reservation_id is not None:

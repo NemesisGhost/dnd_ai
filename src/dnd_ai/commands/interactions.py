@@ -29,6 +29,37 @@ resolves against already carries its own authoritative `campaign_id` — so
 it instead accepts an optional `expected_campaign_id` an API caller passes
 to assert that authoritative value matches the campaign named in the
 request, via `_lock_interaction_for_check_resolution` below.
+
+`_resolve_check_impl` reacts to four kinds of narratively significant
+check outcomes today, each independently gated on which single target
+column the check's own target row carries (docs/PLAN.md §25 steps 8-11):
+
+- `target_area_connection_id` + the connection's own conditional-route
+  requirement satisfied → open the route (`_open_area_connection`,
+  unchanged from Phase 6).
+- `target_area_hazard_id` + `interaction_type_code` of `disarm_trap`/
+  `trigger_trap` → `campaign.hazard_state` transitions to `disarmed`/
+  `triggered` per `_hazard_outcome_status()`'s own mapping.
+- `target_area_interactable_id` + `interaction_type_code` of
+  `activate_mechanism`, on success → `campaign.interactable_state`
+  transitions to `activated`.
+- Any of the four hidden-eligible target kinds (`target_area_connection_id`/
+  `target_area_feature_id`/`target_area_hazard_id`/
+  `target_area_interactable_id`), when `is_hidden` and a caller-supplied
+  `party_id` has not yet discovered it via a matching `knowledge.
+  knowledge_items` row — the write-side counterpart to `dnd_ai.queries.
+  dungeon`'s own read-side discovery filtering (see `_maybe_discover_
+  target()`'s own docstring).
+
+The first three are mutually exclusive by construction (`interaction.
+targets`' own "at most one target column set" shape), but discovery is
+independent and can co-occur with any of them — a single successful check
+can both reveal a hazard's existence and disarm it in the same action.
+Every reaction that fires gets its own `narrative.events` row and
+`interaction.consequences` row; `interaction.interactions.resulting_
+event_id` is set to the mechanically primary one (connection/hazard/
+interactable) when one occurred, falling back to the discovery event
+otherwise — see `_resolve_interaction()`'s own docstring.
 """
 
 import json
@@ -275,29 +306,40 @@ class ResolveCheckResult:
     actor_entity_id: uuid.UUID
     event_id: uuid.UUID | None = None
     area_connection_opened: bool = False
+    hazard_status_code: str | None = None
+    interactable_activated: bool = False
+    discovery_event_id: uuid.UUID | None = None
+    discovered_knowledge_item_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
 class _CheckContext:
     actor_entity_id: uuid.UUID
     interaction_id: uuid.UUID
+    interaction_type_code: str
     timeline_id: uuid.UUID
     world_time_id: uuid.UUID
     world_id: uuid.UUID
     campaign_id: uuid.UUID | None
     session_id: uuid.UUID | None
     target_area_connection_id: uuid.UUID | None
+    target_area_feature_id: uuid.UUID | None
+    target_area_hazard_id: uuid.UUID | None
+    target_area_interactable_id: uuid.UUID | None
 
 
 def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _CheckContext:
     row = (
         connection.execute(
             text("""
-            SELECT cr.actor_entity_id, i.interaction_id, i.timeline_id, i.world_time_id,
-                   i.campaign_id, i.session_id, t.world_id, tgt.target_area_connection_id
+            SELECT cr.actor_entity_id, i.interaction_id, it.code AS interaction_type_code,
+                   i.timeline_id, i.world_time_id, i.campaign_id, i.session_id, t.world_id,
+                   tgt.target_area_connection_id, tgt.target_area_feature_id,
+                   tgt.target_area_hazard_id, tgt.target_area_interactable_id
             FROM interaction.check_requests cr
             JOIN interaction.actions a ON a.action_id = cr.action_id
             JOIN interaction.interactions i ON i.interaction_id = a.interaction_id
+            JOIN interaction.interaction_types it ON it.interaction_type_id = i.interaction_type_id
             JOIN campaign.timelines t ON t.timeline_id = i.timeline_id
             LEFT JOIN interaction.targets tgt ON tgt.target_id = cr.target_id
             WHERE cr.check_request_id = :check_request_id
@@ -310,12 +352,16 @@ def _check_context(connection: Connection, check_request_id: uuid.UUID) -> _Chec
     return _CheckContext(
         actor_entity_id=row["actor_entity_id"],
         interaction_id=row["interaction_id"],
+        interaction_type_code=row["interaction_type_code"],
         timeline_id=row["timeline_id"],
         world_time_id=row["world_time_id"],
         world_id=row["world_id"],
         campaign_id=row["campaign_id"],
         session_id=row["session_id"],
         target_area_connection_id=row["target_area_connection_id"],
+        target_area_feature_id=row["target_area_feature_id"],
+        target_area_hazard_id=row["target_area_hazard_id"],
+        target_area_interactable_id=row["target_area_interactable_id"],
     )
 
 
@@ -473,32 +519,334 @@ def _open_area_connection(
     )
 
 
+_SUCCESS_DEGREES = frozenset({"success", "critical_success"})
+
+
+def _hazard_status(
+    connection: Connection, timeline_id: uuid.UUID, area_hazard_id: uuid.UUID
+) -> str | None:
+    value = connection.execute(
+        text("""
+            SELECT hs.code FROM campaign.hazard_state hst
+            JOIN campaign.hazard_statuses hs ON hs.hazard_status_id = hst.hazard_status_id
+            WHERE hst.timeline_id = :timeline AND hst.area_hazard_id = :hazard
+        """),
+        {"timeline": timeline_id, "hazard": area_hazard_id},
+    ).scalar()
+    assert value is None or isinstance(value, str)
+    return value
+
+
+def _lock_hazard(connection: Connection, area_hazard_id: uuid.UUID) -> None:
+    """Mirrors `_lock_area_connection`'s identical reasoning: locks the
+    structural row itself (always present) so two concurrent `resolve_
+    check()` calls targeting the same hazard serialize rather than racing
+    to both decide the same prior status and both write a conflicting
+    effect."""
+    connection.execute(
+        text("SELECT area_hazard_id FROM world.area_hazards WHERE area_hazard_id = :h FOR UPDATE"),
+        {"h": area_hazard_id},
+    )
+
+
+def _hazard_outcome_status(interaction_type_code: str, degree_of_success: str) -> str | None:
+    """The `campaign.hazard_statuses` code a check against a hazard should
+    transition to, or `None` if this interaction type/outcome combination
+    has no hazard reaction at all. A failed `disarm_trap` attempt sets the
+    trap off (`triggered`) rather than leaving it `armed` — the dramatic
+    and mechanically standard D&D outcome; a failed `trigger_trap` attempt
+    (a deliberate attempt to set it off that didn't land) produces no
+    reaction, mirroring `_open_area_connection`'s own "a failed check
+    simply has nothing further to react to" precedent."""
+    succeeded = degree_of_success in _SUCCESS_DEGREES
+    if interaction_type_code == "disarm_trap":
+        return "disarmed" if succeeded else "triggered"
+    if interaction_type_code == "trigger_trap":
+        return "triggered" if succeeded else None
+    return None
+
+
+def _change_hazard_status(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    area_hazard_id: uuid.UUID,
+    event_id: uuid.UUID,
+    new_status_code: str,
+    previous_status_code: str | None,
+) -> None:
+    """Update the typed current state and record the narrative.event_effects
+    row for it, together — mirrors `_open_area_connection`'s identical
+    pairing for `campaign.area_connection_state`. Unlike that table,
+    `campaign.hazard_state` carries no `last_event_id` column of its own
+    (migration 040 predates that convention, added by migration 060 to
+    the tables that existed by then) — nothing here regresses that; the
+    event linkage still exists via `narrative.event_effects.event_id`."""
+    new_status_id = lookup_id(
+        connection, "campaign", "hazard_statuses", "hazard_status_id", new_status_code
+    )
+    connection.execute(
+        text("""
+            INSERT INTO campaign.hazard_state (timeline_id, area_hazard_id, hazard_status_id)
+            VALUES (:timeline, :hazard, :status)
+            ON CONFLICT (timeline_id, area_hazard_id) DO UPDATE
+            SET hazard_status_id = EXCLUDED.hazard_status_id, updated_at = now()
+        """),
+        {"timeline": timeline_id, "hazard": area_hazard_id, "status": new_status_id},
+    )
+    connection.execute(
+        text("""
+            INSERT INTO narrative.event_effects
+                (event_id, target_area_hazard_id, target_component, previous_value, new_value)
+            VALUES (:event, :hazard, 'hazard_status_id', :previous, :new)
+        """),
+        {
+            "event": event_id,
+            "hazard": area_hazard_id,
+            "previous": json.dumps(previous_status_code),
+            "new": json.dumps(new_status_code),
+        },
+    )
+
+
+def _interactable_status(
+    connection: Connection, timeline_id: uuid.UUID, area_interactable_id: uuid.UUID
+) -> str | None:
+    value = connection.execute(
+        text("""
+            SELECT ist.code FROM campaign.interactable_state ins
+            JOIN campaign.interactable_statuses ist
+                ON ist.interactable_status_id = ins.interactable_status_id
+            WHERE ins.timeline_id = :timeline AND ins.area_interactable_id = :interactable
+        """),
+        {"timeline": timeline_id, "interactable": area_interactable_id},
+    ).scalar()
+    assert value is None or isinstance(value, str)
+    return value
+
+
+def _lock_interactable(connection: Connection, area_interactable_id: uuid.UUID) -> None:
+    connection.execute(
+        text(
+            "SELECT area_interactable_id FROM world.area_interactables "
+            "WHERE area_interactable_id = :i FOR UPDATE"
+        ),
+        {"i": area_interactable_id},
+    )
+
+
+def _activate_interactable(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    area_interactable_id: uuid.UUID,
+    event_id: uuid.UUID,
+    previous_status_code: str | None,
+) -> None:
+    """Mirrors `_change_hazard_status()`'s identical pairing for `campaign.
+    interactable_state`."""
+    activated_status_id = lookup_id(
+        connection, "campaign", "interactable_statuses", "interactable_status_id", "activated"
+    )
+    connection.execute(
+        text("""
+            INSERT INTO campaign.interactable_state
+                (timeline_id, area_interactable_id, interactable_status_id)
+            VALUES (:timeline, :interactable, :status)
+            ON CONFLICT (timeline_id, area_interactable_id) DO UPDATE
+            SET interactable_status_id = EXCLUDED.interactable_status_id, updated_at = now()
+        """),
+        {
+            "timeline": timeline_id,
+            "interactable": area_interactable_id,
+            "status": activated_status_id,
+        },
+    )
+    connection.execute(
+        text("""
+            INSERT INTO narrative.event_effects
+                (event_id, target_area_interactable_id, target_component, previous_value,
+                 new_value)
+            VALUES (:event, :interactable, 'interactable_status_id', :previous, :new)
+        """),
+        {
+            "event": event_id,
+            "interactable": area_interactable_id,
+            "previous": json.dumps(previous_status_code),
+            "new": json.dumps("activated"),
+        },
+    )
+
+
+# Maps each hidden-eligible target column to the structural table/PK column
+# that carries its own is_hidden flag, and to the knowledge.knowledge_items
+# column that names it as a discovery subject — the write-side counterpart
+# to dnd_ai.queries.dungeon's identical _DISCOVERY_EXISTS join (see that
+# module's docstring). Every value here is an internal literal, never
+# user-controlled, so interpolating them into SQL below is safe.
+_HIDDEN_TARGET_TABLES: dict[str, tuple[str, str, str]] = {
+    "target_area_connection_id": (
+        "world.area_connections",
+        "area_connection_id",
+        "subject_area_connection_id",
+    ),
+    "target_area_feature_id": (
+        "world.area_features",
+        "area_feature_id",
+        "subject_area_feature_id",
+    ),
+    "target_area_hazard_id": (
+        "world.area_hazards",
+        "area_hazard_id",
+        "subject_area_hazard_id",
+    ),
+    "target_area_interactable_id": (
+        "world.area_interactables",
+        "area_interactable_id",
+        "subject_area_interactable_id",
+    ),
+}
+
+
+def _resolve_hidden_target(context: _CheckContext) -> tuple[str, uuid.UUID] | None:
+    """Whichever one of the four hidden-eligible target kinds this check's
+    target hit, or `None` if it targeted a bare entity or nothing at all
+    (`interaction.targets`' own "at most one target column set" shape
+    means at most one of these is ever non-`None`)."""
+    for column in _HIDDEN_TARGET_TABLES:
+        value = getattr(context, column)
+        if value is not None:
+            return column, value
+    return None
+
+
+def _maybe_discover_target(
+    connection: Connection, *, context: _CheckContext, party_id: uuid.UUID | None
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Reveals the check's own target to `party_id`, when it is hidden, a
+    `knowledge.knowledge_items` row names it as `subject_area_*_id`, and
+    `party_id` has not already discovered it — the write-side counterpart
+    to `dnd_ai.queries.dungeon.get_dungeon_area_view`'s identical
+    discovery-eligibility join (see that module's own docstring for why a
+    hidden, undiscovered child must be indistinguishable from one that
+    doesn't exist). Returns `(event_id, knowledge_item_id)` when a
+    discovery was recorded, else `None` — no target, no `party_id`, not
+    hidden, no matching knowledge item, or already discovered."""
+    if party_id is None:
+        return None
+    resolved = _resolve_hidden_target(context)
+    if resolved is None:
+        return None
+    target_column, target_id = resolved
+    table, pk_column, subject_column = _HIDDEN_TARGET_TABLES[target_column]
+
+    is_hidden = connection.execute(
+        text(f"SELECT is_hidden FROM {table} WHERE {pk_column} = :target"),  # noqa: S608
+        {"target": target_id},
+    ).scalar()
+    if not is_hidden:
+        return None
+
+    knowledge_item_id = connection.execute(
+        text(
+            f"SELECT knowledge_item_id FROM knowledge.knowledge_items "  # noqa: S608
+            f"WHERE {subject_column} = :target"
+        ),
+        {"target": target_id},
+    ).scalar()
+    if knowledge_item_id is None:
+        return None
+
+    already_discovered = connection.execute(
+        text("""
+            SELECT 1 FROM knowledge.party_discoveries
+            WHERE timeline_id = :timeline AND party_id = :party AND knowledge_item_id = :item
+        """),
+        {"timeline": context.timeline_id, "party": party_id, "item": knowledge_item_id},
+    ).scalar()
+    if already_discovered:
+        return None
+
+    event_id = _insert_event_row(
+        connection,
+        world_id=context.world_id,
+        timeline_id=context.timeline_id,
+        world_time_id=context.world_time_id,
+        event_type_code="knowledge_revealed",
+        name="Hidden feature discovered",
+        campaign_id=context.campaign_id,
+        session_id=context.session_id,
+        participants=(EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),),
+        cause_interaction_id=context.interaction_id,
+    )
+
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.party_discoveries
+                (timeline_id, knowledge_item_id, party_id, discovered_at_world_time_id,
+                 discovered_via_interaction_id)
+            VALUES (:timeline, :item, :party, :world_time, :interaction)
+        """),
+        {
+            "timeline": context.timeline_id,
+            "item": knowledge_item_id,
+            "party": party_id,
+            "world_time": context.world_time_id,
+            "interaction": context.interaction_id,
+        },
+    )
+
+    connection.execute(
+        text(f"""
+            INSERT INTO narrative.event_effects
+                (event_id, {target_column}, target_component, previous_value, new_value)
+            VALUES (:event, :target, 'discovered', :previous, :new)
+        """),  # noqa: S608
+        {
+            "event": event_id,
+            "target": target_id,
+            "previous": json.dumps(False),
+            "new": json.dumps(True),
+        },
+    )
+
+    return event_id, knowledge_item_id
+
+
 def _resolve_interaction(
     connection: Connection,
     *,
     interaction_id: uuid.UUID,
-    event_id: uuid.UUID | None,
-    description: str | None,
+    outcomes: tuple[tuple[uuid.UUID, str | None], ...],
 ) -> None:
-    """Link this call's event (if any) to the interaction. The status
-    transition itself (initiated -> resolving -> resolved) is no longer set
-    here — interaction.advance_interaction_status_on_check_result()
-    (revision 072) now owns it, firing atomically with the check_results
-    INSERT resolve_check() already performs, so it applies to any caller
-    that records a check result, not only this command.
+    """Links this call's event(s), if any, to the interaction — one
+    `interaction.consequences` row per event produced. `interaction.
+    interactions.resulting_event_id` (a single column) is set to
+    `outcomes[0]`'s event: callers list the mechanically primary state
+    change (connection/hazard/interactable) first when one occurred,
+    falling back to a discovery-only event otherwise — see this module's
+    own docstring for the full priority. The status transition itself
+    (initiated -> resolving -> resolved) is no longer set here —
+    interaction.advance_interaction_status_on_check_result() (revision
+    072) now owns it, firing atomically with the check_results INSERT
+    resolve_check() already performs, so it applies to any caller that
+    records a check result, not only this command.
 
-    A failed or non-matching check still contributes no event — it simply
-    has nothing to link and no consequence to record (SYSTEM_ARCHITECTURE.md
-    §6).
+    A failed or non-matching check with no discovery either still
+    contributes no event — it simply has nothing to link and no
+    consequence to record (SYSTEM_ARCHITECTURE.md §6).
     """
-    if event_id is not None:
-        connection.execute(
-            text("""
-                UPDATE interaction.interactions SET resulting_event_id = :event
-                WHERE interaction_id = :interaction
-            """),
-            {"event": event_id, "interaction": interaction_id},
-        )
+    if not outcomes:
+        return
+    primary_event_id = outcomes[0][0]
+    connection.execute(
+        text("""
+            UPDATE interaction.interactions SET resulting_event_id = :event
+            WHERE interaction_id = :interaction
+        """),
+        {"event": primary_event_id, "interaction": interaction_id},
+    )
+    for event_id, description in outcomes:
         connection.execute(
             text("""
                 INSERT INTO interaction.consequences
@@ -521,6 +869,7 @@ def _resolve_check_impl(
     external_system_source: str | None = None,
     event_details: str | None = None,
     expected_campaign_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
 ) -> ResolveCheckResult:
     """The actual work of resolve_check(), on a connection the caller
     already has open — see dnd_ai.commands.encounters._resolve_combat_turn_
@@ -564,6 +913,17 @@ def _resolve_check_impl(
     matters even when both checks belong to the same interaction (locked
     above) and, unchanged, when they belong to two different interactions
     entirely (not covered by the interaction-level lock at all).
+
+    party_id is caller-supplied and used only for discovery
+    (_maybe_discover_target). Unlike dnd_ai.queries.dungeon.
+    get_dungeon_area_view (which serves both a GM and a specific party's
+    own perspective and so must authorize party_id via dnd_ai.api.access.
+    resolve_party_perspective before trusting it), this function's one
+    caller today (dnd_ai.api.interactions.resolve_check_endpoint) requires
+    canon.edit — a GM/adapter-level caller, not a specific party's own
+    player — so party_id here is trusted the same way every other GM-gated
+    Phase 10 endpoint bypasses a party-perspective check entirely. Omitting
+    it (None) simply disables discovery for this call, never an error.
     """
     locked = _lock_interaction_for_check_resolution(
         connection, check_request_id, expected_campaign_id=expected_campaign_id
@@ -595,7 +955,12 @@ def _resolve_check_impl(
 
     event_id: uuid.UUID | None = None
     area_connection_opened = False
+    hazard_status_code: str | None = None
+    interactable_activated = False
 
+    # --- Primary, mutually exclusive reactions (interaction.targets' own
+    # "at most one target column set" shape guarantees only one of these
+    # three blocks can ever apply to a given check). ---
     if target_area_connection_id is not None:
         _lock_area_connection(connection, target_area_connection_id)
 
@@ -633,17 +998,102 @@ def _resolve_check_impl(
                     previous_status_code=previous_status_code,
                 )
                 area_connection_opened = True
+    elif context.target_area_hazard_id is not None:
+        outcome_status = _hazard_outcome_status(context.interaction_type_code, degree_of_success)
+        if outcome_status is not None:
+            _lock_hazard(connection, context.target_area_hazard_id)
+            previous_status_code = _hazard_status(
+                connection, context.timeline_id, context.target_area_hazard_id
+            )
+            if previous_status_code != outcome_status:
+                event_type_code = (
+                    "hazard_disarmed" if outcome_status == "disarmed" else "hazard_triggered"
+                )
+                event_id = _insert_event_row(
+                    connection,
+                    world_id=context.world_id,
+                    timeline_id=context.timeline_id,
+                    world_time_id=context.world_time_id,
+                    event_type_code=event_type_code,
+                    name=f"Hazard {outcome_status}",
+                    details=event_details,
+                    campaign_id=context.campaign_id,
+                    session_id=context.session_id,
+                    participants=(
+                        EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),
+                    ),
+                    cause_interaction_id=context.interaction_id,
+                )
+                _change_hazard_status(
+                    connection,
+                    timeline_id=context.timeline_id,
+                    area_hazard_id=context.target_area_hazard_id,
+                    event_id=event_id,
+                    new_status_code=outcome_status,
+                    previous_status_code=previous_status_code,
+                )
+                hazard_status_code = outcome_status
+    elif context.target_area_interactable_id is not None:
+        if context.interaction_type_code == "activate_mechanism" and (
+            degree_of_success in _SUCCESS_DEGREES
+        ):
+            _lock_interactable(connection, context.target_area_interactable_id)
+            previous_status_code = _interactable_status(
+                connection, context.timeline_id, context.target_area_interactable_id
+            )
+            if previous_status_code != "activated":
+                event_id = _insert_event_row(
+                    connection,
+                    world_id=context.world_id,
+                    timeline_id=context.timeline_id,
+                    world_time_id=context.world_time_id,
+                    event_type_code="mechanism_activated",
+                    name="Mechanism activated",
+                    details=event_details,
+                    campaign_id=context.campaign_id,
+                    session_id=context.session_id,
+                    participants=(
+                        EventParticipant(entity_id=context.actor_entity_id, role_code="actor"),
+                    ),
+                    cause_interaction_id=context.interaction_id,
+                )
+                _activate_interactable(
+                    connection,
+                    timeline_id=context.timeline_id,
+                    area_interactable_id=context.target_area_interactable_id,
+                    event_id=event_id,
+                    previous_status_code=previous_status_code,
+                )
+                interactable_activated = True
+
+    # --- Discovery: independent of the above, only when the check itself
+    # succeeded (an unsuccessful search reveals nothing). ---
+    discovery: tuple[uuid.UUID, uuid.UUID] | None = None
+    if degree_of_success in _SUCCESS_DEGREES:
+        discovery = _maybe_discover_target(connection, context=context, party_id=party_id)
+
+    outcomes: list[tuple[uuid.UUID, str | None]] = []
+    if event_id is not None:
+        if area_connection_opened:
+            description = (
+                f"Check satisfied area connection {target_area_connection_id}'s requirement; "
+                "route opened."
+            )
+        elif hazard_status_code is not None:
+            description = f"Check {hazard_status_code} hazard {context.target_area_hazard_id}."
+        elif interactable_activated:
+            description = f"Check activated interactable {context.target_area_interactable_id}."
+        else:  # pragma: no cover - defensive; event_id is only ever set alongside one of the above
+            description = None
+        outcomes.append((event_id, description))
+    if discovery is not None:
+        discovery_event_id, knowledge_item_id = discovery
+        outcomes.append((discovery_event_id, f"Discovered knowledge item {knowledge_item_id}."))
 
     _resolve_interaction(
         connection,
         interaction_id=interaction_id,
-        event_id=event_id,
-        description=(
-            f"Check satisfied area connection {target_area_connection_id}'s requirement; "
-            "route opened."
-            if area_connection_opened
-            else None
-        ),
+        outcomes=tuple(outcomes),
     )
 
     return ResolveCheckResult(
@@ -652,6 +1102,10 @@ def _resolve_check_impl(
         actor_entity_id=context.actor_entity_id,
         event_id=event_id,
         area_connection_opened=area_connection_opened,
+        hazard_status_code=hazard_status_code,
+        interactable_activated=interactable_activated,
+        discovery_event_id=discovery[0] if discovery is not None else None,
+        discovered_knowledge_item_id=discovery[1] if discovery is not None else None,
     )
 
 
@@ -667,6 +1121,7 @@ def resolve_check(
     external_system_source: str | None = None,
     event_details: str | None = None,
     expected_campaign_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
 ) -> ResolveCheckResult:
     """Record a check's outcome, atomically reacting to it when narratively
     significant. Public convenience API: opens and commits its own
@@ -684,4 +1139,5 @@ def resolve_check(
             external_system_source=external_system_source,
             event_details=event_details,
             expected_campaign_id=expected_campaign_id,
+            party_id=party_id,
         )
