@@ -10,6 +10,19 @@ concurrent advancements of the same objective serialize rather than race,
 then record the causing narrative.events row, update campaign.
 objective_state to match, and link the two through a narrative.
 event_effects row — all in one transaction.
+
+Split into a connection-taking `_advance_objective_impl` plus a thin
+engine-based public wrapper — the same composition
+`dnd_ai.commands.encounters`/`.items` use — so Phase 10's API layer
+(`dnd_ai.api.quests`) can run this on the request's own transaction instead
+of opening a second, nested one. `_advance_objective_impl` validates a
+caller-supplied `session_id` against `campaign_id`
+(`dnd_ai.commands._shared.validate_session_campaign`) before mutating
+anything, the same guard `_start_encounter_impl`/`_transfer_item_
+possession_impl` already apply — neither `narrative.quest_objectives` nor
+`campaign.objective_state` carries a `campaign_id` column at all (both are
+scoped by `timeline_id`, like the item domain), so this is the only place
+a caller-supplied session/campaign mismatch would otherwise go unchecked.
 """
 
 import json
@@ -19,6 +32,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, Engine, text
 
 from ._shared import lookup_id
+from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
 _TERMINAL_OBJECTIVE_STATUSES = frozenset({"completed", "failed", "skipped", "superseded"})
@@ -31,6 +45,7 @@ class AdvanceObjectiveResult:
     event_id: uuid.UUID
     previous_status_code: str | None
     new_status_code: str
+    world_id: uuid.UUID
 
 
 def _quest_objective_world(connection: Connection, quest_objective_id: uuid.UUID) -> uuid.UUID:
@@ -105,6 +120,152 @@ def _lock_objective_state(
     return objective_state_id, status_code
 
 
+def _advance_objective_impl(
+    connection: Connection,
+    *,
+    quest_objective_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    world_time_id: uuid.UUID,
+    new_status_code: str,
+    party_id: uuid.UUID | None = None,
+    actor_entity_id: uuid.UUID | None = None,
+    campaign_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    cause_interaction_id: uuid.UUID | None = None,
+    cause_event_id: uuid.UUID | None = None,
+    event_details: str | None = None,
+) -> AdvanceObjectiveResult:
+    """The actual work of advance_objective(), on a connection the caller
+    already has open — see dnd_ai.commands.encounters._resolve_combat_turn_
+    impl's docstring for the composable-implementation/public-wrapper
+    pattern this mirrors. A caller that owns the surrounding transaction
+    itself (e.g. the API layer's per-request connection) calls this
+    directly.
+
+    Record the narrative.events row that advances or fails a quest
+    objective and update campaign.objective_state to match, atomically. Only
+    'completed' and 'failed' are accepted — the only two transitions a
+    dungeon event actually drives (docs/PLAN.md's exit criterion names
+    "advance or fail"); other objective_status values (hidden, available,
+    active, skipped, superseded) are administrative/GM-driven and have no
+    causing event to record.
+
+    Rejects advancing an objective whose current state is already terminal
+    (completed, failed, skipped, superseded) — there is no application-level
+    guard preventing this at the database level yet (unlike interaction.
+    interactions' status irreversibility, Phase 6 revisions 070-072); this
+    command enforces it itself as the one path that currently writes
+    campaign.objective_state.
+
+    Validates session_id/campaign_id agreement (_validate_session_campaign)
+    before touching any row — campaign_id here is an ordinary caller-
+    supplied assertion (there is no locked, authoritative row to derive it
+    from, unlike _lock_encounter's LockedEncounter.campaign_id), matching
+    how dnd_ai.commands.items' routes already treat it.
+    """
+    if new_status_code not in _ADVANCEABLE_STATUSES:
+        raise ValueError(
+            f"new_status_code must be one of {sorted(_ADVANCEABLE_STATUSES)}, got {new_status_code!r}"
+        )
+
+    _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+
+    world_id = _quest_objective_world(connection, quest_objective_id)
+    _lock_quest_objective(connection, quest_objective_id)
+
+    existing = _lock_objective_state(
+        connection,
+        timeline_id=timeline_id,
+        quest_objective_id=quest_objective_id,
+        party_id=party_id,
+    )
+    previous_status_code = existing[1] if existing is not None else None
+
+    if previous_status_code in _TERMINAL_OBJECTIVE_STATUSES:
+        raise ValueError(
+            f"objective {quest_objective_id} has status {previous_status_code!r} and cannot "
+            "be advanced further — completed, failed, skipped, and superseded are terminal"
+        )
+
+    event_type_code = (
+        "objective_completed" if new_status_code == "completed" else "objective_failed"
+    )
+    event_id = _insert_event_row(
+        connection,
+        world_id=world_id,
+        timeline_id=timeline_id,
+        world_time_id=world_time_id,
+        event_type_code=event_type_code,
+        name=f"Quest objective {new_status_code}",
+        details=event_details,
+        campaign_id=campaign_id,
+        session_id=session_id,
+        participants=(
+            (EventParticipant(entity_id=actor_entity_id, role_code="actor"),)
+            if actor_entity_id is not None
+            else ()
+        ),
+        cause_interaction_id=cause_interaction_id,
+        cause_event_id=cause_event_id,
+    )
+
+    new_status_id = lookup_id(
+        connection, "campaign", "objective_statuses", "objective_status_id", new_status_code
+    )
+
+    if existing is None:
+        objective_state_id = connection.execute(
+            text("""
+                INSERT INTO campaign.objective_state
+                    (timeline_id, quest_objective_id, party_id, objective_status_id, last_event_id)
+                VALUES (:timeline, :objective, :party, :status, :event)
+                RETURNING objective_state_id
+            """),
+            {
+                "timeline": timeline_id,
+                "objective": quest_objective_id,
+                "party": party_id,
+                "status": new_status_id,
+                "event": event_id,
+            },
+        ).scalar()
+        assert isinstance(objective_state_id, uuid.UUID)
+    else:
+        objective_state_id = existing[0]
+        connection.execute(
+            text("""
+                UPDATE campaign.objective_state
+                SET objective_status_id = :status, last_event_id = :event, updated_at = now()
+                WHERE objective_state_id = :id
+            """),
+            {"status": new_status_id, "event": event_id, "id": objective_state_id},
+        )
+
+    connection.execute(
+        text("""
+            INSERT INTO narrative.event_effects
+                (event_id, target_quest_objective_id, target_component, previous_value,
+                 new_value, effective_world_time_id)
+            VALUES (:event, :objective, 'objective_status_id', :previous, :new, :world_time)
+        """),
+        {
+            "event": event_id,
+            "objective": quest_objective_id,
+            "previous": json.dumps(previous_status_code),
+            "new": json.dumps(new_status_code),
+            "world_time": world_time_id,
+        },
+    )
+
+    return AdvanceObjectiveResult(
+        objective_state_id=objective_state_id,
+        event_id=event_id,
+        previous_status_code=previous_status_code,
+        new_status_code=new_status_code,
+        world_id=world_id,
+    )
+
+
 def advance_objective(
     engine: Engine,
     *,
@@ -120,117 +281,22 @@ def advance_objective(
     cause_event_id: uuid.UUID | None = None,
     event_details: str | None = None,
 ) -> AdvanceObjectiveResult:
-    """Record the narrative.events row that advances or fails a quest
-    objective and update campaign.objective_state to match, atomically. Only
-    'completed' and 'failed' are accepted — the only two transitions a
-    dungeon event actually drives (docs/PLAN.md's exit criterion names
-    "advance or fail"); other objective_status values (hidden, available,
-    active, skipped, superseded) are administrative/GM-driven and have no
-    causing event to record.
-
-    Rejects advancing an objective whose current state is already terminal
-    (completed, failed, skipped, superseded) — there is no application-level
-    guard preventing this at the database level yet (unlike interaction.
-    interactions' status irreversibility, Phase 6 revisions 070-072); this
-    command enforces it itself as the one path that currently writes
-    campaign.objective_state.
-    """
-    if new_status_code not in _ADVANCEABLE_STATUSES:
-        raise ValueError(
-            f"new_status_code must be one of {sorted(_ADVANCEABLE_STATUSES)}, got {new_status_code!r}"
-        )
-
+    """Advance or fail a quest objective, atomically. Public convenience
+    API: opens and commits its own transaction. See
+    _advance_objective_impl() for the composable form a caller with its own
+    transaction (e.g. an API command endpoint) uses instead."""
     with engine.begin() as connection:
-        world_id = _quest_objective_world(connection, quest_objective_id)
-        _lock_quest_objective(connection, quest_objective_id)
-
-        existing = _lock_objective_state(
+        return _advance_objective_impl(
             connection,
-            timeline_id=timeline_id,
             quest_objective_id=quest_objective_id,
-            party_id=party_id,
-        )
-        previous_status_code = existing[1] if existing is not None else None
-
-        if previous_status_code in _TERMINAL_OBJECTIVE_STATUSES:
-            raise ValueError(
-                f"objective {quest_objective_id} has status {previous_status_code!r} and cannot "
-                "be advanced further — completed, failed, skipped, and superseded are terminal"
-            )
-
-        event_type_code = (
-            "objective_completed" if new_status_code == "completed" else "objective_failed"
-        )
-        event_id = _insert_event_row(
-            connection,
-            world_id=world_id,
             timeline_id=timeline_id,
             world_time_id=world_time_id,
-            event_type_code=event_type_code,
-            name=f"Quest objective {new_status_code}",
-            details=event_details,
+            new_status_code=new_status_code,
+            party_id=party_id,
+            actor_entity_id=actor_entity_id,
             campaign_id=campaign_id,
             session_id=session_id,
-            participants=(
-                (EventParticipant(entity_id=actor_entity_id, role_code="actor"),)
-                if actor_entity_id is not None
-                else ()
-            ),
             cause_interaction_id=cause_interaction_id,
             cause_event_id=cause_event_id,
+            event_details=event_details,
         )
-
-        new_status_id = lookup_id(
-            connection, "campaign", "objective_statuses", "objective_status_id", new_status_code
-        )
-
-        if existing is None:
-            objective_state_id = connection.execute(
-                text("""
-                    INSERT INTO campaign.objective_state
-                        (timeline_id, quest_objective_id, party_id, objective_status_id, last_event_id)
-                    VALUES (:timeline, :objective, :party, :status, :event)
-                    RETURNING objective_state_id
-                """),
-                {
-                    "timeline": timeline_id,
-                    "objective": quest_objective_id,
-                    "party": party_id,
-                    "status": new_status_id,
-                    "event": event_id,
-                },
-            ).scalar()
-            assert isinstance(objective_state_id, uuid.UUID)
-        else:
-            objective_state_id = existing[0]
-            connection.execute(
-                text("""
-                    UPDATE campaign.objective_state
-                    SET objective_status_id = :status, last_event_id = :event, updated_at = now()
-                    WHERE objective_state_id = :id
-                """),
-                {"status": new_status_id, "event": event_id, "id": objective_state_id},
-            )
-
-        connection.execute(
-            text("""
-                INSERT INTO narrative.event_effects
-                    (event_id, target_quest_objective_id, target_component, previous_value,
-                     new_value, effective_world_time_id)
-                VALUES (:event, :objective, 'objective_status_id', :previous, :new, :world_time)
-            """),
-            {
-                "event": event_id,
-                "objective": quest_objective_id,
-                "previous": json.dumps(previous_status_code),
-                "new": json.dumps(new_status_code),
-                "world_time": world_time_id,
-            },
-        )
-
-    return AdvanceObjectiveResult(
-        objective_state_id=objective_state_id,
-        event_id=event_id,
-        previous_status_code=previous_status_code,
-        new_status_code=new_status_code,
-    )
