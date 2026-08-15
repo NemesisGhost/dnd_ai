@@ -14,6 +14,7 @@ lands, rather than growing them into a parallel write path.
 
 import json
 import uuid
+from datetime import datetime
 
 from sqlalchemy import Connection, text
 
@@ -861,21 +862,30 @@ def make_session(
     *,
     start_world_time_id: uuid.UUID | None = None,
     end_world_time_id: uuid.UUID | None = None,
+    lifecycle_status_code: str = "active",
+    title: str | None = None,
+    summary: str | None = None,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO campaign.sessions
-                (campaign_id, session_number, lifecycle_status_id,
-                 start_world_time_id, end_world_time_id)
-            VALUES (:c, :n, :status, :start, :end)
+                (campaign_id, session_number, lifecycle_status_id, start_world_time_id,
+                 end_world_time_id, title, summary, started_at, ended_at)
+            VALUES (:c, :n, :status, :start, :end, :title, :summary, :started, :ended)
             RETURNING session_id
         """),
         {
             "c": campaign_id,
             "n": session_number,
-            "status": status_id(connection, "lifecycle_statuses", "active"),
+            "status": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
             "start": start_world_time_id,
             "end": end_world_time_id,
+            "title": title,
+            "summary": summary,
+            "started": started_at,
+            "ended": ended_at,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
