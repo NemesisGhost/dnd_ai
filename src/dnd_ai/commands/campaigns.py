@@ -22,16 +22,47 @@ which trusts campaign-scoped ids resolved from an already-authorized
 
 Creates `campaign.campaigns`, its first `security.campaign_memberships`
 row for the creating user, and a `security.membership_roles` row assigning
-the system-template `campaign_owner` role — the one role/capability
-pairing `security.assert_campaign_retains_access_manager()` itself
-requires to exist, per migration 080's own seed comment — all in one
-transaction. `campaign.campaigns`' own `tr_campaigns_retain_access_manager`
-constraint trigger (`security.enforce_campaigns_retain_access_manager`,
-`AFTER INSERT`, `DEFERRABLE INITIALLY DEFERRED`) therefore evaluates the
-fully-written-within-the-transaction state at commit — never a two-step
-"create the campaign, then separately add yourself as owner" sequence,
-which would leave a window (or a legitimately failed second step) with an
-active campaign nobody could manage.
+the system-template `campaign_owner` role — the one role migration 080
+seeded `security.assert_campaign_retains_access_manager()`'s own required
+pairing onto (`access.manage`), and that migration 085 extended to the
+full functional-owner capability set (`access.manage`, `campaign.view`,
+`canon.edit`) this vertical slice's own gating routes actually need — all
+in one transaction. `campaign.campaigns`' own
+`tr_campaigns_retain_access_manager` constraint trigger (`security.
+enforce_campaigns_retain_access_manager`, `AFTER INSERT`, `DEFERRABLE
+INITIALLY DEFERRED`) therefore evaluates the fully-written-within-the-
+transaction state at commit — never a two-step "create the campaign, then
+separately add yourself as owner" sequence, which would leave a window (or
+a legitimately failed second step) with an active campaign nobody could
+manage. Because `campaign_owner` is the shared system-template row every
+campaign's own owner membership references by `role_id` (migration 085's
+own docstring), the creator immediately passes every `campaign.view`-gated
+read and every `canon.edit`-gated command this codebase has — no separate
+role-creation step, and no direct `security.roles`/`.role_capabilities`
+write, is needed before a freshly created campaign is actually usable by
+its owner.
+
+`timeline_id` needs no additional per-caller entitlement check beyond
+"does it exist" (`_resolve_timeline_world`, below): worlds and timelines
+are shared, reusable world content by design (docs/DOMAIN_MODEL.md §2.2,
+"Multiple campaigns may share a timeline"), not a resource scoped to any
+one campaign or user — `campaign.timelines` carries no owner/entitlement
+column, and nothing in `security.*` gates access to a timeline itself. A
+second campaign attaching to a timeline another campaign already uses is
+therefore an intended, load-bearing capability, not a gap — the persistent-
+world model's whole premise is that a shared timeline's mutable state
+(dungeon layout, NPCs, quest state) outlives and is visible across the
+campaigns that play through it, while each campaign's own security state
+(memberships, roles, resource grants) and each party's own knowledge
+(`knowledge.party_discoveries`) stay isolated because those tables are
+keyed by `campaign_id`/`party_id`, never by `timeline_id` alone. A brand
+new campaign on an already-used timeline therefore starts with zero
+memberships, zero roles, and zero resource grants of its own regardless of
+who else is playing on that timeline — proven by `tests/database.
+test_api_campaigns.py`'s own timeline-reuse case and by `tests/scenario.
+test_vertical_slice_api.py`'s steps 17-18 (a second campaign on the same
+timeline sees the first party's altered-but-not-hidden dungeon state,
+never its private discoveries).
 
 `granted_by_membership_id` is deliberately `NULL` for this one role
 assignment: unlike `dnd_ai.commands.memberships.assign_membership_role`

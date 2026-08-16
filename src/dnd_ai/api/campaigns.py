@@ -6,12 +6,14 @@ Authorization is deliberately different from every other command router in
 this codebase: there is no campaign yet to resolve `dnd_ai.api.access.
 require_campaign_capability` against, so this route depends only on
 `dnd_ai.api.auth.get_authenticated_user_id` — any authenticated user may
-create a campaign, becoming its first `campaign_owner` (the sole system-
-template role holding `access.manage`) by construction. This mirrors the
-"no invented capability" scoping every other Phase 10 workstream's first
-cut already chose (e.g. `dnd_ai.api.memberships`'s own docstring), applied
-here to the one action that structurally cannot be gated by a campaign-
-scoped capability at all.
+create a campaign, becoming its first `campaign_owner` (the system-
+template role migration 085 seeded with the full functional-owner
+capability set — `access.manage`, `campaign.view`, `canon.edit` — after
+migration 080 seeded it with `access.manage` alone) by construction. This
+mirrors the "no invented capability" scoping every other Phase 10
+workstream's first cut already chose (e.g. `dnd_ai.api.memberships`'s own
+docstring), applied here to the one action that structurally cannot be
+gated by a campaign-scoped capability at all.
 
 No idempotency-key handling: see `dnd_ai.commands.campaigns`'s module
 docstring for why `security.idempotent_requests`'s `NOT NULL campaign_id`
