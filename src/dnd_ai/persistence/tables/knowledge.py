@@ -77,7 +77,7 @@ knowledge_items = Table(
         server_default=text("'public'::text"),
         comment=(
             "A fixed, universal classification (public, restricted, secret, dangerous), "
-            "not a lookup — same reasoning as character.characters.size_category (Phase 4)."
+            "not a lookup, matching character.characters.size_category."
         ),
     ),
     Column(
@@ -358,7 +358,7 @@ party_discoveries = Table(
         "knowledge item (docs/architecture/DATABASE_MODEL.md §15). Recipient is "
         "exactly one of party_id (party-level discovery) or knower_entity_id "
         "(individual character, NPC, or organization discovery) — public/regional "
-        "discovery (knowledge.public_knowledge) is deferred to Phase 7."
+        "discovery is represented by knowledge.public_knowledge."
     ),
 )
 

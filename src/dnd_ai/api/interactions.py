@@ -1,10 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.interactions` — Phase 10
-workstream 9, continuing "command endpoints over the existing
-command/application services" (docs/PLAN.md Phase 10) into the
-"interactions/events" domain the Phase 10 progress note names as the last
-remaining domain after workstream 8's relationship/organization endpoints
-(`dnd_ai.api.relationships`) — alongside this workstream's own standalone
-event endpoint (`dnd_ai.api.events`). Exposes `perform_interaction` and
+"""Interaction performance and check-resolution endpoints.
+
+Exposes `perform_interaction` and
 `resolve_check` (docs/PHASE6_VERIFICATION.md) over HTTP, on the same
 already-delivered OIDC authentication (`dnd_ai.api.auth`), transaction
 management (`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,

@@ -1,8 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.memberships` — Phase 10
-workstream 20, the first slice of "OIDC-backed login integration for dev,
-authenticated user mapping, campaign invitations/memberships,
-campaign-scoped multi-role assignment, capabilities, and access
-revocation" (docs/PLAN.md Phase 10 deliverable list). Exposes
+"""Campaign membership and role-assignment command endpoints.
+
+Exposes
 `create_campaign_membership`, `assign_membership_role`, and
 `revoke_membership_role` over HTTP, on the same already-delivered OIDC
 authentication, transaction management, and access resolution every other

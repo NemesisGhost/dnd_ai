@@ -1,8 +1,6 @@
-"""Query endpoint over `dnd_ai.queries.character` — Phase 10 workstream 13,
-continuing "query services for the effective dungeon, character, quest,
-relationship, inventory, encounter, and knowledge state required by the
-vertical slice" (docs/PLAN.md Phase 10 deliverable list) into the character
-domain after workstream 12's dungeon-area query. Exposes
+"""Audience-filtered character query endpoint.
+
+Exposes
 `dnd_ai.queries.character.get_character_view` over HTTP as
 `GET /campaigns/{campaign_id}/characters/{character_id}`, on the same
 already-delivered OIDC authentication, transaction management, and access

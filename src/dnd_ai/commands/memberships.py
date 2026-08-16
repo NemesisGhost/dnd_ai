@@ -1,11 +1,7 @@
-"""Campaign membership and role-assignment commands (docs/architecture/
-DATABASE_MODEL.md §19.2-19.3, docs/PLAN.md Phase 10 deliverable "OIDC-
-backed login integration for dev, authenticated user mapping, campaign
-invitations/memberships, campaign-scoped multi-role assignment,
-capabilities, and access revocation").
+"""Campaign membership and role-assignment commands.
 
-Phase 10 workstream 20 delivers the first slice of this deliverable:
-direct membership creation and role assignment/revocation by a caller
+These functions provide direct membership creation and role
+assignment/revocation by a caller
 already holding `access.manage` in the target campaign — the same
 GM/adapter-level scoping every other Phase 10 command router chose for
 its own first cut. `security.campaign_invitations` (the token/email

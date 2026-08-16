@@ -1340,7 +1340,28 @@ Every summary or answer records or returns its campaign, timeline, effective poi
 
 ## 24. Delivery phases
 
-The active plan keeps only compact stubs for completed Phases 0–5. Their detailed deliverables, exit criteria, first-time obligations, and closeout narrative are preserved in [PLAN_PHASES_0_5_ARCHIVE.md](PLAN_PHASES_0_5_ARCHIVE.md) and should be loaded only for historical or regression work. Phase verification files remain the evidence of what actually ran.
+This section is the delivery-status source of truth. Each phase distinguishes completed work from remaining work; verification files preserve the evidence for completed phases.
+
+### Progress at a glance
+
+| Phase | Status | Implemented | Remaining |
+|---:|---|---|---|
+| 0 | Complete | Architecture documentation and decision records | None |
+| 1 | Complete | PostgreSQL bootstrap, roles, migrations, CI verification | None |
+| 2 | Complete | Core worlds, entities, names, calendars, and audit foundation | None |
+| 3 | Complete | Timelines, campaigns, parties, memberships, and sessions | None |
+| 4 | Complete | Rulesets, shared characters, builds, and timeline character state | None |
+| 5 | Complete | Locations, dungeons, navigation state, and knowledge foundation | None |
+| 6 | Complete | Events, interactions, causal state changes, and effective branch history | None |
+| 7 | Complete | Quests and expanded knowledge behavior | None |
+| 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
+| 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
+| 10 | In progress | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service | Complete the API vertical-slice exit scenario and any still-missing endpoint composition |
+| 11 | Not started | — | Foundry MVP |
+| 12 | Not started | — | Narrow AI/NPC and rules-corpus MVP |
+| 13 | Not started | — | Web portal MVP and same-origin packaging |
+| 14 | Partially implemented | PostgreSQL/API Compose services and local development topology | Production UI/worker/reverse-proxy packaging, secrets, monitoring, backup/restore and rollback hardening |
+| 15 | Not started | — | Controlled world and campaign-data import |
 
 ### 24.0 Verification policy
 
@@ -1410,29 +1431,78 @@ Do not recursively require a separately proven safety net for every layer of tes
 
 ### Phase 0: Documentation and decision records
 
-**Complete.** Detailed historical plan: [Archived Delivery Plans: Phase 0](PLAN_PHASES_0_5_ARCHIVE.md#phase-0-documentation-and-decision-records).
+**Status: Complete.**
+
+Implemented:
+
+- Core domain, architecture, lifecycle, database-convention, and delivery documents.
+- Architectural decision records for the platform's foundational choices.
+
+Remaining: none. Current documentation is maintained alongside implementation changes.
 
 ### Phase 1: Database bootstrap
 
-**Complete.** Detailed historical plan: [Archived Delivery Plans: Phase 1](PLAN_PHASES_0_5_ARCHIVE.md#phase-1-database-bootstrap). Verification evidence: [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md).
+**Status: Complete.**
+
+Implemented:
+
+- Alembic and SQLAlchemy project scaffolding.
+- PostgreSQL schemas, ownership roles, login roles, extensions, grants, and migration conventions.
+- Local and CI migration verification.
+
+Remaining: none. Evidence: [PHASE1_VERIFICATION.md](PHASE1_VERIFICATION.md).
 
 ### Phase 2: Core world platform
 
-**Complete.** Detailed historical plan: [Archived Delivery Plans: Phase 2](PLAN_PHASES_0_5_ARCHIVE.md#phase-2-core-world-platform). Verification evidence: [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md).
+**Status: Complete.**
+
+Implemented:
+
+- Worlds, base entities, names, tags, sources, statuses, calendars, fictional time, and audit records.
+- Initial structured seed loading and integrity tests.
+
+Remaining: none. Evidence: [PHASE2_VERIFICATION.md](PHASE2_VERIFICATION.md).
 
 ### Phase 3: Timelines and campaigns
 
-**Complete.** Detailed historical plan: [Archived Delivery Plans: Phase 3](PLAN_PHASES_0_5_ARCHIVE.md#phase-3-timelines-and-campaigns). Verification evidence: [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md).
+**Status: Complete.**
+
+Implemented:
+
+- Timelines and branching metadata.
+- Campaigns, parties, memberships, sessions, and timeline-scoped character participation.
+- Entity-name history within timelines.
+
+Remaining: none. Effective inherited branch history is delivered in Phase 6. Evidence: [PHASE3_VERIFICATION.md](PHASE3_VERIFICATION.md).
 
 ### Phase 4: Rules and shared characters
 
-**Complete.** Detailed historical plan: [Archived Delivery Plans: Phase 4](PLAN_PHASES_0_5_ARCHIVE.md#phase-4-rules-and-shared-characters). Verification evidence: [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md); [PHASE4_REMAINING_ISSUES.md](PHASE4_REMAINING_ISSUES.md) is a closed historical record.
+**Status: Complete.**
+
+Implemented:
+
+- Versioned rulesets, rules content, provenance, canon selection, and world allow lists.
+- Shared character mechanics, builds, languages, proficiencies, and timeline state.
+- Parent-scope and ruleset-identity integrity protections.
+
+Remaining: none. Evidence: [PHASE4_VERIFICATION.md](PHASE4_VERIFICATION.md).
 
 ### Phase 5: Locations and dungeon play
 
-**Complete.** The gameplay features and database invariants are merged and CI-verified. Revision 056 closes the last production race, and all five concurrency tests prove genuine waiter resumption with independent final-state assertions. The reusable test helper received major hardening through PR #15; GitHub Actions run [`30977657034`](https://github.com/NemesisGhost/dnd_ai/actions/runs/30977657034) passed both jobs and all 1,153 tests at implementation head `267ac1d`. Further hypothetical faults inside cleanup primitives are non-blocking under §24.1's proportionality and stop-loss rules. Detailed historical plan: [Archived Delivery Plans: Phase 5](PLAN_PHASES_0_5_ARCHIVE.md#phase-5-locations-and-dungeon-play). Verification evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md); [PHASE5_REMAINING_ISSUES.md](PHASE5_REMAINING_ISSUES.md) is a closed historical record.
+**Status: Complete.**
+
+Implemented:
+
+- Location hierarchy, realms, routes, dungeons, areas, connections, features, hazards, and interactables.
+- Timeline-scoped dungeon and character-location state.
+- Containment, reparenting, temporal-integrity, and concurrency protections.
+- Knowledge records and party discoveries needed by dungeon play.
+
+Remaining: none. Evidence: [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md).
 
 ### Phase 6: Events and interactions
+
+**Status: Complete.** Implemented: events, interactions, causal state changes, branch-aware effective history, conditional-route evaluation, and transactional command handlers. Remaining: none. Encounters and combat are delivered in Phase 9. Verification: [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
 
 **Complete.** Delivered as five independently reviewed increments: `narrative.events` and branch-aware effective history (revision 057–060), the `interaction.*` domain (061–062), real knowledge-provenance references closing Phase 5's placeholders (063), conditional-route evaluation (064), and `src/dnd_ai/commands` — the first application-layer command handlers (`RecordEvent`, `PerformInteraction`, `ResolveCheck`). Four correction passes (revisions 065–072) followed a series of exit reviews, closing recorded-event immutability and deletion protection, `resolve_check()` concurrency control, interaction-resolution completeness, state-provenance timeline safety, ruleset/test-coverage guard gaps, and — in the final pass — moving the interaction status lifecycle (`initiated → resolving → resolved`) fully into the database as an `AFTER INSERT` trigger with matching `BEFORE INSERT` creation guards. [PR #16](https://github.com/NemesisGhost/dnd_ai/pull/16) merged to `main` (commit `2692f41`); that exact merge commit reached a confirmed green CI run (one transient AWS-RDS connection fault in the initial run was re-run, not a code defect). `alembic check` clean throughout, one Alembic head. Encounters/combat (§17's table shape) belongs to Phase 9, not this phase — see that phase's deliverable list. Verification evidence: [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md).
 
@@ -1479,6 +1549,8 @@ First-time obligations (per [§24.1](#241-phase-exit-review)):
 
 ### Phase 7: Quests and knowledge
 
+**Status: Complete.** Implemented: quests, stages, objectives, outcomes, rewards, timeline quest state, party knowledge, knowledge versioning, expertise, information transfer, public knowledge, and atomic objective advancement. Remaining: none. Verification: [PHASE7_VERIFICATION.md](PHASE7_VERIFICATION.md).
+
 **Complete.** Revision 073 delivers the quest domain (`narrative.story_arcs`/`.quests`/`.quest_stages`/`.objective_types`/`.quest_objectives`/`.objective_dependencies`/`.quest_participants`/`.quest_outcomes`/`.quest_rewards`, `campaign.quest_state`/`.objective_state`) and the knowledge-domain expansion this phase inherits (below): temporal validity on `knowledge.knowledge_items`, `knowledge.knowledge_versions`, `.expertise_domains`/`.character_expertise`, `.information_transfers`, `.public_knowledge`. `src/dnd_ai/commands/quests.py`'s `advance_objective()` lets a dungeon event complete or fail a quest objective atomically, satisfying this phase's first exit criterion. A review of that work found six defects revision 073 missed — the second exit criterion's original test exercised an unrelated individual knower instead of party-level belief; `narrative.enforce_event_effect_target_world()`/`interaction.enforce_consequence_world()` were not extended for the new `target_quest_objective_id`/`resulting_quest_objective_state_id` columns; `knowledge.information_transfers`/`.public_knowledge` only checked world, not timeline, agreement for several columns; `advance_objective()` had a first-write concurrency gap; §14.1's completion-rule/visibility-policy concepts and §15.1's full knowledge-type seed list were incomplete; and `knowledge.knowledge_versions` allowed mutating an already-cited version. A correction pass (revision 074) closed all six, including building `campaign.party_knowledge` — the table the second exit criterion actually names — as a genuinely distinct table from `knowledge.party_discoveries`. [PR #17](https://github.com/NemesisGhost/dnd_ai/pull/17)'s exact final head reached a confirmed green CI run. A post-merge review found a second gap — the domain's same-world/same-scope triggers validated child rows only, never re-checking a parent row's own scope identity after a dependent referenced it — closed by revision 075 (`075_phase7_reparent_guards`, [PR #19](https://github.com/NemesisGhost/dnd_ai/pull/19), confirmed green CI). Verification evidence: [PHASE7_VERIFICATION.md](PHASE7_VERIFICATION.md).
 
 Deliver:
@@ -1502,6 +1574,8 @@ Exit criteria:
 
 ### Phase 8: Relationships and organizations
 
+**Status: Complete.** Implemented: universal and specialized relationships, organizations and their subtypes, religions and affiliations, relationship/organization timeline state, and mutation commands. Remaining: none. Verification: [PHASE8_VERIFICATION.md](PHASE8_VERIFICATION.md).
+
 **Complete.** Revision 076 (originally drafted as `075_relationships_and_orgs` before Phase 7's own `075_phase7_reparent_guards` existed; renumbered by a deployable-integrity correction pass after both revisions forked the Alembic graph and failed CI — see [PHASE8_VERIFICATION.md](PHASE8_VERIFICATION.md)) delivers the universal relationship model (`world.relationship_types`/`.relationships`/`.relationship_participants`/`.relationship_perspectives`), the specialized relationships (`world.organization_memberships`/`.employment_relationships`/`.ownership_relationships`/`.family_relationships`/`.political_relationships`), the organization CTI hierarchy (`world.organizations` plus `.businesses`/`.governments`/`.religious_organizations`/`.military_units`/`.political_factions`), the religion/religious-affiliation distinction (`world.religions`, `character.character_religious_affiliations`), and the two timeline-state tables `DATABASE_MODEL.md §17` had already named but no earlier phase built (`campaign.organization_state`/`.relationship_state`). Two commands (`src/dnd_ai/commands/relationships.py`): `evolve_relationship_reaction()` and `update_organization_status()`. The correction pass also extended the `target_relationship_id`/`resulting_relationship_state_id` world/timeline-agreement guards, added reverse-mutation guards on `world.relationships`/`.relationship_participants`/`campaign.relationship_state`, and fixed `world.employment_relationships` to use a single §12.4 current-records pattern. All local verification — migration round trip (including a from-empty full `downgrade base → upgrade head` against a disposable scratch database), `alembic check`, the full test suite (2,058 tests), `ruff`/`mypy` — passed against AWS `dev`. See [PHASE8_VERIFICATION.md](PHASE8_VERIFICATION.md) for the full account.
 
 Deliver:
@@ -1520,6 +1594,8 @@ Exit criteria:
 - Shared and subjective relationship data are separate.
 
 ### Phase 9: Items, inventory, encounters, and Foundry integration contracts
+
+**Status: Complete.** Implemented: item definitions and instances, ownership and possession, inventory and identification, encounters/combat persistence and commands, and integration mapping/synchronization contracts. Remaining: none within this phase; the live Foundry adapter is Phase 11. Verification: [PHASE9_VERIFICATION.md](PHASE9_VERIFICATION.md).
 
 Phase 9 is the first phase developed under the local-first loop in [§24.0](#240-verification-policy) — its verification file is the first to record both a local result and a CI run ID. The [PostgreSQL 18 gate](POSTGRES18_UPGRADE_PLAN.md) that previously blocked this phase from merging closed 2026-08-08: `dev` now runs PostgreSQL 18.4, matching local.
 
@@ -1542,6 +1618,28 @@ Exit criteria:
 - Live Foundry synchronization is explicitly excluded and moves to [Phase 11](#phase-11-foundry-mvp); Phase 9 proves only the persistence and application-service behavior that the later adapter will call.
 
 ### Phase 10: Core API and playable vertical slice
+
+**Status: In progress.**
+
+Implemented:
+
+- FastAPI/Uvicorn application, health/readiness checks, configuration, correlation IDs, stable error contracts, and request transactions.
+- OIDC bearer-token verification, identity resolution, campaign authorization, role/capability management, invitations, memberships, character relationships, and resource grants.
+- Command endpoints for campaigns, sessions, events, interactions, movement, dungeons, encounters, items, quests, relationships, organizations, and integrations.
+- Audience-filtered queries for the vertical-slice domains and campaign/session summaries.
+- Durable idempotency and auditing, including pre-campaign creation reservations and timeline bootstrap grants.
+- Docker image and Compose services for PostgreSQL, migrations, and the API.
+
+Remaining:
+
+- Run and record the complete API vertical-slice acceptance scenario against the phase's exit criteria.
+- Close any endpoint or response-composition gaps exposed by that scenario.
+- Confirm final-head CI and write the phase verification record.
+
+The implementation record below preserves detailed workstream decisions; the deliverables and exit criteria after it remain authoritative.
+
+<details>
+<summary>Detailed implementation record</summary>
 
 > **Revised deployment boundary:** Phase 10 continues and delivers the portable application/API layer for local production. FastAPI runs under Uvicorn in a container and connects to local PostgreSQL through private Compose networking. Lambda, Mangum, API Gateway, Lambda IAM/deployment packaging, AWS-only networking/RDS access, and AWS-specific production telemetry are not required acceptance criteria. If a Lambda adapter exists or is later useful, it must remain isolated and optional.
 
@@ -1641,7 +1739,9 @@ Workstream 22 (`src/dnd_ai/queries/summary.py`, `src/dnd_ai/api/summary.py`) beg
 
 Still to come: the remaining pieces of the summary/detail deliverable (active quests, locations, characters, NPCs/factions, inventory, knowledge — each already independently servable via workstreams 12-18's own endpoints, so this is a documentation/dashboard-composition question more than a missing query), and the actual reverse-proxy container (deliberately deferred to Phase 14 — see workstream 11 above). Campaign-creation bootstrap and the invitation-token acceptance flow, both deferred at workstream 20, were delivered at workstreams 23-24; the resource-grant target kinds and character-relationship temporal bounds deferred at workstream 21 were delivered at workstream 25 — all below. `apply_foundry_combat_sync`'s own HTTP exposure is also deliberately deferred, to Phase 11 (Foundry MVP), where a real Foundry-adapter caller and its authorization/transaction shape are designed together rather than retrofitted here — see workstream 10 above and `dnd_ai.commands.integration`'s own module docstring. A Lambda adapter is neither required nor part of the production path; see ADR 0012.
 
-Deliver:
+</details>
+
+#### Deliverables
 
 - a FastAPI application entry point executed by Uvicorn and containerized as a portable service
 - database transaction and session management with cross-domain transaction boundaries owned by the application layer
@@ -1670,7 +1770,7 @@ Keep the endpoint surface limited to what that scenario needs:
 - end a session
 - verify effective state in another campaign and a branched timeline
 
-Exit criteria:
+#### Exit criteria
 
 > The complete vertical-slice scenario executes through the application API without direct client writes to PostgreSQL. Authenticated GM, player, and observer requests receive only their permitted rows, fields, relationships, search results, counts, and summaries; a user can relate to multiple characters and a character or fact can relate to multiple users. Required cross-domain changes commit atomically, retries do not duplicate effects, and campaign/timeline isolation is preserved.
 
@@ -1679,6 +1779,8 @@ Testing focuses on application behavior and this end-to-end scenario. Do not cre
 Phase 10 also proves secure authentication cookies, CSRF protection, and player, GM, observer, and user-to-detail many-to-many access enforcement through the reverse proxy. Its application contracts, command/query services, transaction/session management, validation, authorization, audit, correlation, and idempotency behavior remain platform-neutral.
 
 ### Phase 11: Foundry MVP
+
+**Status: Not started.** Implemented dependencies: integration persistence contracts and API/domain command services. Remaining: the Foundry adapter and the end-to-end encounter synchronization flow below.
 
 Wires Phase 9's `integration.*` schema and adapter-facing contracts through Phase 10's API to the smallest playable Foundry integration. Build the concrete encounter flow before designing any general-purpose bidirectional synchronization framework.
 
@@ -1697,6 +1799,8 @@ Exit criteria:
 > A real Foundry encounter updates canonical state through the application API, and reopening or reconnecting retrieves the updated state without duplicate events or direct database access.
 
 ### Phase 12: Narrow AI/NPC MVP
+
+**Status: Not started.** Implemented dependencies: audience-filtered structured queries and authorization boundaries. Remaining: the NPC portrayal service, rules/reference corpus, cited retrieval, proposal workflow, and auditing below.
 
 AI delivery is separate from the web-portal implementation and world/campaign-data import. Start with one NPC portrayal/conversation use case, one provider, one audience-aware summary/question path, and one authorized representative rules source—preferably an applicable SRD or user-authored homebrew document—before broader AI infrastructure.
 
@@ -1729,6 +1833,8 @@ Do not create a general-purpose document-ingestion or vector-search framework fo
 
 ### Phase 13: Web portal MVP and same-origin packaging
 
+**Status: Not started.** Implemented dependencies: the API, authentication, authorization, and audience-filtered query contracts. Remaining: the React portal and browser-facing workflows below.
+
 The web portal becomes the primary out-of-session interface over the Phase 10 API and Phase 12 on-demand assistant. Implement the bounded experience in [§23](#23-identity-authorization-and-web-portal-implementation) and [UI_DESIGN.md](UI_DESIGN.md); do not turn this phase into an unrestricted content-management platform.
 
 Deliver:
@@ -1753,6 +1859,8 @@ Exit criteria:
 
 ### Phase 14: Local production deployment and hardening
 
+**Status: Partially implemented.** PostgreSQL, migration, and API containers plus the local Compose network exist. Remaining: UI and worker packaging, reverse-proxy ingress, production secrets and observability, backup/restore automation, deployment rollback, and the production-readiness evidence below.
+
 Deliver:
 
 - Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration;
@@ -1774,6 +1882,8 @@ Exit criteria:
 - An immutable prior application release can be selected and restored with the documented rollback command; the procedure is exercised against a compatible schema or, when a schema rollback is required, against the matching verified database restore point.
 
 ### Phase 15: World and campaign-data import
+
+**Status: Not started.** Implemented dependencies: canonical domain commands and audit infrastructure. Remaining: retained source ingestion, staged proposals, matching/review workflows, idempotent promotion, and portal review surfaces below.
 
 World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
 

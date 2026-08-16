@@ -42,7 +42,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
 
-# Seed data directory. Alembic (and the migration runner in docs/PLAN.md §29.6)
+# Seed data directory. Alembic and the migration runner
 # always runs with the repo's `database/` directory as a sibling of the working
 # directory, so resolve relative to the current working directory first — this
 # also holds once the runner installs dnd_ai into site-packages, where a path

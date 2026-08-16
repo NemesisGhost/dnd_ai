@@ -1,9 +1,7 @@
-"""Effective organization query (docs/PLAN.md Phase 10 deliverable "query
-services for the effective dungeon, character, quest, relationship,
-inventory, encounter, and knowledge state required by the vertical
-slice"). A sibling to `dnd_ai.queries.relationship`, over the other half
-of workstream 8's command domain (`dnd_ai.commands.relationships.
-update_organization_status`).
+"""Audience-filtered effective organization query.
+
+This is the read side for `dnd_ai.commands.relationships.
+update_organization_status` and a sibling to `dnd_ai.queries.relationship`.
 
 `world.organizations` describes what an organization is; `campaign.
 organization_state` describes its current operational status on a

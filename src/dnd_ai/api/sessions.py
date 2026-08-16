@@ -1,7 +1,6 @@
-"""Command endpoint over `dnd_ai.commands.sessions` — docs/PLAN.md §25
-step 14 ("End the session and generate a summary"), the write half `dnd_ai
-.api.summary`'s existing `GET /campaigns/{campaign_id}/summary`
-(workstream 22) never had. Exposes `end_session` as `POST /campaigns/
+"""Session-ending command endpoint.
+
+Exposes `end_session` as `POST /campaigns/
 {campaign_id}/sessions/{session_id}/end`.
 
 Authorization: requires `canon.edit`, the same GM/adapter-level scoping

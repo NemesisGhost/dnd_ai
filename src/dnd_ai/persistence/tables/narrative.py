@@ -45,7 +45,7 @@ event_types = _lookup_table(
     "event_types",
     "event_type_id",
     "The kind of occurrence an event represents. An illustrative, "
-    "extensible starter set (docs/PLAN.md §13.3), not an exhaustive "
+    "extensible starter set, not an exhaustive "
     "taxonomy.",
 )
 
@@ -640,7 +640,7 @@ quest_objectives = Table(
         "completion_rule",
         JSONB(),
         comment=(
-            "Structured completion-rule metadata (docs/PLAN.md §14.1) — e.g. "
+            "Structured completion-rule metadata, for example "
             '{"rule": "quantity_threshold", "threshold": 3} — distinct from '
             "completion_mode (automatic vs. GM-confirmed, i.e. who decides) and from "
             "quantity_required (a single scalar). NULL when the objective's "
@@ -654,10 +654,10 @@ quest_objectives = Table(
         nullable=False,
         server_default=text("'visible'::text"),
         comment=(
-            "Whether and when this objective is shown to players (docs/PLAN.md §14.1) "
+            "Whether and when this objective is shown to players "
             "— distinct from requirement_level='hidden' (whether the objective is "
             "mandatory for quest completion, not whether players can see it). An "
-            "inferred, illustrative vocabulary — docs/PLAN.md does not enumerate "
+            "inferred, illustrative vocabulary rather than "
             "policy values, only the concept."
         ),
     ),
@@ -822,8 +822,7 @@ quest_rewards = Table(
     schema="narrative",
     comment=(
         "A reward granted by a specific quest outcome. item/currency rewards have "
-        "no typed target yet (Phase 9's item domain does not exist); "
-        "reward_knowledge_item_id is the one typed reward this phase can express."
+        "no typed target; reward_knowledge_item_id is the supported typed reward."
     ),
 )
 

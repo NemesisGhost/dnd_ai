@@ -1,9 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.access_grants` — Phase 10
-workstream 21 (extended by workstream 25 to the full target/temporal
-scope), continuing "many-to-many user-character relationships and
-resource-access grants sufficient for the vertical slice" (docs/PLAN.md
-Phase 10 deliverable list) after workstream 20's campaign
-membership/role-assignment endpoints. Exposes `grant_character_relationship`,
+"""HTTP endpoints for character relationships and resource grants.
+
+Exposes `grant_character_relationship`,
 `revoke_character_relationship`, `create_resource_grant`, and
 `revoke_resource_grant` over HTTP, on the same already-delivered OIDC
 authentication, transaction management, and access resolution every other

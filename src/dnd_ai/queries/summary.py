@@ -1,16 +1,11 @@
-"""Campaign/session summary query (docs/PLAN.md Phase 10 deliverable
-"deterministic, audience-filtered summary and detail query services for
-current campaign/session state, active quests, recent events, locations,
-characters, NPCs/factions, inventory, knowledge, and the prior-session
-recap"; docs/PLAN.md §25 step 15).
+"""Deterministic, audience-filtered campaign/session summary query.
 
-Scope: this first cut covers three of that list's items — current session
-state, recent events, and the prior-session recap — the pieces with no
-existing dedicated query yet. Active quests, locations, characters,
+This query covers current session state, recent events, and the prior-session
+recap. Active quests, locations, characters,
 NPCs/factions, inventory, and knowledge are deliberately *not*
 re-aggregated here: `dnd_ai.queries.quest`/`.character`/`.inventory`/
 `.knowledge` already serve each of those with their own, already-tested
-audience-filtering rules (workstreams 12-18), and duplicating that logic
+audience-filtering rules, and duplicating that logic
 into one "mega-query" would either drift from those rules or reimplement
 them a second time for no benefit. A client assembling a full dashboard
 composes this endpoint with those, the same way a web page issues several

@@ -1,6 +1,4 @@
-"""Request-scoped campaign-capability enforcement for command endpoints
-(docs/architecture/DATABASE_MODEL.md §19.7, docs/PLAN.md Phase 10 deliverable
-"command endpoints over the existing command/application services").
+"""Request-scoped campaign-capability enforcement for API endpoints.
 
 `dnd_ai.domain.access.resolve_access_context` already centralizes role,
 character-relationship, and resource-grant resolution into one

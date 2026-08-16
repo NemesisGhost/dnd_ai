@@ -1,7 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.encounters` — the first slice of
-Phase 10's "command endpoints over the existing command/application
-services" deliverable (docs/PLAN.md Phase 10). Exposes `start_encounter`,
-`resolve_combat_turn`, and `end_encounter` (docs/PHASE9_VERIFICATION.md)
+"""Encounter command and query endpoints.
+
+Exposes `start_encounter`, `resolve_combat_turn`, and `end_encounter`
 over HTTP, on top of the already-delivered OIDC authentication
 (`dnd_ai.api.auth`), transaction management (`dnd_ai.api.deps`), and access
 resolution (`dnd_ai.api.access`, `dnd_ai.domain.access`).

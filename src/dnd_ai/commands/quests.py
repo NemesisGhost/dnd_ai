@@ -1,6 +1,4 @@
-"""AdvanceObjective — the command that lets a dungeon event advance or fail a
-quest objective, atomically (docs/PLAN.md Phase 7 exit criterion, CLAUDE.md
-rule 6).
+"""AdvanceObjective atomically advances or fails a quest objective.
 
 Mirrors dnd_ai.commands.interactions.resolve_check's shape: lock a
 structural row that always exists (narrative.quest_objectives, the same

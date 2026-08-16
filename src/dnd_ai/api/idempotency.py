@@ -1,6 +1,4 @@
-"""Durable, PostgreSQL-backed `Idempotency-Key` handling for command
-endpoints (docs/PLAN.md §25 "retries do not duplicate effects";
-`security.idempotent_requests`, migration 082).
+"""Durable, PostgreSQL-backed `Idempotency-Key` handling for commands.
 
 `dnd_ai.api.deps.get_idempotency_key` only ever passed the client's header
 value through — nothing stored or deduplicated against it. This module is

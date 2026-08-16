@@ -1,8 +1,5 @@
-"""Query endpoints over `dnd_ai.queries.dungeon` — Phase 10 workstream 12,
-the first slice of "query services for the effective dungeon, character,
-quest, relationship, inventory, encounter, and knowledge state required by
-the vertical slice" (docs/PLAN.md Phase 10 deliverable list) after
-workstreams 5-10 delivered every command endpoint the same scenario needs.
+"""Audience-filtered dungeon-area query endpoint.
+
 Exposes `dnd_ai.queries.dungeon.get_dungeon_area_view` over HTTP as
 `GET /campaigns/{campaign_id}/dungeon-areas/{dungeon_area_id}`, on the same
 already-delivered OIDC authentication, transaction management, and access

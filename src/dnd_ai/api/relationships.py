@@ -1,11 +1,7 @@
-"""Command endpoints over `dnd_ai.commands.relationships` — Phase 10
-workstream 8, continuing "command endpoints over the existing
-command/application services" (docs/PLAN.md Phase 10) into the
-relationship/organization domain after workstream 5's encounter endpoints
-(`dnd_ai.api.encounters`), workstream 6's item endpoints
-(`dnd_ai.api.items`), and workstream 7's quest endpoint
-(`dnd_ai.api.quests`). Exposes `evolve_relationship_reaction` and
-`update_organization_status` (docs/PHASE8_VERIFICATION.md) over HTTP, on
+"""Relationship and organization command/query endpoints.
+
+Exposes `evolve_relationship_reaction` and
+`update_organization_status` over HTTP, on
 the same already-delivered OIDC authentication (`dnd_ai.api.auth`),
 transaction management (`dnd_ai.api.deps`), and access resolution
 (`dnd_ai.api.access`, `dnd_ai.domain.access`) every other command router
@@ -59,7 +55,7 @@ Idempotency: durable, PostgreSQL-backed, via `dnd_ai.api.idempotency` and
 every other command router; see `dnd_ai.api.items`'s module docstring for
 the full concurrency argument.
 
-Phase 10 workstream 15 added the read side over the same URL prefix:
+The relationship read side uses the same URL prefix:
 `GET /campaigns/{campaign_id}/relationships/{relationship_id}`
 (`dnd_ai.queries.relationship.get_relationship_view`), requiring only
 `campaign.view` (the read-only counterpart to every command route's
@@ -81,8 +77,7 @@ and this remains a genuinely campaign-wide capability check, unlike the
 idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
 
-Phase 10 workstream 19 added the organization read side, a sibling to
-workstream 15's relationship read over the other half of this module's
+The organization read side is a sibling to the relationship read over the other half of this module's
 own command domain: `GET /campaigns/{campaign_id}/organizations/
 {organization_id}` (`dnd_ai.queries.organization.get_organization_view`),
 also requiring only `campaign.view`. Unlike the relationship read, the

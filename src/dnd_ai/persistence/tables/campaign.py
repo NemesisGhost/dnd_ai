@@ -57,7 +57,7 @@ timelines = Table(
         ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
         comment=(
             "The world time at which this timeline diverged from its parent. NULL only "
-            "for a root timeline. The causal branch_event_id arrives in Phase 6 with "
+            "for a root timeline. branch_event_id records the causal event and "
             "narrative.events."
         ),
     ),
@@ -94,7 +94,7 @@ timelines = Table(
     schema="campaign",
     comment=(
         "A branching chronology within a world. Campaigns are played on a timeline; a "
-        "branch inherits parent history only up to its branch point (docs/PLAN.md §5.2)."
+        "branch inherits parent history only up to its branch point."
     ),
 )
 
@@ -143,7 +143,7 @@ parties = Table(
     comment=(
         "A group of characters who adventure together. A stable world-level identity that "
         "may persist across campaigns; membership is timeline-scoped state, not a property "
-        "of this row (docs/PLAN.md §5.4)."
+        "of this row."
     ),
 )
 
@@ -179,7 +179,7 @@ party_memberships = Table(
         ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
         nullable=False,
         comment=(
-            "References core.entities, not character.characters, which arrives in Phase 4. "
+            "References core.entities so membership identity remains polymorphic. "
             "Characters are entities, so this is correct but weaker than it will be — the "
             "database cannot yet reject a non-character being added to a party."
         ),
@@ -282,7 +282,7 @@ campaigns = Table(
     schema="campaign",
     comment=(
         "A single game's run on a timeline. Several campaigns may share one timeline "
-        "(docs/PLAN.md §5.3). Does not own world entities — it reaches them through "
+        "Does not own world entities — it reaches them through "
         "participation, discovery, state, and event records."
     ),
 )
@@ -365,7 +365,7 @@ sessions = Table(
         Text(),
         comment=(
             "A derived artifact. May be revised freely without changing the events it "
-            "summarizes (docs/PLAN.md §5.5)."
+            "summarizes."
         ),
     ),
     Column(
@@ -393,7 +393,7 @@ sessions = Table(
     comment=(
         "A single period of play within a campaign. Carries both real-world time "
         "(started_at/ended_at, when the table actually played) and fictional time "
-        "(start/end_world_time_id, where the story was) — see docs/PLAN.md §5.5."
+        "(start/end_world_time_id, where the story was)."
     ),
 )
 
@@ -554,7 +554,7 @@ character_conditions = Table(
     comment=(
         "A condition currently active on a character in a timeline. "
         "source_description is free text for now — a causal event reference arrives "
-        "in Phase 6."
+        "through narrative event references."
     ),
 )
 
@@ -971,7 +971,7 @@ character_location_history = Table(
         "location_period range together with the ex_character_location_history_no_"
         "overlap exclusion constraint over (timeline_id, character_id, "
         "location_period), the same ADR 0010 shape as campaign.party_memberships. "
-        "Deferred from Phase 4 until world.locations existed "
+        "References world.locations "
         "(docs/architecture/DATABASE_MODEL.md §17)."
     ),
 )
@@ -1209,7 +1209,7 @@ party_knowledge = Table(
     schema="campaign",
     comment=(
         "The party's own current effective belief about a knowledge item on a "
-        "timeline (docs/DOMAIN_MODEL.md §15.4, docs/PLAN.md §15) — distinct from "
+        "timeline (docs/DOMAIN_MODEL.md §15.4) — distinct from "
         "knowledge.party_discoveries, which records only when/how the party "
         "acquired the item and carries no belief/confidence/interpretation of its "
         "own. Does not imply every party member shares this understanding unless "
@@ -1356,7 +1356,7 @@ relationship_state = Table(
         "campaign.quest_state's party_id: NULL is the shared/objective status, "
         "set is that one participant's current subjective reaction (affinity, "
         "trust, respect, fear, obligation, emotional tone). This is the row "
-        "events update — see docs/PLAN.md's \"NPC and faction reactions can "
+        "events update; NPC and faction reactions can "
         'evolve from events" exit criterion — unlike the stable, authored '
         "world.relationship_perspectives baseline. One current row per "
         "(timeline, relationship[, perspective holder]) — see the partial "

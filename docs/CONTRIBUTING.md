@@ -2,7 +2,7 @@
 
 Onboarding for new contributors: getting a working environment, then the workflow for changing things.
 
-**Start with §1.** Per [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), development runs against a **local or self-hosted (Docker Compose) PostgreSQL 18 server**, and self-hosted Docker Compose (`compose.yaml`) is the supported deployment topology. The path below covers the default, repository-native workflow and keeps setup focused on the platform itself rather than external hosting assumptions.
+**Start with §1.** Development runs against a local or Compose PostgreSQL 18 server, and `compose.yaml` defines the supported topology.
 
 ---
 
@@ -18,9 +18,9 @@ Onboarding for new contributors: getting a working environment, then the workflo
 
 ## 1. Local setup (start here)
 
-Phases 1 through 8 are complete and CI-verified; Phase 9 is next. See [PLAN.md §23](PLAN.md#23-delivery-phases) for what each delivered and `docs/PHASEn_VERIFICATION.md` for the evidence.
+The repository contains the database, command/query layers, and FastAPI application. Verification records preserve completed delivery evidence.
 
-Development runs against a **local or self-hosted PostgreSQL 18 server** ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). Nothing in this section needs an AWS account. The fastest path is `docker compose up -d db` (see [DEVELOPMENT.md §3.6](DEVELOPMENT.md#36-self-hosted-docker-compose)) — a native PostgreSQL install works too.
+Development runs against a **local or self-hosted PostgreSQL 18 server**. Nothing in this section needs an AWS account. The fastest path is `docker compose up -d db` — a native PostgreSQL install works too.
 
 ### 1.1 Required tools
 
@@ -33,7 +33,7 @@ Development runs against a **local or self-hosted PostgreSQL 18 server** ([PLAN.
 
 Recommended: VS Code or your preferred IDE. Node.js 18+ only if you start on the React UI, which has not begun.
 
-**Use PostgreSQL 18, not whatever version is convenient.** A server on a different major version produces green local runs that fail CI ([PLAN.md §24.0](PLAN.md#240-verification-policy)).
+**Use PostgreSQL 18, not whatever version is convenient.** A different major version can produce local results that disagree with CI.
 
 ### 1.2 Setup
 
@@ -58,7 +58,7 @@ The project's six database roles are created by the `001_bootstrap` migration, n
 
 ### 1.3 Then read
 
-Follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy): read [PLAN.md §24.0–24.1](PLAN.md#24-delivery-phases) plus the current phase entry, search [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the affected vocabulary, read only the [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms you will change, and consult [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) when application-layer placement is in scope. Do not preload the complete documentation set.
+Follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy): search [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the affected vocabulary, read the [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) sections governing the mechanisms you will change, and consult [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) when application-layer placement is in scope.
 
 ---
 
@@ -82,11 +82,11 @@ uv run mypy src
 uv run pytest
 ```
 
-All four must pass locally before opening a pull request, and CI must then go green against containerized PostgreSQL 18 — that run is the merge gate, not your local result ([PLAN.md §24.0](PLAN.md#240-verification-policy)). If a green local run turns into a red CI run, treat it as a real defect or local/CI drift and investigate; do not re-run until it passes.
+All four must pass locally before opening a pull request, and CI must then go green against containerized PostgreSQL 18. CI is the merge gate, not the local result. If a green local run turns into a red CI run, treat it as a real defect or local/CI drift and investigate.
 
 The full workflow — Alembic revision requirements, the three test layers, CI expectations — is [DEVELOPMENT.md §4–§8](DEVELOPMENT.md#4-database-and-migrations), and the definition of done is [§10](DEVELOPMENT.md#10-definition-of-done).
 
-Before writing anything, confirm it belongs to the current phase entry in [PLAN.md](PLAN.md), and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
+Before writing anything, confirm it fits the current architecture and check the eleven non-negotiable rules in [CLAUDE.md §5](../CLAUDE.md#5-non-negotiable-architectural-rules). If a task appears to require breaking one, stop and raise it rather than deviating quietly.
 
 ---
 
@@ -109,12 +109,11 @@ Documentation is part of the change, not a follow-up. If a change introduces a n
 | Question | Where |
 |---|---|
 | What does this term mean? | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) |
-| What should I be working on? | [PLAN.md §23](PLAN.md#23-delivery-phases) |
 | How should this table look? | [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) + [architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) |
 | Where does this code go? | [architecture/SYSTEM_ARCHITECTURE.md §5](architecture/SYSTEM_ARCHITECTURE.md#5-layering) |
 | Which library or tool? | [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
 | Local database won't connect? | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
-| Green locally, red in CI? | [PLAN.md §24.0](PLAN.md#240-verification-policy) — check PostgreSQL major version and extensions first |
+| Green locally, red in CI? | Check PostgreSQL major version, extensions, and environment differences first |
 | Self-hosting with Docker? | [DEVELOPMENT.md §3.6](DEVELOPMENT.md#36-self-hosted-docker-compose) |
 | How do I create/archive an entity? | [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) |
 

@@ -1,6 +1,4 @@
-"""Request-scoped dependencies: database transaction/session management and
-the idempotency-key passthrough (docs/architecture/SYSTEM_ARCHITECTURE.md
-§7 "Transaction boundary", docs/PLAN.md Phase 10 deliverables).
+"""Request-scoped database transactions and idempotency-key parsing.
 
 `get_engine` is a process-wide singleton overridden wholesale in tests via
 `app.dependency_overrides` (docs/architecture/SYSTEM_ARCHITECTURE.md §5.2 —

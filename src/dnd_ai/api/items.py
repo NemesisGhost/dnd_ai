@@ -1,7 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.items` — Phase 10 workstream 6,
-continuing "command endpoints over the existing command/application
-services" (docs/PLAN.md Phase 10) into the item domain after workstream 5's
-encounter endpoints (`dnd_ai.api.encounters`). Exposes `transfer_item_
+"""Item-possession and identification command endpoints.
+
+Exposes `transfer_item_
 possession` and `identify_item` (docs/PHASE9_VERIFICATION.md) over HTTP, on
 the same already-delivered OIDC authentication (`dnd_ai.api.auth`),
 transaction management (`dnd_ai.api.deps`), and access resolution

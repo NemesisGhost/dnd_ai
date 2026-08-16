@@ -1,5 +1,4 @@
-"""OIDC bearer-token authentication wiring (docs/PLAN.md Phase 10
-deliverables — "authentication verification"). `dnd_ai.domain.tokens` does
+"""OIDC bearer-token authentication wiring. `dnd_ai.domain.tokens` does
 the framework-free signature/claims verification; this module is the
 FastAPI-specific plumbing around it: the JWKS client singleton, header
 extraction, and the request-scoped dependencies command/query endpoints

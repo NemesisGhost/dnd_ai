@@ -1,7 +1,4 @@
-"""Effective knowledge query (docs/PLAN.md Phase 10 deliverable "query
-services for the effective dungeon, character, quest, relationship,
-inventory, encounter, and knowledge state required by the vertical
-slice").
+"""Audience-filtered effective knowledge query.
 
 `knowledge.knowledge_items` records a claim — its canonical (ground-truth)
 statement, truth status, and sensitivity; `campaign.party_knowledge`

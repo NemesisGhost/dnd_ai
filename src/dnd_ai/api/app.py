@@ -1,5 +1,4 @@
-"""The FastAPI application entry point (docs/PLAN.md Phase 10 deliverable
-list, docs/architecture/SYSTEM_ARCHITECTURE.md §5.2).
+"""The portable FastAPI application entry point.
 
 Portable by design (ADR 0012, docs/LOCAL_DEPLOYMENT.md): FastAPI runs under
 Uvicorn, in a container or otherwise, and talks to PostgreSQL over the

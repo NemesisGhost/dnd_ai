@@ -1,8 +1,6 @@
-"""Character-relationship and typed-resource-grant commands (docs/
-architecture/DATABASE_MODEL.md §19.4, §19.6; docs/PLAN.md Phase 10
-deliverable "many-to-many user-character relationships and resource-
-access grants sufficient for the vertical slice"). A sibling workstream to
-`dnd_ai.commands.memberships`, over the two remaining `security.*` tables
+"""Character-relationship and typed-resource-grant commands.
+
+These commands operate over the two `security.*` tables
 that let a human actually see or act as something beyond a bare campaign
 role: `security.membership_character_relationships` (a membership's
 relationship to a character — control, viewing, portrayal) and `security.

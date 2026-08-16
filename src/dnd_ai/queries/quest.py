@@ -1,7 +1,4 @@
-"""Effective quest-progress query (docs/PLAN.md Phase 10 deliverable "query
-services for the effective dungeon, character, quest, ... state required by
-the vertical slice"; docs/PLAN.md §25 step 12, "Advance the quest
-objective").
+"""Audience-filtered effective quest-progress query.
 
 `narrative.quests`/`.quest_stages`/`.quest_objectives` describe what a
 quest is; `campaign.quest_state`/`.objective_state` describe current

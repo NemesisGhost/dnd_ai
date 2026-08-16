@@ -1,5 +1,4 @@
-"""Character movement — `enter_location` (docs/PLAN.md §25 step 7, "Move
-the party into the dungeon").
+"""Character movement through `enter_location`.
 
 `campaign.character_location_history` (revision 042/043) already carries
 the full ADR 0010 interval contract for "where a character has been" — the

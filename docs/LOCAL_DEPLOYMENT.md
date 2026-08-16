@@ -62,7 +62,7 @@ Do not retire transitional AWS resources until all of the following are recorded
 
 - migrations apply to local PostgreSQL and required extensions exist;
 - bootstrap roles and grants work locally;
-- Phase 10's API vertical slice works end to end;
+- the API vertical slice works end to end;
 - authentication, authorization, secure cookies, and CSRF work through the proxy;
 - PostgreSQL and uploaded-file backups can be created and restored, including an offsite copy;
 - retained AWS development data is exported/migrated and verified locally; and

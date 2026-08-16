@@ -1,6 +1,4 @@
-"""Query services (docs/PLAN.md Phase 10 deliverable "query services for the
-effective dungeon, character, quest, relationship, inventory, encounter, and
-knowledge state required by the vertical slice").
+"""Framework-free, audience-filtered query services.
 
 Mirrors `dnd_ai.commands`' package shape: framework-free, connection-taking
 functions returning plain dataclasses, never FastAPI/pydantic types

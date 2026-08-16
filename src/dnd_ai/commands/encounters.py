@@ -1,7 +1,7 @@
-"""StartEncounter, ResolveCombatTurn, and EndEncounter — the commands that
-let a dungeon (or Foundry) combat session update persistent character and
-world state (docs/PLAN.md Phase 9 exit criterion: "Foundry combat can update
-persistent character and world state").
+"""StartEncounter, ResolveCombatTurn, and EndEncounter commands.
+
+These commands let a dungeon or external combat session update persistent
+character and world state.
 
 resolve_combat_turn mirrors dnd_ai.commands.relationships.
 evolve_relationship_reaction's shape: lock a structural row that always

@@ -55,7 +55,7 @@ characters = Table(
         UUID(),
         ForeignKey("world.locations.location_id", ondelete="SET NULL"),
         comment=(
-            "Where this character is from. Deferred from Phase 4 until world.locations "
+            "Where this character is from. References world.locations "
             "existed (docs/architecture/DATABASE_MODEL.md §7.1). Must belong to the "
             "character's own world, enforced by trigger."
         ),
@@ -64,7 +64,7 @@ characters = Table(
     comment=(
         "Identity-level mechanical data shared by every character: species and size. "
         "NPCs and player characters both extend this row rather than duplicating it "
-        "(docs/PLAN.md §7.1). origin_location_id arrives in Phase 5 once "
+        "(docs/DOMAIN_MODEL.md §7.1). origin_location_id references "
         "world.locations exists."
     ),
 )
@@ -89,7 +89,7 @@ npcs = Table(
     schema="character",
     comment=(
         "Marks a character as an NPC. Portrayal, goals, routines, and other simulation "
-        "apparatus (docs/PLAN.md §8) are deferred to Phase 10, which builds the AI "
+        "apparatus belongs in the AI domain rather than this mechanical table "
         "agents that consume them."
     ),
 )
@@ -113,7 +113,7 @@ player_characters = Table(
     comment=(
         "Marks a character as player-controlled. player_user_id is basic ownership "
         "identity; timeline- or session-scoped control handoffs "
-        "(character.character_controllers) are deferred to Phase 10."
+        "are represented by security.membership_character_relationships."
     ),
 )
 
@@ -144,7 +144,7 @@ character_descriptions = Table(
     schema="character",
     comment=(
         "Free-text background, appearance, and notes that do not drive mechanics "
-        "(docs/PLAN.md §7.2). Optional: a character need not have one yet."
+        "Optional: a character need not have one."
     ),
 )
 

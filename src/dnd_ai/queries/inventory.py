@@ -1,18 +1,11 @@
-"""Effective character-inventory query (docs/PLAN.md Phase 10 deliverable
-"query services for the effective dungeon, character, quest, relationship,
-inventory, ... state required by the vertical slice").
+"""Audience-filtered effective character-inventory query.
 
 `rules.item_definitions`/`world.item_instances` describe what an item is;
 `campaign.item_state`/`.item_ownership`/`.inventory_entries` describe its
 current condition, legal owner, and current possessor on a timeline
-(docs/architecture/DATABASE_MODEL.md §11 — reconciliation note at §19.7's
-sibling `campaign.character_inventory` entry: "Phase 9, which owns items,
-should confirm whether a separate index table is actually warranted or
-whether a view/query suffices." No `campaign.character_inventory` table
-was ever built (migration 077 built the four tables above and
-`knowledge.item_identification` only) — this module is that confirmation:
-a direct query over `campaign.inventory_entries` joined to the item-level
-tables, not a maintained index table.
+(docs/architecture/DATABASE_MODEL.md §11). There is no maintained
+`campaign.character_inventory` index table; this module queries
+`campaign.inventory_entries` directly and joins the item-level tables.
 
 Audience filtering: definition-level facts (name, category, rarity) and
 timeline state (quantity, condition, charges, equipped/destroyed, current

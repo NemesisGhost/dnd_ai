@@ -1,7 +1,4 @@
-"""Effective encounter query (docs/PLAN.md Phase 10 deliverable "query
-services for the effective dungeon, character, quest, relationship,
-inventory, encounter, and knowledge state required by the vertical
-slice").
+"""Audience-filtered effective encounter query.
 
 `narrative.encounters`/`.encounter_participants`/`.encounter_rounds`/
 `.encounter_turns` and `interaction.combat_actions` together are already

@@ -1,8 +1,6 @@
-"""Query endpoint over `dnd_ai.queries.knowledge` — Phase 10 workstream 18,
-completing the named-domain list in "query services for the effective
-dungeon, character, quest, relationship, inventory, encounter, and
-knowledge state required by the vertical slice" (docs/PLAN.md Phase 10
-deliverable list). Exposes `dnd_ai.queries.knowledge.get_knowledge_view`
+"""Audience-filtered knowledge query endpoint.
+
+Exposes `dnd_ai.queries.knowledge.get_knowledge_view`
 over HTTP as `GET /campaigns/{campaign_id}/knowledge/{knowledge_item_id}`,
 on the same already-delivered OIDC authentication, transaction management,
 and access resolution every other router uses. No command endpoint exists

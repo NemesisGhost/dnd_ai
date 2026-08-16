@@ -1,14 +1,9 @@
-"""Campaign-creation bootstrap command (docs/PLAN.md Phase 10 "Still to
-come" list: "the invitation-token acceptance flow and campaign-creation
-bootstrap deferred at workstream 20" —
-`dnd_ai.commands.memberships`'s own docstring reasoned that
-`campaign.campaigns`/its first owning membership "must already exist by
-some path before any `access.manage`-gated command could run at all —
-bootstrapping a campaign's very first owner membership is left to whatever
-future workstream builds campaign creation itself." This is that
-workstream: without it, no campaign could ever be created through the
-application API at all (CLAUDE.md rule 3), only by a test factory or a
-direct database write.
+"""Campaign creation and first-owner bootstrap.
+
+This command creates a campaign through the application boundary and
+atomically establishes its initial owning membership and role. Without
+this bootstrap, subsequent campaign commands would require an
+`access.manage` holder that could not yet exist.
 
 Every other Phase 10 command trusts an already-resolved `AccessContext`'s
 `campaign_id` as authorized; `create_campaign` has no such campaign to

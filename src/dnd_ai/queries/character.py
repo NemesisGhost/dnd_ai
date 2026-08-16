@@ -1,6 +1,4 @@
-"""Effective character-state query (docs/PLAN.md Phase 10 deliverable
-"query services for the effective dungeon, character, ... state required by
-the vertical slice").
+"""Audience-filtered effective character-state query.
 
 `character.characters` and its ruleset-scoped references (`rules.species`,
 ...) describe what a character *is*; `campaign.character_state`/

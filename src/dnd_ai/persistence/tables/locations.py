@@ -200,7 +200,7 @@ area_connections = Table(
     Column("is_hidden", Boolean(), nullable=False, server_default=text("false")),
     Column("description", Text()),
     # Added by revision 047: the descriptive half of "conditional routes"
-    # (docs/PLAN.md §9.2). Structured, machine-checkable evaluation for the
+    # Structured, machine-checkable evaluation for the
     # check-gated case arrived in revision 064 — see required_check_kind
     # below and world.conditional_route_requirement_satisfied().
     Column(
@@ -209,10 +209,10 @@ area_connections = Table(
         nullable=False,
         server_default=text("false"),
         comment=(
-            "True for a conditional route (docs/PLAN.md §9.2) — traversable only when "
+            "True for a conditional route — traversable only when "
             "some condition holds. required_check_kind (revision 064), when set, makes "
             "a check-gated condition machine-evaluable; quest-gated or state-gated "
-            "conditions still rely on condition_description alone (Phase 7)."
+            "quest- or state-gated conditions rely on condition_description."
         ),
     ),
     Column(

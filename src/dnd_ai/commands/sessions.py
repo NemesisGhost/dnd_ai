@@ -1,12 +1,11 @@
-"""End-session command (docs/PLAN.md §25 step 14, "End the session and
-generate a summary").
+"""End-session bookkeeping command.
 
 `campaign.sessions` already carries the full lifecycle columns
 (`ended_at`, `end_world_time_id`, `summary`) — no command populated them
 through the application until now, the same gap `dnd_ai.commands.movement.
 enter_location` closed for `character_location_history`. "Generate a
 summary" (the second half of step 14) is already served by `GET /campaigns
-/{campaign_id}/summary` (Phase 10 workstream 22); this command only
+/{campaign_id}/summary`; this command only
 records the session bookkeeping itself. "Ended" is represented by
 `ended_at IS NOT NULL`, not any `lifecycle_status_id` transition —
 `core.lifecycle_statuses`' own vocabulary (pending/active/inactive/

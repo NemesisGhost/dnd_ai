@@ -1,7 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.campaign_invitations` — the
-remaining piece of Phase 10's "OIDC-backed login integration for dev,
-authenticated user mapping, campaign invitations/memberships..." deliverable
-`dnd_ai.commands.memberships` left deferred at workstream 20. Exposes
+"""Campaign-invitation creation and acceptance endpoints.
+
+Exposes
 `create_campaign_invitation` as `POST /campaigns/{campaign_id}/invitations`
 and `accept_campaign_invitation` as `POST /campaign-invitations/accept`.
 

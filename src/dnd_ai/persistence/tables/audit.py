@@ -100,7 +100,7 @@ change_log = Table(
         UUID(),
         comment=(
             "The narrative event that caused this change, once narrative.events exists in "
-            "Phase 6. Unconstrained until then; rule 6 in CLAUDE.md is what makes it matter."
+            "narrative.events. Nullable for records that have no causal event."
         ),
     ),
     Column("ai_proposal_id", UUID()),

@@ -313,7 +313,7 @@ businesses = Table(
         "(docs/DOMAIN_MODEL.md §10.3). Locations/employees/owners are "
         "expressed through world.organizations.headquarters_location_id and "
         "the employment/ownership specialized relationships, not duplicated "
-        "here; inventory/prices are deferred to Phase 9's item domain."
+        "here; inventory and prices belong to the item domain."
     ),
 )
 
@@ -333,7 +333,7 @@ governments = Table(
         "A government organization (docs/DOMAIN_MODEL.md §10.1). "
         "Jurisdiction/territorial control is expressed through the universal "
         "relationship model (relationship_type = control), per "
-        "docs/PLAN.md's own example, not a typed column here; offices/"
+        "a domain example, not a typed column here; offices/"
         "leaders are organization_memberships, agencies are child "
         "organizations (parent_organization_id)."
     ),
@@ -403,7 +403,7 @@ religions = Table(
         "pantheon_structure is illustrative free text (monotheistic, "
         "polytheistic, pantheistic, animistic, philosophical, ...). Holy sites "
         "and reverence are expressed through the universal relationship model "
-        '(docs/PLAN.md\'s own "religion reveres deity" example), not typed '
+        '(the "religion reveres deity" relationship), not typed '
         "columns here; doctrines/rituals/sacred texts/symbols/traditions are "
         "descriptive lore carried by the inherited core.entities.summary and "
         "core.entity_names, with no exit criterion requiring structured "
@@ -593,7 +593,7 @@ ownership_relationships = Table(
         "A specialized relationship: an entity owning another non-item entity "
         "— a business, a building, another organization "
         "(docs/architecture/DATABASE_MODEL.md §10.2). Item ownership stays with "
-        "the future Phase 9 item domain (campaign.item_ownership) rather than "
+        "campaign.item_ownership rather than "
         "this table."
     ),
 )

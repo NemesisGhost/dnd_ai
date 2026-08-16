@@ -2,7 +2,7 @@
 
 How to set up a working environment and make changes to this repository.
 
-This document covers the **mechanics** — toolchain, layout, commands, workflow. It deliberately does not restate design rules; those live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Start with [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-policy), then read [PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) and the current phase entry rather than loading the whole plan.
+This document covers the **mechanics** — toolchain, layout, commands, and workflow. Design rules live in [DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md), [architecture/SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md), and [ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md). Consult [PLAN.md](PLAN.md) only for delivery status or future scope.
 
 ---
 
@@ -12,7 +12,7 @@ This document covers the **mechanics** — toolchain, layout, commands, workflow
 - [2. Repository layout](#2-repository-layout)
 - [3. Local setup](#3-local-setup) (including [§3.6 Self-hosted Docker Compose](#36-self-hosted-docker-compose))
 - [4. Database and migrations](#4-database-and-migrations)
-- [5. Phase 1 walkthrough (complete)](#5-phase-1-walkthrough-complete)
+- [5. Bootstrap walkthrough](#5-bootstrap-walkthrough)
 - [6. Testing](#6-testing)
 - [7. Code quality](#7-code-quality)
 - [8. Continuous integration](#8-continuous-integration)
@@ -46,7 +46,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 
 ## 2. Repository layout
 
-The tree below is the **target**. As of Phase 6, `database/` holds the migrations and seed files, `src/dnd_ai/persistence/` holds the table metadata and seed machinery, `src/dnd_ai/commands/` holds the first command handlers (`record_event`, `perform_interaction`, `resolve_check`), and `tests/` holds all three layers plus shared factories. As of Phase 10, `src/dnd_ai/domain/` holds `access.py` — the `security.*` effective-access resolver (docs/architecture/DATABASE_MODEL.md §19.7) — and `errors.py`, the framework-free `SafeMessageError`/`DomainAuthorizationError` classification a domain error opts into when it needs control over how it reaches an API client. `src/dnd_ai/api/` holds the portable FastAPI application (app factory, `/healthz` and `/readyz`, the error contract, correlation IDs, and per-request transaction management; see ADR 0013 and docs/LOCAL_DEPLOYMENT.md for why "portable" — no Lambda/AWS-specific code lives here or anywhere else in this package). The remaining `src/dnd_ai/` subpackages (`queries/`, `ai/`, `integrations/`) do not exist yet — create each as the phase that needs it requires, not in advance. `commands/` itself stayed thin: no `domain/` layer was needed yet because the invariants a command has to satisfy (world consistency, ruleset allow-lists, the conditional-route decision) already live in triggers and `world.conditional_route_requirement_satisfied()` — a command calls those rather than re-deriving them in Python.
+The tree below describes the repository layout. `database/` holds migrations and seed files; `src/dnd_ai/persistence/` holds table metadata and seed machinery; `src/dnd_ai/commands/` owns transactional mutations; `src/dnd_ai/queries/` owns audience-filtered reads; `src/dnd_ai/domain/` contains framework-free access, token, and error behavior; and `src/dnd_ai/api/` exposes the portable FastAPI application. Tests are split into unit, database, and cross-domain scenario layers. Domain invariants stay in PostgreSQL where they protect every caller, while commands compose those invariants into atomic workflows.
 
 ```text
 .
@@ -353,9 +353,9 @@ Against a self-hosted `compose.yaml` database, run `docker compose --profile too
 
 ---
 
-## 5. Phase 1 walkthrough (complete)
+## 5. Bootstrap walkthrough
 
-**Phases 1 through 8 are done.** Phase 9 is next. Follow [PLAN.md §24.1](PLAN.md#241-phase-exit-review) when each phase closes and [§26.6](PLAN.md#266-proportional-test-infrastructure-policy) before expanding test-only infrastructure. Phase 9 was the first phase developed under the local-first loop in [§3](#3-local-setup) (originally [ADR 0011](adr/0011-local-first-development-aws-verified-delivery.md), now [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)); Phases 1–8 were developed directly against `dev` RDS, so their verification files record only that target — historical evidence, not current policy.
+This walkthrough explains the repository's database bootstrap and the checks that keep a new PostgreSQL instance consistent with development and CI.
 
 This section is kept as the reference for how the database bootstrap is put together, because every later phase builds on it.
 

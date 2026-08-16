@@ -1,10 +1,4 @@
-"""Command endpoint over `dnd_ai.commands.events.record_event` — Phase 10
-workstream 9, continuing "command endpoints over the existing
-command/application services" (docs/PLAN.md Phase 10) into the "interactions/
-events" domain the Phase 10 progress note names as the last remaining
-domain after workstream 8's relationship/organization endpoints
-(`dnd_ai.api.relationships`) — alongside this workstream's own interaction
-endpoints (`dnd_ai.api.interactions`).
+"""Standalone event-recording endpoint.
 
 Exposes the standalone `RecordEvent` command (docs/ENTITY_LIFECYCLE.md
 §21) over HTTP as `POST /campaigns/{campaign_id}/events`, on the same

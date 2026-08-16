@@ -42,8 +42,7 @@ A **persistent-world simulation platform** for tabletop RPGs (initially D&D 5e 2
 
 Search the candidate documents first, then open only the matching sections. The list below is a routing order, not a mandatory full-document read list.
 
-1. **Check current phase**: [docs/PLAN.md](PLAN.md) — are you working on something that's supposed to be implemented yet?
-2. **Clarify concepts**: [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — what does this term actually mean?
+1. **Clarify concepts**: [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — what does this term actually mean?
 3. **Schema design**: [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) — how should this be modeled?
 4. **Database rules**: [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) — what naming/pattern should I use?
 5. **Lifecycle operations**: [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) — how do I create/modify/delete this?
@@ -65,9 +64,9 @@ Persistent game worlds supporting:
 - Long-term structured memory
 - Future support for additional rulesets beyond D&D 5e
 
-### Current Phase
+### Delivery status
 
-Use [docs/PLAN.md](PLAN.md) for the active implementation phase and scope. Keep the work anchored to the current phase entry rather than using broad project-status notes as routine startup context.
+Use domain and architecture documents as the authority for implemented behavior.
 
 ### What's Being Built
 
@@ -203,17 +202,17 @@ See [docs/ENTITY_LIFECYCLE.md §14](ENTITY_LIFECYCLE.md) for complete rules.
 
 ✅ **Correct**:
 - Run migrations and database/scenario tests against a local/self-hosted PostgreSQL server whose **major version matches CI** (currently 18.x)
-- Treat the CI run against a disposable containerized PostgreSQL 18 instance as the merge gate and the phase-exit evidence
-- Record both in `docs/PHASEn_VERIFICATION.md`: what passed locally, and the CI run ID that proved it
-- Exercise each deployable via `compose.yaml` once its phase introduces it
+- Treat the CI run against a disposable PostgreSQL 18 container as the merge gate
+- Record local results and the confirming CI run ID in the applicable verification record
+- Exercise every deployable through `compose.yaml`
 
 ❌ **Wrong**:
-- Treating a green local run as phase-exit evidence on its own
+- Treating a green local run as sufficient merge evidence
 - Installing whatever PostgreSQL major version is convenient locally — that produces green local runs that fail CI
 - Re-running a red CI job that followed a green local run, instead of investigating it as a real defect or local/CI drift
 - Deferring deployment verification until the end of the project
 
-See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).
+See [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md).
 
 ---
 
@@ -222,14 +221,14 @@ See [PLAN.md §24.0](PLAN.md#240-verification-policy) and [ADR 0012](adr/0012-se
 | Layer | Technology | Notes |
 |-------|------------|-------|
 | **Deployment** | Self-hosted Docker Compose | `compose.yaml`/`Dockerfile` — the supported deployment topology, verified by CI ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) |
-| **Compute** | One shared container image | Migrations today (`compose.yaml`'s `migrate` service); API, background worker, and Discord adapter share the same image once `src/dnd_ai/api` exists |
+| **Compute** | One shared container image | The migration job and FastAPI service use the same image with different commands; future workers and adapters follow this pattern |
 | **Database** | PostgreSQL 18.x | Local/self-hosted for development and CI. The major version must match everywhere it runs ([DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Migrations via Alembic |
 | **Backend** | Python 3.12+ | SQLAlchemy 2.x Core (not the ORM), psycopg 3, Pydantic v2 |
-| **API** | FastAPI (REST) | Framework is pinned; the concrete endpoint shape is still deferred by [PLAN.md §28](PLAN.md#28-deferred-decisions) |
+| **API** | FastAPI (REST) | Routers expose command/query services with OIDC, capability checks, request transactions, and stable error contracts |
 | **UI** | React | Web/admin client talking to REST API; not yet started |
 | **Integrations** | FoundryVTT Module, Discord Bot, MCP Interface | All are clients, all go through application API |
 | **Migrations** | Alembic | See [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions) |
-| **Tooling** | uv, pytest against a local/self-hosted PostgreSQL 18 server (CI repeats it against a disposable containerized instance), ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain); verification policy in [PLAN.md §24.0](PLAN.md#240-verification-policy) |
+| **Tooling** | uv, pytest against PostgreSQL 18, ruff, mypy | Full rationale in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-toolchain) |
 
 **Do not introduce new technologies** without explicit design review and documentation update.
 
@@ -245,7 +244,6 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 |----------|---------|--------------|
 | [README.md](../README.md) | High-level project vision and architecture overview | First-time orientation only |
 | [CLAUDE.md](../CLAUDE.md) | Required operating rules and context-routing policy | Start of every task |
-| [docs/PLAN.md](PLAN.md) | **Source of truth** for implementation phases and deliverables | §23.0–23.1 plus current phase entry |
 | [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) | Conceptual vocabulary and domain boundaries | Affected concept sections only |
 | [docs/DATABASE_CONVENTIONS.md](DATABASE_CONVENTIONS.md) | Hard rules for schema design | Sections for mechanisms being changed |
 | [docs/ENTITY_LIFECYCLE.md](ENTITY_LIFECYCLE.md) | Create/mutate/archive/delete workflows | Matching workflow only, when applicable |
@@ -264,7 +262,7 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 | Document | Purpose |
 |----------|---------|
 | [docs/INFRASTRUCTURE.md](INFRASTRUCTURE.md) | Deploying and operating the AWS infrastructure |
-| [docs/adr/](adr/) | Architecture Decision Records — 0001–0007 are stubs whose decisions live in [PLAN.md §2](PLAN.md#2-architectural-decisions); [ADR 0008](adr/0008-aws-first-deployment-and-verification.md) (AWS-first deployment and verification) and [ADR 0009](adr/0009-separate-owning-role-from-login-roles.md) (owning vs. login database roles) are written in full |
+| [docs/adr/](adr/) | Architecture Decision Records, including current and superseded rationale |
 | [.github/copilot-instructions.md](../.github/copilot-instructions.md) | GitHub Copilot repository instructions |
 
 ---
@@ -274,8 +272,7 @@ All project documentation lives under `docs/` (except `README.md` and `CLAUDE.md
 **Before implementing any feature**, complete this checklist using targeted searches and section reads. Do not satisfy it by loading every linked document in full.
 
 ### Phase Check
-- [ ] Read [docs/PLAN.md §23.0–23.1](PLAN.md#23-delivery-phases) and the current phase entry
-- [ ] Verify this feature is in the current phase's deliverables
+- [ ] Verify the feature fits the current architecture and documented domain boundaries
 - [ ] Confirm exit criteria are clear
 
 ### Domain Understanding
@@ -853,11 +850,7 @@ def open_door():
 ### Starting a New Feature
 
 ```
-1. Check docs/PLAN.md
-   ├─ Am I working on the right phase?
-   └─ What are the exit criteria?
-
-2. Review domain concepts
+1. Review domain concepts
    ├─ docs/DOMAIN_MODEL.md for vocabulary
    └─ docs/architecture/DATABASE_MODEL.md for schema
 
@@ -1081,10 +1074,6 @@ NO. AI always goes through:
 
 → [docs/DOMAIN_MODEL.md](DOMAIN_MODEL.md) — search for the term
 
-### Problem: "I don't know what phase we're in"
-
-→ [docs/PLAN.md](PLAN.md) — check current deliverables
-
 ### Problem: "I don't know where this table should go"
 
 → [docs/architecture/DATABASE_MODEL.md](architecture/DATABASE_MODEL.md) — find similar table, check schema
@@ -1147,11 +1136,10 @@ As an AI assistant working on this project:
    - Knowledge is per-knower
    - Archive, don't delete
    - No secrets in code
-   - Deploy and verify in AWS
+   - Develop and verify against PostgreSQL 18 using the supported Compose/CI topology
 
-3. ✅ **Check current phase before implementing**
-   - docs/PLAN.md is the source of truth
-   - Implement only the current target; Phase 5's formal-correctness gate is blocked pending PR #15's final-head CI confirmation, so Phase 6 feature/schema work should not begin yet
+3. ✅ **Check delivery scope when it affects the task**
+   - Current architecture documents are authoritative for how implemented behavior works
 
 4. ✅ **Don't extend legacy code**
    - This is an architecture restart

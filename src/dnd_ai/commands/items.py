@@ -1,6 +1,6 @@
 """TransferItemPossession and IdentifyItem — the commands that let a
-dungeon event change who/what currently holds an item instance, or what a
-knower currently knows about one, atomically (docs/PLAN.md Phase 9).
+dungeon event change who or what currently holds an item instance, or what a
+knower currently knows about one, atomically.
 
 Mirrors dnd_ai.commands.relationships.evolve_relationship_reaction's shape:
 lock a structural row that always exists (world.item_instances) before

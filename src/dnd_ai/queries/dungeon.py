@@ -1,7 +1,4 @@
-"""Effective dungeon-area query (docs/PLAN.md Phase 10 deliverable "query
-services for the effective dungeon, ... state required by the vertical
-slice"; docs/PLAN.md §25 steps 7-8, "Move the party into the dungeon" /
-"Search an area and discover the trap but not the hidden door").
+"""Audience-filtered effective dungeon-area query.
 
 `world.dungeon_areas` and its structural children (`world.area_features`/
 `.area_hazards`/`.area_interactables`/`.area_connections`) describe what

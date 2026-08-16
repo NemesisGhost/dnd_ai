@@ -477,7 +477,7 @@ The import subsystem is intentionally isolated from canonical tables until promo
 |---|---|---|
 | PostgreSQL | `db` service in `compose.yaml`, PostgreSQL 18, persistent named volume | Source of truth (§2) |
 | Migrations and batch jobs | `migrate` service in `compose.yaml`, built from the shared `Dockerfile` | Runs today |
-| Application API | `api` service in `compose.yaml`, FastAPI under Uvicorn, built from the shared `Dockerfile` | Runs today; publishes no host port by default (compose.override.yaml adds one for local development) — a reverse proxy is not yet built (§32 of PLAN.md, Phase 14) |
+| Application API | `api` service in `compose.yaml`, FastAPI under Uvicorn, built from the shared `Dockerfile` | Runs today; publishes no host port by default (compose.override.yaml adds one for local development); production ingress still requires the reverse proxy described in PLAN.md §32 |
 | Background worker | Not yet built | Drains the outbox (§10), delivers integrations, processes AI proposals, once built |
 | Discord adapter | Not yet built | Outbound gateway connection, once built |
 | Object storage | Not yet decided | Import source documents, exports, image layers |
@@ -583,7 +583,7 @@ Run against a local/self-hosted PostgreSQL 18 server during development and agai
 - MCP tools
 - OIDC bearer-token verification (`dnd_ai.domain.tokens`, `dnd_ai.api.auth`)
 
-No live external dependency in tests. Established by the OIDC token-verification workstream (Phase 10), the first of this project's contract-test surfaces to actually need one: rather than a live identity provider or a JWKS HTTP server, the verifier resolves its signing key through an injected `kid -> key` callable, and tests supply a fake resolver backed by a keypair generated locally in the test process (see `tests/jwt_helpers.py`, `tests/unit/test_token_verification.py`). Prefer this shape — an injectable resolver/client seam plus a locally generated credential or fixture, never a live third-party call or a spun-up local server standing in for one — for any later contract test in this category (Foundry, Discord, AI provider adapters) that would otherwise need external reachability to run.
+No live external dependency is permitted in tests. OIDC verification demonstrates the pattern: rather than a live identity provider or JWKS server, the verifier resolves its signing key through an injected `kid -> key` callable, and tests supply a fake resolver backed by a locally generated keypair. Use the same injectable resolver/client seam for Foundry, Discord, and AI-provider contract tests.
 
 ### End-to-end tests
 

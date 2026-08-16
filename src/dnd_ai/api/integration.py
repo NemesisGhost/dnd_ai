@@ -1,7 +1,6 @@
-"""Command endpoints over the world-scoped half of
-`dnd_ai.commands.integration` — Phase 10 workstream 10, continuing
-"command endpoints over the existing command/application services"
-(docs/PLAN.md Phase 10) into the `integration` domain. Exposes
+"""World-scoped external-system and identifier-mapping endpoints.
+
+Exposes
 `register_external_system` and `map_external_identifier` over HTTP, on the
 same already-delivered OIDC authentication (`dnd_ai.api.auth`), transaction
 management (`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,

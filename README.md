@@ -54,7 +54,6 @@ The final product is a rules-aware world platform, not a one-off database or pro
 - [PostgreSQL Domain Layout](#postgresql-domain-layout)
 - [Repository Structure](#repository-structure)
 - [Getting Started](#getting-started)
-- [Development Roadmap](#development-roadmap)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -375,7 +374,7 @@ Campaigns should not usually create independent copies of locations, NPCs, organ
 
 ---
 
-> **Illustrative, not authoritative.** From here through "PostgreSQL Domain Layout," diagrams and example SQL sketch the shape of the platform for a reader new to the project. They are simplified and will drift from the real schema as it's built. [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) is the source of truth for actual tables, columns, and schema scope; [docs/PLAN.md](docs/PLAN.md) is the source of truth for what's built and in what phase.
+> **Illustrative, not authoritative.** From here through "PostgreSQL Domain Layout," diagrams and example SQL introduce the platform at a high level. [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) is the source of truth for actual tables, columns, and schema scope.
 
 ## Entity Model
 
@@ -735,7 +734,6 @@ The database will use bounded PostgreSQL schemas:
 │   ├── workflows/ci.yml
 │   └── copilot-instructions.md
 ├── docs/                           # ALL documentation lives here
-│   ├── PLAN.md                     # Source of truth for phases and deliverables
 │   ├── DOMAIN_MODEL.md
 │   ├── DATABASE_CONVENTIONS.md
 │   ├── ENTITY_LIFECYCLE.md
@@ -745,7 +743,6 @@ The database will use bounded PostgreSQL schemas:
 │   ├── CHECKLIST.md                # Pre-deployment checks
 │   ├── INFRASTRUCTURE.md           # Infrastructure reference
 │   ├── AI_ASSISTANT_GUIDE.md       # On-demand examples; not startup context
-│   ├── PLAN_PHASES_0_5_ARCHIVE.md  # Completed-phase delivery detail
 │   ├── architecture/
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
@@ -758,7 +755,7 @@ The database will use bounded PostgreSQL schemas:
 └── scripts/
 ```
 
-Phase 1 added the Python project and migration scaffolding:
+The Python project and migration scaffolding use this layout:
 
 ```text
 ├── pyproject.toml                  # Python project and tool configuration
@@ -770,37 +767,34 @@ Phase 1 added the Python project and migration scaffolding:
 └── tests/{unit,database,scenario}/
 ```
 
-### Planned, not yet created
+### Reserved extension points
 
 ```text
 ├── database/functions/             # SQL for stored functions, applied via revisions
 ├── src/dnd_ai/                     # api / commands / queries / domain / ai / integrations
-└── terraform/modules/              # ecr, ecs_cluster, ecs_service, alb — optional AWS compute path (PLAN.md §31)
+└── terraform/modules/              # optional AWS infrastructure modules
 ```
 
-These are created as implementation proceeds, not in advance. The full target layout, with the rationale for each directory, is in [docs/DEVELOPMENT.md §2](docs/DEVELOPMENT.md#2-repository-layout).
+These directories are reserved for the responsibilities shown and should be created only when their corresponding runtime component exists. The full repository layout and directory responsibilities are in [docs/DEVELOPMENT.md §2](docs/DEVELOPMENT.md#2-repository-layout).
 
-All design and process documentation lives under `docs/`; only `README.md` and `CLAUDE.md` belong at the repository root. Pre-restart application code and orphaned Terraform wiring have been removed — see [Current Status](#current-status) for what was cleaned up and what was intentionally kept.
+All design and process documentation lives under `docs/`; only `README.md` and `CLAUDE.md` belong at the repository root.
 
 ---
 
 ## Getting Started
 
-Self-hosted Docker Compose ([ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) is the officially supported deployment topology. The planned production target is the existing Ubuntu mini-PC that hosts FoundryVTT, with D&D AI running as a separate Docker Compose-managed application (React, FastAPI/Uvicorn, PostgreSQL, and required workers) behind a shared reverse proxy and No-IP-managed public DNS — see [ADR 0013](docs/adr/0013-locally-host-production-on-existing-mini-pc.md) and [the local deployment runbook](docs/LOCAL_DEPLOYMENT.md) for that (not yet implemented) plan. AWS RDS remains available as an optional, no-longer-CI-verified path; no teardown is required or scheduled.
+Self-hosted Docker Compose ([ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) is the supported topology. The current stack contains PostgreSQL, a one-off migration service, and the FastAPI/Uvicorn API on a private Compose network. [docs/LOCAL_DEPLOYMENT.md](docs/LOCAL_DEPLOYMENT.md) defines the operational requirements for production ingress and the remaining services. AWS RDS is an optional, no-longer-CI-verified database-hosting path.
 
 New here? [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) is the onboarding path.
 
 ### If you are implementing
 
-Development runs against a **local or self-hosted (Docker Compose) PostgreSQL 18 server** — migrations and the `tests/database`/`tests/scenario` suites need no AWS account, no credentials, and no network. CI then runs the identical suites against a disposable containerized PostgreSQL 18 instance, and that run is the merge gate. `compose.yaml`/`Dockerfile` define the self-hosted deployment topology; AWS RDS/ECS Fargate remain a documented, optional path, no longer continuously verified. See [docs/PLAN.md §24.0](docs/PLAN.md#240-verification-policy) and [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md).
+Development runs against a **local or self-hosted (Docker Compose) PostgreSQL 18 server**. Migrations and the `tests/database`/`tests/scenario` suites need no AWS account, credentials, or network. CI repeats the same suites against a disposable PostgreSQL 18 container and is the merge gate. `compose.yaml` and `Dockerfile` define the supported topology; AWS RDS remains an optional database-hosting path.
 
 1. **Understand the shape of the system** — this README, then [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) for the vocabulary.
-2. **Find the current phase** — [docs/PLAN.md §23](docs/PLAN.md#23-delivery-phases) is the source of truth for what should be built next and what "done" means for it.
-3. **Set up your environment** — [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup): PostgreSQL 18 locally, then `uv sync`. Toolchain and repository layout are pinned in §1–2 of that document.
-4. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
-5. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
-
-Phases 1 through 8 are **complete**. Phase 9 is next, and is the first phase developed under the local-first loop. [§23.1](docs/PLAN.md#231-phase-exit-review) defines the phase-close process, including the proportionality and stop-loss rules that keep test-harness hardening from displacing delivery work.
+2. **Set up your environment** — [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup): PostgreSQL 18 locally, then `uv sync`.
+3. **Learn the hard rules before writing schema** — [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md), especially the anti-patterns in §34.
+4. **Place code in the right layer** — [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering).
 
 ### If you are self-hosting
 
@@ -813,7 +807,7 @@ docker compose --profile tools run --rm migrate   # apply migrations
 docker compose up -d api                          # start the API
 ```
 
-See [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup) for start/stop, backup, and upgrade guidance, and [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) for why this replaced AWS as the default. Neither `db` nor `api` publishes a host port by default (`compose.override.yaml` adds 127.0.0.1-only ones for local development) — a real self-hosted deployment reaches `api` through a reverse proxy instead, not yet built (PLAN.md §32, Phase 14).
+See [docs/DEVELOPMENT.md §3](docs/DEVELOPMENT.md#3-local-setup) for start/stop, backup, and upgrade guidance. Neither `db` nor `api` publishes a host port by default; `compose.override.yaml` adds loopback-only ports for local development. Production ingress requires a reverse proxy.
 
 ### If you are deploying to AWS (optional)
 
@@ -828,7 +822,6 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — the deployment path, step by step
 - [docs/CHECKLIST.md](docs/CHECKLIST.md) — pre-flight checks before you apply
 - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — reference: variables, outputs, verification, teardown, known gaps
-- [docs/PLAN.md §30](docs/PLAN.md#30-aws-terraform-deployment-plan-for-postgresql) — the authoritative plan for what this infrastructure should become, if used
 
 Note that a freshly deployed database is an **empty PostgreSQL instance** until Alembic's bootstrap revision runs against it — see [docs/DEVELOPMENT.md §3.5](docs/DEVELOPMENT.md#35-connecting-to-aws-dev-occasional). The module's `postgres_version` default is now `18.4`, matching the project's pinned version.
 
@@ -836,19 +829,10 @@ Note that a freshly deployed database is an **empty PostgreSQL instance** until 
 
 ---
 
-## Development Roadmap
-
-[docs/PLAN.md](docs/PLAN.md) is the source of truth for the implementation roadmap: phases, deliverables, and acceptance criteria. It is not duplicated here, to avoid the two documents drifting apart.
-
-The first major vertical slice should prove that a party can navigate a dungeon, discover hidden information, alter persistent state, advance a quest, and leave consequences visible to another campaign sharing the same timeline.
-
----
-
 ## Documentation
 
 ### Design and domain
 
-- [docs/PLAN.md](docs/PLAN.md) — source of truth for implementation phases, dependencies, deliverables, and acceptance criteria
 - [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) — authoritative vocabulary and domain ownership rules
 - [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) — PostgreSQL naming, UUIDs, migrations, constraints and testing conventions
 - [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) — entity creation, approval, mutation, timeline, archival and deletion rules
@@ -868,12 +852,11 @@ The first major vertical slice should prove that a party can navigate a dungeon,
 
 - [CLAUDE.md](CLAUDE.md) — Claude Code operating instructions: tech stack, architectural rules, documentation map
 - [docs/AI_ASSISTANT_GUIDE.md](docs/AI_ASSISTANT_GUIDE.md) — on-demand worked examples, anti-patterns, and decision trees; start with `CLAUDE.md` and open only the relevant section
-- [docs/PLAN_PHASES_0_5_ARCHIVE.md](docs/PLAN_PHASES_0_5_ARCHIVE.md) — completed Phase 0–5 delivery detail, kept out of the active plan's normal context
 - [.github/copilot-instructions.md](.github/copilot-instructions.md) — condensed rules for GitHub Copilot
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0001–0007 are stubs whose reasoning still lives in [docs/PLAN.md §2](docs/PLAN.md#2-architectural-decisions) and is being extracted incrementally. [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md) is the current deployment and verification policy — self-hosted Docker Compose, CI against containerized PostgreSQL 18. [ADR 0008](docs/adr/0008-aws-first-deployment-and-verification.md) and [ADR 0011](docs/adr/0011-local-first-development-aws-verified-delivery.md) are superseded but kept as the historical record of the AWS-first and local-first-inner-loop decisions; ADR 0009 records the database ownership model and ADR 0010 fictional-time interval representation.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0012 defines the current self-hosted deployment and verification policy; ADRs 0008 and 0011 preserve superseded deployment decisions; ADR 0009 records database ownership and ADR 0010 fictional-time interval representation.
 
 ---
 

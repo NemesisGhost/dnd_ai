@@ -1,6 +1,4 @@
-"""Effective relationship-state query (docs/PLAN.md Phase 10 deliverable
-"query services for the effective dungeon, character, quest, relationship,
-... state required by the vertical slice").
+"""Audience-filtered effective relationship-state query.
 
 `world.relationships`/`.relationship_participants` describe what a
 relationship is; `campaign.relationship_state` describes its current

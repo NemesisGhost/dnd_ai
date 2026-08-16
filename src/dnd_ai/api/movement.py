@@ -1,7 +1,6 @@
-"""Command endpoint over `dnd_ai.commands.movement` — docs/PLAN.md §25
-step 7 ("Move the party into the dungeon"), the write path `dnd_ai.
-queries.character.get_character_view` (Phase 10 workstream 13) already
-assumed existed. Exposes `enter_location` as `POST /campaigns/{campaign_id}
+"""Character-location movement endpoint.
+
+Exposes `enter_location` as `POST /campaigns/{campaign_id}
 /characters/{character_id}/location`, on the same already-delivered OIDC
 authentication, transaction management, and access resolution every other
 command router uses.

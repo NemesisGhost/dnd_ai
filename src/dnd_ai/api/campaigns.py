@@ -1,5 +1,5 @@
-"""Command endpoint over `dnd_ai.commands.campaigns` — Phase 10's
-campaign-creation bootstrap (docs/PLAN.md Phase 10 "Still to come" list).
+"""Campaign-creation endpoint over `dnd_ai.commands.campaigns`.
+
 Exposes `create_campaign` as `POST /campaigns`.
 
 Authorization is deliberately different from every other command router in

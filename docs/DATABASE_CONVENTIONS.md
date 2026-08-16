@@ -51,7 +51,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-Required when Phase 3 introduces temporal exclusion constraints:
+Required for temporal exclusion constraints:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -735,7 +735,7 @@ EXCLUDE USING gist (
 
 This requires `btree_gist` for the UUID equality operators. The period uses the half-open `INT8RANGE` convention from §12.3, so leaving at the same world-time position another membership begins is valid, while two open-ended rows for the same timeline/party/member are not.
 
-Real membership changes create or close periods. Editing an existing elapsed period is reserved for correcting erroneous data, must be audited with the old and new endpoints, and must re-run all world, ordering, and overlap validation. When `narrative.events` arrives in Phase 6, narrative join/leave changes also acquire causal event references; Phase 3 must not add unconstrained event UUIDs in anticipation.
+Real membership changes create or close periods. Editing an existing elapsed period is reserved for correcting erroneous data, must be audited with the old and new endpoints, and must re-run all world, ordering, and overlap validation. Narrative join/leave changes use causal event references; unconstrained event UUIDs are not permitted.
 
 ---
 

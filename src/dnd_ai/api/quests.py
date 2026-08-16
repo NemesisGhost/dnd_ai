@@ -1,9 +1,6 @@
-"""Command endpoints over `dnd_ai.commands.quests` — Phase 10 workstream 7,
-continuing "command endpoints over the existing command/application
-services" (docs/PLAN.md Phase 10) into the quest domain after workstream 5's
-encounter endpoints (`dnd_ai.api.encounters`) and workstream 6's item
-endpoints (`dnd_ai.api.items`). Exposes `advance_objective`
-(docs/PHASE7_VERIFICATION.md) over HTTP, on the same already-delivered OIDC
+"""Quest-objective command and query endpoints.
+
+Exposes `advance_objective` over HTTP, on the shared OIDC
 authentication (`dnd_ai.api.auth`), transaction management
 (`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,
 `dnd_ai.domain.access`) `dnd_ai.api.encounters`/`.items` use.

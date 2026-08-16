@@ -375,8 +375,7 @@ consequences = Table(
             "The objective-state row a quest_change consequence produced, when it "
             "has one. Closes revision 061's own documented placeholder "
             '("quest_change ... consequence types have no FK target at all yet ... '
-            'Phase 7/8 domains do not exist") for its quest half; '
-            "relationship_change remains Phase 8's job."
+            'typed quest target"); relationship_change has no typed result column.'
         ),
     ),
     # Added by revision 076, once campaign.relationship_state existed to
@@ -390,7 +389,7 @@ consequences = Table(
             "The relationship-state row a relationship_change consequence "
             "produced, when it has one. Closes revision 061's own documented "
             'placeholder ("relationship_change ... consequence types have no '
-            'FK target at all yet ... Phase 7/8 domains do not exist") for '
+            'typed FK target") for '
             "its relationship half."
         ),
     ),

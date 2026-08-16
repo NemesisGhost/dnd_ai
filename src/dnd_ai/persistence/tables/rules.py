@@ -69,7 +69,7 @@ rulesets = Table(
         'A named, edition-neutral rule-system family (e.g. "D&D 5e") — a specific edition '
         "or revision is recorded on rules.ruleset_versions.version_label and description, "
         "not here. Homebrew rulesets are ordinary rows here with their own source and "
-        "canon status (docs/PLAN.md §6.2) — not a separate structure."
+        "canon status, not a separate structure."
     ),
 )
 
@@ -177,7 +177,7 @@ conditions = _ruleset_lookup_table(
     "conditions",
     "condition_id",
     "A status a character can be under (poisoned, prone, ...). Definitions only — "
-    "campaign.character_conditions (Phase 4 timeline state) tracks who currently has "
+    "campaign.character_conditions tracks who currently has "
     "one.",
 )
 creature_types = _ruleset_lookup_table(
@@ -202,7 +202,7 @@ resource_definitions = _ruleset_lookup_table(
     "resource_definitions",
     "resource_definition_id",
     "A depletable/rechargeable resource kind (spell slot, ki point, rage use, ...). "
-    "Definitions only — campaign.character_resources (Phase 4 timeline state) tracks "
+    "Definitions only — campaign.character_resources tracks "
     "current and maximum amounts.",
 )
 

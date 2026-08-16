@@ -346,7 +346,7 @@ Before saving, show a concise impact preview. After saving, invalidate relevant 
 
 ## 7. Campaign import review
 
-Phase 14 extends the GM workspace with:
+The campaign-import workspace provides:
 
 - import job list and progress;
 - retained source and source-location viewer;
@@ -489,43 +489,14 @@ Portal responses should include:
 
 The UI may use permitted-action hints to choose controls, but the API must independently authorize the eventual request.
 
-## 14. Delivery boundaries
+## 14. Capability boundaries
 
-### Phase 10: security and query foundation
-
-- Login-provider integration and internal user mapping.
-- Campaign memberships, multi-role capabilities, character relationships, and resource grants.
-- Centralized access resolution.
-- Audience-filtered summary/detail/search services.
-- GM/player/observer API acceptance scenario.
-
-### Phase 11: Foundry
-
-- Foundry user mapping and character-control enforcement through the same API rules.
-
-### Phase 12: assistant
-
-- AI synthesis over pre-filtered campaign queries.
-- Cited rules/reference retrieval.
-- GM, player-character, and observer answer differences.
-
-### Phase 13: portal MVP
-
-- Login and campaign/perspective selection.
-- Home, World, Characters, Quests, Sessions, Knowledge, and Ask.
-- Observer view.
-- GM access management, audit view, and preview-as-user.
-- Same-origin static deployment behind the local reverse proxy and end-to-end role/access testing.
-
-### Phase 14: local production hardening
-
-- No-IP and automatic HTTPS for the selected deployment-time hostname arrangement.
-- Secure-cookie and CSRF verification through the reverse proxy.
-- Login and Ask/AI endpoint rate limiting and non-disclosing operational error states.
-
-### Phase 15: import review
-
-- Source/proposal review, matching, conflict resolution, approval, rejection, and promotion status in the portal.
+- Identity and access services provide login mapping, memberships, roles, character relationships, resource grants, centralized access resolution, and audience-filtered queries.
+- Foundry uses the same user mapping, character-control, command, and query authorization rules as the portal.
+- Assistant features synthesize only pre-filtered campaign context and return cited rules/reference results appropriate to the active perspective.
+- The portal provides campaign and perspective selection, player and observer views, GM access management, audit history, and preview-as-user.
+- Production ingress provides same-origin UI/API routing, HTTPS, secure cookies, CSRF protection, rate limits, and non-disclosing operational errors.
+- Import review provides source/proposal inspection, matching, conflict resolution, approval, rejection, and promotion status without bypassing application commands.
 
 ## 15. Deferred experience
 
@@ -554,5 +525,5 @@ Defer until demonstrated need:
 - A player can request recaps, quest status, world details, character knowledge, and cited rules answers.
 - A GM can request a preparation brief and preview the portal as a selected user/character perspective.
 - A GM can manage memberships, roles, user-character relationships, and resource grants with an audit trail.
-- Phase 15 import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
+- Authorized import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
 - All critical flows are keyboard-accessible and usable on desktop and mobile layouts.

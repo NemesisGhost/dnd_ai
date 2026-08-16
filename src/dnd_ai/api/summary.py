@@ -1,9 +1,6 @@
-"""Query endpoint over `dnd_ai.queries.summary` — Phase 10 workstream 22,
-the first slice of "deterministic, audience-filtered summary and detail
-query services for current campaign/session state, active quests, recent
-events, locations, characters, NPCs/factions, inventory, knowledge, and
-the prior-session recap" (docs/PLAN.md Phase 10 deliverable list, §25 step
-15). Exposes `dnd_ai.queries.summary.get_campaign_summary_view` over HTTP
+"""Audience-filtered campaign/session summary endpoint.
+
+Exposes `dnd_ai.queries.summary.get_campaign_summary_view` over HTTP
 as `GET /campaigns/{campaign_id}/summary`, on the same already-delivered
 OIDC authentication, transaction management, and access resolution every
 other query router uses.

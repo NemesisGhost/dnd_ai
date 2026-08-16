@@ -726,7 +726,7 @@ resource_grants = Table(
         "unenforced (resource_type, resource_id) polymorphic reference "
         "(docs/architecture/DATABASE_MODEL.md §19.6). Exactly one grantee column "
         "and exactly one typed target column are non-null. Scoped to the six "
-        "target kinds the Phase 10 vertical slice needs (character, entity, "
+        "supported target kinds (character, entity, "
         "knowledge item, quest, session, event) — source_document_id, "
         "ai_proposed_change_id, and import_job_id are added by the migration "
         "that introduces their target table (§19.6's own extension rule). "
@@ -866,7 +866,7 @@ idempotent_requests = Table(
     ),
     schema="security",
     comment=(
-        "Durable Idempotency-Key store for command endpoints (docs/PLAN.md §25 "
+        "Durable Idempotency-Key store for command endpoints; "
         '"retries do not duplicate effects"). One row reserves (actor_user_id, '
         "campaign_id, idempotency_key) for the lifetime of the reserving "
         "transaction; a rolled-back or failed command releases the key "

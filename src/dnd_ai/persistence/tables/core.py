@@ -52,7 +52,7 @@ source_types = _lookup_table(
     "core",
     "source_types",
     "source_type_id",
-    "Where an authored or imported fact came from — see docs/PLAN.md §4.5.",
+    "Where an authored or imported fact came from.",
 )
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ sources = Table(
     schema="core",
     comment=(
         "Where an authored or imported fact came from. Every meaningful authored "
-        "record should reference one where practical (docs/PLAN.md §4.5)."
+        "record should reference one where practical."
     ),
 )
 

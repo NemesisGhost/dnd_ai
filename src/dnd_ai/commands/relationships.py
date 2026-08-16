@@ -1,8 +1,6 @@
 """EvolveRelationshipReaction and UpdateOrganizationStatus — the commands
-that let a dungeon event change a relationship's current status/subjective
-reaction or an organization's operational status, atomically
-(docs/PLAN.md Phase 8 exit criterion: "NPC and faction reactions can
-evolve from events").
+that let a dungeon event change a relationship's current status or subjective
+reaction, or an organization's operational status, atomically.
 
 Mirrors dnd_ai.commands.quests.advance_objective's shape: lock a
 structural row that always exists (world.relationships / world.organizations)

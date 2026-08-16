@@ -1,6 +1,6 @@
-"""Campaign-invitation token acceptance flow (docs/PLAN.md Phase 10 "Still
-to come": "the invitation-token acceptance flow deferred at workstream
-20"). `security.campaign_invitations` (migration 080) "tracks an
+"""Campaign-invitation creation and token acceptance flow.
+
+`security.campaign_invitations` (migration 080) "tracks an
 invitation without pre-creating a durable membership for an unknown
 recipient" (that table's own comment) — only a token hash is retained, and
 acceptance is documented there as idempotent.
