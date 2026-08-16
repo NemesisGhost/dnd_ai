@@ -94,8 +94,44 @@ Rollback:
     migration 080 itself seeded. `security.
     enforce_role_capabilities_retain_access_manager()` (migration 080) only
     re-checks the retention invariant when the *removed* capability's code
-    is `access.manage`; neither row deleted here matches that code, so this
-    downgrade needs no special handling for it.
+    is `access.manage`; neither row deleted here matches that code, so
+    the function itself always no-ops for these two deletes.
+
+    That no-op still leaves a *pending* invocation, though:
+    `tr_role_capabilities_retain_access_manager` (migration 080) is
+    `DEFERRABLE INITIALLY DEFERRED`, so each `DELETE` above queues one
+    trigger firing regardless of what the function body ultimately does
+    with it, and a queued firing is not resolved until something forces
+    it — normally the enclosing transaction's own `COMMIT`. A single
+    `alembic downgrade base` never gives it that chance: `database/
+    migrations/env.py`'s `context.begin_transaction()` wraps every
+    migration's `downgrade()` invoked in that one run inside one
+    continuous transaction, so this revision's two pending firings are
+    still queued when migration `080_security_identity_and_access`'s own
+    `downgrade()` — reached later in that same transaction — tries to
+    `DROP TABLE security.role_capabilities`. PostgreSQL refuses to drop a
+    table with pending trigger events against it
+    (`psycopg.errors.ObjectInUse: cannot DROP TABLE "role_capabilities"
+    because it has pending trigger events`), so the whole multi-revision
+    downgrade fails at 080 even though this revision's own two deletes
+    were individually harmless.
+
+    `SET CONSTRAINTS security.tr_role_capabilities_retain_access_manager
+    IMMEDIATE` below forces PostgreSQL to run both queued firings right
+    here — where the function body no-ops immediately, exactly as it
+    would have at commit — draining the pending state before control ever
+    reaches a later revision's downgrade. This keeps the fix local to the
+    migration whose own `DELETE`s create the pending state, so this
+    revision's downgrade is self-contained and correct regardless of what
+    else runs after it in a longer chain, rather than depending on
+    `080_security_identity_and_access` (which has no reason to know or
+    care what any later revision deleted) to compensate for it. A single-
+    step `alembic downgrade 085_campaign_owner_capabilities` (no later
+    revision's `downgrade()` sharing its transaction) already worked
+    without this — the deferred check simply ran at that command's own
+    commit — so this statement changes nothing observable about that
+    case; it only matters once this revision's `downgrade()` shares a
+    transaction with a later one that drops the table.
 
 Data implications:
     Two new lookup-junction rows on an existing table. No existing row is
@@ -153,3 +189,11 @@ def downgrade() -> None:
               AND r.code = '{_CAMPAIGN_OWNER_ROLE_CODE}' AND r.campaign_id IS NULL
               AND c.code = '{capability_code}';
         """)
+
+    # Drain the two deferred tr_role_capabilities_retain_access_manager
+    # firings the deletes above just queued — see this module's own
+    # "Rollback" docstring section for why a later revision's downgrade()
+    # (080_security_identity_and_access, dropping this table) would
+    # otherwise fail mid-chain with "pending trigger events" rather than
+    # this revision's own deletes ever being the problem themselves.
+    op.execute("SET CONSTRAINTS security.tr_role_capabilities_retain_access_manager IMMEDIATE;")

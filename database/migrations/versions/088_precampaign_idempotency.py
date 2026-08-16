@@ -69,13 +69,26 @@ Forward migration:
         `security.idempotent_requests` gives (see that table's own
         migration 082 comment)
       - `created_campaign_id UUID REFERENCES campaign.campaigns
-        (campaign_id) ON DELETE SET NULL` — the campaign this reservation
+        (campaign_id) ON DELETE RESTRICT` — the campaign this reservation
         actually produced, set together with the response; kept as a real
         column (not left buried inside `response_body` alone) so a
-        reservation's resulting campaign can be queried directly, and
-        `ON DELETE SET NULL` rather than `CASCADE` since this row is
-        disposable request-dedup state, not something whose own lifetime
-        should ever force a campaign's physical deletion, or vice versa
+        reservation's resulting campaign can be queried directly.
+        `ck_campaign_creation_reservations_completion_consistent` (below)
+        requires `response_status_code`, `response_body`, `completed_at`,
+        and `created_campaign_id` to be `NULL` or non-`NULL` *together* —
+        `ON DELETE SET NULL` would let a deleted `campaign.campaigns` row
+        null out `created_campaign_id` alone, leaving the other three
+        still set and violating that very constraint the instant the
+        cascade ran, mirroring `security.timeline_bootstrap_grants.
+        consumed_by_campaign_id`'s identical fix in migration 087 (see
+        that revision's own "Forward migration" section for the full
+        reasoning). `RESTRICT`, not `CASCADE`: no command in this
+        codebase deletes a `campaign.campaigns` row at all (campaigns are
+        permanent once created, CLAUDE.md rule 9), so this only turns a
+        schema-level contradiction that would otherwise silently corrupt
+        this table's own invariant into an explicit failure if that
+        assumption is ever violated, rather than quietly discarding a
+        completed reservation's own record of what it produced
       - `ux_campaign_creation_reservations_scope`: `UNIQUE (actor_user_id,
         idempotency_key)` — this table's whole concurrency argument, and
         also the `actor_user_id` foreign key's own supporting index (a
@@ -145,7 +158,7 @@ def upgrade() -> None:
             response_body                               JSONB,
             created_campaign_id                            UUID
                                                             REFERENCES campaign.campaigns(campaign_id)
-                                                            ON DELETE SET NULL,
+                                                            ON DELETE RESTRICT,
             created_at                                            TIMESTAMPTZ NOT NULL
                                                                    DEFAULT now(),
             completed_at                                                 TIMESTAMPTZ,
@@ -198,9 +211,12 @@ def upgrade() -> None:
     op.execute("""
         COMMENT ON COLUMN security.campaign_creation_reservations.created_campaign_id IS
         'The campaign.campaigns row this reservation produced, set atomically '
-        'with response_body once create_campaign succeeds. ON DELETE SET NULL: '
-        'this row is disposable request-dedup state, never a reason to force or '
-        'block a campaign''s own physical deletion.';
+        'with response_body once create_campaign succeeds. ON DELETE RESTRICT, '
+        'compatible with ck_campaign_creation_reservations_completion_consistent: '
+        'campaigns are never physically deleted by any command in this codebase, '
+        'so this only turns a schema-level contradiction into an explicit failure '
+        'if that assumption is ever violated, rather than a SET NULL cascade '
+        'silently orphaning a completed reservation''s own completion columns.';
     """)
 
     op.execute(

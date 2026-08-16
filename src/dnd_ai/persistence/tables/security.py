@@ -908,7 +908,13 @@ timeline_bootstrap_grants = Table(
     Column(
         "consumed_by_campaign_id",
         UUID(),
-        ForeignKey("campaign.campaigns.campaign_id", ondelete="SET NULL"),
+        # RESTRICT, not SET NULL: ck_timeline_bootstrap_grants_consumed_pairing
+        # requires consumed_at/consumed_by_campaign_id to be NULL or non-NULL
+        # together, so a SET NULL cascade from a deleted campaign.campaigns row
+        # would null this column alone and violate that constraint outright.
+        # No command in this codebase deletes a campaign row (CLAUDE.md rule
+        # 9), so RESTRICT costs nothing in practice.
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
     ),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
     schema="security",
@@ -999,12 +1005,15 @@ campaign_creation_reservations = Table(
     Column(
         "created_campaign_id",
         UUID(),
-        ForeignKey("campaign.campaigns.campaign_id", ondelete="SET NULL"),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
         comment=(
             "The campaign.campaigns row this reservation produced, set atomically "
-            "with response_body once create_campaign succeeds. ON DELETE SET NULL: "
-            "this row is disposable request-dedup state, never a reason to force or "
-            "block a campaign's own physical deletion."
+            "with response_body once create_campaign succeeds. ON DELETE RESTRICT, "
+            "compatible with ck_campaign_creation_reservations_completion_consistent: "
+            "campaigns are never physically deleted by any command in this codebase, "
+            "so this only turns a schema-level contradiction into an explicit failure "
+            "if that assumption is ever violated, rather than a SET NULL cascade "
+            "silently orphaning a completed reservation's own completion columns."
         ),
     ),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),

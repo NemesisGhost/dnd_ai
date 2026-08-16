@@ -68,12 +68,26 @@ Forward migration:
         but has no command that sets it either) — trusted infrastructure
         may set it directly today, exactly as it does to grant one
       - `consumed_at TIMESTAMPTZ` / `consumed_by_campaign_id UUID
-        REFERENCES campaign.campaigns(campaign_id) ON DELETE SET NULL` —
+        REFERENCES campaign.campaigns(campaign_id) ON DELETE RESTRICT` —
         set together, atomically, by `create_campaign` itself once the
         campaign the grant authorized has actually been created (never by
         a separate "redeem" step, unlike `accept_campaign_invitation`'s
         two-phase create-then-accept shape — there is exactly one thing a
-        timeline bootstrap grant is ever redeemed for)
+        timeline bootstrap grant is ever redeemed for). `ON DELETE
+        RESTRICT`, not `SET NULL`: `ck_timeline_bootstrap_grants_
+        consumed_pairing` (below) requires `consumed_at` and `consumed_
+        by_campaign_id` to be `NULL` or non-`NULL` *together* — a `SET
+        NULL` cascade from a deleted `campaign.campaigns` row would null
+        out `consumed_by_campaign_id` alone, leaving `consumed_at` still
+        set and violating that very constraint the moment the cascade
+        ran. No command in this codebase deletes a `campaign.campaigns`
+        row at all (CLAUDE.md rule 9's archive-don't-delete discipline,
+        and `docs/architecture/DATABASE_MODEL.md`'s campaign lifecycle,
+        both treat a campaign as permanent once created), so `RESTRICT`
+        costs nothing in practice — it only turns a schema-level
+        contradiction that would otherwise silently corrupt this table's
+        own invariant into an explicit, loud failure if that assumption
+        is ever violated.
       - `ck_timeline_bootstrap_grants_consumed_pairing`: `consumed_at` and
         `consumed_by_campaign_id` are NULL or non-NULL together
       - `ux_timeline_bootstrap_grants_active`: a partial unique index on
@@ -142,7 +156,7 @@ def upgrade() -> None:
             consumed_at                  TIMESTAMPTZ,
             consumed_by_campaign_id      UUID
                                           REFERENCES campaign.campaigns(campaign_id)
-                                          ON DELETE SET NULL,
+                                          ON DELETE RESTRICT,
             created_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT ck_timeline_bootstrap_grants_consumed_pairing
                 CHECK ((consumed_at IS NULL) = (consumed_by_campaign_id IS NULL))

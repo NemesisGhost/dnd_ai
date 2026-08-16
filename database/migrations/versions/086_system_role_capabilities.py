@@ -71,7 +71,31 @@ Rollback:
     Supported. Deletes exactly the rows this revision adds, by role code
     and capability code together — never a wildcard across every role
     using any of these capabilities, and never touching `campaign_owner`'s
-    own row set (migration 085).
+    own row set (migration 085). None of the eight deleted rows names
+    `access.manage` (never granted to these four roles by this migration's
+    own seed), so `security.
+    enforce_role_capabilities_retain_access_manager()`'s own retention
+    check always no-ops for them — but each `DELETE` still queues one
+    *pending* firing of the `DEFERRABLE INITIALLY DEFERRED` `tr_role_
+    capabilities_retain_access_manager` trigger (migration 080) regardless
+    of what the function body does with it, and a single `alembic
+    downgrade base` runs every revision's `downgrade()` inside one
+    continuous transaction (`database/migrations/env.py`'s `context.
+    begin_transaction()`) — so, unless drained here, those eight pending
+    firings are still queued when `080_security_identity_and_access`'s own
+    `downgrade()`, reached later in that same transaction, tries to `DROP
+    TABLE security.role_capabilities` and fails outright (`cannot DROP
+    TABLE "role_capabilities" because it has pending trigger events`).
+    `085_campaign_owner_capabilities.py`'s own "Rollback" section has the
+    full narrative and applies identically here; `SET CONSTRAINTS
+    security.tr_role_capabilities_retain_access_manager IMMEDIATE` below
+    drains this revision's own eight firings the same way, right after the
+    deletes that queued them, so this revision's downgrade stays self-
+    contained regardless of what later shares its transaction. A single-
+    step `alembic downgrade 086_system_role_capabilities` already worked
+    without this (the deferred check simply ran at that command's own
+    commit); this statement only matters once a later revision's
+    downgrade shares the transaction.
 
 Data implications:
     New lookup-junction rows on an existing table only. No existing row is
@@ -140,3 +164,10 @@ def downgrade() -> None:
                   AND r.code = '{role_code}' AND r.campaign_id IS NULL
                   AND c.code = '{capability_code}';
             """)
+
+    # Drain the eight deferred tr_role_capabilities_retain_access_manager
+    # firings the deletes above just queued — see this module's own
+    # "Rollback" docstring section (and 085_campaign_owner_capabilities.py's
+    # identical note) for why a later revision's downgrade() dropping this
+    # table would otherwise fail mid-chain with "pending trigger events".
+    op.execute("SET CONSTRAINTS security.tr_role_capabilities_retain_access_manager IMMEDIATE;")
