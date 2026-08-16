@@ -866,8 +866,8 @@ idempotent_requests = Table(
     ),
     schema="security",
     comment=(
-        "Durable Idempotency-Key store for command endpoints; "
-        '"retries do not duplicate effects"). One row reserves (actor_user_id, '
+        "Durable Idempotency-Key store for command endpoints so retries do not duplicate "
+        "effects. One row reserves (actor_user_id, "
         "campaign_id, idempotency_key) for the lifetime of the reserving "
         "transaction; a rolled-back or failed command releases the key "
         "automatically because its INSERT is part of the same rolled-back "

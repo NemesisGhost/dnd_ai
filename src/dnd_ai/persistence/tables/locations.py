@@ -211,8 +211,8 @@ area_connections = Table(
         comment=(
             "True for a conditional route — traversable only when "
             "some condition holds. required_check_kind (revision 064), when set, makes "
-            "a check-gated condition machine-evaluable; quest-gated or state-gated "
-            "quest- or state-gated conditions rely on condition_description."
+            "a check-gated condition machine-evaluable; quest- or state-gated conditions "
+            "rely on condition_description."
         ),
     ),
     Column(

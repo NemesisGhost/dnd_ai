@@ -57,8 +57,7 @@ timelines = Table(
         ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
         comment=(
             "The world time at which this timeline diverged from its parent. NULL only "
-            "for a root timeline. branch_event_id records the causal event and "
-            "narrative.events."
+            "for a root timeline. branch_event_id records the causal narrative event."
         ),
     ),
     Column(
@@ -281,7 +280,7 @@ campaigns = Table(
     ),
     schema="campaign",
     comment=(
-        "A single game's run on a timeline. Several campaigns may share one timeline "
+        "A single game's run on a timeline. Several campaigns may share one timeline. "
         "Does not own world entities — it reaches them through "
         "participation, discovery, state, and event records."
     ),
@@ -364,8 +363,7 @@ sessions = Table(
         "summary",
         Text(),
         comment=(
-            "A derived artifact. May be revised freely without changing the events it "
-            "summarizes."
+            "A derived artifact. May be revised freely without changing the events it summarizes."
         ),
     ),
     Column(
@@ -552,9 +550,8 @@ character_conditions = Table(
     PrimaryKeyConstraint("timeline_id", "character_id", "condition_id"),
     schema="campaign",
     comment=(
-        "A condition currently active on a character in a timeline. "
-        "source_description is free text for now — a causal event reference arrives "
-        "through narrative event references."
+        "A condition currently active on a character in a timeline. source_description "
+        "provides a free-text explanation; source_event_id identifies a causal event."
     ),
 )
 
@@ -1356,8 +1353,7 @@ relationship_state = Table(
         "campaign.quest_state's party_id: NULL is the shared/objective status, "
         "set is that one participant's current subjective reaction (affinity, "
         "trust, respect, fear, obligation, emotional tone). This is the row "
-        "events update; NPC and faction reactions can "
-        'evolve from events" exit criterion — unlike the stable, authored '
+        "events update as NPC and faction reactions evolve — unlike the stable, authored "
         "world.relationship_perspectives baseline. One current row per "
         "(timeline, relationship[, perspective holder]) — see the partial "
         "unique indexes below."

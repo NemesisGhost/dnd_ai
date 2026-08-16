@@ -99,8 +99,8 @@ change_log = Table(
         "event_id",
         UUID(),
         comment=(
-            "The narrative event that caused this change, once narrative.events exists in "
-            "narrative.events. Nullable for records that have no causal event."
+            "The narrative event that caused this change. Nullable for records that have no "
+            "causal event."
         ),
     ),
     Column("ai_proposal_id", UUID()),

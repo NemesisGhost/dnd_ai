@@ -372,10 +372,7 @@ consequences = Table(
         UUID(),
         ForeignKey("campaign.objective_state.objective_state_id", ondelete="SET NULL"),
         comment=(
-            "The objective-state row a quest_change consequence produced, when it "
-            "has one. Closes revision 061's own documented placeholder "
-            '("quest_change ... consequence types have no FK target at all yet ... '
-            'typed quest target"); relationship_change has no typed result column.'
+            "The objective-state row produced by a quest_change consequence, when it has one."
         ),
     ),
     # Added by revision 076, once campaign.relationship_state existed to
@@ -386,11 +383,8 @@ consequences = Table(
         UUID(),
         ForeignKey("campaign.relationship_state.relationship_state_id", ondelete="SET NULL"),
         comment=(
-            "The relationship-state row a relationship_change consequence "
-            "produced, when it has one. Closes revision 061's own documented "
-            'placeholder ("relationship_change ... consequence types have no '
-            'typed FK target") for '
-            "its relationship half."
+            "The relationship-state row produced by a relationship_change consequence, "
+            "when it has one."
         ),
     ),
     schema="interaction",

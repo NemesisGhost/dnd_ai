@@ -55,8 +55,8 @@ characters = Table(
         UUID(),
         ForeignKey("world.locations.location_id", ondelete="SET NULL"),
         comment=(
-            "Where this character is from. References world.locations "
-            "existed (docs/architecture/DATABASE_MODEL.md §7.1). Must belong to the "
+            "Where this character is from (docs/architecture/DATABASE_MODEL.md §7.1). "
+            "The location must belong to the "
             "character's own world, enforced by trigger."
         ),
     ),
@@ -64,8 +64,7 @@ characters = Table(
     comment=(
         "Identity-level mechanical data shared by every character: species and size. "
         "NPCs and player characters both extend this row rather than duplicating it "
-        "(docs/DOMAIN_MODEL.md §7.1). origin_location_id references "
-        "world.locations exists."
+        "(docs/DOMAIN_MODEL.md §7.1). origin_location_id references world.locations."
     ),
 )
 
@@ -89,8 +88,7 @@ npcs = Table(
     schema="character",
     comment=(
         "Marks a character as an NPC. Portrayal, goals, routines, and other simulation "
-        "apparatus belongs in the AI domain rather than this mechanical table "
-        "agents that consume them."
+        "apparatus belongs in the AI domain rather than this mechanical table."
     ),
 )
 
@@ -143,7 +141,7 @@ character_descriptions = Table(
     *_timestamps(),
     schema="character",
     comment=(
-        "Free-text background, appearance, and notes that do not drive mechanics "
+        "Free-text background, appearance, and notes that do not drive mechanics. "
         "Optional: a character need not have one."
     ),
 )

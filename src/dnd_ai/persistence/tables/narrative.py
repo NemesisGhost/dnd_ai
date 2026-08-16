@@ -657,8 +657,7 @@ quest_objectives = Table(
             "Whether and when this objective is shown to players "
             "— distinct from requirement_level='hidden' (whether the objective is "
             "mandatory for quest completion, not whether players can see it). An "
-            "inferred, illustrative vocabulary rather than "
-            "policy values, only the concept."
+            "illustrative vocabulary rather than an exhaustive policy enumeration."
         ),
     ),
     *_timestamps(),
