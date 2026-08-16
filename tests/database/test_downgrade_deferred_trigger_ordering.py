@@ -129,7 +129,7 @@ def _current_revision(database_url: str) -> str:
     assert result.returncode == 0, result.stdout + result.stderr
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert lines, f"alembic current produced no output: {result.stdout!r}"
-    # "088_precampaign_idempotency (head)" or "087_timeline_bootstrap_grants"
+    # For example, "e3f791aca64d (head)" or "088_precampaign_idempotency".
     return lines[-1].split()[0]
 
 
@@ -406,12 +406,13 @@ def test_a_fresh_migrated_database_survives_a_full_downgrade_to_base_and_reupgra
     admin_url, test_url = _provision_database("fresh_base")
     try:
         _alembic_upgrade(test_url, "head")
+        head_revision = _current_revision(test_url)
 
         result = _alembic(test_url, "downgrade", "base")
         assert result.returncode == 0, result.stdout + result.stderr
 
         _alembic_upgrade(test_url, "head")
-        assert _current_revision(test_url) == "088_precampaign_idempotency"
+        assert _current_revision(test_url) == head_revision
 
         engine = create_engine(test_url)
         try:
@@ -428,6 +429,7 @@ def test_a_realistically_populated_database_survives_a_full_downgrade_to_base_an
     admin_url, test_url = _provision_database("populated_base")
     try:
         _alembic_upgrade(test_url, "head")
+        head_revision = _current_revision(test_url)
 
         engine = create_engine(test_url)
         try:
@@ -440,7 +442,7 @@ def test_a_realistically_populated_database_survives_a_full_downgrade_to_base_an
         assert result.returncode == 0, result.stdout + result.stderr
 
         _alembic_upgrade(test_url, "head")
-        assert _current_revision(test_url) == "088_precampaign_idempotency"
+        assert _current_revision(test_url) == head_revision
 
         engine = create_engine(test_url)
         try:
