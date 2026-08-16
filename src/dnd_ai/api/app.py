@@ -13,10 +13,14 @@ is delivered and used by the command endpoints below
 `dnd_ai.api.integration`, `dnd_ai.api.memberships`,
 `dnd_ai.api.access_grants`) and the query endpoints (`dnd_ai.api.dungeon`,
 `dnd_ai.api.characters`, `dnd_ai.api.knowledge`, `dnd_ai.api.summary`) via
-`dnd_ai.api.access`. This module remains the plumbing every router builds
-on: app factory, error contract, correlation IDs, health/readiness,
-per-request transaction management, and authentication — routers register
-their own paths, this module only mounts them.
+`dnd_ai.api.access`. `dnd_ai.api.campaigns` is the one exception: it has no
+campaign yet to resolve `dnd_ai.api.access.require_campaign_capability`
+against, so it authenticates the caller directly via `dnd_ai.api.auth.
+get_authenticated_user_id` instead — see its own module docstring. This
+module remains the plumbing every router builds on: app factory, error
+contract, correlation IDs, health/readiness, per-request transaction
+management, and authentication — routers register their own paths, this
+module only mounts them.
 """
 
 import logging
@@ -32,6 +36,8 @@ from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, settings
 
 from .access_grants import router as access_grants_router
 from .auth import dispose_jwks_client
+from .campaign_invitations import router as campaign_invitations_router
+from .campaigns import router as campaigns_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
@@ -44,8 +50,10 @@ from .interactions import router as interactions_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
 from .memberships import router as memberships_router
+from .movement import router as movement_router
 from .quests import router as quests_router
 from .relationships import router as relationships_router
+from .sessions import router as sessions_router
 from .summary import router as summary_router
 
 logger = logging.getLogger(__name__)
@@ -87,6 +95,8 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
+    app.include_router(campaign_invitations_router)
+    app.include_router(campaigns_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounters_router)
@@ -96,8 +106,10 @@ def create_app() -> FastAPI:
     app.include_router(items_router)
     app.include_router(knowledge_router)
     app.include_router(memberships_router)
+    app.include_router(movement_router)
     app.include_router(quests_router)
     app.include_router(relationships_router)
+    app.include_router(sessions_router)
     app.include_router(summary_router)
 
     @app.get("/healthz")

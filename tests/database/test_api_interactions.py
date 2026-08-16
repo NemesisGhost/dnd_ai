@@ -34,12 +34,15 @@ from tests.factories import (
     lookup_id,
     make_ability,
     make_area_connection,
+    make_area_hazard,
     make_campaign,
     make_campaign_membership,
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_knowledge_item,
     make_membership_role,
+    make_party,
     make_role,
     make_role_capability,
     make_ruleset_version_for_world,
@@ -121,6 +124,14 @@ class Fixture:
 
         self.outsider_user_id = make_user(connection, "Interaction API Outsider")
 
+        # Workstream 26: a hidden hazard with a matching knowledge item (for
+        # the discovery consequence) plus a party to attribute it to.
+        self.hazard_id = make_area_hazard(connection, self.area_a, is_hidden=True)
+        self.hazard_knowledge_item_id = make_knowledge_item(
+            connection, self.world_id, subject_area_hazard_id=self.hazard_id
+        )
+        self.party_id = make_party(connection, self.world_id)
+
 
 @pytest.fixture
 def f(postgres_engine: Engine) -> Iterator[Fixture]:
@@ -133,6 +144,14 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             text("""
                 DELETE FROM campaign.area_connection_state WHERE timeline_id = :t
             """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM campaign.hazard_state WHERE timeline_id = :t"),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM knowledge.party_discoveries WHERE timeline_id = :t"),
             {"t": fixture.timeline_id},
         )
         cleanup.execute(
@@ -502,3 +521,98 @@ def test_a_sequential_replay_of_resolve_check_returns_the_original_response(
             {"r": check_request_id},
         ).scalar_one()
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# resolve_check — hazard trigger/disarm, discovery (workstream 26)
+# ---------------------------------------------------------------------------
+
+
+def _perform_hazard_check_directly(postgres_engine: Engine, f: Fixture) -> uuid.UUID:
+    result = perform_interaction(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        actor_entity_id=f.actor_id,
+        interaction_type_code="disarm_trap",
+        campaign_id=f.campaign_id,
+        targets=(TargetSpec(target_area_hazard_id=f.hazard_id),),
+        check_requests=(
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=15, skill_id=f.skill_id, target_index=0
+            ),
+        ),
+    )
+    return result.check_request_ids[0]
+
+
+def test_resolving_a_disarm_check_updates_the_hazard(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    check_request_id = _perform_hazard_check_directly(postgres_engine, f)
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _resolve_url(f.campaign_id, check_request_id),
+            json={"degree_of_success": "success", "roll": 18, "total_modifier": 2, "total": 20},
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["hazard_status_code"] == "disarmed"
+
+    with postgres_engine.connect() as verify:
+        status_code = verify.execute(
+            text("""
+                SELECT hs.code FROM campaign.hazard_state hst
+                JOIN campaign.hazard_statuses hs ON hs.hazard_status_id = hst.hazard_status_id
+                WHERE hst.timeline_id = :t AND hst.area_hazard_id = :h
+            """),
+            {"t": f.timeline_id, "h": f.hazard_id},
+        ).scalar_one()
+        assert status_code == "disarmed"
+
+
+def test_resolving_a_search_check_with_a_party_id_records_a_discovery(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    result = perform_interaction(
+        postgres_engine,
+        timeline_id=f.timeline_id,
+        world_time_id=f.world_time_id,
+        actor_entity_id=f.actor_id,
+        interaction_type_code="search",
+        campaign_id=f.campaign_id,
+        targets=(TargetSpec(target_area_hazard_id=f.hazard_id),),
+        check_requests=(
+            CheckRequestSpec(
+                check_kind="skill_check", difficulty=15, skill_id=f.skill_id, target_index=0
+            ),
+        ),
+    )
+    check_request_id = result.check_request_ids[0]
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _resolve_url(f.campaign_id, check_request_id),
+            json={
+                "degree_of_success": "success",
+                "roll": 18,
+                "total_modifier": 2,
+                "total": 20,
+                "party_id": str(f.party_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["discovered_knowledge_item_id"] == str(f.hazard_knowledge_item_id)
+    assert body["discovery_event_id"] is not None
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT party_id FROM knowledge.party_discoveries
+                WHERE knowledge_item_id = :k
+            """),
+            {"k": f.hazard_knowledge_item_id},
+        ).one()
+        assert row.party_id == f.party_id

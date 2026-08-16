@@ -14,21 +14,18 @@ target, `dnd_ai.api.access.resolve_party_perspective`/
 workstream 12, with no command able to populate either through the API
 until now.
 
-Scope: this first cut supports only `character_id` as the resource-grant
-target (of the six `security.resource_grants` supports) — the one every
-existing query workstream's own resource-scoped capability check already
-resolves against, and the only one with a real caller yet.
-`entity_id`/`knowledge_item_id`/`quest_id`/`session_id`/`event_id` targets
-are deferred until a caller actually needs them, not invented
-speculatively here — extending `create_resource_grant` to accept a second
-target kind is additive, not a redesign. `security.
-membership_character_relationships`' `effective_from_world_time_id`/
-`effective_to_world_time_id` (the ADR 0010 fictional-time-bounded variant)
-and `timeline_id` (narrower-than-campaign scoping) are similarly deferred
-for `grant_character_relationship` — this first cut only creates an
-unbounded, campaign-wide relationship, the simpler and more common case
-(`resolve_access_context`'s own character-capability query already treats
-`timeline_id IS NULL` as "applies to every timeline").
+`create_resource_grant` supports all six `security.resource_grants`
+target kinds (`character_id`, `entity_id`, `knowledge_item_id`, `quest_id`,
+`session_id`, `event_id`) and `grant_character_relationship` supports
+`security.membership_character_relationships`' full temporal scope
+(`timeline_id`, `effective_from_world_time_id`/`effective_to_world_time_id`
+— the ADR 0010 fictional-time-bounded variant), each pre-checked the same
+way `security.enforce_resource_grant_scope()`/`.enforce_membership_
+character_relationship_scope()` (migration 080) validate them at the
+database layer — see `_validate_resource_grant_target()`'s and `grant_
+character_relationship()`'s own docstrings for the exact rules mirrored
+and why relying on either trigger's raw `IntegrityError` alone would
+surface as an unclassified 500 instead of the intended 400/404.
 
 Every function here is framework-free and trusts its `campaign_id`
 argument as already authorized by the API layer
@@ -52,7 +49,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
-from ._shared import lookup_id
+from ._shared import lookup_id, validate_session_campaign
 
 
 class MembershipNotInCampaignError(DomainAuthorizationError):
@@ -82,16 +79,53 @@ class ResourceGrantNotInCampaignError(DomainAuthorizationError):
 
 
 class TargetNotInCampaignWorldError(DomainAuthorizationError):
-    """Raised when a caller-supplied `character_id` does not belong to the
-    already-authorized campaign's own world — including a nonexistent
-    character, identically. The supplied ids are included only in the
-    constructor's `detail` argument (`str(self)`), never in
-    `safe_message`."""
+    """Raised when a caller-supplied resource-grant target, relationship
+    `timeline_id`, or relationship `effective_from_world_time_id`/
+    `effective_to_world_time_id` does not belong to the already-authorized
+    campaign's own world — including a nonexistent id, identically. Also
+    raised for a `session_id`/`event_id` resource-grant target that exists
+    and is in the right world but belongs to a different campaign (`dnd_ai.
+    commands._shared.validate_session_campaign`'s identical reasoning
+    applies here too — a same-world, different-campaign target is exactly
+    as much a disclosure risk as a different-world one). The supplied ids
+    are included only in the constructor's `detail` argument (`str(self)`),
+    never in `safe_message`."""
+
+
+class InvalidRelationshipPeriodError(ValueError):
+    """Raised by `grant_character_relationship()` when `effective_to_
+    world_time_id` is supplied without `effective_from_world_time_id` (an
+    end with no start), or when the resolved end `sort_key` does not fall
+    after the start `sort_key` — mirroring `security.enforce_membership_
+    character_relationship_scope()`'s own ordering check (migration 080),
+    pre-checked here for the same unclassified-SQLSTATE reason this
+    module's docstring gives."""
 
 
 @dataclass(frozen=True)
 class GrantCharacterRelationshipResult:
     membership_character_relationship_id: uuid.UUID
+
+
+def _resolve_world_time_sort_key(
+    connection: Connection, *, world_time_id: uuid.UUID, expected_world_id: uuid.UUID
+) -> int:
+    row = (
+        connection.execute(
+            text("SELECT world_id, sort_key FROM core.world_times WHERE world_time_id = :wt"),
+            {"wt": world_time_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["world_id"] != expected_world_id:
+        raise TargetNotInCampaignWorldError(
+            f"world time {world_time_id} does not exist in world {expected_world_id} "
+            f"(actual world: {row['world_id'] if row is not None else None})"
+        )
+    sort_key = row["sort_key"]
+    assert isinstance(sort_key, int)
+    return sort_key
 
 
 def grant_character_relationship(
@@ -103,17 +137,30 @@ def grant_character_relationship(
     campaign_id: uuid.UUID,
     expected_world_id: uuid.UUID,
     granted_by_membership_id: uuid.UUID,
+    timeline_id: uuid.UUID | None = None,
+    effective_from_world_time_id: uuid.UUID | None = None,
+    effective_to_world_time_id: uuid.UUID | None = None,
 ) -> GrantCharacterRelationshipResult:
-    """Grants `campaign_membership_id` an unbounded, campaign-wide
-    relationship of type `relationship_type_code` to `character_id`.
-    Raises `MembershipNotInCampaignError` for a `campaign_membership_id`
-    outside `campaign_id`, or `TargetNotInCampaignWorldError` for a
-    `character_id` whose world does not match `expected_world_id` (always
-    the caller's own resolved-timeline world — `dnd_ai.api._shared.
-    timeline_world_id`, never caller-supplied) — both before any row is
-    written. A retry granting the same still-active relationship type
-    again is rejected as a 409 by `ux_membership_character_relationships_
-    active_type` (existing `IntegrityError` handler)."""
+    """Grants `campaign_membership_id` a relationship of type `relationship_
+    type_code` to `character_id`, unbounded and campaign-wide by default,
+    or timeline-scoped and/or fictional-time-bounded (ADR 0010) when
+    `timeline_id`/`effective_from_world_time_id`/`effective_to_world_
+    time_id` are supplied. Raises `MembershipNotInCampaignError` for a
+    `campaign_membership_id` outside `campaign_id`; `TargetNotInCampaignWorldError`
+    for a `character_id`, `timeline_id`, or world-time id whose world does
+    not match `expected_world_id`; `InvalidRelationshipPeriodError` for an
+    `effective_to_world_time_id` supplied without `effective_from_world_
+    time_id`, or one that does not resolve to a later `sort_key` — all
+    before any row is written, mirroring `security.enforce_membership_
+    character_relationship_scope()`'s own checks (see this module's
+    docstring for why relying on that trigger's raw `IntegrityError` alone
+    would surface as an unclassified 500). `effective_period` itself is
+    left for that same trigger to derive from the two world-time ids on
+    `INSERT` — never computed or passed here — since it is documented as
+    "derived, never client-authoritative." A retry granting the same
+    still-active relationship type again is rejected as a 409 by `ux_
+    membership_character_relationships_active_type` (existing
+    `IntegrityError` handler)."""
     membership_campaign_id = connection.execute(
         text(
             "SELECT campaign_id FROM security.campaign_memberships "
@@ -137,6 +184,40 @@ def grant_character_relationship(
             f"(actual world: {character_world_id})"
         )
 
+    if timeline_id is not None:
+        timeline_world_id = connection.execute(
+            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline"),
+            {"timeline": timeline_id},
+        ).scalar()
+        if timeline_world_id is None or timeline_world_id != expected_world_id:
+            raise TargetNotInCampaignWorldError(
+                f"timeline {timeline_id} does not exist in world {expected_world_id} "
+                f"(actual world: {timeline_world_id})"
+            )
+
+    if effective_to_world_time_id is not None and effective_from_world_time_id is None:
+        raise InvalidRelationshipPeriodError(
+            "effective_to_world_time_id requires effective_from_world_time_id"
+        )
+
+    if effective_from_world_time_id is not None:
+        from_sort_key = _resolve_world_time_sort_key(
+            connection,
+            world_time_id=effective_from_world_time_id,
+            expected_world_id=expected_world_id,
+        )
+        if effective_to_world_time_id is not None:
+            to_sort_key = _resolve_world_time_sort_key(
+                connection,
+                world_time_id=effective_to_world_time_id,
+                expected_world_id=expected_world_id,
+            )
+            if to_sort_key <= from_sort_key:
+                raise InvalidRelationshipPeriodError(
+                    f"relationship end (sort_key {to_sort_key}) must be later than its start "
+                    f"(sort_key {from_sort_key})"
+                )
+
     relationship_type_id = lookup_id(
         connection,
         "security",
@@ -148,14 +229,19 @@ def grant_character_relationship(
         text("""
             INSERT INTO security.membership_character_relationships
                 (campaign_membership_id, character_id, character_relationship_type_id,
+                 timeline_id, effective_from_world_time_id, effective_to_world_time_id,
                  granted_by_membership_id)
-            VALUES (:membership, :character, :relationship_type, :granted_by)
+            VALUES (:membership, :character, :relationship_type, :timeline, :from_time,
+                    :to_time, :granted_by)
             RETURNING membership_character_relationship_id
         """),
         {
             "membership": campaign_membership_id,
             "character": character_id,
             "relationship_type": relationship_type_id,
+            "timeline": timeline_id,
+            "from_time": effective_from_world_time_id,
+            "to_time": effective_to_world_time_id,
             "granted_by": granted_by_membership_id,
         },
     ).scalar()
@@ -217,31 +303,95 @@ class CreateResourceGrantResult:
     resource_grant_id: uuid.UUID
 
 
+def _validate_resource_grant_target(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    expected_world_id: uuid.UUID,
+    character_id: uuid.UUID | None,
+    entity_id: uuid.UUID | None,
+    knowledge_item_id: uuid.UUID | None,
+    quest_id: uuid.UUID | None,
+    session_id: uuid.UUID | None,
+    event_id: uuid.UUID | None,
+) -> None:
+    """Pre-checks whichever one of the six target columns is non-`None`
+    against `security.enforce_resource_grant_scope()`'s own rules
+    (migration 080): `character_id`/`entity_id`/`knowledge_item_id`/
+    `quest_id`/`event_id` are all `core.entities` rows via class-table
+    inheritance, so each is checked identically, by world, against that
+    one shared table; `session_id` is checked by campaign instead (`dnd_ai.
+    commands._shared.validate_session_campaign` — a session has no
+    `world_id` of its own, and campaign agreement is the stronger,
+    directly-relevant check `campaign.sessions` supports); `event_id` is
+    additionally checked by campaign when the event itself carries one
+    (`narrative.events.campaign_id` is nullable — a world-level,
+    campaign-less event has nothing further to check, matching the
+    trigger's own `IF v_target_campaign IS NOT NULL` guard). If the
+    caller's target is `None` for every one of the six kinds — or more
+    than one is non-`None` — this function does nothing further; `security.
+    resource_grants`' own `ck_resource_grants_exactly_one_target` `CHECK`
+    constraint (SQLSTATE `23514`, already correctly classified to a fixed
+    400) is the actual enforcement for that shape, exactly like `create_
+    resource_grant`'s existing "exactly one grantee" reasoning."""
+    entity_rooted_target = character_id or entity_id or knowledge_item_id or quest_id or event_id
+    if entity_rooted_target is not None:
+        target_world_id = connection.execute(
+            text("SELECT world_id FROM core.entities WHERE entity_id = :target"),
+            {"target": entity_rooted_target},
+        ).scalar()
+        if target_world_id is None or target_world_id != expected_world_id:
+            raise TargetNotInCampaignWorldError(
+                f"resource grant target {entity_rooted_target} does not exist in world "
+                f"{expected_world_id} (actual world: {target_world_id})"
+            )
+
+    if event_id is not None:
+        event_campaign_id = connection.execute(
+            text("SELECT campaign_id FROM narrative.events WHERE event_id = :event"),
+            {"event": event_id},
+        ).scalar()
+        if event_campaign_id is not None and event_campaign_id != campaign_id:
+            raise TargetNotInCampaignWorldError(
+                f"event {event_id} belongs to campaign {event_campaign_id}, not {campaign_id}"
+            )
+
+    if session_id is not None:
+        validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+
+
 def create_resource_grant(
     connection: Connection,
     *,
     campaign_id: uuid.UUID,
     grantee_campaign_membership_id: uuid.UUID | None,
     grantee_access_group_id: uuid.UUID | None,
-    character_id: uuid.UUID,
     capability_code: str,
     effect: str,
     expected_world_id: uuid.UUID,
     granted_by_membership_id: uuid.UUID,
+    character_id: uuid.UUID | None = None,
+    entity_id: uuid.UUID | None = None,
+    knowledge_item_id: uuid.UUID | None = None,
+    quest_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+    event_id: uuid.UUID | None = None,
     reason: str | None = None,
 ) -> CreateResourceGrantResult:
-    """Creates a `character_id`-scoped `security.resource_grants` row for
-    exactly one of `grantee_campaign_membership_id`/
-    `grantee_access_group_id` (the caller supplies exactly one; the other
-    must be `None` — `security.resource_grants`' own `ck_resource_grants_
-    exactly_one_grantee` `CHECK` constraint rejects both/neither as a
-    clean 400, needing no pre-check here). Raises
-    `MembershipNotInCampaignError`/`AccessGroupNotInCampaignError` for a
-    grantee outside `campaign_id`, or `TargetNotInCampaignWorldError` for
-    a `character_id` whose world does not match `expected_world_id` —
-    before any row is written. A retry creating the same still-active
-    grant again is rejected as a 409 by `ux_resource_grants_active`
-    (existing `IntegrityError` handler)."""
+    """Creates a `security.resource_grants` row for exactly one of
+    `grantee_campaign_membership_id`/`grantee_access_group_id` and exactly
+    one of the six target kinds (`character_id`, `entity_id`, `knowledge_
+    item_id`, `quest_id`, `session_id`, `event_id`) — the caller supplies
+    exactly one of each pair/group; `security.resource_grants`' own `CHECK`
+    constraints reject any other shape as a clean 400, needing no pre-check
+    here (see this function's and `_validate_resource_grant_target()`'s own
+    docstrings). Raises `MembershipNotInCampaignError`/
+    `AccessGroupNotInCampaignError` for a grantee outside `campaign_id`, or
+    `TargetNotInCampaignWorldError`/`SessionNotInCampaignError` for a
+    target outside `expected_world_id`/`campaign_id` — all before any row
+    is written. A retry creating the same still-active grant again is
+    rejected as a 409 by `ux_resource_grants_active` (existing
+    `IntegrityError` handler)."""
     if grantee_campaign_membership_id is not None:
         grantee_campaign_id = connection.execute(
             text(
@@ -266,15 +416,17 @@ def create_resource_grant(
                 f"{campaign_id} (actual campaign: {group_campaign_id})"
             )
 
-    character_world_id = connection.execute(
-        text("SELECT world_id FROM core.entities WHERE entity_id = :character"),
-        {"character": character_id},
-    ).scalar()
-    if character_world_id is None or character_world_id != expected_world_id:
-        raise TargetNotInCampaignWorldError(
-            f"character {character_id} does not exist in world {expected_world_id} "
-            f"(actual world: {character_world_id})"
-        )
+    _validate_resource_grant_target(
+        connection,
+        campaign_id=campaign_id,
+        expected_world_id=expected_world_id,
+        character_id=character_id,
+        entity_id=entity_id,
+        knowledge_item_id=knowledge_item_id,
+        quest_id=quest_id,
+        session_id=session_id,
+        event_id=event_id,
+    )
 
     capability_id = lookup_id(
         connection, "security", "capabilities", "capability_id", capability_code
@@ -283,9 +435,11 @@ def create_resource_grant(
         text("""
             INSERT INTO security.resource_grants
                 (campaign_id, grantee_campaign_membership_id, grantee_access_group_id,
-                 capability_id, effect, character_id, granted_by_membership_id, reason)
+                 capability_id, effect, character_id, entity_id, knowledge_item_id, quest_id,
+                 session_id, event_id, granted_by_membership_id, reason)
             VALUES (:campaign, :grantee_membership, :grantee_group, :capability, :effect,
-                    :character, :granted_by, :reason)
+                    :character, :entity, :knowledge_item, :quest, :session, :event,
+                    :granted_by, :reason)
             RETURNING resource_grant_id
         """),
         {
@@ -295,6 +449,11 @@ def create_resource_grant(
             "capability": capability_id,
             "effect": effect,
             "character": character_id,
+            "entity": entity_id,
+            "knowledge_item": knowledge_item_id,
+            "quest": quest_id,
+            "session": session_id,
+            "event": event_id,
             "granted_by": granted_by_membership_id,
             "reason": reason,
         },

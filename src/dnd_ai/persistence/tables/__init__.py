@@ -221,6 +221,7 @@ from .rules import (
 from .security import (
     access_group_memberships,
     access_groups,
+    campaign_creation_reservations,
     campaign_invitations,
     campaign_memberships,
     capabilities,
@@ -235,6 +236,7 @@ from .security import (
     role_capabilities,
     roles,
     service_accounts,
+    timeline_bootstrap_grants,
     users,
 )
 
@@ -257,6 +259,7 @@ __all__ = [
     "businesses",
     "calendar_months",
     "calendars",
+    "campaign_creation_reservations",
     "campaign_invitations",
     "campaign_memberships",
     "campaign_parties",
@@ -414,6 +417,7 @@ __all__ = [
     "sync_state",
     "tags",
     "targets",
+    "timeline_bootstrap_grants",
     "timelines",
     "truth_statuses",
     "users",

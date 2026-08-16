@@ -1,4 +1,4 @@
-"""Security tables — security schema (revisions 003, 080, 082).
+"""Security tables — security schema (revisions 003, 080, 082, 087, 088).
 
 Part of the src/dnd_ai/persistence/tables package. See
 src/dnd_ai/persistence/tables/__init__.py for the metadata-authority note
@@ -876,3 +876,168 @@ idempotent_requests = Table(
 )
 
 Index("ix_idempotent_requests_campaign_id", idempotent_requests.c.campaign_id)
+
+# ---------------------------------------------------------------------------
+# First-campaign entitlement (revision 087)
+# ---------------------------------------------------------------------------
+
+timeline_bootstrap_grants = Table(
+    "timeline_bootstrap_grants",
+    metadata,
+    _uuid_pk("timeline_bootstrap_grant_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "granted_to_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "granted_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("expires_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column("consumed_at", TIMESTAMP(timezone=True)),
+    Column(
+        "consumed_by_campaign_id",
+        UUID(),
+        # RESTRICT, not SET NULL: ck_timeline_bootstrap_grants_consumed_pairing
+        # requires consumed_at/consumed_by_campaign_id to be NULL or non-NULL
+        # together, so a SET NULL cascade from a deleted campaign.campaigns row
+        # would null this column alone and violate that constraint outright.
+        # No command in this codebase deletes a campaign row (CLAUDE.md rule
+        # 9), so RESTRICT costs nothing in practice.
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="security",
+    comment=(
+        "A single-use entitlement, issued by trusted world-authoring/import "
+        "infrastructure (never over HTTP), authorizing one specific user to "
+        "create the first campaign.campaigns row on one specific timeline. "
+        "Consumed atomically by dnd_ai.commands.campaigns.create_campaign() in "
+        "the same transaction that creates the campaign it authorizes — see that "
+        "module's own docstring for the full policy."
+    ),
+)
+
+Index(
+    "ux_timeline_bootstrap_grants_active",
+    timeline_bootstrap_grants.c.timeline_id,
+    timeline_bootstrap_grants.c.granted_to_user_id,
+    unique=True,
+    postgresql_where=(
+        timeline_bootstrap_grants.c.consumed_at.is_(None)
+        & timeline_bootstrap_grants.c.revoked_at.is_(None)
+    ),
+)
+Index(
+    "ix_timeline_bootstrap_grants_consumed_by_campaign_id",
+    timeline_bootstrap_grants.c.consumed_by_campaign_id,
+    postgresql_where=timeline_bootstrap_grants.c.consumed_by_campaign_id.isnot(None),
+)
+Index(
+    "ix_timeline_bootstrap_grants_granted_to_user_id",
+    timeline_bootstrap_grants.c.granted_to_user_id,
+)
+Index(
+    "ix_timeline_bootstrap_grants_granted_by_user_id",
+    timeline_bootstrap_grants.c.granted_by_user_id,
+    postgresql_where=timeline_bootstrap_grants.c.granted_by_user_id.isnot(None),
+)
+
+# ---------------------------------------------------------------------------
+# Pre-campaign idempotency (revision 088)
+# ---------------------------------------------------------------------------
+
+campaign_creation_reservations = Table(
+    "campaign_creation_reservations",
+    metadata,
+    _uuid_pk("campaign_creation_reservation_id"),
+    Column(
+        "actor_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "idempotency_key",
+        Text(),
+        nullable=False,
+        comment=(
+            "Client-supplied Idempotency-Key header value, bounded and character-"
+            "restricted (dnd_ai.api.deps.get_idempotency_key) before it ever reaches "
+            "this column or any log line — the same discipline "
+            "dnd_ai.api.correlation applies to X-Correlation-Id."
+        ),
+    ),
+    Column(
+        "request_fingerprint",
+        Text(),
+        nullable=False,
+        comment=(
+            'sha256 hex digest of the canonical ("create_campaign", request body) '
+            "tuple (dnd_ai.api.idempotency.compute_request_fingerprint). A replay "
+            "whose fingerprint does not match this value — a different payload "
+            "reusing the same key — is rejected as a fixed, non-disclosing conflict "
+            "rather than replayed or silently applied."
+        ),
+    ),
+    Column("correlation_id", UUID()),
+    Column("response_status_code", SmallInteger()),
+    Column(
+        "response_body",
+        JSONB(),
+        comment=(
+            "The exact response body this command already returned to this same "
+            "authenticated caller for this key, including the resulting campaign_id "
+            "and campaign_membership_id; replayed verbatim on a matching retry "
+            "rather than re-running create_campaign."
+        ),
+    ),
+    Column(
+        "created_campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="RESTRICT"),
+        comment=(
+            "The campaign.campaigns row this reservation produced, set atomically "
+            "with response_body once create_campaign succeeds. ON DELETE RESTRICT, "
+            "compatible with ck_campaign_creation_reservations_completion_consistent: "
+            "campaigns are never physically deleted by any command in this codebase, "
+            "so this only turns a schema-level contradiction into an explicit failure "
+            "if that assumption is ever violated, rather than a SET NULL cascade "
+            "silently orphaning a completed reservation's own completion columns."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("completed_at", TIMESTAMP(timezone=True)),
+    UniqueConstraint(
+        "actor_user_id",
+        "idempotency_key",
+        name="ux_campaign_creation_reservations_scope",
+    ),
+    schema="security",
+    comment=(
+        "Durable pre-campaign Idempotency-Key store for POST /campaigns "
+        "(dnd_ai.commands.campaigns.create_campaign), the one write in this "
+        "codebase with no existing campaign_id to key a security."
+        "idempotent_requests reservation against. One row reserves "
+        "(actor_user_id, idempotency_key) for the lifetime of the reserving "
+        "transaction and is filled in with the resulting campaign and response "
+        "before that transaction commits; a rolled-back or failed attempt "
+        "releases the key automatically. See src/dnd_ai/api/idempotency.py."
+    ),
+)
+
+Index(
+    "ix_campaign_creation_reservations_created_campaign_id",
+    campaign_creation_reservations.c.created_campaign_id,
+    postgresql_where=campaign_creation_reservations.c.created_campaign_id.isnot(None),
+)
