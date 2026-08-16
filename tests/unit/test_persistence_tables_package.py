@@ -23,7 +23,9 @@ item, encounter, and integration domains. Revision 080 reshaped security.users
 and replaced the old global security.roles/security.user_roles pair with the
 Phase 10 campaign-scoped security schema (13 new tables, 1 table dropped).
 Revision 082 (a Phase 10 workstream 6 correction pass) added
-security.idempotent_requests.
+security.idempotent_requests. Revision 087 (Phase 10 workstream 32) added
+security.timeline_bootstrap_grants. Revision 088 (Phase 10 workstream 33)
+added security.campaign_creation_reservations.
 """
 
 import importlib
@@ -226,6 +228,7 @@ EXPECTED_TABLES = {
     "security": [
         "security.access_group_memberships",
         "security.access_groups",
+        "security.campaign_creation_reservations",
         "security.campaign_invitations",
         "security.campaign_memberships",
         "security.capabilities",

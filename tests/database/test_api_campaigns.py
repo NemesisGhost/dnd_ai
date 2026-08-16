@@ -62,6 +62,35 @@ a failed campaign-creation attempt leaves the grant it would have consumed
 exactly as usable as before
 (`test_campaign_creation_is_atomic_and_preserves_grant_usability_when_
 ruleset_validation_fails`).
+
+Also covers the High-severity idempotency defect the second Critical fix
+exposed (`dnd_ai.api.campaigns`'s and `dnd_ai.api.idempotency`'s own
+docstrings have the full narrative): a single-use bootstrap grant stops a
+*different* user from claiming the first campaign, but did nothing to stop
+the successful creator's own dropped-response retry from reusing the
+timeline it just claimed (via the `access.manage` that retry's own creator
+now holds) and minting a second campaign/membership/role/audit row for one
+logical request. `security.campaign_creation_reservations` (migration 088)
+closes it: a sequential replay returns the original campaign with exactly
+one row surviving in every table a successful creation touches
+(`test_a_sequential_replay_returns_the_original_campaign_with_exactly_one_
+of_each_row`); two genuinely concurrent requests sharing a key never create
+more than one campaign
+(`test_two_concurrent_same_key_requests_create_exactly_one_campaign`); a
+retry standing in for a lost response replays the already-committed
+campaign without ever having seen the original response
+(`test_a_lost_response_retry_replays_the_already_committed_campaign`);
+reusing a key with a changed payload is rejected as the established fixed
+conflict, not silently replayed or applied
+(`test_reusing_the_same_key_with_a_different_payload_is_rejected_as_a_
+conflict`); a genuinely different key legitimately creates a second
+campaign through the existing `access.manage` timeline-reuse path
+(`test_different_idempotency_keys_intentionally_create_a_second_campaign_
+via_timeline_reuse`); and a forced mid-request failure leaves the
+reservation and the bootstrap grant exactly as usable as before, proven by
+an immediate, successful retry on the same key
+(`test_a_forced_failure_leaves_the_key_and_grant_unconsumed_for_a_
+successful_retry`).
 """
 
 import concurrent.futures
@@ -166,6 +195,18 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 )
             """),
             {"w": fixture.world_id},
+        )
+        # security.campaign_creation_reservations carries no timeline/world
+        # column of its own (dnd_ai.api.idempotency's own "Pre-campaign
+        # idempotency" docstring section — it exists before any campaign
+        # does) — scoped by actor_user_id instead, the same two users every
+        # other cleanup step below also targets directly.
+        cleanup.execute(
+            text("""
+                DELETE FROM security.campaign_creation_reservations
+                WHERE actor_user_id = ANY(:users)
+            """),
+            {"users": [fixture.creator_user_id, fixture.second_user_id]},
         )
         cleanup.execute(
             text("""
@@ -929,3 +970,313 @@ def test_an_expired_or_revoked_bootstrap_grant_cannot_be_used(
         )
     assert expired_response.status_code == 404, expired_response.text
     assert revoked_response.status_code == 404, revoked_response.text
+
+
+# ---------------------------------------------------------------------------
+# High-severity fix: pre-campaign idempotency
+# (`security.campaign_creation_reservations`, migration 088) —
+# `dnd_ai.api.idempotency`'s "Pre-campaign idempotency" docstring section
+# and `dnd_ai.api.campaigns`'s own docstring have the full defect/fix
+# narrative.
+# ---------------------------------------------------------------------------
+
+
+def test_a_sequential_replay_returns_the_original_campaign_with_exactly_one_of_each_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A second request with the identical `Idempotency-Key` and payload
+    replays the first response verbatim rather than falling through to the
+    now-available `access.manage` timeline-reuse path and minting a second
+    campaign — proven both by the two response bodies matching exactly and
+    by exactly one row surviving in every table a successful creation
+    touches: the campaign itself, its membership, the owner role
+    assignment, the consumed bootstrap grant, the audit record, and the
+    reservation row itself."""
+    key = f"replay-{uuid.uuid4().hex[:8]}"
+    body = _body(f, name="Replayed Campaign")
+    with client_factory(f.creator_user_id) as client:
+        first = client.post("/campaigns", json=body, headers={"Idempotency-Key": key})
+        second = client.post("/campaigns", json=body, headers={"Idempotency-Key": key})
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json() == first.json()
+    campaign_id = uuid.UUID(first.json()["campaign_id"])
+    campaign_membership_id = uuid.UUID(first.json()["campaign_membership_id"])
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE campaign_id = :c"),
+            {"c": campaign_id},
+        ).scalar_one()
+        assert campaign_count == 1
+
+        membership_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships "
+                "WHERE campaign_membership_id = :m"
+            ),
+            {"m": campaign_membership_id},
+        ).scalar_one()
+        assert membership_count == 1
+
+        role_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles WHERE campaign_membership_id = :m"
+            ),
+            {"m": campaign_membership_id},
+        ).scalar_one()
+        assert role_count == 1
+
+        grant_row = verify.execute(
+            text("""
+                SELECT consumed_at, consumed_by_campaign_id
+                FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :t AND granted_to_user_id = :u
+            """),
+            {"t": f.timeline_id, "u": f.creator_user_id},
+        ).one()
+        assert grant_row.consumed_at is not None
+        assert grant_row.consumed_by_campaign_id == campaign_id
+
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE schema_name = 'campaign' AND table_name = 'campaigns' AND record_id = :c"
+            ),
+            {"c": campaign_id},
+        ).scalar_one()
+        assert audit_count == 1
+
+        reservation_row = verify.execute(
+            text("""
+                SELECT created_campaign_id, response_status_code
+                FROM security.campaign_creation_reservations
+                WHERE actor_user_id = :u AND idempotency_key = :k
+            """),
+            {"u": f.creator_user_id, "k": key},
+        ).one()
+        assert reservation_row.created_campaign_id == campaign_id
+        assert reservation_row.response_status_code == 201
+
+
+def test_two_concurrent_same_key_requests_create_exactly_one_campaign(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Two genuinely concurrent requests from the same creator, same
+    `Idempotency-Key`, same payload — the same real-thread race
+    `test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds`
+    already proves reliable against this database, applied here to
+    `begin_campaign_creation_request`'s own atomic reservation `INSERT ...
+    ON CONFLICT DO NOTHING` rather than the bootstrap grant's row lock.
+    Whichever request's reservation commits first creates the campaign;
+    the other blocks on the unique index until that commit, then replays
+    its response — both succeed, both return the identical campaign, and
+    only one `campaign.campaigns` row is ever created."""
+    key = f"concurrent-{uuid.uuid4().hex[:8]}"
+    body = _body(f, name="Concurrent Claim")
+
+    def _attempt() -> tuple[int, dict[str, object]]:
+        with client_factory(f.creator_user_id) as client:
+            response = client.post("/campaigns", json=body, headers={"Idempotency-Key": key})
+        return response.status_code, response.json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(_attempt)
+        future_b = pool.submit(_attempt)
+        status_a, body_a = future_a.result()
+        status_b, body_b = future_b.result()
+
+    assert status_a == 201, body_a
+    assert status_b == 201, body_b
+    assert body_a == body_b
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert campaign_count == 1
+
+        reservation_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_creation_reservations "
+                "WHERE actor_user_id = :u AND idempotency_key = :k"
+            ),
+            {"u": f.creator_user_id, "k": key},
+        ).scalar_one()
+        assert reservation_count == 1
+
+
+def test_a_lost_response_retry_replays_the_already_committed_campaign(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Stands in for a client whose first request's underlying transaction
+    fully committed, but whose HTTP response never arrived (a dropped
+    connection, a proxy timeout): the retry below never inspects the first
+    response at all, only the database's own already-committed state
+    beforehand — and still gets back exactly the campaign that first
+    request produced, never a second one."""
+    key = f"lost-response-{uuid.uuid4().hex[:8]}"
+    body = _body(f, name="Lost Response Campaign")
+
+    with client_factory(f.creator_user_id) as client:
+        client.post("/campaigns", json=body, headers={"Idempotency-Key": key})
+        # The response above is deliberately never read — simulating a
+        # dropped connection after the server-side transaction committed.
+
+    with postgres_engine.connect() as verify:
+        committed = verify.execute(
+            text("""
+                SELECT c.campaign_id, cm.campaign_membership_id
+                FROM campaign.campaigns c
+                JOIN security.campaign_memberships cm ON cm.campaign_id = c.campaign_id
+                WHERE c.timeline_id = :t AND cm.user_id = :u
+            """),
+            {"t": f.timeline_id, "u": f.creator_user_id},
+        ).one()
+
+    with client_factory(f.creator_user_id) as client:
+        retried = client.post("/campaigns", json=body, headers={"Idempotency-Key": key})
+    assert retried.status_code == 201, retried.text
+    assert uuid.UUID(retried.json()["campaign_id"]) == committed.campaign_id
+    assert uuid.UUID(retried.json()["campaign_membership_id"]) == committed.campaign_membership_id
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert campaign_count == 1
+
+
+def test_reusing_the_same_key_with_a_different_payload_is_rejected_as_a_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The established idempotency conflict contract
+    (`dnd_ai.api.idempotency.begin_campaign_creation_request`, mirroring
+    `begin_idempotent_request` exactly) — a fixed, non-disclosing 409, not
+    a silent replay and not a second campaign."""
+    key = f"conflict-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.creator_user_id) as client:
+        first = client.post(
+            "/campaigns", json=_body(f, name="Conflict Original"), headers={"Idempotency-Key": key}
+        )
+        second = client.post(
+            "/campaigns", json=_body(f, name="Conflict Mutated"), headers={"Idempotency-Key": key}
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 409, second.text
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert campaign_count == 1
+
+
+def test_different_idempotency_keys_intentionally_create_a_second_campaign_via_timeline_reuse(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A different `Idempotency-Key` is a genuinely different logical
+    request, not a retry of the first one — the creator, now holding
+    `access.manage` in the first campaign, may deliberately reuse the
+    timeline for a second one (the existing, unaffected timeline-reuse
+    policy), and each key gets its own reservation row pointing at its own
+    resulting campaign."""
+    first_key = f"first-{uuid.uuid4().hex[:8]}"
+    second_key = f"second-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.creator_user_id) as client:
+        first = client.post(
+            "/campaigns",
+            json=_body(f, name="First Via Key"),
+            headers={"Idempotency-Key": first_key},
+        )
+        second = client.post(
+            "/campaigns",
+            json=_body(f, name="Second Via Key"),
+            headers={"Idempotency-Key": second_key},
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_campaign_id = uuid.UUID(first.json()["campaign_id"])
+    second_campaign_id = uuid.UUID(second.json()["campaign_id"])
+    assert first_campaign_id != second_campaign_id
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert campaign_count == 2
+
+        rows = verify.execute(
+            text("""
+                SELECT idempotency_key, created_campaign_id
+                FROM security.campaign_creation_reservations
+                WHERE actor_user_id = :u AND idempotency_key IN (:k1, :k2)
+            """),
+            {"u": f.creator_user_id, "k1": first_key, "k2": second_key},
+        ).all()
+        by_key = {row.idempotency_key: row.created_campaign_id for row in rows}
+        assert by_key[first_key] == first_campaign_id
+        assert by_key[second_key] == second_campaign_id
+
+
+def test_a_forced_failure_leaves_the_key_and_grant_unconsumed_for_a_successful_retry(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A disallowed ruleset fails `create_campaign` after `begin_campaign_
+    creation_request`'s own reservation `INSERT` but before anything
+    commits — the whole request transaction rolls back together
+    (`dnd_ai.api.deps.get_connection`), so the reservation row is never
+    durably written at all, mirroring `dnd_ai.api.idempotency`'s own "a
+    failed command never permanently consumes a key" guarantee. The
+    bootstrap grant this same attempt would have consumed is equally
+    untouched, and an immediate retry with the identical key succeeds."""
+    key = f"forced-failure-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.creator_user_id) as client:
+        failed = client.post(
+            "/campaigns",
+            json=_body(
+                f, name="Forced Failure", ruleset_version_id=str(f.foreign_ruleset_version_id)
+            ),
+            headers={"Idempotency-Key": key},
+        )
+    assert failed.status_code == 400, failed.text
+
+    with postgres_engine.connect() as verify:
+        reservation_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_creation_reservations "
+                "WHERE actor_user_id = :u AND idempotency_key = :k"
+            ),
+            {"u": f.creator_user_id, "k": key},
+        ).scalar_one()
+        assert reservation_count == 0
+
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert campaign_count == 0
+
+        grant_row = verify.execute(
+            text("""
+                SELECT consumed_at, consumed_by_campaign_id
+                FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :t AND granted_to_user_id = :u
+            """),
+            {"t": f.timeline_id, "u": f.creator_user_id},
+        ).one()
+        assert grant_row.consumed_at is None
+        assert grant_row.consumed_by_campaign_id is None
+
+    with client_factory(f.creator_user_id) as client:
+        retried = client.post(
+            "/campaigns",
+            json=_body(f, name="Forced Failure Retry"),
+            headers={"Idempotency-Key": key},
+        )
+    assert retried.status_code == 201, retried.text

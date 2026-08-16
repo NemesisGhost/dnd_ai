@@ -33,10 +33,28 @@ one action that structurally cannot be gated by `require_campaign_
 capability` itself, since no campaign exists yet at the time the route is
 entered.
 
-No idempotency-key handling: see `dnd_ai.commands.campaigns`'s module
-docstring for why `security.idempotent_requests`'s `NOT NULL campaign_id`
-foreign key makes that structurally unavailable to the one command with no
-existing campaign to key a reservation against.
+Idempotency: durable, PostgreSQL-backed, like every other Phase 10 write —
+but via `security.campaign_creation_reservations` (migration 088) rather
+than the general `security.idempotent_requests` store every other command
+endpoint uses, since `idempotent_requests`' `campaign_id` column is `NOT
+NULL` and this is the one write in this codebase with no existing campaign
+to key a reservation against yet. Migration 087's single-use bootstrap
+grant stops a *different* user from claiming the first campaign, but does
+nothing on its own to stop the successful creator's own dropped-response
+retry from reusing the timeline it just claimed (via the `access.manage`
+that retry's own creator now holds) and minting a second campaign,
+membership, owner role, and audit row — the defect this idempotency
+mechanism closes. When a client supplies an `Idempotency-Key` header, the
+route reserves `(actor_user_id, idempotency_key)` via `dnd_ai.api.
+idempotency.begin_campaign_creation_request()` before calling `create_
+campaign`, and completes that reservation with the campaign it produced
+before returning — both inside the request's own transaction, so a
+retried request either replays the original `campaign_id`/`campaign_
+membership_id` with no new campaign/membership/role/audit row, or (a
+different payload reusing the same key) gets a fixed, non-disclosing 409
+without touching anything. A request with no `Idempotency-Key` header is
+not deduplicated at all, matching every other command endpoint in this
+codebase.
 
 Auditing: one `audit.change_log` row per successful call, identifying the
 new campaign row (`schema_name="campaign"`, `table_name="campaigns"`).
@@ -61,7 +79,12 @@ from dnd_ai.commands.campaigns import create_campaign
 from .audit import record_change_log
 from .auth import get_authenticated_user_id
 from .correlation import get_request_correlation_id
-from .deps import get_connection
+from .deps import get_connection, get_idempotency_key
+from .idempotency import (
+    IdempotentReplay,
+    begin_campaign_creation_request,
+    complete_campaign_creation_request,
+)
 
 router = APIRouter(tags=["campaigns"])
 
@@ -86,8 +109,22 @@ def create_campaign_endpoint(
     body: CreateCampaignRequest,
     creator_user_id: Annotated[uuid.UUID, Depends(get_authenticated_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> CreateCampaignResponse:
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        outcome = begin_campaign_creation_request(
+            connection,
+            actor_user_id=creator_user_id,
+            idempotency_key=idempotency_key,
+            payload=body.model_dump(mode="json"),
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return CreateCampaignResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.campaign_creation_reservation_id
+
     result = create_campaign(
         connection,
         timeline_id=body.timeline_id,
@@ -111,6 +148,17 @@ def create_campaign_endpoint(
         event_id=None,
     )
 
-    return CreateCampaignResponse(
+    response = CreateCampaignResponse(
         campaign_id=result.campaign_id, campaign_membership_id=result.campaign_membership_id
     )
+
+    if reservation_id is not None:
+        complete_campaign_creation_request(
+            connection,
+            campaign_creation_reservation_id=reservation_id,
+            response_status_code=201,
+            response_body=response.model_dump(mode="json"),
+            campaign_id=result.campaign_id,
+        )
+
+    return response

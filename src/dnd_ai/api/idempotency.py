@@ -51,6 +51,27 @@ between those two points: it is invisible until commit, and by commit
 time it is already complete — `ck_idempotent_requests_completion_consistent`
 (migration 082) makes an inconsistent intermediate state a schema-level
 impossibility, not just an application convention.
+
+## Pre-campaign idempotency: `security.campaign_creation_reservations`
+
+`POST /campaigns` (`dnd_ai.commands.campaigns.create_campaign`) has no
+existing `campaign_id` to scope a `security.idempotent_requests` row
+against — it is the one write in this codebase that *creates* the
+campaign a reservation would otherwise be keyed to. `begin_campaign_
+creation_request()`/`complete_campaign_creation_request()` are the
+matching reserve/replay/complete functions for `security.campaign_
+creation_reservations` (migration 088), scoped to `(actor_user_id,
+idempotency_key)` alone — no `campaign_id` column, and no `command_name`
+column, since exactly one command ever reserves a row here. Every
+concurrency and rollback guarantee above applies unchanged: one atomic
+`INSERT ... ON CONFLICT DO NOTHING RETURNING` resolves ownership of the
+key with no check-then-insert race, run inside the same transaction
+`create_campaign()` itself runs in, so a failed or rolled-back attempt
+never durably reserves the key — a retry with the same key sees no row
+and reserves fresh. `complete_campaign_creation_request()` additionally
+records the resulting `campaign_id` directly on the row (not only inside
+`response_body`), so the campaign a reservation produced can be queried
+without parsing JSON.
 """
 
 import hashlib
@@ -184,5 +205,109 @@ def complete_idempotent_request(
             "status": response_status_code,
             "body": json.dumps(response_body),
             "id": idempotent_request_id,
+        },
+    )
+
+
+_CREATE_CAMPAIGN_COMMAND_NAME = "create_campaign"
+
+
+@dataclass(frozen=True)
+class CampaignCreationReservation:
+    """This call is the first (and, for the duration of its transaction,
+    only) holder of the key — proceed with `create_campaign` normally and
+    call `complete_campaign_creation_request()` with its result before
+    returning. See the module docstring's "Pre-campaign idempotency"
+    section."""
+
+    campaign_creation_reservation_id: uuid.UUID
+
+
+def begin_campaign_creation_request(
+    connection: Connection,
+    *,
+    actor_user_id: uuid.UUID,
+    idempotency_key: str,
+    payload: dict[str, Any],
+    correlation_id: str | None,
+) -> CampaignCreationReservation | IdempotentReplay:
+    """Reserve `idempotency_key` for `actor_user_id`'s own `create_campaign`
+    call, or return the already-completed response for a matching replay.
+    The pre-campaign counterpart to `begin_idempotent_request()` — same
+    atomic-INSERT concurrency behavior, same fingerprint-mismatch/
+    incomplete-reservation `ConflictError` cases — scoped to `(actor_user_id,
+    idempotency_key)` alone since there is no `campaign_id` yet to add to
+    the tuple. See the module docstring's "Pre-campaign idempotency"
+    section for why this needs its own table rather than reusing `security.
+    idempotent_requests`."""
+    fingerprint = compute_request_fingerprint(
+        command_name=_CREATE_CAMPAIGN_COMMAND_NAME, payload=payload
+    )
+
+    reserved = connection.execute(
+        text("""
+            INSERT INTO security.campaign_creation_reservations
+                (actor_user_id, idempotency_key, request_fingerprint, correlation_id)
+            VALUES (:user, :key, :fingerprint, :correlation)
+            ON CONFLICT (actor_user_id, idempotency_key) DO NOTHING
+            RETURNING campaign_creation_reservation_id
+        """),
+        {
+            "user": actor_user_id,
+            "key": idempotency_key,
+            "fingerprint": fingerprint,
+            "correlation": correlation_id,
+        },
+    ).one_or_none()
+    if reserved is not None:
+        return CampaignCreationReservation(
+            campaign_creation_reservation_id=reserved.campaign_creation_reservation_id
+        )
+
+    existing = connection.execute(
+        text("""
+            SELECT request_fingerprint, response_status_code, response_body
+            FROM security.campaign_creation_reservations
+            WHERE actor_user_id = :user AND idempotency_key = :key
+        """),
+        {"user": actor_user_id, "key": idempotency_key},
+    ).one()
+
+    if existing.request_fingerprint != fingerprint:
+        raise ConflictError(
+            f"idempotency key {idempotency_key!r} was already used for a different "
+            "command or payload"
+        )
+    if existing.response_status_code is None or existing.response_body is None:
+        raise ConflictError(f"idempotency key {idempotency_key!r} names an incomplete reservation")
+    return IdempotentReplay(
+        response_status_code=existing.response_status_code,
+        response_body=existing.response_body,
+    )
+
+
+def complete_campaign_creation_request(
+    connection: Connection,
+    *,
+    campaign_creation_reservation_id: uuid.UUID,
+    response_status_code: int,
+    response_body: dict[str, Any],
+    campaign_id: uuid.UUID,
+) -> None:
+    """Fill in the reserved row with `create_campaign`'s actual response and
+    the campaign it produced, still inside the reserving transaction — the
+    pre-campaign counterpart to `complete_idempotent_request()`."""
+    connection.execute(
+        text("""
+            UPDATE security.campaign_creation_reservations
+            SET response_status_code = :status, response_body = :body, completed_at = now(),
+                created_campaign_id = :campaign
+            WHERE campaign_creation_reservation_id = :id
+        """),
+        {
+            "status": response_status_code,
+            "body": json.dumps(response_body),
+            "campaign": campaign_id,
+            "id": campaign_creation_reservation_id,
         },
     )

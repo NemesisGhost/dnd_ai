@@ -203,19 +203,22 @@ family" — mirroring `RoleNotUsableByCampaignError`'s identical folding, so
 a caller probing with random UUIDs can't distinguish which ruleset
 versions genuinely exist.
 
-Deliberately out of scope: idempotency-key support. Every other Phase 10
-write endpoint durably reserves its `Idempotency-Key` in `security.
-idempotent_requests`, but that table's `campaign_id` column is `NOT NULL`
-with a foreign key to `campaign.campaigns` (migration 082) — a real
-structural requirement, not an oversight, everywhere else in this codebase
-that a command endpoint always names an already-existing campaign it was
-authorized against. `create_campaign` is the one write with no such
-campaign to key a reservation against yet, so a dropped response or a
-naive client retry genuinely creates a second campaign rather than
-replaying the first. Closing this would need its own schema extension (a
-nullable `campaign_id`, or a separate pre-campaign reservation table) —
-left to a future workstream that actually needs it, not invented
-speculatively here."""
+Idempotency-key support lives entirely at the API layer, not here: `dnd_ai.
+api.campaigns.create_campaign_endpoint` reserves/replays via `dnd_ai.api.
+idempotency.begin_campaign_creation_request()`/`complete_campaign_creation_
+request()` against `security.campaign_creation_reservations` (migration
+088) — a dedicated pre-campaign store, since the general-purpose `security.
+idempotent_requests` table's `campaign_id` column is `NOT NULL` and this is
+the one write in this codebase with no existing campaign to key a
+reservation against until `create_campaign` itself returns. This command
+function stays unaware of idempotency entirely, the same separation of
+concerns every other Phase 10 command/API pair already keeps. Without it, a
+dropped response and a naive client retry would fall through to `_
+authorize_timeline_reuse()`'s *reuse* branch (the retry's own creator now
+holds `access.manage` on the timeline it just claimed) and mint a second
+campaign, membership, owner role, and audit row for what the caller
+believes is one logical request — see `dnd_ai.api.idempotency`'s module
+docstring for the full mechanism and concurrency argument."""
 
 import uuid
 from dataclasses import dataclass

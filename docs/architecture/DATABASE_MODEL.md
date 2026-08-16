@@ -1031,6 +1031,23 @@ Unique on `(actor_user_id, campaign_id, idempotency_key)`. A row is reserved (`I
 
 Deliberately **not** under `audit`: `audit.*` tables are append-only to normal application roles (conventions §24.2) and outlive the records they describe, by design. This table is the opposite on both counts — reserved, updated once, and disposable cache state, not history — so it carries real `ON DELETE CASCADE` foreign keys rather than `audit.change_log`'s deliberately unconstrained columns.
 
+##### `security.campaign_creation_reservations`
+
+Delivered by revision 088 (Phase 10 workstream 33). `POST /campaigns` (`dnd_ai.commands.campaigns.create_campaign`) has no existing `campaign_id` to scope a `security.idempotent_requests` row against — it is the one write in this codebase that *creates* the campaign a reservation would otherwise be keyed to, so that table's `NOT NULL campaign_id` foreign key structurally excludes it. This is a dedicated pre-campaign counterpart, not a nullable-column extension of `idempotent_requests`: a nullable column inside a `UNIQUE` constraint does not enforce uniqueness across multiple `NULL`s, so weakening that column would have silently stopped deduplicating every other command's reservations without protecting this one either.
+
+Migration 087's single-use `security.timeline_bootstrap_grants` entitlement stops a *different* user from claiming the first campaign, but on its own did nothing to stop the successful creator's own dropped-response retry: seeing an already-used timeline, the retry passes the ordinary timeline-*reuse* check via the `access.manage` it just received as the new campaign's own owner, and mints a second active campaign, membership, owner role assignment, and audit row for what the caller believes is one logical request. `security.campaign_creation_reservations` closes that gap.
+
+Key columns:
+
+- `campaign_creation_reservation_id UUID PK`
+- `actor_user_id UUID FK -> security.users, ON DELETE CASCADE`
+- `idempotency_key TEXT` — same bounded, character-restricted header value as `idempotent_requests.idempotency_key`
+- `request_fingerprint TEXT` — sha256 of the canonical (`"create_campaign"`, request body) tuple; no path parameters exist for this route, unlike every other command endpoint's fingerprint
+- `correlation_id UUID NULL`
+- `response_status_code SMALLINT NULL`, `response_body JSONB NULL`, `created_campaign_id UUID NULL FK -> campaign.campaigns, ON DELETE SET NULL`, `completed_at TIMESTAMPTZ NULL` — all four NULL until `create_campaign` actually succeeds, all four set together (`ck_campaign_creation_reservations_completion_consistent`)
+
+Unique on `(actor_user_id, idempotency_key)` alone — no `campaign_id` column (none exists at reservation time) and no `command_name` column (exactly one command ever reserves a row here; the command name is still baked into the stored fingerprint for parity with `idempotent_requests`' own shape). `created_campaign_id` is stored as a real column, not left buried inside `response_body`, so the campaign a reservation produced can be queried directly. Reservation/replay/completion behavior mirrors `idempotent_requests` exactly — see `dnd_ai.api.idempotency`'s module docstring ("Pre-campaign idempotency") for the shared concurrency argument and for why a rolled-back or failed `create_campaign` attempt never permanently consumes the key.
+
 ### Audit
 
 - `audit.change_log`

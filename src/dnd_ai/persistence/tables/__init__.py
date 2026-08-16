@@ -221,6 +221,7 @@ from .rules import (
 from .security import (
     access_group_memberships,
     access_groups,
+    campaign_creation_reservations,
     campaign_invitations,
     campaign_memberships,
     capabilities,
@@ -258,6 +259,7 @@ __all__ = [
     "businesses",
     "calendar_months",
     "calendars",
+    "campaign_creation_reservations",
     "campaign_invitations",
     "campaign_memberships",
     "campaign_parties",
