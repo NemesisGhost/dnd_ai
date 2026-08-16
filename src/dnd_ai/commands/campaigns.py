@@ -42,23 +42,87 @@ role-creation step, and no direct `security.roles`/`.role_capabilities`
 write, is needed before a freshly created campaign is actually usable by
 its owner.
 
-`timeline_id` needs no additional per-caller entitlement check beyond
-"does it exist" (`_resolve_timeline_world`, below): worlds and timelines
-are shared, reusable world content by design (docs/DOMAIN_MODEL.md §2.2,
-"Multiple campaigns may share a timeline"), not a resource scoped to any
-one campaign or user — `campaign.timelines` carries no owner/entitlement
-column, and nothing in `security.*` gates access to a timeline itself. A
-second campaign attaching to a timeline another campaign already uses is
-therefore an intended, load-bearing capability, not a gap — the persistent-
-world model's whole premise is that a shared timeline's mutable state
-(dungeon layout, NPCs, quest state) outlives and is visible across the
-campaigns that play through it, while each campaign's own security state
+`timeline_id` *does* need a per-caller entitlement check — a lesson
+learned the hard way (docs/PLAN.md's own workstream 30 entry has the full
+defect narrative): migration 085 gave a fresh campaign's owner `campaign.
+view`/`canon.edit` in that campaign, which made "any authenticated user
+may create a campaign on any existing timeline" (the original workstream
+23 policy, when `create_campaign` only checked `timeline_id` *exists*) a
+genuine privilege-escalation path — an attacker could manufacture a new
+campaign over a *victim's* timeline and use their own fresh `campaign_
+owner` membership to read that timeline's shared, GM-only canon (hidden
+dungeon content, knowledge ground truth, internal organization
+descriptions, anything else gated on `canon.edit`) despite never being
+invited to the victim's own campaign. Docs/DOMAIN_MODEL.md §2.2's
+"Multiple campaigns may share a timeline" documents that *sharing* a
+timeline across campaigns is supported — it never says every authenticated
+user is entitled to *initiate* that sharing for an arbitrary existing
+timeline; `campaign.timelines` still carries no owner/entitlement column
+of its own, so this workstream added the entitlement check at the one
+place that does have an owner concept — `campaign.campaigns`' own
+`security.campaign_memberships`/`.membership_roles`.
+
+`_authorize_timeline_reuse()` (below) is the resulting policy, checked
+before anything is written:
+
+1. `SELECT ... FOR UPDATE` locks `timeline_id`'s own `campaign.timelines`
+   row for the rest of the transaction. A nonexistent `timeline_id` raises
+   `TimelineNotAuthorizedError` immediately — nothing to lock.
+2. If **no** `campaign.campaigns` row references `timeline_id` yet, the
+   caller may claim it unconditionally — this is a deliberate policy
+   choice, not an oversight: nothing in this schema gives a bare world or
+   timeline its own entitlement concept independent of the campaigns
+   played on it (no `world`/`timeline`-scoped membership table exists,
+   and inventing one is a materially larger schema change than this
+   defect needs — see CLAUDE.md §5's guidance to flag rather than
+   quietly invent a new domain concept). "First authenticated caller may
+   claim an unused timeline" mirrors the exact same trust boundary
+   `create_campaign` has always had for *any* campaign creation (any
+   authenticated user may create the very first campaign anywhere) — it
+   is not a new, weaker boundary introduced here.
+3. If a `campaign.campaigns` row **does** already reference `timeline_id`,
+   the caller must hold an active `access.manage` membership in *at
+   least one* of them — the same capability `security.
+   assert_campaign_retains_access_manager()` already treats as "this
+   user administers this campaign." Anyone else, including a caller who
+   only holds `campaign.view` in an existing campaign on that timeline,
+   is rejected.
+4. Both rejections — a nonexistent `timeline_id` and an existing one the
+   caller isn't entitled to reuse — raise the identical
+   `TimelineNotAuthorizedError` (a `DomainAuthorizationError`, fixed,
+   non-disclosing 404): a caller probing random or guessed UUIDs can never
+   learn which case applied, the same folding this codebase already
+   applies to every other existence-is-a-disclosure check (`dnd_ai.api.
+   access.PartyPerspectiveNotAuthorizedError`, `dnd_ai.commands.
+   campaign_invitations.InvitationNotAcceptableError`, etc.).
+
+Step 1's row lock is what makes step 2 concurrency-safe, not merely
+convenient: two concurrent `create_campaign` calls naming the *same*,
+previously-unused `timeline_id` serialize on that lock rather than both
+observing "no campaign yet" and both writing one. Whichever transaction's
+`SELECT ... FOR UPDATE` acquires the lock first proceeds through steps 2-4
+and commits its own new campaign before the second transaction's identical
+`SELECT ... FOR UPDATE` is unblocked; the second transaction then reaches
+step 3 and finds the *first* transaction's campaign already there — for
+two unrelated callers, the second is correctly rejected (no membership in
+the first caller's brand-new campaign), even though at the instant both
+requests arrived, neither campaign existed yet. This is proven directly by
+`tests/database/test_api_campaigns.py`'s own concurrent-claim case: firing
+two `POST /campaigns` calls for the same fresh `timeline_id` from two
+threads never leaves both authorized, and never leaves more than one
+`campaign.campaigns` row on that timeline.
+
+Once authorized, a second campaign attaching to a timeline another
+campaign already uses is exactly the "shared, reusable world content"
+capability docs/DOMAIN_MODEL.md §2.2 describes — the persistent-world
+model's whole premise is that a shared timeline's mutable state (dungeon
+layout, NPCs, quest state) outlives and is visible across the campaigns
+that play through it, while each campaign's own security state
 (memberships, roles, resource grants) and each party's own knowledge
 (`knowledge.party_discoveries`) stay isolated because those tables are
-keyed by `campaign_id`/`party_id`, never by `timeline_id` alone. A brand
-new campaign on an already-used timeline therefore starts with zero
-memberships, zero roles, and zero resource grants of its own regardless of
-who else is playing on that timeline — proven by `tests/database.
+keyed by `campaign_id`/`party_id`, never by `timeline_id` alone. A newly
+authorized campaign therefore still starts with zero memberships, zero
+roles, and zero resource grants of its own — proven by `tests/database.
 test_api_campaigns.py`'s own timeline-reuse case and by `tests/scenario.
 test_vertical_slice_api.py`'s steps 17-18 (a second campaign on the same
 timeline sees the first party's altered-but-not-hidden dungeon state,
@@ -85,9 +149,9 @@ the timeline's world, one that doesn't exist at all (comparing against a
 NULL resolved `ruleset_id` never matches), and, more surprisingly, for a
 `timeline_id` that doesn't exist at all either (a NULL resolved `world_id`
 never matches, and the trigger fires ahead of `campaign.campaigns`' own
-`timeline_id` foreign key, so that FK is never reached). `_resolve_
-timeline_world()` closes the `timeline_id` gap with a dedicated
-`TimelineNotFoundError`; `_check_ruleset_allowed()` closes the
+`timeline_id` foreign key, so that FK is never reached). `_authorize_
+timeline_reuse()` already closes the `timeline_id` gap as part of its own
+authorization check, above; `_check_ruleset_allowed()` closes the
 `ruleset_version_id` gap with `CampaignRulesetNotAllowedError`, raised
 identically for "doesn't exist" and "belongs to a disallowed ruleset
 family" — mirroring `RoleNotUsableByCampaignError`'s identical folding, so
@@ -113,20 +177,28 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.errors import DomainAuthorizationError
+
 from ._shared import lookup_id
 
 _CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
+_ACCESS_MANAGE_CAPABILITY_CODE = "access.manage"
 _ACTIVE_LIFECYCLE_STATUS_CODE = "active"
 _ACTIVE_MEMBERSHIP_STATUS_CODE = "active"
 
 
-class TimelineNotFoundError(ValueError):
+class TimelineNotAuthorizedError(DomainAuthorizationError):
     """Raised by `create_campaign()` when `timeline_id` does not resolve to
-    a real `campaign.timelines` row. Pre-checked here rather than left to
-    `campaign.campaigns.timeline_id`'s own foreign key — see this module's
-    docstring for why the `BEFORE INSERT`-fired `campaign.
-    enforce_campaign_ruleset_allowed()` trigger would otherwise swallow
-    this into an unclassified 500 first, before that FK is ever reached."""
+    a real `campaign.timelines` row, or resolves to one already used by an
+    existing campaign the caller holds no `access.manage` membership in —
+    both indistinguishably (this module's own docstring has the full
+    policy). Pre-checked here rather than left to `campaign.campaigns.
+    timeline_id`'s own foreign key — see this module's docstring for why
+    the `BEFORE INSERT`-fired `campaign.enforce_campaign_ruleset_allowed()`
+    trigger would otherwise swallow a nonexistent `timeline_id` into an
+    unclassified 500 first, before that FK is ever reached. The supplied
+    `timeline_id`/`creator_user_id` are included only in the constructor's
+    `detail` argument (`str(self)`), never in `safe_message`."""
 
 
 class CampaignRulesetNotAllowedError(ValueError):
@@ -148,14 +220,64 @@ class CreateCampaignResult:
     world_id: uuid.UUID
 
 
-def _resolve_timeline_world(connection: Connection, timeline_id: uuid.UUID) -> uuid.UUID:
+def _authorize_timeline_reuse(
+    connection: Connection, *, timeline_id: uuid.UUID, creator_user_id: uuid.UUID
+) -> uuid.UUID:
+    """Resolves `timeline_id`'s own `world_id`, having authorized
+    `creator_user_id` to attach a new campaign to it. See this module's
+    docstring for the full policy and its concurrency-safety argument;
+    briefly: locks the timeline row, allows an unclaimed timeline
+    unconditionally, and otherwise requires an active `access.manage`
+    membership in at least one existing campaign already on it."""
     world_id = connection.execute(
-        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline"),
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline FOR UPDATE"),
         {"timeline": timeline_id},
     ).scalar()
     if world_id is None:
-        raise TimelineNotFoundError(f"timeline {timeline_id} does not exist")
+        raise TimelineNotAuthorizedError(f"timeline {timeline_id} does not exist")
     assert isinstance(world_id, uuid.UUID)
+
+    already_used = connection.execute(
+        text("SELECT EXISTS (SELECT 1 FROM campaign.campaigns WHERE timeline_id = :timeline)"),
+        {"timeline": timeline_id},
+    ).scalar()
+    if not already_used:
+        return world_id
+
+    is_entitled = connection.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM campaign.campaigns c
+                JOIN security.campaign_memberships cm ON cm.campaign_id = c.campaign_id
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                JOIN security.membership_roles mr
+                    ON mr.campaign_membership_id = cm.campaign_membership_id
+                JOIN security.roles r ON r.role_id = mr.role_id
+                JOIN security.role_capabilities rc ON rc.role_id = r.role_id
+                JOIN security.capabilities cap ON cap.capability_id = rc.capability_id
+                WHERE c.timeline_id = :timeline
+                  AND cm.user_id = :user
+                  AND cm.ended_at IS NULL
+                  AND ms.code = 'active' AND ms.is_active
+                  AND mr.revoked_at IS NULL
+                  AND (mr.expires_at IS NULL OR mr.expires_at > now())
+                  AND r.is_active
+                  AND cap.code = :capability AND cap.is_active
+            )
+        """),
+        {
+            "timeline": timeline_id,
+            "user": creator_user_id,
+            "capability": _ACCESS_MANAGE_CAPABILITY_CODE,
+        },
+    ).scalar()
+    if not is_entitled:
+        raise TimelineNotAuthorizedError(
+            f"user {creator_user_id} holds no active access.manage membership in any existing "
+            f"campaign on timeline {timeline_id}"
+        )
     return world_id
 
 
@@ -192,7 +314,9 @@ def create_campaign(
     membership, atomically. See this module's docstring for the full
     reasoning, including why `timeline_id`/`ruleset_version_id` are
     pre-checked before anything is written."""
-    world_id = _resolve_timeline_world(connection, timeline_id)
+    world_id = _authorize_timeline_reuse(
+        connection, timeline_id=timeline_id, creator_user_id=creator_user_id
+    )
     _check_ruleset_allowed(connection, world_id=world_id, ruleset_version_id=ruleset_version_id)
 
     active_lifecycle_status_id = lookup_id(

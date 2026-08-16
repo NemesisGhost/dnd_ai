@@ -5,15 +5,27 @@ Exposes `create_campaign` as `POST /campaigns`.
 Authorization is deliberately different from every other command router in
 this codebase: there is no campaign yet to resolve `dnd_ai.api.access.
 require_campaign_capability` against, so this route depends only on
-`dnd_ai.api.auth.get_authenticated_user_id` — any authenticated user may
-create a campaign, becoming its first `campaign_owner` (the system-
-template role migration 085 seeded with the full functional-owner
-capability set — `access.manage`, `campaign.view`, `canon.edit` — after
-migration 080 seeded it with `access.manage` alone) by construction. This
-mirrors the "no invented capability" scoping every other Phase 10
-workstream's first cut already chose (e.g. `dnd_ai.api.memberships`'s own
-docstring), applied here to the one action that structurally cannot be
-gated by a campaign-scoped capability at all.
+`dnd_ai.api.auth.get_authenticated_user_id` at the API layer — any
+authenticated user may *call* this route. `dnd_ai.commands.campaigns.
+create_campaign` itself is where the real authorization now lives:
+`_authorize_timeline_reuse()` (that module's own docstring has the full
+policy and the High/Critical defect history behind it) requires the
+caller to already hold `access.manage` in an existing campaign before a
+*second* campaign may attach to an already-used `timeline_id` — only a
+genuinely unclaimed timeline may be created on unconditionally. A rejected
+attempt surfaces as `dnd_ai.commands.campaigns.TimelineNotAuthorizedError`,
+a fixed non-disclosing 404 indistinguishable from a nonexistent
+`timeline_id`, handled by the existing generic `SafeMessageError`
+mapping — no per-route error handling needed here. Once authorized, the
+caller becomes the campaign's first `campaign_owner` (the system-template
+role migration 085 seeded with the full functional-owner capability set —
+`access.manage`, `campaign.view`, `canon.edit` — after migration 080
+seeded it with `access.manage` alone) by construction. This mirrors the
+"no invented capability" scoping every other Phase 10 workstream's first
+cut already chose (e.g. `dnd_ai.api.memberships`'s own docstring), applied
+here to the one action that structurally cannot be gated by
+`require_campaign_capability` itself, since no campaign exists yet at the
+time the route is entered.
 
 No idempotency-key handling: see `dnd_ai.commands.campaigns`'s module
 docstring for why `security.idempotent_requests`'s `NOT NULL campaign_id`

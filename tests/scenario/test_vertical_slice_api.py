@@ -3,20 +3,25 @@ end to end, through the application API — the phase's own primary
 architectural and application acceptance test and exit criterion.
 
 Every dynamic, play-time step a Phase 10 endpoint exists for (establishing
-the campaign, memberships, character relationships, resource grants, party
-movement, search/discovery, hazard/mechanism interaction, quest
-advancement, NPC conversation, ending the session, every read, every
+the campaign, memberships, roles, character relationships, resource
+grants, party movement, search/discovery, hazard/mechanism interaction,
+quest advancement, NPC conversation, ending the session, every read, every
 revocation, the second campaign, and the branched timeline) goes through a
 real HTTP call against the FastAPI app via `TestClient` — no direct client
 write to PostgreSQL for any of it, matching §25's own "must run through
-the application API without direct client database writes." The campaign
-creator's own functional-owner access (`campaign.view`/`canon.edit`/
-`access.manage`) is established the same way: `POST /campaigns` alone,
-with no separate role-assignment call and no direct `security.roles`/`.
-role_capabilities` write, since migration 085 fixed the High authorization
-defect where `campaign_owner` carried `access.manage` only (see `dnd_ai.
-commands.campaigns`'s own module docstring). Player/observer roles are the
-one remaining, deliberate exception — see the third scope note below.
+the application API without direct client database writes." This now
+includes every role assignment: the campaign creator's own functional-
+owner access (`campaign.view`/`canon.edit`/`access.manage`) is established
+by `POST /campaigns` alone (migration 085's fix for the High authorization
+defect where `campaign_owner` carried `access.manage` only), and player/
+observer participants are assigned the seeded system-template `player`/
+`observer` roles (migration 086's fix for the sibling gap — those two
+roles, and `gm`/`assistant_gm`, previously carried zero `security.
+role_capabilities` rows at all) through the ordinary `POST .../
+memberships/{id}/roles` endpoint, with no direct `security.roles`/`.
+role_capabilities` write anywhere in this file — see `dnd_ai.commands.
+campaigns`'s own module docstring for the full defect/fix narrative
+behind both migrations.
 
 What does *not* go through the API is static world/campaign-content
 *authoring*: the world, timeline, dungeon and its structural children, the
@@ -52,17 +57,15 @@ Two further, narrower scope notes:
   believes" layer) that no discovery command in this codebase populates.
   Discovery and belief are deliberately different concerns (CLAUDE.md
   rule 5); this test proves the one the new commands actually deliver.
-- Player/observer roles (step 3) are still bootstrapped through direct
-  `security.roles`/`.role_capabilities` factory writes, unlike the
-  owner's own `campaign_owner` role (now assigned automatically by `POST
-  /campaigns`, migration 085). This remains a deliberate, documented gap:
-  no Phase 10 workstream ever built an endpoint for creating a role or
-  attaching a capability to one, and migration 085's own scope was the
-  owner's functional-access defect specifically — not a build-out of the
-  full role/capability matrix for every system-template role (migration
-  080's original "a later Phase 10 workstream owns the rest" note still
-  applies to `gm`/`assistant_gm`/`player`/`observer`/`import_reviewer`/
-  `rules_curator`).
+- Player/observer roles (step 3) are the seeded system-template `player`/
+  `observer` roles (migration 086), assigned through the ordinary
+  membership-role API — no campaign-scoped role of any kind is created by
+  this file anymore. `import_reviewer`/`rules_curator` remain vocabulary-
+  only system roles, deliberately: their own capabilities (`import.
+  approve`, `rules_source.manage`) belong to later phases with no command
+  layer yet to validate a default mapping against — migration 080's
+  original "a later Phase 10 workstream owns the rest" note still applies
+  to those two specifically.
 """
 
 import uuid
@@ -77,7 +80,6 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
-    lookup_id,
     make_ability,
     make_area_connection,
     make_area_hazard,
@@ -91,8 +93,6 @@ from tests.factories import (
     make_quest,
     make_quest_objective,
     make_quest_stage,
-    make_role,
-    make_role_capability,
     make_ruleset_version_for_world,
     make_skill,
     make_timeline,
@@ -336,15 +336,20 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     return _make
 
 
-def _make_role_with_capabilities(
-    connection: Connection, *, campaign_id: uuid.UUID, code: str, capability_codes: list[str]
-) -> uuid.UUID:
-    role_id = make_role(connection, campaign_id=campaign_id, code=f"{code}_{uuid.uuid4().hex[:8]}")
-    for capability_code in capability_codes:
-        capability_id = lookup_id(
-            connection, "security", "capabilities", "capability_id", capability_code
-        )
-        make_role_capability(connection, role_id, capability_id)
+def _system_role_id(connection: Connection, code: str) -> uuid.UUID:
+    """Resolves a system-template `security.roles` row (`campaign_id IS
+    NULL`) by its code — `campaign_owner`/`gm`/`assistant_gm`/`player`/
+    `observer`/`import_reviewer`/`rules_curator`, migration 080's own
+    seeded vocabulary. `dnd_ai.commands._shared.lookup_id` is not used
+    here for the same reason `dnd_ai.commands.campaigns.create_campaign`
+    itself avoids it for `campaign_owner`: `security.roles.code` is only
+    guaranteed unique among system templates (`ux_roles_system_code`,
+    `WHERE campaign_id IS NULL`), not globally."""
+    role_id = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE code = :code AND campaign_id IS NULL"),
+        {"code": code},
+    ).scalar_one()
+    assert isinstance(role_id, uuid.UUID)
     return role_id
 
 
@@ -380,25 +385,16 @@ def test_the_vertical_slice_scenario(
             text("INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:c, :p)"),
             {"c": campaign_id, "p": f.party_id},
         )
-        # player/observer role capabilities remain a deliberate, documented
-        # gap (migration 080/085's own "a later Phase 10 workstream owns
-        # the rest" scoping) — no Phase 10 endpoint exists for creating a
-        # role or attaching a capability to one, so these two (unlike the
-        # owner's own campaign_owner role, now assigned automatically by
-        # create_campaign) still need direct factory writes, mirroring
-        # every other Phase 10 test's own role-bootstrap convention for
-        # non-owner participants.
-        player_role_id = _make_role_with_capabilities(
-            connection,
-            campaign_id=campaign_id,
-            code="player",
-            capability_codes=["campaign.view", "character.view_summary"],
-        )
-        observer_role_id = _make_role_with_capabilities(
-            connection, campaign_id=campaign_id, code="observer", capability_codes=["campaign.view"]
-        )
+        # Read-only resolution of the seeded system-template role_ids
+        # (migration 086 gave both real capabilities) — not a security
+        # write of any kind, the same "look up, don't create" shape
+        # create_campaign itself uses for campaign_owner.
+        player_role_id = _system_role_id(connection, "player")
+        observer_role_id = _system_role_id(connection, "observer")
 
-    # -- Step 3: two players and an observer, campaign-scoped roles.
+    # -- Step 3: two players and an observer, the seeded system-template
+    # player/observer roles (migration 086), assigned through the ordinary
+    # membership-role API — no campaign-scoped role is created here.
     def _add_member(user_id: uuid.UUID, role_id: uuid.UUID) -> uuid.UUID:
         create_response = gm.post(
             f"/campaigns/{campaign_id}/memberships", json={"user_id": str(user_id)}
@@ -667,20 +663,20 @@ def test_the_vertical_slice_scenario(
     )
     assert create_campaign2_response.status_code == 201, create_campaign2_response.text
     campaign2_id = uuid.UUID(create_campaign2_response.json()["campaign_id"])
-    # gm is campaign2's own creator, so it is already campaign_owner there
-    # (campaign.view/canon.edit included, migration 085) with no separate
-    # role to bootstrap — but an owner's canon.edit always bypasses hidden-
-    # content filtering by design (the same property gm_dungeon_view proved
-    # above for campaign_id itself), so proving "altered state visible,
-    # hidden content not" needs a genuinely weaker, campaign.view-only
-    # perspective. player1 joins campaign2 as an ordinary member holding a
-    # campaign-scoped "viewer" role for exactly that — the same deliberate,
-    # still-deferred role-bootstrap convention this file's own docstring
-    # documents for non-owner participants.
+    # gm is campaign2's own creator — and, since campaign2 shares campaign_
+    # id's own timeline, gm's access.manage membership there is exactly
+    # what _authorize_timeline_reuse() requires to reuse that timeline at
+    # all (dnd_ai.commands.campaigns's own module docstring). gm is
+    # therefore already campaign_owner in campaign2 too (campaign.view/
+    # canon.edit included, migration 085) with no separate role to
+    # bootstrap — but an owner's canon.edit always bypasses hidden-content
+    # filtering by design (the same property gm_dungeon_view proved above
+    # for campaign_id itself), so proving "altered state visible, hidden
+    # content not" needs a genuinely weaker, campaign.view-only
+    # perspective. player1 joins campaign2 as an ordinary member holding
+    # the seeded system-template `player` role (migration 086) instead.
     with postgres_engine.begin() as connection:
-        campaign2_viewer_role_id = _make_role_with_capabilities(
-            connection, campaign_id=campaign2_id, code="viewer", capability_codes=["campaign.view"]
-        )
+        campaign2_player_role_id = _system_role_id(connection, "player")
     add_campaign2_member_response = gm.post(
         f"/campaigns/{campaign2_id}/memberships", json={"user_id": str(f.player1_user_id)}
     )
@@ -690,7 +686,7 @@ def test_the_vertical_slice_scenario(
     )
     assign_campaign2_role_response = gm.post(
         f"/campaigns/{campaign2_id}/memberships/{campaign2_player1_membership_id}/roles",
-        json={"role_id": str(campaign2_viewer_role_id)},
+        json={"role_id": str(campaign2_player_role_id)},
     )
     assert assign_campaign2_role_response.status_code == 201, assign_campaign2_role_response.text
 
@@ -730,15 +726,15 @@ def test_the_vertical_slice_scenario(
     )
     assert create_campaign3_response.status_code == 201, create_campaign3_response.text
     campaign3_id = uuid.UUID(create_campaign3_response.json()["campaign_id"])
-    # Same reasoning as campaign2 above: gm is campaign3's own creator and
-    # already campaign_owner (canon.edit included) there, so observer joins
-    # as an ordinary campaign.view-only "viewer" member instead, to prove
-    # the branch's own dungeon view without an owner's hidden-content
-    # bypass in the way.
+    # Same reasoning as campaign2 above: branch_timeline_id has never been
+    # used by any campaign before this call, so gm claims it unconditionally
+    # (dnd_ai.commands.campaigns's own "unclaimed timeline" policy) and is
+    # already campaign_owner (canon.edit included) there. observer joins as
+    # an ordinary member holding the seeded system-template `observer` role
+    # instead, to prove the branch's own dungeon view without an owner's
+    # hidden-content bypass in the way.
     with postgres_engine.begin() as connection:
-        campaign3_viewer_role_id = _make_role_with_capabilities(
-            connection, campaign_id=campaign3_id, code="viewer", capability_codes=["campaign.view"]
-        )
+        campaign3_observer_role_id = _system_role_id(connection, "observer")
     add_campaign3_member_response = gm.post(
         f"/campaigns/{campaign3_id}/memberships", json={"user_id": str(f.observer_user_id)}
     )
@@ -748,7 +744,7 @@ def test_the_vertical_slice_scenario(
     )
     assign_campaign3_role_response = gm.post(
         f"/campaigns/{campaign3_id}/memberships/{campaign3_observer_membership_id}/roles",
-        json={"role_id": str(campaign3_viewer_role_id)},
+        json={"role_id": str(campaign3_observer_role_id)},
     )
     assert assign_campaign3_role_response.status_code == 201, assign_campaign3_role_response.text
 

@@ -20,15 +20,27 @@ any of the owner's capabilities
 that the access-manager retention invariant still blocks revoking a sole
 owner's own role
 (`test_the_sole_owners_own_role_cannot_be_revoked_from_an_active_campaign`),
-that campaign creation is atomic on failure
-(`test_campaign_creation_is_atomic_when_membership_creation_fails`), and
-that reusing a timeline another campaign already uses is allowed (the
-documented "shared, reusable world content" policy) without leaking either
-campaign's own security state into the other
-(`test_a_second_campaign_on_an_already_used_timeline_succeeds_and_cannot_
-see_the_first_campaigns_access`).
+and that campaign creation is atomic on failure
+(`test_campaign_creation_is_atomic_when_membership_creation_fails`).
+
+Also covers the Critical timeline-reuse authorization defect (`dnd_ai.
+commands.campaigns`'s own module docstring has the full defect/fix
+narrative): only a caller already holding `access.manage` in an existing
+campaign may attach a second campaign to that campaign's own timeline
+(`test_the_existing_access_manager_can_create_a_second_campaign_on_their_
+own_timeline`), an unrelated user cannot
+(`test_an_unrelated_user_cannot_create_a_second_campaign_on_anothers_
+timeline`), a `campaign.view`-only member cannot
+(`test_a_member_with_only_campaign_view_cannot_reuse_the_timeline`),
+concurrent claims on a brand-new timeline never both succeed
+(`test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds`), and
+that the closed exploit (fabricating a campaign to read a victim
+timeline's hidden canon) no longer works end to end
+(`test_an_unauthorized_caller_cannot_use_campaign_creation_to_read_hidden_
+canon`).
 """
 
+import concurrent.futures
 import uuid
 from collections.abc import Callable, Iterator
 
@@ -40,8 +52,12 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from tests.factories import (
+    make_area_hazard,
     make_character,
+    make_dungeon,
+    make_dungeon_area,
     make_location,
+    make_organization,
     make_ruleset_version_for_world,
     make_timeline,
     make_user,
@@ -81,51 +97,70 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        # Scoped by world_id, not fixture.timeline_id alone — several tests
+        # (timeline-reuse, concurrent-claim) create additional timelines and
+        # campaigns under the same fixture world, and this sweeps all of
+        # them regardless of which specific timeline_id they used.
         cleanup.execute(
-            text("DELETE FROM campaign.character_location_history WHERE timeline_id = :t"),
-            {"t": fixture.timeline_id},
+            text("""
+                DELETE FROM campaign.character_location_history WHERE timeline_id IN (
+                    SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                )
+            """),
+            {"w": fixture.world_id},
         )
         cleanup.execute(
             text("""
                 DELETE FROM security.campaign_invitations WHERE campaign_id IN (
-                    SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    SELECT c.campaign_id FROM campaign.campaigns c
+                    JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                    WHERE t.world_id = :w
                 )
             """),
-            {"t": fixture.timeline_id},
+            {"w": fixture.world_id},
         )
         cleanup.execute(
             text("""
                 DELETE FROM security.idempotent_requests WHERE campaign_id IN (
-                    SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    SELECT c.campaign_id FROM campaign.campaigns c
+                    JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                    WHERE t.world_id = :w
                 )
             """),
-            {"t": fixture.timeline_id},
+            {"w": fixture.world_id},
         )
         cleanup.execute(
             text("""
                 DELETE FROM security.membership_roles WHERE campaign_membership_id IN (
-                    SELECT campaign_membership_id FROM security.campaign_memberships
-                    WHERE campaign_id IN (
-                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
-                    )
+                    SELECT cm.campaign_membership_id FROM security.campaign_memberships cm
+                    JOIN campaign.campaigns c ON c.campaign_id = cm.campaign_id
+                    JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                    WHERE t.world_id = :w
                 )
             """),
-            {"t": fixture.timeline_id},
+            {"w": fixture.world_id},
         )
         cleanup.execute(
-            text(
-                "DELETE FROM security.campaign_memberships WHERE campaign_id IN "
-                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
-            ),
-            {"t": fixture.timeline_id},
+            text("""
+                DELETE FROM security.campaign_memberships WHERE campaign_id IN (
+                    SELECT c.campaign_id FROM campaign.campaigns c
+                    JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                    WHERE t.world_id = :w
+                )
+            """),
+            {"w": fixture.world_id},
         )
         cleanup.execute(
-            text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
-            {"t": fixture.timeline_id},
+            text("""
+                DELETE FROM campaign.campaigns WHERE timeline_id IN (
+                    SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                )
+            """),
+            {"w": fixture.world_id},
         )
         cleanup.execute(
-            text("DELETE FROM campaign.timelines WHERE timeline_id = :t"),
-            {"t": fixture.timeline_id},
+            text("DELETE FROM campaign.timelines WHERE world_id = :w"),
+            {"w": fixture.world_id},
         )
         cleanup.execute(
             text("""
@@ -194,9 +229,15 @@ def _body(f: Fixture, **overrides: object) -> dict[str, object]:
     return body
 
 
-def test_any_authenticated_user_can_create_a_campaign(
+def test_any_authenticated_user_can_create_the_first_campaign_on_an_unused_timeline(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
+    """Doubles as the explicit "unclaimed timeline" policy proof `dnd_ai.
+    commands.campaigns`'s own module docstring documents: `f.timeline_id`
+    has no `campaign.campaigns` row yet at this point, so `_authorize_
+    timeline_reuse()`'s step 2 (any authenticated caller may claim an
+    unused timeline unconditionally) is exactly what authorizes this
+    call — not an absence of a check."""
     with client_factory(f.creator_user_id) as client:
         response = client.post("/campaigns", json=_body(f))
     assert response.status_code == 201, response.text
@@ -262,9 +303,14 @@ def test_any_authenticated_user_can_create_a_campaign(
 def test_creating_a_campaign_with_a_nonexistent_timeline_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
+    """A fixed, non-disclosing 404 — `TimelineNotAuthorizedError` — not a
+    400: a nonexistent `timeline_id` and one the caller isn't entitled to
+    reuse are folded into the identical response (`dnd_ai.commands.
+    campaigns`'s own module docstring), so a caller probing random UUIDs
+    can't distinguish the two cases."""
     with client_factory(f.creator_user_id) as client:
         response = client.post("/campaigns", json=_body(f, timeline_id=str(uuid.uuid4())))
-    assert response.status_code == 400, response.text
+    assert response.status_code == 404, response.text
 
 
 def test_creating_a_campaign_with_a_nonexistent_ruleset_version_is_rejected(
@@ -432,38 +478,211 @@ def test_campaign_creation_is_atomic_when_membership_creation_fails(
         assert campaign_count == 0
 
 
-def test_a_second_campaign_on_an_already_used_timeline_succeeds_and_cannot_see_the_first_campaigns_access(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+# ---------------------------------------------------------------------------
+# Critical fix: the timeline-reuse authorization policy
+# `dnd_ai.commands.campaigns._authorize_timeline_reuse()` implements —
+# application-layer only, no schema change — see that module's own
+# docstring for the full defect/fix narrative.
+# ---------------------------------------------------------------------------
+
+
+def test_the_existing_access_manager_can_create_a_second_campaign_on_their_own_timeline(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """`dnd_ai.commands.campaigns`'s own module docstring documents
-    timeline reuse across campaigns as intentional, shared-world-content
-    semantics (docs/DOMAIN_MODEL.md §2.2), not a gap: `create_campaign`
-    only checks that `timeline_id` exists, never who else already uses it.
-    This proves both halves of that policy — the second campaign is
-    accepted rather than rejected, and neither campaign's own creator
-    gains any capability in the other campaign, since `security.
+    """The one authorized reuse case: the same user who already holds
+    `access.manage` in an existing campaign on `timeline_id` may attach a
+    second campaign to it — proving the check is a real entitlement gate,
+    not a blanket "no campaign may ever reuse a timeline" regression. The
+    second campaign still starts with its own independent membership/role,
+    never inheriting the first campaign's row — `security.
     campaign_memberships`/`.membership_roles` are keyed by `campaign_id`,
     never by the timeline they share."""
-    with client_factory(f.creator_user_id) as first_client:
-        first_response = first_client.post("/campaigns", json=_body(f, name="First Expedition"))
+    with client_factory(f.creator_user_id) as client:
+        first_response = client.post("/campaigns", json=_body(f, name="First Expedition"))
         assert first_response.status_code == 201, first_response.text
         first_campaign_id = uuid.UUID(first_response.json()["campaign_id"])
 
-    with client_factory(f.second_user_id) as second_client:
-        second_response = second_client.post("/campaigns", json=_body(f, name="Second Expedition"))
-        assert second_response.status_code == 201, second_response.text
-        second_campaign_id = uuid.UUID(second_response.json()["campaign_id"])
-        assert second_campaign_id != first_campaign_id
+        second_response = client.post("/campaigns", json=_body(f, name="Second Expedition"))
+    assert second_response.status_code == 201, second_response.text
+    second_campaign_id = uuid.UUID(second_response.json()["campaign_id"])
+    second_membership_id = uuid.UUID(second_response.json()["campaign_membership_id"])
+    assert second_campaign_id != first_campaign_id
 
-        # The second campaign's own creator has no membership at all in
-        # the first campaign — a fixed, non-disclosing 404, matching
-        # dnd_ai.api.access.require_campaign_capability's own contract for
-        # a non-member.
-        cross_campaign_response = second_client.get(f"/campaigns/{first_campaign_id}/summary")
-    assert cross_campaign_response.status_code == 404, cross_campaign_response.text
+    with postgres_engine.connect() as verify:
+        role_rows = verify.execute(
+            text("SELECT role_id FROM security.membership_roles WHERE campaign_membership_id = :m"),
+            {"m": second_membership_id},
+        ).all()
+        assert len(role_rows) == 1
 
-    with client_factory(f.creator_user_id) as first_client:
-        # Symmetrically, the first campaign's own creator has no
-        # membership in the second.
-        reverse_response = first_client.get(f"/campaigns/{second_campaign_id}/summary")
-    assert reverse_response.status_code == 404, reverse_response.text
+
+def test_an_unrelated_user_cannot_create_a_second_campaign_on_anothers_timeline(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The Critical defect this policy closes: before it existed, any
+    authenticated user could attach a new campaign to `f.timeline_id` once
+    `f.creator_user_id` had already claimed it, gaining `campaign_owner`'s
+    own `campaign.view`/`canon.edit` there by construction. The rejection
+    is a fixed, non-disclosing 404 — indistinguishable from a nonexistent
+    timeline — and leaves no campaign, membership, role assignment, or
+    audit row behind for the attempt."""
+    with client_factory(f.creator_user_id) as owner_client:
+        first_response = owner_client.post("/campaigns", json=_body(f, name="Owner's Campaign"))
+        assert first_response.status_code == 201, first_response.text
+
+    campaign_name = f"Attacker Campaign {uuid.uuid4().hex[:8]}"
+    with client_factory(f.second_user_id) as attacker_client:
+        attack_response = attacker_client.post("/campaigns", json=_body(f, name=campaign_name))
+    assert attack_response.status_code == 404, attack_response.text
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE name = :n"),
+            {"n": campaign_name},
+        ).scalar_one()
+        assert campaign_count == 0
+
+        membership_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships "
+                "WHERE user_id = :u AND campaign_id IN "
+                "(SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t)"
+            ),
+            {"u": f.second_user_id, "t": f.timeline_id},
+        ).scalar_one()
+        assert membership_count == 0
+
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE schema_name = 'campaign' AND table_name = 'campaigns' "
+                "AND actor_user_id = :u"
+            ),
+            {"u": f.second_user_id},
+        ).scalar_one()
+        assert audit_count == 0
+
+
+def test_a_member_with_only_campaign_view_cannot_reuse_the_timeline(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`access.manage` specifically is the required capability — an
+    ordinary member of the existing campaign holding only `campaign.view`
+    (the seeded system-template `player` role, assigned through the
+    existing membership-role API) still cannot create a second campaign on
+    that timeline."""
+    with client_factory(f.creator_user_id) as owner_client:
+        first_response = owner_client.post("/campaigns", json=_body(f, name="Owner's Campaign"))
+        assert first_response.status_code == 201, first_response.text
+        first_campaign_id = uuid.UUID(first_response.json()["campaign_id"])
+
+        add_member_response = owner_client.post(
+            f"/campaigns/{first_campaign_id}/memberships",
+            json={"user_id": str(f.second_user_id)},
+        )
+        assert add_member_response.status_code == 201, add_member_response.text
+        member_membership_id = uuid.UUID(add_member_response.json()["campaign_membership_id"])
+
+        with postgres_engine.connect() as verify:
+            player_role_id = verify.execute(
+                text(
+                    "SELECT role_id FROM security.roles WHERE code = 'player' "
+                    "AND campaign_id IS NULL"
+                )
+            ).scalar_one()
+
+        assign_role_response = owner_client.post(
+            f"/campaigns/{first_campaign_id}/memberships/{member_membership_id}/roles",
+            json={"role_id": str(player_role_id)},
+        )
+        assert assign_role_response.status_code == 201, assign_role_response.text
+
+    with client_factory(f.second_user_id) as member_client:
+        # campaign.view: confirms the role really is active before proving
+        # it is insufficient for timeline reuse below.
+        summary_response = member_client.get(f"/campaigns/{first_campaign_id}/summary")
+        assert summary_response.status_code == 200, summary_response.text
+
+        reuse_response = member_client.post("/campaigns", json=_body(f, name="Reuse Attempt"))
+    assert reuse_response.status_code == 404, reuse_response.text
+
+
+def test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The row-lock argument `dnd_ai.commands.campaigns`'s own module
+    docstring makes: two unrelated users racing to be the first campaign
+    on a brand-new, previously-unused timeline cannot both win. Whichever
+    transaction's `SELECT ... FOR UPDATE` commits first becomes the
+    legitimate first claimant; the other serializes behind that lock and,
+    once unblocked, finds a campaign it holds no `access.manage` in and is
+    rejected — never both succeeding, and never leaving more than one
+    `campaign.campaigns` row on the timeline."""
+    with postgres_engine.begin() as connection:
+        fresh_timeline_id = make_timeline(connection, f.world_id, "Race Timeline")
+
+    def _attempt(user_id: uuid.UUID) -> int:
+        with client_factory(user_id) as client:
+            response = client.post(
+                "/campaigns",
+                json=_body(f, timeline_id=str(fresh_timeline_id), name=f"Claim by {user_id}"),
+            )
+        return response.status_code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(_attempt, f.creator_user_id)
+        future_b = pool.submit(_attempt, f.second_user_id)
+        status_a = future_a.result()
+        status_b = future_b.result()
+
+    assert sorted([status_a, status_b]) == [201, 404], (status_a, status_b)
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": fresh_timeline_id},
+        ).scalar_one()
+        assert campaign_count == 1
+
+
+def test_an_unauthorized_caller_cannot_use_campaign_creation_to_read_hidden_canon(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Proves the actual exploit this policy closes end to end: before it
+    existed, an attacker could manufacture a campaign on a victim's
+    timeline and use the resulting `campaign_owner`/`canon.edit` to read
+    GM-only canon — hidden dungeon content and an organization's internal
+    (canon.edit-only) description — that a non-member could never
+    otherwise reach. With the fix, campaign creation itself is rejected,
+    so the attacker never obtains a `campaign_id` to read either through."""
+    with postgres_engine.begin() as connection:
+        dungeon_id = make_dungeon(connection, f.world_id)
+        area_id = make_dungeon_area(connection, dungeon_id)
+        make_area_hazard(connection, area_id, is_hidden=True)
+        organization_id = make_organization(
+            connection,
+            f.world_id,
+            internal_description="The guild secretly answers to the lich queen.",
+        )
+
+    with client_factory(f.creator_user_id) as owner_client:
+        victim_response = owner_client.post("/campaigns", json=_body(f, name="Victim Campaign"))
+        assert victim_response.status_code == 201, victim_response.text
+        victim_campaign_id = uuid.UUID(victim_response.json()["campaign_id"])
+
+    with client_factory(f.second_user_id) as attacker_client:
+        create_attempt = attacker_client.post(
+            "/campaigns", json=_body(f, name="Attacker's Shadow Campaign")
+        )
+        assert create_attempt.status_code == 404, create_attempt.text
+        assert "campaign_id" not in create_attempt.json()
+
+        dungeon_response = attacker_client.get(
+            f"/campaigns/{victim_campaign_id}/dungeon-areas/{area_id}"
+        )
+        assert dungeon_response.status_code == 404, dungeon_response.text
+
+        organization_response = attacker_client.get(
+            f"/campaigns/{victim_campaign_id}/organizations/{organization_id}"
+        )
+    assert organization_response.status_code == 404, organization_response.text
