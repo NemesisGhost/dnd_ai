@@ -1,8 +1,10 @@
 """Tests for `dnd_ai.api.campaigns` — the campaign-creation bootstrap
 command endpoint (docs/PLAN.md Phase 10 "Still to come" list).
 
-Covers: any authenticated user may create a campaign (no pre-existing
-membership needed, unlike every other command endpoint), the created
+Covers: any authenticated, positively entitled user may create a campaign
+(no pre-existing membership needed, unlike every other command endpoint —
+see "the second Critical defect" below for what "positively entitled"
+means and why it is not merely "any authenticated user"), the created
 campaign's own retained-access-manager invariant (proven indirectly: a
 201 response is only possible once `tr_campaigns_retain_access_manager`'s
 deferred check passes at commit), a nonexistent timeline, a nonexistent
@@ -17,32 +19,55 @@ with no direct `security.roles`/`.role_capabilities` write of any kind
 canon_edit_command`), that an ordinary accepted member does not inherit
 any of the owner's capabilities
 (`test_an_accepted_ordinary_member_does_not_inherit_owner_capabilities`),
-that the access-manager retention invariant still blocks revoking a sole
-owner's own role
-(`test_the_sole_owners_own_role_cannot_be_revoked_from_an_active_campaign`),
-and that campaign creation is atomic on failure
-(`test_campaign_creation_is_atomic_when_membership_creation_fails`).
+and that the access-manager retention invariant still blocks revoking a
+sole owner's own role
+(`test_the_sole_owners_own_role_cannot_be_revoked_from_an_active_campaign`).
 
-Also covers the Critical timeline-reuse authorization defect (`dnd_ai.
-commands.campaigns`'s own module docstring has the full defect/fix
-narrative): only a caller already holding `access.manage` in an existing
-campaign may attach a second campaign to that campaign's own timeline
-(`test_the_existing_access_manager_can_create_a_second_campaign_on_their_
-own_timeline`), an unrelated user cannot
+Also covers the first Critical timeline-reuse authorization defect
+(`dnd_ai.commands.campaigns`'s own module docstring has the full
+defect/fix narrative): only a caller already holding `access.manage` in
+an existing campaign may attach a second campaign to that campaign's own
+timeline (`test_the_existing_access_manager_can_create_a_second_
+campaign_on_their_own_timeline`), an unrelated user cannot
 (`test_an_unrelated_user_cannot_create_a_second_campaign_on_anothers_
 timeline`), a `campaign.view`-only member cannot
-(`test_a_member_with_only_campaign_view_cannot_reuse_the_timeline`),
-concurrent claims on a brand-new timeline never both succeed
-(`test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds`), and
+(`test_a_member_with_only_campaign_view_cannot_reuse_the_timeline`), and
 that the closed exploit (fabricating a campaign to read a victim
 timeline's hidden canon) no longer works end to end
 (`test_an_unauthorized_caller_cannot_use_campaign_creation_to_read_hidden_
 canon`).
+
+Also covers the second Critical defect found immediately after the first
+(`dnd_ai.commands.campaigns`'s own module docstring, "First-campaign
+entitlement," has the full narrative): "no campaign currently references
+this timeline" is not itself an entitlement to be the one who creates the
+first one. A positively entitled user (one holding a live `security.
+timeline_bootstrap_grants` row, issued by trusted world-authoring
+infrastructure — every `Fixture.creator_user_id` in this file has one for
+`Fixture.timeline_id`) can
+(`test_a_positively_entitled_user_can_create_the_first_campaign_on_their_
+granted_timeline`, which also proves the grant is marked consumed
+afterward); an unrelated user with no grant of their own cannot claim a
+timeline with pre-authored hidden dungeon content and knowledge
+(`test_an_unrelated_user_cannot_claim_an_unused_timeline_with_pre_
+authored_hidden_content`); a second user cannot replay or reuse someone
+else's still-live grant
+(`test_a_second_user_cannot_replay_or_reuse_anothers_first_claim_grant`);
+an expired or revoked grant cannot be used
+(`test_an_expired_or_revoked_bootstrap_grant_cannot_be_used`); concurrent
+claims — each backed by their own independently valid grant — on the same
+brand-new timeline never both succeed
+(`test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds`); and
+a failed campaign-creation attempt leaves the grant it would have consumed
+exactly as usable as before
+(`test_campaign_creation_is_atomic_and_preserves_grant_usability_when_
+ruleset_validation_fails`).
 """
 
 import concurrent.futures
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -51,11 +76,13 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.campaigns import grant_timeline_bootstrap
 from tests.factories import (
     make_area_hazard,
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_knowledge_item,
     make_location,
     make_organization,
     make_ruleset_version_for_world,
@@ -80,6 +107,17 @@ class Fixture:
 
         self.creator_user_id = make_user(connection, "Campaign API Creator")
         self.second_user_id = make_user(connection, "Campaign API Second User")
+
+        # The positive, server-verifiable first-campaign entitlement —
+        # issued here by this fixture acting as trusted world-authoring
+        # infrastructure, the same trust boundary every other piece of
+        # pre-campaign content below already has. Without this,
+        # f.creator_user_id could not create the first campaign on
+        # f.timeline_id at all — see dnd_ai.commands.campaigns's own
+        # module docstring ("First-campaign entitlement").
+        grant_timeline_bootstrap(
+            connection, timeline_id=self.timeline_id, granted_to_user_id=self.creator_user_id
+        )
 
         # Content for the representative canon.edit command
         # (dnd_ai.commands.movement.enter_location) — content authoring,
@@ -159,6 +197,14 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             {"w": fixture.world_id},
         )
         cleanup.execute(
+            text("""
+                DELETE FROM security.timeline_bootstrap_grants WHERE timeline_id IN (
+                    SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                )
+            """),
+            {"w": fixture.world_id},
+        )
+        cleanup.execute(
             text("DELETE FROM campaign.timelines WHERE world_id = :w"),
             {"w": fixture.world_id},
         )
@@ -229,15 +275,17 @@ def _body(f: Fixture, **overrides: object) -> dict[str, object]:
     return body
 
 
-def test_any_authenticated_user_can_create_the_first_campaign_on_an_unused_timeline(
+def test_a_positively_entitled_user_can_create_the_first_campaign_on_their_granted_timeline(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """Doubles as the explicit "unclaimed timeline" policy proof `dnd_ai.
-    commands.campaigns`'s own module docstring documents: `f.timeline_id`
-    has no `campaign.campaigns` row yet at this point, so `_authorize_
-    timeline_reuse()`'s step 2 (any authenticated caller may claim an
-    unused timeline unconditionally) is exactly what authorizes this
-    call — not an absence of a check."""
+    """`f.timeline_id` has no `campaign.campaigns` row yet at this point,
+    so what authorizes this call is exactly the `security.
+    timeline_bootstrap_grants` row `Fixture.__init__` issued to
+    `f.creator_user_id` — never the mere absence of a prior campaign
+    (`dnd_ai.commands.campaigns`'s own module docstring, "First-campaign
+    entitlement," documents why that alone was a second Critical defect).
+    Also proves the grant is marked consumed, attributed to the new
+    campaign, once it succeeds — never reusable again."""
     with client_factory(f.creator_user_id) as client:
         response = client.post("/campaigns", json=_body(f))
     assert response.status_code == 201, response.text
@@ -246,6 +294,17 @@ def test_any_authenticated_user_can_create_the_first_campaign_on_an_unused_timel
     campaign_membership_id = uuid.UUID(payload["campaign_membership_id"])
 
     with postgres_engine.connect() as verify:
+        grant_row = verify.execute(
+            text("""
+                SELECT consumed_at, consumed_by_campaign_id
+                FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :t AND granted_to_user_id = :u
+            """),
+            {"t": f.timeline_id, "u": f.creator_user_id},
+        ).one()
+        assert grant_row.consumed_at is not None
+        assert grant_row.consumed_by_campaign_id == campaign_id
+
         campaign_row = verify.execute(
             text("""
                 SELECT c.timeline_id, c.name, c.ruleset_version_id, ls.code AS status_code
@@ -446,36 +505,52 @@ def test_the_sole_owners_own_role_cannot_be_revoked_from_an_active_campaign(
         assert revoked_at is None
 
 
-def test_campaign_creation_is_atomic_when_membership_creation_fails(
+def test_campaign_creation_is_atomic_and_preserves_grant_usability_when_ruleset_validation_fails(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """`create_campaign` writes `campaign.campaigns`, `security.
-    campaign_memberships`, and `security.membership_roles` in one request
-    transaction (`dnd_ai.api.deps.get_connection` commits on return, rolls
-    back on any raised exception). A `creator_user_id` with no `security.
-    users` row makes the membership INSERT fail its `user_id` foreign key
-    after the campaign row has already been written earlier in the same
-    transaction — proving the campaign row does not survive on its own
-    when a later step in the same transaction fails."""
-    nonexistent_user_id = uuid.uuid4()
+    """`create_campaign` authorizes the timeline (locking, and — on the
+    first-campaign path — matching but not yet consuming, the caller's
+    bootstrap grant), then checks the ruleset, then writes `campaign.
+    campaigns`/`security.campaign_memberships`/`.membership_roles`, and
+    only *then* marks the grant consumed — all in one request transaction
+    (`dnd_ai.api.deps.get_connection` commits on return, rolls back on any
+    raised exception). A disallowed `ruleset_version_id` fails after
+    authorization succeeds but before anything is written, proving two
+    things at once: no campaign/membership/role/audit row survives the
+    failure, and — the property a nonexistent-`creator_user_id` trick
+    could no longer exercise once authorization itself requires a real,
+    already-resolvable user — the grant `f.creator_user_id` holds for
+    `f.timeline_id` is exactly as usable after this failed attempt as it
+    was before, immediately proven by a following, valid request
+    succeeding on the very same grant."""
     campaign_name = f"Atomicity Test {uuid.uuid4().hex[:8]}"
-    with client_factory(nonexistent_user_id) as client:
-        response = client.post("/campaigns", json=_body(f, name=campaign_name))
-    # security.campaign_memberships.user_id's foreign-key violation
-    # (SQLSTATE 23503) is already classified by the generic IntegrityError
-    # handler to a fixed 400 (dnd_ai.api.errors._INVALID_REQUEST_INTEGRITY_
-    # SQLSTATES) — no pre-check needed here, since a nonexistent
-    # authenticated caller can only happen in a test, never in production
-    # (get_authenticated_user_id always resolves to a real, OIDC-
-    # provisioned security.users row).
-    assert response.status_code == 400, response.text
+    with client_factory(f.creator_user_id) as client:
+        failed_response = client.post(
+            "/campaigns",
+            json=_body(f, name=campaign_name, ruleset_version_id=str(f.foreign_ruleset_version_id)),
+        )
+        assert failed_response.status_code == 400, failed_response.text
 
-    with postgres_engine.connect() as verify:
-        campaign_count = verify.execute(
-            text("SELECT count(*) FROM campaign.campaigns WHERE name = :n"),
-            {"n": campaign_name},
-        ).scalar_one()
-        assert campaign_count == 0
+        with postgres_engine.connect() as verify:
+            campaign_count = verify.execute(
+                text("SELECT count(*) FROM campaign.campaigns WHERE name = :n"),
+                {"n": campaign_name},
+            ).scalar_one()
+            assert campaign_count == 0
+
+            grant_row = verify.execute(
+                text("""
+                    SELECT consumed_at, consumed_by_campaign_id
+                    FROM security.timeline_bootstrap_grants
+                    WHERE timeline_id = :t AND granted_to_user_id = :u
+                """),
+                {"t": f.timeline_id, "u": f.creator_user_id},
+            ).one()
+            assert grant_row.consumed_at is None
+            assert grant_row.consumed_by_campaign_id is None
+
+        retry_response = client.post("/campaigns", json=_body(f, name="Retry Succeeds"))
+    assert retry_response.status_code == 201, retry_response.text
 
 
 # ---------------------------------------------------------------------------
@@ -492,11 +567,15 @@ def test_the_existing_access_manager_can_create_a_second_campaign_on_their_own_t
     """The one authorized reuse case: the same user who already holds
     `access.manage` in an existing campaign on `timeline_id` may attach a
     second campaign to it — proving the check is a real entitlement gate,
-    not a blanket "no campaign may ever reuse a timeline" regression. The
-    second campaign still starts with its own independent membership/role,
-    never inheriting the first campaign's row — `security.
-    campaign_memberships`/`.membership_roles` are keyed by `campaign_id`,
-    never by the timeline they share."""
+    not a blanket "no campaign may ever reuse a timeline" regression, and
+    that it needs no bootstrap grant of its own: `f.creator_user_id`'s own
+    grant was already consumed by the first campaign (proven elsewhere),
+    yet the second campaign — reached through the access.manage branch,
+    which never looks at `security.timeline_bootstrap_grants` at all —
+    still succeeds. The second campaign still starts with its own
+    independent membership/role, never inheriting the first campaign's
+    row — `security.campaign_memberships`/`.membership_roles` are keyed by
+    `campaign_id`, never by the timeline they share."""
     with client_factory(f.creator_user_id) as client:
         first_response = client.post("/campaigns", json=_body(f, name="First Expedition"))
         assert first_response.status_code == 201, first_response.text
@@ -509,6 +588,19 @@ def test_the_existing_access_manager_can_create_a_second_campaign_on_their_own_t
     assert second_campaign_id != first_campaign_id
 
     with postgres_engine.connect() as verify:
+        # No second grant was ever issued for this timeline — the fixture
+        # only grants f.creator_user_id once — so a live grant count of
+        # zero here confirms the second campaign truly went through the
+        # access.manage reuse branch, not a second (nonexistent) grant.
+        live_grant_count = verify.execute(
+            text("""
+                SELECT count(*) FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :t AND consumed_at IS NULL AND revoked_at IS NULL
+            """),
+            {"t": f.timeline_id},
+        ).scalar_one()
+        assert live_grant_count == 0
+
         role_rows = verify.execute(
             text("SELECT role_id FROM security.membership_roles WHERE campaign_membership_id = :m"),
             {"m": second_membership_id},
@@ -611,15 +703,22 @@ def test_concurrent_claims_on_a_brand_new_timeline_only_one_succeeds(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     """The row-lock argument `dnd_ai.commands.campaigns`'s own module
-    docstring makes: two unrelated users racing to be the first campaign
-    on a brand-new, previously-unused timeline cannot both win. Whichever
-    transaction's `SELECT ... FOR UPDATE` commits first becomes the
-    legitimate first claimant; the other serializes behind that lock and,
-    once unblocked, finds a campaign it holds no `access.manage` in and is
-    rejected — never both succeeding, and never leaving more than one
-    `campaign.campaigns` row on the timeline."""
+    docstring makes: two *independently entitled* users — each holding
+    their own valid, unconsumed bootstrap grant for the same brand-new,
+    previously-unused timeline — racing to be the first campaign there
+    cannot both win. Whichever transaction's `SELECT ... FOR UPDATE`
+    commits first becomes the legitimate first claimant (consuming its own
+    grant); the other serializes behind that lock and, once unblocked,
+    finds a campaign it holds no `access.manage` in and is rejected — its
+    own still-valid grant notwithstanding, since a bootstrap grant only
+    ever authorizes being *first* — never both succeeding, and never
+    leaving more than one `campaign.campaigns` row on the timeline."""
     with postgres_engine.begin() as connection:
         fresh_timeline_id = make_timeline(connection, f.world_id, "Race Timeline")
+        for user_id in (f.creator_user_id, f.second_user_id):
+            grant_timeline_bootstrap(
+                connection, timeline_id=fresh_timeline_id, granted_to_user_id=user_id
+            )
 
     def _attempt(user_id: uuid.UUID) -> int:
         with client_factory(user_id) as client:
@@ -686,3 +785,147 @@ def test_an_unauthorized_caller_cannot_use_campaign_creation_to_read_hidden_cano
             f"/campaigns/{victim_campaign_id}/organizations/{organization_id}"
         )
     assert organization_response.status_code == 404, organization_response.text
+
+
+# ---------------------------------------------------------------------------
+# Second Critical fix: the first-campaign entitlement
+# (`security.timeline_bootstrap_grants`, migration 087) —
+# `dnd_ai.commands.campaigns.grant_timeline_bootstrap()`/
+# `_authorize_timeline_reuse()`'s "First-campaign entitlement" section has
+# the full defect/fix narrative.
+# ---------------------------------------------------------------------------
+
+
+def test_an_unrelated_user_cannot_claim_an_unused_timeline_with_pre_authored_hidden_content(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The second Critical defect itself, proven end to end: a brand-new
+    timeline with real, pre-authored hidden dungeon content and a
+    knowledge item — exactly the ordering the vertical-slice scenario
+    depends on, world content before any campaign — but with *no*
+    `security.timeline_bootstrap_grants` row for anyone. An unrelated user
+    who merely knows this `timeline_id` cannot claim it: absence of a
+    prior campaign was never itself authorization. No campaign,
+    membership, role assignment, or audit row survives the attempt."""
+    with postgres_engine.begin() as connection:
+        fresh_timeline_id = make_timeline(connection, f.world_id, "Ungranted Timeline")
+        dungeon_id = make_dungeon(connection, f.world_id)
+        area_id = make_dungeon_area(connection, dungeon_id)
+        hazard_id = make_area_hazard(connection, area_id, is_hidden=True)
+        make_knowledge_item(
+            connection,
+            f.world_id,
+            statement="A hidden trap guards the vault.",
+            subject_area_hazard_id=hazard_id,
+        )
+
+    campaign_name = f"Unentitled Claim {uuid.uuid4().hex[:8]}"
+    with client_factory(f.second_user_id) as attacker_client:
+        response = attacker_client.post(
+            "/campaigns",
+            json=_body(f, timeline_id=str(fresh_timeline_id), name=campaign_name),
+        )
+    assert response.status_code == 404, response.text
+
+    with postgres_engine.connect() as verify:
+        campaign_count = verify.execute(
+            text("SELECT count(*) FROM campaign.campaigns WHERE timeline_id = :t"),
+            {"t": fresh_timeline_id},
+        ).scalar_one()
+        assert campaign_count == 0
+
+        membership_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships WHERE user_id = :u "
+                "AND campaign_id IN (SELECT campaign_id FROM campaign.campaigns "
+                "WHERE timeline_id = :t)"
+            ),
+            {"u": f.second_user_id, "t": fresh_timeline_id},
+        ).scalar_one()
+        assert membership_count == 0
+
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE schema_name = 'campaign' AND table_name = 'campaigns' "
+                "AND actor_user_id = :u"
+            ),
+            {"u": f.second_user_id},
+        ).scalar_one()
+        assert audit_count == 0
+
+
+def test_a_second_user_cannot_replay_or_reuse_anothers_first_claim_grant(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`f.timeline_id` already has a live bootstrap grant — but it names
+    `f.creator_user_id`, not `f.second_user_id`. Binding a grant to a
+    specific `granted_to_user_id` (never a bearer token) means a second
+    user has no way to redeem someone else's still-unconsumed grant: the
+    attempt is rejected, and the real owner's grant remains untouched,
+    provably still usable by them afterward."""
+    with client_factory(f.second_user_id) as attacker_client:
+        replay_response = attacker_client.post(
+            "/campaigns", json=_body(f, name="Stolen Grant Attempt")
+        )
+    assert replay_response.status_code == 404, replay_response.text
+
+    with postgres_engine.connect() as verify:
+        grant_row = verify.execute(
+            text("""
+                SELECT consumed_at, revoked_at
+                FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :t AND granted_to_user_id = :u
+            """),
+            {"t": f.timeline_id, "u": f.creator_user_id},
+        ).one()
+        assert grant_row.consumed_at is None
+        assert grant_row.revoked_at is None
+
+    with client_factory(f.creator_user_id) as owner_client:
+        legitimate_response = owner_client.post(
+            "/campaigns", json=_body(f, name="Legitimate Claim")
+        )
+    assert legitimate_response.status_code == 201, legitimate_response.text
+
+
+def test_an_expired_or_revoked_bootstrap_grant_cannot_be_used(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Both `expires_at`/`revoked_at` are checked by the same authorization
+    query (`dnd_ai.commands.campaigns`'s own "First-campaign entitlement"
+    docstring section) — proven directly against two separate, otherwise-
+    valid grants issued by this fixture acting as trusted world-authoring
+    infrastructure, exactly as it does to grant one in the first place."""
+    with postgres_engine.begin() as connection:
+        expired_timeline_id = make_timeline(connection, f.world_id, "Expired Grant Timeline")
+        grant_timeline_bootstrap(
+            connection,
+            timeline_id=expired_timeline_id,
+            granted_to_user_id=f.second_user_id,
+            ttl=timedelta(days=-1),
+        )
+
+        revoked_timeline_id = make_timeline(connection, f.world_id, "Revoked Grant Timeline")
+        revoked_grant = grant_timeline_bootstrap(
+            connection, timeline_id=revoked_timeline_id, granted_to_user_id=f.second_user_id
+        )
+        connection.execute(
+            text(
+                "UPDATE security.timeline_bootstrap_grants SET revoked_at = now() "
+                "WHERE timeline_bootstrap_grant_id = :g"
+            ),
+            {"g": revoked_grant.timeline_bootstrap_grant_id},
+        )
+
+    with client_factory(f.second_user_id) as client:
+        expired_response = client.post(
+            "/campaigns",
+            json=_body(f, timeline_id=str(expired_timeline_id), name="Expired Attempt"),
+        )
+        revoked_response = client.post(
+            "/campaigns",
+            json=_body(f, timeline_id=str(revoked_timeline_id), name="Revoked Attempt"),
+        )
+    assert expired_response.status_code == 404, expired_response.text
+    assert revoked_response.status_code == 404, revoked_response.text

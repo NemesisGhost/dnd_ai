@@ -240,6 +240,7 @@ EXPECTED_TABLES = {
         "security.role_capabilities",
         "security.roles",
         "security.service_accounts",
+        "security.timeline_bootstrap_grants",
         "security.users",
     ],
 }

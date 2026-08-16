@@ -23,6 +23,18 @@ role_capabilities` write anywhere in this file — see `dnd_ai.commands.
 campaigns`'s own module docstring for the full defect/fix narrative
 behind both migrations.
 
+`POST /campaigns` itself, for both the original timeline and the branched
+one (step 18), now depends on a positive first-campaign entitlement — a
+`security.timeline_bootstrap_grants` row `dnd_ai.commands.campaigns.
+grant_timeline_bootstrap()` issues, called directly in `Fixture.__init__`/
+at the branch point below, the same trusted world-authoring-infrastructure
+boundary this file's static-content authoring already has (see the next
+paragraph). This establishes the scenario's own initial entitlement
+through that supported infrastructure boundary explicitly, rather than
+"no campaign exists yet" alone ever being treated as authorization — see
+that function's own module docstring ("First-campaign entitlement") for
+the second Critical defect this closes.
+
 What does *not* go through the API is static world/campaign-content
 *authoring*: the world, timeline, dungeon and its structural children, the
 quest definition, the NPC, the two player characters, and the party
@@ -79,6 +91,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.campaigns import grant_timeline_bootstrap
 from tests.factories import (
     make_ability,
     make_area_connection,
@@ -198,6 +211,21 @@ class Fixture:
         self.player1_user_id = make_user(connection, "Vertical Slice Player One")
         self.player2_user_id = make_user(connection, "Vertical Slice Player Two")
         self.observer_user_id = make_user(connection, "Vertical Slice Observer")
+
+        # The positive, server-verifiable first-campaign entitlement (`dnd_
+        # ai.commands.campaigns`'s own "First-campaign entitlement" module
+        # docstring section) — issued here by this fixture acting as
+        # trusted world-authoring infrastructure, the same trust boundary
+        # every other piece of pre-campaign content above already has.
+        # Establishes step 2's own initial entitlement through the
+        # supported infrastructure boundary rather than relying on
+        # "unclaimed" — this scenario's own step ordering (world/dungeon/
+        # knowledge authored before any campaign exists) is exactly the
+        # case that made "no campaign yet" alone an insufficient
+        # authorization in the first place.
+        grant_timeline_bootstrap(
+            connection, timeline_id=self.timeline_id, granted_to_user_id=self.gm_user_id
+        )
 
 
 @pytest.fixture
@@ -715,6 +743,13 @@ def test_the_vertical_slice_scenario(
             "The Road Not Taken",
             parent_timeline_id=f.timeline_id,
             branch_world_time_id=f.wt_branch,
+        )
+        # branch_timeline_id has no campaign yet either — whoever branches
+        # a new timeline also decides who is entitled to bootstrap its
+        # first campaign, the same infrastructure boundary the original
+        # timeline's own grant came from above.
+        grant_timeline_bootstrap(
+            connection, timeline_id=branch_timeline_id, granted_to_user_id=f.gm_user_id
         )
     create_campaign3_response = gm.post(
         "/campaigns",

@@ -203,6 +203,8 @@ MANAGED_TABLES = [
     ("security", "resource_grants"),
     # Phase 10, workstream 6 correction pass — durable command idempotency
     ("security", "idempotent_requests"),
+    # Phase 10, workstream 32 — first-campaign entitlement
+    ("security", "timeline_bootstrap_grants"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

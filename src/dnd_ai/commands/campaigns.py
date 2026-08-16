@@ -69,48 +69,93 @@ before anything is written:
    row for the rest of the transaction. A nonexistent `timeline_id` raises
    `TimelineNotAuthorizedError` immediately — nothing to lock.
 2. If **no** `campaign.campaigns` row references `timeline_id` yet, the
-   caller may claim it unconditionally — this is a deliberate policy
-   choice, not an oversight: nothing in this schema gives a bare world or
-   timeline its own entitlement concept independent of the campaigns
-   played on it (no `world`/`timeline`-scoped membership table exists,
-   and inventing one is a materially larger schema change than this
-   defect needs — see CLAUDE.md §5's guidance to flag rather than
-   quietly invent a new domain concept). "First authenticated caller may
-   claim an unused timeline" mirrors the exact same trust boundary
-   `create_campaign` has always had for *any* campaign creation (any
-   authenticated user may create the very first campaign anywhere) — it
-   is not a new, weaker boundary introduced here.
+   caller must hold a live `security.timeline_bootstrap_grants` row
+   naming both `timeline_id` and their own `creator_user_id` (`SELECT
+   ... FOR UPDATE`, `consumed_at IS NULL`, `revoked_at IS NULL`,
+   `expires_at > now()`). See "First-campaign entitlement" below for why
+   "nobody has created a campaign here yet" was, on its own, a second
+   Critical defect (docs/PLAN.md's own workstream 32 entry has the full
+   narrative) rather than a legitimate policy — worlds/timelines/dungeon
+   content/knowledge can all be authored before any campaign exists (the
+   vertical-slice scenario's own step ordering depends on it), so absence
+   of a prior campaign is not evidence the caller was ever meant to be the
+   one who creates the first one.
 3. If a `campaign.campaigns` row **does** already reference `timeline_id`,
    the caller must hold an active `access.manage` membership in *at
    least one* of them — the same capability `security.
    assert_campaign_retains_access_manager()` already treats as "this
    user administers this campaign." Anyone else, including a caller who
    only holds `campaign.view` in an existing campaign on that timeline,
-   is rejected.
-4. Both rejections — a nonexistent `timeline_id` and an existing one the
-   caller isn't entitled to reuse — raise the identical
+   or who holds an otherwise-valid bootstrap grant for it (that grant
+   only ever authorized being *first*; it is never consulted once a
+   campaign already exists), is rejected. No bootstrap grant is consumed
+   or even looked up on this branch.
+4. Every rejection — a nonexistent `timeline_id`, an unclaimed one with
+   no matching bootstrap grant, and an already-claimed one the caller
+   isn't entitled to reuse — raises the identical
    `TimelineNotAuthorizedError` (a `DomainAuthorizationError`, fixed,
-   non-disclosing 404): a caller probing random or guessed UUIDs can never
+   non-disclosing 404): a caller probing random or guessed UUIDs, or a
+   caller who once held a now-consumed/expired/revoked grant, can never
    learn which case applied, the same folding this codebase already
    applies to every other existence-is-a-disclosure check (`dnd_ai.api.
    access.PartyPerspectiveNotAuthorizedError`, `dnd_ai.commands.
    campaign_invitations.InvitationNotAcceptableError`, etc.).
 
-Step 1's row lock is what makes step 2 concurrency-safe, not merely
-convenient: two concurrent `create_campaign` calls naming the *same*,
-previously-unused `timeline_id` serialize on that lock rather than both
-observing "no campaign yet" and both writing one. Whichever transaction's
+## First-campaign entitlement: `security.timeline_bootstrap_grants`
+
+A grant row (`timeline_bootstrap_grant_id`, `timeline_id`, `granted_to_
+user_id`, an optional `granted_by_user_id` for provenance, `expires_at`,
+`revoked_at`, and `consumed_at`/`consumed_by_campaign_id`, migration 087)
+is the positive, server-verifiable entitlement step 2 requires — never a
+bearer token like `security.campaign_invitations`: `granted_to_user_id`
+binds the grant directly to an already-known `security.users` row, since
+world-authoring infrastructure always knows exactly which user it is
+bootstrapping a timeline for (there is no "invite an unknown email"
+scenario here). This removes token leakage as an attack surface entirely,
+directly satisfying "do not use UUID secrecy... as authorization" — a
+caller who merely learns a `timeline_id` (by any means) still has nothing
+usable unless a grant naming *their own* `user_id` also exists.
+
+`grant_timeline_bootstrap()` (below) is the one function that writes this
+table, called only by trusted world-authoring/import infrastructure —
+never exposed over HTTP, the identical "no authoring endpoint exists yet"
+scope boundary every other piece of pre-campaign content in this codebase
+already has (`tests/factories.py`'s own world/timeline/dungeon/knowledge
+helpers are exactly this same trust boundary today; a future import job is
+the production caller). `create_campaign()` both validates *and consumes*
+the matching grant in the identical transaction that creates the campaign
+it authorizes — the `UPDATE ... SET consumed_at = now(), consumed_by_
+campaign_id = :campaign` runs only after the campaign/membership/role
+rows are fully written, so a later failure in that same request (the
+ruleset check, most concretely) rolls back everything, including the
+grant's own consumption: the grant is exactly as usable after a failed
+attempt as it was before, proven by `tests/database/test_api_campaigns.
+py`'s own atomicity case. Revocation and expiration are both checked by
+the same authorization query (`revoked_at IS NULL`, `expires_at > now()`)
+but, like `security.campaign_invitations.revoked_at`, have no dedicated
+command that sets them yet — trusted infrastructure may set `revoked_at`
+directly today, exactly as it does to create the grant in the first
+place; migration 087's own docstring records this as a deliberate,
+narrower scope than a full grant-management API, not an oversight.
+
+Step 1's row lock is what makes step 2's grant consumption concurrency-
+safe, not merely convenient: two concurrent `create_campaign` calls naming
+the *same*, previously-unused `timeline_id` — whether they hold the same
+grant (a retried request from the same user) or two different users' own
+independent grants for it — serialize on that lock rather than both
+observing "not yet consumed" and both consuming. Whichever transaction's
 `SELECT ... FOR UPDATE` acquires the lock first proceeds through steps 2-4
-and commits its own new campaign before the second transaction's identical
-`SELECT ... FOR UPDATE` is unblocked; the second transaction then reaches
-step 3 and finds the *first* transaction's campaign already there — for
-two unrelated callers, the second is correctly rejected (no membership in
-the first caller's brand-new campaign), even though at the instant both
-requests arrived, neither campaign existed yet. This is proven directly by
-`tests/database/test_api_campaigns.py`'s own concurrent-claim case: firing
-two `POST /campaigns` calls for the same fresh `timeline_id` from two
-threads never leaves both authorized, and never leaves more than one
-`campaign.campaigns` row on that timeline.
+and commits its own new campaign (consuming its own grant) before the
+second transaction's identical `SELECT ... FOR UPDATE` is unblocked; the
+second transaction then reaches step 3 (a campaign now exists) and, unless
+it happens to already hold `access.manage` there, is correctly rejected —
+its own still-valid, never-consumed grant notwithstanding, since a
+bootstrap grant only ever authorizes being *first*. This is proven
+directly by `tests/database/test_api_campaigns.py`'s own concurrent-claim
+case: firing two `POST /campaigns` calls for the same fresh `timeline_id`,
+each with its own valid grant, from two threads never leaves both
+authorized, and never leaves more than one `campaign.campaigns` row on
+that timeline.
 
 Once authorized, a second campaign attaching to a timeline another
 campaign already uses is exactly the "shared, reusable world content"
@@ -174,6 +219,7 @@ speculatively here."""
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy import Connection, text
 
@@ -185,13 +231,16 @@ _CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
 _ACCESS_MANAGE_CAPABILITY_CODE = "access.manage"
 _ACTIVE_LIFECYCLE_STATUS_CODE = "active"
 _ACTIVE_MEMBERSHIP_STATUS_CODE = "active"
+_DEFAULT_BOOTSTRAP_GRANT_TTL = timedelta(days=7)
 
 
 class TimelineNotAuthorizedError(DomainAuthorizationError):
     """Raised by `create_campaign()` when `timeline_id` does not resolve to
-    a real `campaign.timelines` row, or resolves to one already used by an
-    existing campaign the caller holds no `access.manage` membership in —
-    both indistinguishably (this module's own docstring has the full
+    a real `campaign.timelines` row, resolves to one no campaign has
+    claimed yet but the caller holds no live `security.
+    timeline_bootstrap_grants` row for it, or resolves to one already used
+    by an existing campaign the caller holds no `access.manage` membership
+    in — all indistinguishably (this module's own docstring has the full
     policy). Pre-checked here rather than left to `campaign.campaigns.
     timeline_id`'s own foreign key — see this module's docstring for why
     the `BEFORE INSERT`-fired `campaign.enforce_campaign_ruleset_allowed()`
@@ -220,15 +269,79 @@ class CreateCampaignResult:
     world_id: uuid.UUID
 
 
+@dataclass(frozen=True)
+class GrantTimelineBootstrapResult:
+    timeline_bootstrap_grant_id: uuid.UUID
+
+
+def grant_timeline_bootstrap(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    granted_to_user_id: uuid.UUID,
+    granted_by_user_id: uuid.UUID | None = None,
+    ttl: timedelta = _DEFAULT_BOOTSTRAP_GRANT_TTL,
+) -> GrantTimelineBootstrapResult:
+    """Issues a single-use `security.timeline_bootstrap_grants` row
+    authorizing `granted_to_user_id` — and only that user — to create the
+    *first* `campaign.campaigns` row on `timeline_id`. See this module's
+    own docstring ("First-campaign entitlement") for the full policy this
+    implements.
+
+    Callable only by trusted world-authoring/import infrastructure —
+    deliberately not exposed over HTTP, the same scope boundary every
+    other piece of pre-campaign content in this codebase already has
+    (`tests/factories.py`'s own world/timeline/dungeon/knowledge helpers
+    are this exact trust boundary today; a future import job is the
+    production caller). No pre-check against `timeline_id`/`granted_to_
+    user_id` existing is performed here — an invalid id surfaces as an
+    ordinary foreign-key `IntegrityError`, acceptable for a function with
+    no untrusted caller, unlike every HTTP-reachable command in this
+    package.
+
+    `granted_by_user_id` is optional provenance only (who issued the
+    grant), never part of the authorization check itself — `NULL`
+    represents a system/import-job-issued grant with no human actor to
+    attribute it to, the same "administrative source" concept CLAUDE.md
+    rule 6 already accepts for event-less state changes."""
+    grant_id = connection.execute(
+        text("""
+            INSERT INTO security.timeline_bootstrap_grants
+                (timeline_id, granted_to_user_id, granted_by_user_id, expires_at)
+            VALUES (:timeline, :granted_to, :granted_by, now() + :ttl)
+            RETURNING timeline_bootstrap_grant_id
+        """),
+        {
+            "timeline": timeline_id,
+            "granted_to": granted_to_user_id,
+            "granted_by": granted_by_user_id,
+            "ttl": ttl,
+        },
+    ).scalar()
+    assert isinstance(grant_id, uuid.UUID)
+    return GrantTimelineBootstrapResult(timeline_bootstrap_grant_id=grant_id)
+
+
+@dataclass(frozen=True)
+class _TimelineAuthorization:
+    world_id: uuid.UUID
+    # Set only on the first-campaign (grant-consuming) path; None on the
+    # reuse (access.manage) path, which never touches a bootstrap grant.
+    bootstrap_grant_id: uuid.UUID | None
+
+
 def _authorize_timeline_reuse(
     connection: Connection, *, timeline_id: uuid.UUID, creator_user_id: uuid.UUID
-) -> uuid.UUID:
+) -> _TimelineAuthorization:
     """Resolves `timeline_id`'s own `world_id`, having authorized
-    `creator_user_id` to attach a new campaign to it. See this module's
+    `creator_user_id` to attach a new campaign to it — and, on the first-
+    campaign path, having locked (but not yet consumed) the matching
+    bootstrap grant, so `create_campaign` can mark it consumed only after
+    the campaign it authorizes actually exists. See this module's
     docstring for the full policy and its concurrency-safety argument;
-    briefly: locks the timeline row, allows an unclaimed timeline
-    unconditionally, and otherwise requires an active `access.manage`
-    membership in at least one existing campaign already on it."""
+    briefly: locks the timeline row, requires a live bootstrap grant for
+    an unclaimed timeline, and otherwise requires an active `access.
+    manage` membership in at least one existing campaign already on it."""
     world_id = connection.execute(
         text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline FOR UPDATE"),
         {"timeline": timeline_id},
@@ -241,8 +354,28 @@ def _authorize_timeline_reuse(
         text("SELECT EXISTS (SELECT 1 FROM campaign.campaigns WHERE timeline_id = :timeline)"),
         {"timeline": timeline_id},
     ).scalar()
+
     if not already_used:
-        return world_id
+        grant_id = connection.execute(
+            text("""
+                SELECT timeline_bootstrap_grant_id
+                FROM security.timeline_bootstrap_grants
+                WHERE timeline_id = :timeline
+                  AND granted_to_user_id = :user
+                  AND consumed_at IS NULL
+                  AND revoked_at IS NULL
+                  AND expires_at > now()
+                FOR UPDATE
+            """),
+            {"timeline": timeline_id, "user": creator_user_id},
+        ).scalar()
+        if grant_id is None:
+            raise TimelineNotAuthorizedError(
+                f"user {creator_user_id} holds no live bootstrap grant for unclaimed timeline "
+                f"{timeline_id}"
+            )
+        assert isinstance(grant_id, uuid.UUID)
+        return _TimelineAuthorization(world_id=world_id, bootstrap_grant_id=grant_id)
 
     is_entitled = connection.execute(
         text("""
@@ -278,7 +411,7 @@ def _authorize_timeline_reuse(
             f"user {creator_user_id} holds no active access.manage membership in any existing "
             f"campaign on timeline {timeline_id}"
         )
-    return world_id
+    return _TimelineAuthorization(world_id=world_id, bootstrap_grant_id=None)
 
 
 def _check_ruleset_allowed(
@@ -314,9 +447,10 @@ def create_campaign(
     membership, atomically. See this module's docstring for the full
     reasoning, including why `timeline_id`/`ruleset_version_id` are
     pre-checked before anything is written."""
-    world_id = _authorize_timeline_reuse(
+    authorization = _authorize_timeline_reuse(
         connection, timeline_id=timeline_id, creator_user_id=creator_user_id
     )
+    world_id = authorization.world_id
     _check_ruleset_allowed(connection, world_id=world_id, ruleset_version_id=ruleset_version_id)
 
     active_lifecycle_status_id = lookup_id(
@@ -387,6 +521,23 @@ def create_campaign(
         """),
         {"membership": campaign_membership_id, "role": campaign_owner_role_id},
     )
+
+    # Consumed last, only once the campaign it authorized is fully
+    # written — a failure anywhere above (including the ruleset check,
+    # before this point) rolls back the whole transaction and leaves the
+    # grant exactly as usable as it was before the attempt. See this
+    # module's docstring ("First-campaign entitlement") for why this
+    # can't simply be a pre-check: the grant only makes sense to mark
+    # spent once it is certain a campaign now exists to attribute it to.
+    if authorization.bootstrap_grant_id is not None:
+        connection.execute(
+            text("""
+                UPDATE security.timeline_bootstrap_grants
+                SET consumed_at = now(), consumed_by_campaign_id = :campaign
+                WHERE timeline_bootstrap_grant_id = :grant
+            """),
+            {"campaign": campaign_id, "grant": authorization.bootstrap_grant_id},
+        )
 
     return CreateCampaignResult(
         campaign_id=campaign_id,

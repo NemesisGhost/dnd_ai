@@ -9,23 +9,29 @@ require_campaign_capability` against, so this route depends only on
 authenticated user may *call* this route. `dnd_ai.commands.campaigns.
 create_campaign` itself is where the real authorization now lives:
 `_authorize_timeline_reuse()` (that module's own docstring has the full
-policy and the High/Critical defect history behind it) requires the
-caller to already hold `access.manage` in an existing campaign before a
-*second* campaign may attach to an already-used `timeline_id` — only a
-genuinely unclaimed timeline may be created on unconditionally. A rejected
-attempt surfaces as `dnd_ai.commands.campaigns.TimelineNotAuthorizedError`,
-a fixed non-disclosing 404 indistinguishable from a nonexistent
-`timeline_id`, handled by the existing generic `SafeMessageError`
-mapping — no per-route error handling needed here. Once authorized, the
-caller becomes the campaign's first `campaign_owner` (the system-template
-role migration 085 seeded with the full functional-owner capability set —
-`access.manage`, `campaign.view`, `canon.edit` — after migration 080
-seeded it with `access.manage` alone) by construction. This mirrors the
-"no invented capability" scoping every other Phase 10 workstream's first
-cut already chose (e.g. `dnd_ai.api.memberships`'s own docstring), applied
-here to the one action that structurally cannot be gated by
-`require_campaign_capability` itself, since no campaign exists yet at the
-time the route is entered.
+policy and the High/Critical defect history behind it, including a second
+Critical defect found and closed immediately after the first) requires
+the caller to already hold `access.manage` in an existing campaign before
+a *second* campaign may attach to an already-used `timeline_id`, and a
+live, positively-issued `security.timeline_bootstrap_grants` row naming
+both the timeline and the caller before a genuinely unclaimed one may be
+created on at all — nothing about a `timeline_id` being unclaimed is
+itself authorization; a real deployment issues that grant through trusted
+world-authoring/import infrastructure, never through this route. A
+rejected attempt surfaces as `dnd_ai.commands.campaigns.
+TimelineNotAuthorizedError`, a fixed non-disclosing 404 indistinguishable
+from a nonexistent `timeline_id` or an expired/revoked/already-consumed
+grant, handled by the existing generic `SafeMessageError` mapping — no
+per-route error handling needed here. Once authorized, the caller becomes
+the campaign's first `campaign_owner` (the system-template role migration
+085 seeded with the full functional-owner capability set — `access.
+manage`, `campaign.view`, `canon.edit` — after migration 080 seeded it
+with `access.manage` alone) by construction. This mirrors the "no invented
+capability" scoping every other Phase 10 workstream's first cut already
+chose (e.g. `dnd_ai.api.memberships`'s own docstring), applied here to the
+one action that structurally cannot be gated by `require_campaign_
+capability` itself, since no campaign exists yet at the time the route is
+entered.
 
 No idempotency-key handling: see `dnd_ai.commands.campaigns`'s module
 docstring for why `security.idempotent_requests`'s `NOT NULL campaign_id`

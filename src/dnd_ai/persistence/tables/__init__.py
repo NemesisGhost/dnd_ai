@@ -235,6 +235,7 @@ from .security import (
     role_capabilities,
     roles,
     service_accounts,
+    timeline_bootstrap_grants,
     users,
 )
 
@@ -414,6 +415,7 @@ __all__ = [
     "sync_state",
     "tags",
     "targets",
+    "timeline_bootstrap_grants",
     "timelines",
     "truth_statuses",
     "users",

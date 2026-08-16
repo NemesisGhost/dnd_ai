@@ -1,4 +1,4 @@
-"""Security tables — security schema (revisions 003, 080, 082).
+"""Security tables — security schema (revisions 003, 080, 082, 087).
 
 Part of the src/dnd_ai/persistence/tables package. See
 src/dnd_ai/persistence/tables/__init__.py for the metadata-authority note
@@ -876,3 +876,73 @@ idempotent_requests = Table(
 )
 
 Index("ix_idempotent_requests_campaign_id", idempotent_requests.c.campaign_id)
+
+# ---------------------------------------------------------------------------
+# First-campaign entitlement (revision 087)
+# ---------------------------------------------------------------------------
+
+timeline_bootstrap_grants = Table(
+    "timeline_bootstrap_grants",
+    metadata,
+    _uuid_pk("timeline_bootstrap_grant_id"),
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "granted_to_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "granted_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("expires_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column("consumed_at", TIMESTAMP(timezone=True)),
+    Column(
+        "consumed_by_campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="SET NULL"),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    schema="security",
+    comment=(
+        "A single-use entitlement, issued by trusted world-authoring/import "
+        "infrastructure (never over HTTP), authorizing one specific user to "
+        "create the first campaign.campaigns row on one specific timeline. "
+        "Consumed atomically by dnd_ai.commands.campaigns.create_campaign() in "
+        "the same transaction that creates the campaign it authorizes — see that "
+        "module's own docstring for the full policy."
+    ),
+)
+
+Index(
+    "ux_timeline_bootstrap_grants_active",
+    timeline_bootstrap_grants.c.timeline_id,
+    timeline_bootstrap_grants.c.granted_to_user_id,
+    unique=True,
+    postgresql_where=(
+        timeline_bootstrap_grants.c.consumed_at.is_(None)
+        & timeline_bootstrap_grants.c.revoked_at.is_(None)
+    ),
+)
+Index(
+    "ix_timeline_bootstrap_grants_consumed_by_campaign_id",
+    timeline_bootstrap_grants.c.consumed_by_campaign_id,
+    postgresql_where=timeline_bootstrap_grants.c.consumed_by_campaign_id.isnot(None),
+)
+Index(
+    "ix_timeline_bootstrap_grants_granted_to_user_id",
+    timeline_bootstrap_grants.c.granted_to_user_id,
+)
+Index(
+    "ix_timeline_bootstrap_grants_granted_by_user_id",
+    timeline_bootstrap_grants.c.granted_by_user_id,
+    postgresql_where=timeline_bootstrap_grants.c.granted_by_user_id.isnot(None),
+)
