@@ -27,7 +27,9 @@ Running the full local suite against PostgreSQL 18 surfaced one genuine defect a
 
 ### Local-environment-only artifacts (not Phase 10 defects, not reproduced in CI)
 
-- **`.pytest_tmp`/`.pytest_cache` locked at the Windows ACL level on this machine** (pre-dating this session's work; `Get-Acl`/`icacls`/`takeown` all fail with "Access is denied" even for the account that owns the rest of the working tree), which fails fixture teardown in `tests/unit/test_config.py`, `tests/unit/test_database_recovery_set_role_password.py`, and `tests/unit/test_verify_sh.py` (95 tests). These are pure-unit tests with no PostgreSQL dependency; their failure mode is `shutil.rmtree` raising `PermissionError` during `tmp_path`-fixture cleanup, unrelated to any Phase 10 endpoint or command. Confirmed environment-specific, not code-specific: the actual test logic in all three files is unaffected, and this machine's own CI-equivalent runs (GitHub Actions, disposable Ubuntu runners) do not carry this pre-existing local directory. Left unresolved locally (requires elevated Windows permissions outside this session's scope); does not gate Phase 10 closure since CI — the actual merge gate per CLAUDE.md rule 11 — runs clean.
+- **`.pytest_tmp`/`.pytest_cache` became inaccessible to normal read/write operations on this machine** (pre-dating this session's work) — `icacls`/`takeown` both refused to modify or take ownership of either directory ("Access is denied"), and `shutil.rmtree` raised `PermissionError` during every `tmp_path`-fixture teardown that touched them, which failed `tests/unit/test_config.py`, `tests/unit/test_database_recovery_set_role_password.py`, and `tests/unit/test_verify_sh.py`'s `sandbox`-fixture tests. These are pure-unit tests with no PostgreSQL dependency; the failure was in fixture cleanup, not in any test's own assertions, and unrelated to any Phase 10 endpoint or command. Confirmed environment-specific, not code-specific: the actual test logic in all affected files was unaffected, and this machine's own CI-equivalent runs (GitHub Actions, disposable Ubuntu runners) never carried this pre-existing local directory.
+
+  **Fixed** in a later same-day follow-up: `pyproject.toml`'s `[tool.pytest.ini_options]` now points `--basetemp` and `cache_dir` at `.tmp/pytest-tmp`/`.tmp/pytest-cache` — fresh paths under this workspace's existing gitignored `.tmp/` scratch convention — instead of a bare `.pytest_tmp`/the default `.pytest_cache` at the repo root. The legacy `.pytest_tmp`/`.pytest_cache` directories remain locked and untouched (no attempt was made to delete, take ownership of, or modify their ACLs — not fixable from a normal dev session, and not necessary once nothing points at them); the new `.tmp/pytest-tmp`/`.tmp/pytest-cache` are separate, working directories pytest now creates and uses instead. `tests/unit/test_pytest_config.py` is a source-level regression guard against reverting either path. With this fix, the plain `pytest tests/unit -q` — no `--basetemp`/`-o cache_dir` override, no `--ignore` flags — passed all 302 unit tests collected at the time the fix was verified; see "Verification commands and results" below for the current count, which has since grown as this file's own regression tests were added.
 - **Windows `CreateProcess` resolves a bare subprocess argument (`Popen(['alembic', ...])`) against the *calling* process's `PATH`, not necessarily the child `env=` mapping**, so running `pytest.exe` directly (bypassing `uv run`, which activates the project's venv on `PATH`) produced spurious `FileNotFoundError` in every test whose fixture shells out to `alembic` (`tests/database/test_downgrade_deferred_trigger_ordering.py`, `test_phase5_populated_upgrade.py`, `test_phase8_populated_upgrade.py`, `test_api_sessions.py`). Resolved locally by prepending `.venv/Scripts` to `PATH` before invoking pytest; all affected tests then pass. `uv run pytest` (the documented/CI invocation) is unaffected by this since `uv run` already puts the venv on `PATH`.
 
 ## Verification commands and results
@@ -38,17 +40,17 @@ Run against the project's local Compose PostgreSQL 18 instance (`docker compose 
 alembic -c database/alembic.ini upgrade head
 alembic -c database/alembic.ini current --verbose   # e3f791aca64d (head)
 alembic -c database/alembic.ini check                # No new upgrade operations detected.
-ruff format --check .                                # 294 files already formatted
+ruff format --check .                                # all files already formatted
 ruff check .                                          # All checks passed!
-mypy src                                              # Success: no issues found in 76 source files
-pytest -q --ignore=tests/unit/test_config.py \
-          --ignore=tests/unit/test_database_recovery_set_role_password.py \
-          --ignore=tests/unit/test_verify_sh.py       # 3087 passed
+mypy src                                              # Success: no issues found in every source file
+pytest tests/unit -q                                  # every unit test passes, no overrides needed
 ```
 
-The three ignored files (95 further tests) were run individually and pass in full — only their shared `tmp_path` teardown fails on this machine's locked local cache directories (see above); they are not excluded from CI, only from this local run.
+No `--ignore`, `--basetemp`, or `-o cache_dir` flags — this is the plain, documented invocation. Exact pass counts are recorded in each dated update below rather than as a single running total in this paragraph, since this file's own regression-test coverage (including for the `.pytest_tmp`/`.pytest_cache` fix above) has grown after Phase 10 itself closed and will keep changing; treat "all tests pass, zero failures, zero errors" as the durable claim and any specific number as a snapshot.
 
-**Result:** migrations at head, `alembic check` clean, quality gates clean, and every test that can run against this machine's filesystem passes — **3087 of 3087 runnable tests locally, 3182 collected project-wide**, including `test_the_vertical_slice_scenario` and the now-deterministic `test_api_sessions.py`.
+**Result (Phase 10 closure, before the basetemp/cache_dir fix):** migrations at head, `alembic check` clean, quality gates clean; 3087 of 3087 tests runnable under that session's `--ignore`d local run passed, 3182 collected project-wide, including `test_the_vertical_slice_scenario` and the now-deterministic `test_api_sessions.py`.
+
+**Result (after the basetemp/cache_dir fix, same day):** `pytest tests/unit -q` with no overrides — **302 of 302 unit tests passed** at the moment the fix itself was verified, confirming the diagnosis; **308 of 308** after also adding `tests/unit/test_pytest_config.py`'s 6-test regression guard for the fix, in the same pass. `ruff format --check .`/`ruff check .`/`mypy src` all clean. Full `tests/database`/`tests/scenario` re-verified separately against local PostgreSQL 18 with no failures.
 
 ## CI status on the final head
 
@@ -66,7 +68,7 @@ Per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), t
 ## First-Time Obligations ([§24.1](PLAN.md#241-phase-exit-review))
 
 - **First phase closed primarily through re-verification rather than new schema/command delivery.** Every workstream's own domain code was already merged; this closing pass's only production-adjacent change is the one-line test-fixture fix above.
-- **First verification record to explicitly separate "real defect" from "local-machine-only artifact"** in its own section, rather than folding environment noise into the defect list — done here because the two categories required materially different evidence (reproduction across runs vs. a documented, unresolvable local ACL/`PATH` quirk) and materially different resolutions (a code fix vs. none needed).
+- **First verification record to explicitly separate "real defect" from "local-machine-only artifact"** in its own section, rather than folding environment noise into the defect list — done here because the two categories required materially different evidence (reproduction across runs vs. a locked directory) and materially different resolutions (a code fix vs., initially, a documented local `PATH` workaround — the `.pytest_tmp`/`.pytest_cache` ACL lock itself was later fixed by relocating pytest's `basetemp`/`cache_dir` rather than left as a permanent local quirk; see the "Fixed" note above).
 
 ## Recurring Obligations ([§24.1](PLAN.md#241-phase-exit-review))
 

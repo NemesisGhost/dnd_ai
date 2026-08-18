@@ -96,19 +96,35 @@ pythonpath = ["scripts"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# Default tmp_path/tmp_path_factory basetemp is the OS temp dir (Windows:
+# %TEMP%, under AppData\Local\Temp), shared with every other process on the
+# machine — on at least one development sandbox this hit permission errors
+# unrelated to any test's own logic. .tmp/ is this workspace's existing
+# gitignored scratch-artifact location (see .gitignore); pointing both
+# basetemp and pytest's own cache_dir at a dedicated subdirectory there
+# keeps tmp_path-based tests and the cache reproducible regardless of the
+# ambient OS temp dir's state or permissions. Both are recreated fresh
+# each session (pytest clears basetemp; cache_dir is created on demand),
+# so nothing here needs to survive between runs.
+#
+# This previously pointed at a bare .pytest_tmp/ (basetemp) and the
+# default .pytest_cache/ (cache_dir) at the repo root. On one Windows
+# sandbox, some earlier process left both of those directories in a
+# state this account could not write to, remove, or take ownership of
+# (icacls/takeown both refused with "Access is denied") — so every
+# tmp_path-dependent test failed at fixture teardown regardless of the
+# test's own logic. No attempt was made to delete, take ownership of, or
+# modify ACLs on those directories; they are simply no longer used.
+# .tmp/pytest-tmp/.tmp/pytest-cache below are fresh paths, never
+# poisoned this way; if a similar lock ever recurs here too, picking a
+# new directory name is the fix, per docs/PHASE10_VERIFICATION.md.
+cache_dir = ".tmp/pytest-cache"
 addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
     "--showlocals",
-    # Default tmp_path/tmp_path_factory basetemp is the OS temp dir
-    # (Windows: %TEMP%, under AppData\Local\Temp), shared with every other
-    # process on the machine — on at least one development sandbox this hit
-    # permission errors unrelated to any test's own logic. Pointing basetemp
-    # at a dedicated directory inside the repo (gitignored; pytest clears it
-    # at the start of every session) keeps tmp_path-based tests reproducible
-    # regardless of the ambient OS temp dir's state or permissions.
-    "--basetemp=.pytest_tmp",
+    "--basetemp=.tmp/pytest-tmp",
 ]
 markers = [
     "unit: Unit tests with no database",
