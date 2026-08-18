@@ -1356,7 +1356,7 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 7 | Complete | Quests and expanded knowledge behavior | None |
 | 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
 | 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
-| 10 | In progress | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service | Complete the API vertical-slice exit scenario and any still-missing endpoint composition |
+| 10 | Complete | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | None |
 | 11 | Not started | — | Foundry MVP |
 | 12 | Not started | — | Narrow AI/NPC and rules-corpus MVP |
 | 13 | Not started | — | Web portal MVP and same-origin packaging |
@@ -1619,7 +1619,7 @@ Exit criteria:
 
 ### Phase 10: Core API and playable vertical slice
 
-**Status: In progress.**
+**Status: Complete.** See [docs/PHASE10_VERIFICATION.md](PHASE10_VERIFICATION.md) for the closing verification record.
 
 Implemented:
 
@@ -1629,12 +1629,7 @@ Implemented:
 - Audience-filtered queries for the vertical-slice domains and campaign/session summaries.
 - Durable idempotency and auditing, including pre-campaign creation reservations and timeline bootstrap grants.
 - Docker image and Compose services for PostgreSQL, migrations, and the API.
-
-Remaining:
-
-- Run and record the complete API vertical-slice acceptance scenario against the phase's exit criteria.
-- Close any endpoint or response-composition gaps exposed by that scenario.
-- Confirm final-head CI and write the phase verification record.
+- The complete API vertical-slice acceptance scenario (`tests/scenario/test_vertical_slice_api.py`), run and recorded against every clause of the phase's exit criterion, with the one gap it exposed (a flaky test fixture, not a production defect) fixed and re-verified — see [docs/PHASE10_VERIFICATION.md](PHASE10_VERIFICATION.md).
 
 The implementation record below preserves detailed workstream decisions; the deliverables and exit criteria after it remain authoritative.
 

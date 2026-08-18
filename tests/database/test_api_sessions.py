@@ -11,7 +11,7 @@ the first end call.
 
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,14 +54,19 @@ class Fixture:
             1,
             start_world_time_id=self.start_world_time_id,
         )
+        already_ended_started_at = datetime.now(UTC)
         self.already_ended_session_id = make_session(
             connection,
             self.campaign_id,
             2,
             start_world_time_id=self.start_world_time_id,
             end_world_time_id=self.end_world_time_id,
-            started_at=datetime.now(UTC),
-            ended_at=datetime.now(UTC),
+            started_at=already_ended_started_at,
+            # ck_sessions_ended_after_started requires ended_at > started_at
+            # strictly; two independent datetime.now(UTC) calls can land on
+            # the same instant under a coarse system clock, so derive this
+            # one from the first instead of sampling the clock again.
+            ended_at=already_ended_started_at + timedelta(seconds=1),
         )
 
         self.gm_user_id = make_user(connection, "Session API GM")
