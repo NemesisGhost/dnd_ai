@@ -29,19 +29,95 @@ Markers (unit, database, scenario) are registered in pyproject.toml, not here.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import uuid
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+import psycopg
 import pytest
 from dotenv import load_dotenv
 from sqlalchemy import URL, Connection, Engine, create_engine, make_url, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
+
+# --- Per-run pytest basetemp -------------------------------------------
+#
+# A *fixed* basetemp name (this project previously used a bare
+# .pytest_tmp/, then .tmp/pytest-tmp/) can end up owned by an ACL a later
+# session — a different Windows sandbox identity, observed twice on this
+# project — can neither read, write, nor take ownership of. Once that
+# happens the name itself is permanently poisoned: every session that
+# reuses it fails every tmp_path-dependent test at fixture teardown,
+# regardless of that test's own logic, and picking yet another fixed name
+# only postpones the same failure to whenever *that* name's creating
+# identity next differs from a later one.
+#
+# The fix is structural, not another fixed name: every pytest process
+# generates its own fresh, uniquely named basetemp under this workspace's
+# gitignored .tmp/ scratch directory before pytest's built-in tmpdir
+# plugin ever reads config.option.basetemp — so each run is created by,
+# and only ever used by, the identity running it. A stale directory left
+# by a previous run (crashed before cleanup, or simply inaccessible to
+# this identity) is never selected again; at most it sits unused under
+# .tmp/ until an identity that *can* remove it does so opportunistically.
+_PYTEST_TMP_ROOT = REPO_ROOT / ".tmp"
+_PYTEST_RUN_DIR_PREFIX = "pytest-tmp-"
+
+
+def _new_pytest_run_basetemp() -> Path:
+    """A fresh, unique path under _PYTEST_TMP_ROOT. The directory itself
+    is not created here — pytest's own TempPathFactory.getbasetemp()
+    creates it (0o700) the first time a test actually asks for
+    tmp_path/tmp_path_factory, which also means a session that never
+    touches either never creates a directory here at all. _PYTEST_TMP_ROOT
+    (.tmp/) itself is created eagerly, though: getbasetemp()'s own mkdir
+    call is not parents=True, so it requires .tmp/ to already exist — true
+    on an established checkout, but not guaranteed on a fresh one."""
+    _PYTEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return _PYTEST_TMP_ROOT / f"{_PYTEST_RUN_DIR_PREFIX}{uuid.uuid4().hex}"
+
+
+def _cleanup_stale_pytest_run_dirs(keep: Path) -> None:
+    """Best-effort removal of previous runs' basetemp directories,
+    skipping `keep` (this run's own, not created yet at this point) and
+    silently leaving behind anything this identity can't remove — an
+    inaccessible leftover from a different identity is exactly the case
+    this whole mechanism exists to make irrelevant, not something worth
+    failing a test session over. Never raises."""
+    if not _PYTEST_TMP_ROOT.is_dir():
+        return
+    for candidate in _PYTEST_TMP_ROOT.glob(f"{_PYTEST_RUN_DIR_PREFIX}*"):
+        if candidate == keep:
+            continue
+        try:
+            shutil.rmtree(candidate)
+        except OSError:
+            continue
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Assigns this run's own unique basetemp unless the caller already
+    supplied --basetemp explicitly (left untouched either way). Runs via
+    pytest's own public pytest_configure hook — the same extension point
+    any plugin uses, not a private internal — and must run before the
+    built-in tmpdir plugin's own pytest_configure() captures
+    config.option.basetemp into its TempPathFactory; `tryfirst=True`
+    makes that ordering explicit rather than relying on conftest.py
+    hooks incidentally running first. tests/unit/test_pytest_tmp_setup.py
+    proves this ordering behaviorally, via a real subprocess.
+    """
+    if config.option.basetemp is not None:
+        return
+    run_dir = _new_pytest_run_basetemp()
+    config.option.basetemp = str(run_dir)
+    _cleanup_stale_pytest_run_dirs(keep=run_dir)
+
 
 # docs/DATABASE_CONVENTIONS.md §2.1 pins one PostgreSQL major version across
 # local, dev/staging/prod, and CI.
@@ -122,16 +198,43 @@ class UnsupportedPostgresVersionError(RuntimeError):
     """
 
 
-class DatabaseSetupTimeoutError(RuntimeError):
-    """A PostgreSQL connection attempt, or the Alembic migration subprocess,
-    did not complete within its bounded timeout while provisioning the
-    ephemeral test database.
+class DatabaseSetupError(RuntimeError):
+    """Base class for every diagnosed test-database-setup failure below.
+    Never raised directly — always one of the two subclasses, chosen by
+    _classify_setup_failure() rather than assumed. Catch this to handle
+    "database setup failed, for a reason with an actionable, redacted
+    diagnosis" generically; catch a specific subclass to distinguish a
+    hang from an immediate rejection."""
+
+
+class DatabaseSetupTimeoutError(DatabaseSetupError):
+    """A PostgreSQL connection attempt, or the Alembic migration
+    subprocess, did not complete within its bounded timeout while
+    provisioning the ephemeral test database.
 
     Raised instead of letting the underlying psycopg connection or the
     `alembic upgrade head` subprocess hang indefinitely — see
-    _DB_CONNECT_TIMEOUT_SECONDS/_MIGRATION_SUBPROCESS_TIMEOUT_SECONDS above.
-    Always built via _setup_timeout_error(), which redacts the target URL
-    and strips any password out of the underlying driver/subprocess error
+    _DB_CONNECT_TIMEOUT_SECONDS/_MIGRATION_SUBPROCESS_TIMEOUT_SECONDS
+    above. Reserved for a *genuine* timeout: psycopg's own
+    ConnectionTimeout (raised precisely when connect_timeout expires) or
+    subprocess.TimeoutExpired — never a catch-all for "some DBAPIError
+    happened," which is what DatabaseConnectionError below is for.
+    """
+
+
+class DatabaseConnectionError(DatabaseSetupError):
+    """A PostgreSQL connection attempt, or a statement run while
+    provisioning the ephemeral test database, failed immediately — for a
+    reason *other* than a bounded timeout expiring. _classify_setup_failure()
+    labels the specific category where recognizable: authentication, DNS
+    resolution, connection refused/closed, TLS/SSL, a missing database, or
+    insufficient privilege are the ones this project has actually observed
+    (real regression tests exist for each — see
+    tests/database/test_conftest_setup_diagnostics.py and
+    tests/unit/test_conftest_database_setup_timeouts.py); an unrecognized
+    case still gets a generic label, never a timeout claim it doesn't
+    deserve. Always built via _build_connection_error(), which redacts the
+    target URL and strips any password out of the underlying driver error
     text too, so this can be printed safely to test output or CI logs.
     """
 
@@ -180,10 +283,8 @@ def _require_supported_postgres(engine: Engine) -> None:
     try:
         with engine.connect() as conn:
             version_num = int(conn.execute(text("SHOW server_version_num")).scalar_one())
-    except OperationalError as exc:
-        raise _setup_timeout_error(
-            "Connecting to PostgreSQL", engine.url, _DB_CONNECT_TIMEOUT_SECONDS, exc
-        ) from exc
+    except DBAPIError as exc:
+        raise _build_connection_error("Connecting to PostgreSQL", engine.url, exc) from exc
     _check_server_major_version(version_num)
 
 
@@ -239,14 +340,65 @@ def _redact_secret(text_: str, url: str | URL) -> str:
     return text_
 
 
-def _setup_timeout_error(
+def _classify_setup_failure(cause: BaseException) -> tuple[type[DatabaseSetupError], str]:
+    """Inspects `cause` (a caught DBAPIError from a database-setup
+    connection or statement) and returns which DatabaseSetupError
+    subclass it represents, plus a short human-readable label for the
+    message.
+
+    Only psycopg's own ConnectionTimeout — raised precisely when
+    connect_timeout expires — is ever classified as a timeout. Every
+    other DBAPI failure is a DatabaseConnectionError. Empirically (see
+    tests/database/test_conftest_setup_diagnostics.py, which drives each
+    of these against a real PostgreSQL 18 server rather than assuming),
+    psycopg gives statement-execution-time failures a distinctly typed
+    exception (InsufficientPrivilege), but reports most *connection*-
+    phase failures — authentication, a missing database — as a plain
+    OperationalError with a descriptive message rather than a typed
+    subclass, so those are classified from that message's text instead.
+    An unrecognized case still gets a generic label — the underlying
+    message is always included verbatim (redacted) in the built error
+    regardless of whether this heuristic recognizes it, so nothing is
+    ever lost even when the label is generic.
+    """
+    orig = getattr(cause, "orig", cause)
+
+    if isinstance(orig, psycopg.errors.ConnectionTimeout):
+        return DatabaseSetupTimeoutError, "connection timed out"
+    if isinstance(orig, psycopg.errors.InsufficientPrivilege):
+        return DatabaseConnectionError, "insufficient privilege"
+
+    message = str(orig).lower()
+    if "password authentication failed" in message or "authentication" in message:
+        return DatabaseConnectionError, "authentication failed"
+    if "permission denied" in message:
+        return DatabaseConnectionError, "insufficient privilege"
+    if "does not exist" in message:
+        return DatabaseConnectionError, "database or role does not exist"
+    if "ssl" in message or "tls" in message or "certificate" in message:
+        return DatabaseConnectionError, "TLS/SSL error"
+    if (
+        "resolve host" in message
+        or "getaddrinfo" in message
+        or "name or service not known" in message
+        or "name resolution" in message
+    ):
+        return DatabaseConnectionError, "DNS resolution failed"
+    if "refused" in message or "closed the connection" in message or "reset by peer" in message:
+        return DatabaseConnectionError, "connection refused or closed"
+    return DatabaseConnectionError, "connection failed"
+
+
+def _build_timeout_error(
     action: str, url: str | URL, timeout_seconds: float, cause: BaseException
 ) -> DatabaseSetupTimeoutError:
-    """Builds the one diagnostic message every timeout site below raises,
-    so the target host/database, the bound that was exceeded, and a
-    concrete remediation are always reported together — and a password
-    never appears, whether from `url` itself or from the underlying
-    driver/subprocess error text."""
+    """Builds the diagnostic for a *known* timeout — the caller already
+    established this (subprocess.TimeoutExpired admits no other
+    interpretation) rather than asking _classify_setup_failure() to
+    guess. Reports the target host/database, the bound that was
+    exceeded, and a concrete remediation — and a password never appears,
+    whether from `url` itself or from the underlying driver/subprocess
+    error text."""
     return DatabaseSetupTimeoutError(
         f"{action} against {_redact_database_url(url)} did not complete "
         f"within {timeout_seconds:g}s. tests/database and tests/scenario "
@@ -255,6 +407,31 @@ def _setup_timeout_error(
         "(docs/DEVELOPMENT.md §3: `docker compose up -d db` for the "
         "local/self-hosted default) and that DATABASE_URL/"
         "DND_AI_TEST_DATABASE_URL name the right target. "
+        f"Underlying error: {_redact_secret(str(cause), url)}"
+    )
+
+
+def _build_connection_error(
+    action: str, url: str | URL, cause: BaseException
+) -> DatabaseSetupError:
+    """Classifies a caught DBAPIError from a connection attempt or
+    statement execution (via _classify_setup_failure()) and builds the
+    matching diagnostic: DatabaseSetupTimeoutError only for a genuine
+    connect_timeout expiry — which can happen here too, not only at the
+    initial version check, since CREATE DATABASE/DROP DATABASE each open
+    their own connection — or DatabaseConnectionError, clearly labeled by
+    category, for everything else. Either way, the target and the
+    underlying driver message are redacted the same way
+    _build_timeout_error()'s are.
+    """
+    error_class, label = _classify_setup_failure(cause)
+    if error_class is DatabaseSetupTimeoutError:
+        return _build_timeout_error(action, url, _DB_CONNECT_TIMEOUT_SECONDS, cause)
+    return DatabaseConnectionError(
+        f"{action} against {_redact_database_url(url)} failed ({label}), "
+        "not a timeout — check the credentials, host/port, database name, "
+        "and role privileges named by DATABASE_URL/DND_AI_TEST_DATABASE_URL "
+        "(docs/DEVELOPMENT.md §3). "
         f"Underlying error: {_redact_secret(str(cause), url)}"
     )
 
@@ -281,7 +458,7 @@ def _run_bounded_subprocess(
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
-        raise _setup_timeout_error(action, url, timeout_seconds, exc) from exc
+        raise _build_timeout_error(action, url, timeout_seconds, exc) from exc
 
 
 def _run_alembic_upgrade(database_url: str) -> None:
@@ -341,12 +518,9 @@ def postgres_engine() -> Iterator[Engine]:
         try:
             with admin_engine.connect() as conn:
                 conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-        except OperationalError as exc:
-            raise _setup_timeout_error(
-                "Creating the ephemeral test database",
-                admin_url,
-                _DB_CONNECT_TIMEOUT_SECONDS,
-                exc,
+        except DBAPIError as exc:
+            raise _build_connection_error(
+                "Creating the ephemeral test database", admin_url, exc
             ) from exc
     finally:
         admin_engine.dispose()
@@ -380,12 +554,9 @@ def postgres_engine() -> Iterator[Engine]:
                     conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
             finally:
                 admin_engine.dispose()
-        except OperationalError as exc:
-            cleanup_error = _setup_timeout_error(
-                "Dropping the ephemeral test database",
-                admin_url,
-                _DB_CONNECT_TIMEOUT_SECONDS,
-                exc,
+        except DBAPIError as exc:
+            cleanup_error = _build_connection_error(
+                "Dropping the ephemeral test database", admin_url, exc
             )
             if setup_already_failed:
                 # A real setup failure is already propagating (the usual

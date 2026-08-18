@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,13 +27,14 @@ import pytest
 from sqlalchemy import create_engine
 
 from tests.conftest import (
+    DatabaseConnectionError,
     DatabaseSetupTimeoutError,
+    _build_timeout_error,
     _connect_args,
     _redact_database_url,
     _redact_secret,
     _require_supported_postgres,
     _run_bounded_subprocess,
-    _setup_timeout_error,
 )
 
 pytestmark = pytest.mark.unit
@@ -101,6 +103,69 @@ def test_unreachable_postgres_fails_fast_with_redacted_diagnostic(
     assert _FAKE_PASSWORD not in message
 
 
+@contextmanager
+def _immediately_closing_listener() -> Iterator[int]:
+    """A TCP server that accepts and immediately closes the connection —
+    no PostgreSQL protocol bytes exchanged at all — simulating an
+    immediate connection rejection distinct from a timeout: this fails
+    fast (well under a second, not connect_timeout's several seconds),
+    so a caller mistakenly classifying it as a timeout would be caught
+    by the elapsed-time assertion below, independent of the exception
+    type assertion."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def _accept_and_close() -> None:
+        try:
+            conn, _ = server.accept()
+        except OSError:
+            return
+        conn.close()
+
+    thread = threading.Thread(target=_accept_and_close, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+        thread.join(timeout=5)
+
+
+def test_an_immediate_connection_rejection_is_not_classified_as_a_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression for the original defect: every DBAPIError used to be
+    # translated into DatabaseSetupTimeoutError regardless of whether a
+    # timeout actually occurred. This is a real, fast rejection — not a
+    # simulated one — that must come back as DatabaseConnectionError.
+    monkeypatch.setattr("tests.conftest._DB_CONNECT_TIMEOUT_SECONDS", 10)
+
+    with _immediately_closing_listener() as port:
+        url = f"postgresql+psycopg://postgres:{_FAKE_PASSWORD}@127.0.0.1:{port}/dnd_ai"
+        engine = create_engine(url, connect_args=_connect_args())
+        start = time.monotonic()
+        try:
+            with pytest.raises(DatabaseConnectionError) as exc_info:
+                _require_supported_postgres(engine)
+        finally:
+            elapsed = time.monotonic() - start
+            engine.dispose()
+
+    # Fast — nowhere near the 10s connect_timeout configured above — proof
+    # this was genuinely an immediate rejection, not a slow timeout that
+    # happened to get classified correctly by coincidence.
+    assert elapsed < 5.0, f"took {elapsed:.1f}s — this should have failed almost immediately"
+
+    error = exc_info.value
+    assert not isinstance(error, DatabaseSetupTimeoutError)
+    message = str(error)
+    assert "not a timeout" in message
+    assert "127.0.0.1" in message
+    assert _FAKE_PASSWORD not in message
+
+
 def test_hanging_alembic_style_subprocess_fails_fast_with_redacted_diagnostic() -> None:
     # A real child process that would hang far longer than the bound below
     # if not for subprocess.run(timeout=...) — not a mock of the timeout
@@ -163,10 +228,10 @@ def test_redact_secret_is_a_no_op_for_a_passwordless_url() -> None:
     assert _redact_secret(driver_message, url) == driver_message
 
 
-def test_setup_timeout_error_message_never_contains_the_password() -> None:
+def test_build_timeout_error_message_never_contains_the_password() -> None:
     url = f"postgresql+psycopg://postgres:{_FAKE_PASSWORD}@db.example:5432/dnd_ai"
     cause = RuntimeError(f"driver said: {_FAKE_PASSWORD}")
-    error = _setup_timeout_error("Connecting to PostgreSQL", url, 10, cause)
+    error = _build_timeout_error("Connecting to PostgreSQL", url, 10, cause)
     assert isinstance(error, DatabaseSetupTimeoutError)
     assert _FAKE_PASSWORD not in str(error)
     assert "db.example" in str(error)
