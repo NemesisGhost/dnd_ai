@@ -32,12 +32,13 @@ import os
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
-from sqlalchemy import Connection, Engine, create_engine, make_url, text
+from sqlalchemy import URL, Connection, Engine, create_engine, make_url, text
+from sqlalchemy.exc import OperationalError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
@@ -81,6 +82,21 @@ REQUIRED_POSTGRES_MAJOR_VERSION = 18
 _TEST_ENGINE_POOL_PRE_PING = True
 _TEST_ENGINE_POOL_RECYCLE_SECONDS = 1800
 
+# An unreachable PostgreSQL host (a silently-blackholed address, a listener
+# that never completes the startup handshake, ...) or a stuck `alembic
+# upgrade head` used to hang postgres_engine() indefinitely — no timeout on
+# any connection attempt or on the migration subprocess meant a bad target
+# silently consumed the entire pytest run (and CI job) instead of failing
+# fast with a diagnosis. Every create_engine() call below now passes
+# connect_args=_connect_args() (a bounded libpq connect_timeout, which
+# covers the full connection handshake, not just the initial TCP SYN/ACK),
+# and _run_alembic_upgrade()/_run_bounded_subprocess() pass a bounded
+# subprocess timeout. Both are read as module attributes at call time
+# (never captured as default-argument values), so tests can monkeypatch
+# them to small values without waiting out the real production bound.
+_DB_CONNECT_TIMEOUT_SECONDS = 10
+_MIGRATION_SUBPROCESS_TIMEOUT_SECONDS = 300
+
 load_dotenv()
 
 
@@ -103,6 +119,20 @@ class UnsupportedPostgresVersionError(RuntimeError):
     class of problem ADR 0011's two-tier verification model exists to
     catch — so it must fail the run rather than quietly test against the
     wrong version.
+    """
+
+
+class DatabaseSetupTimeoutError(RuntimeError):
+    """A PostgreSQL connection attempt, or the Alembic migration subprocess,
+    did not complete within its bounded timeout while provisioning the
+    ephemeral test database.
+
+    Raised instead of letting the underlying psycopg connection or the
+    `alembic upgrade head` subprocess hang indefinitely — see
+    _DB_CONNECT_TIMEOUT_SECONDS/_MIGRATION_SUBPROCESS_TIMEOUT_SECONDS above.
+    Always built via _setup_timeout_error(), which redacts the target URL
+    and strips any password out of the underlying driver/subprocess error
+    text too, so this can be printed safely to test output or CI logs.
     """
 
 
@@ -147,21 +177,111 @@ def _require_supported_postgres(engine: Engine) -> None:
     has to be cleaned up. Applied identically on both the DATABASE_URL and
     DND_AI_TEST_DATABASE_URL paths, so local and CI can't diverge here.
     """
-    with engine.connect() as conn:
-        version_num = int(conn.execute(text("SHOW server_version_num")).scalar_one())
+    try:
+        with engine.connect() as conn:
+            version_num = int(conn.execute(text("SHOW server_version_num")).scalar_one())
+    except OperationalError as exc:
+        raise _setup_timeout_error(
+            "Connecting to PostgreSQL", engine.url, _DB_CONNECT_TIMEOUT_SECONDS, exc
+        ) from exc
     _check_server_major_version(version_num)
 
 
+def _connect_args() -> dict[str, object]:
+    """The bounded libpq connect_timeout applied to every psycopg
+    connection made while provisioning/tearing down the ephemeral test
+    database — factored out (like _test_engine_kwargs() below) so it's
+    unit-testable as plain data and so tests/unit/
+    test_conftest_database_setup_timeouts.py can monkeypatch
+    _DB_CONNECT_TIMEOUT_SECONDS down for a fast regression test rather
+    than waiting out the real production bound."""
+    return {"connect_timeout": _DB_CONNECT_TIMEOUT_SECONDS}
+
+
 def _test_engine_kwargs() -> dict[str, object]:
-    """The pool-resilience kwargs applied to both create_engine() calls in
-    postgres_engine() below — factored out to a pure function, rather than
-    inlined at each call site, so the settings are unit-testable
-    (tests/unit/test_conftest_guards.py) as plain data without asserting
-    on SQLAlchemy's own (partly private) Pool/Engine internals."""
+    """The pool-resilience/connection-timeout kwargs applied to both
+    create_engine() calls in postgres_engine() below — factored out to a
+    pure function, rather than inlined at each call site, so the settings
+    are unit-testable (tests/unit/test_conftest_guards.py) as plain data
+    without asserting on SQLAlchemy's own (partly private) Pool/Engine
+    internals."""
     return {
         "pool_pre_ping": _TEST_ENGINE_POOL_PRE_PING,
         "pool_recycle": _TEST_ENGINE_POOL_RECYCLE_SECONDS,
+        "connect_args": _connect_args(),
     }
+
+
+def _redact_database_url(url: str | URL) -> str:
+    """Renders `url` with any password masked. Tolerates a URL that fails
+    to parse (e.g. malformed input) rather than raising — a diagnostic-
+    message helper must never itself blow up and replace the real error
+    it was building a message for."""
+    try:
+        parsed = url if isinstance(url, URL) else make_url(url)
+    except Exception:
+        return "<database URL (unparseable)>"
+    return parsed.render_as_string(hide_password=True)
+
+
+def _redact_secret(text_: str, url: str | URL) -> str:
+    """Strips `url`'s literal password (if any) out of arbitrary text —
+    e.g. a driver or subprocess exception's own message — as defense in
+    depth beyond the redacted URL _setup_timeout_error() already builds,
+    which never includes it in the first place."""
+    try:
+        parsed = url if isinstance(url, URL) else make_url(url)
+    except Exception:
+        return text_
+    password = parsed.password
+    if password:
+        return text_.replace(password, "***")
+    return text_
+
+
+def _setup_timeout_error(
+    action: str, url: str | URL, timeout_seconds: float, cause: BaseException
+) -> DatabaseSetupTimeoutError:
+    """Builds the one diagnostic message every timeout site below raises,
+    so the target host/database, the bound that was exceeded, and a
+    concrete remediation are always reported together — and a password
+    never appears, whether from `url` itself or from the underlying
+    driver/subprocess error text."""
+    return DatabaseSetupTimeoutError(
+        f"{action} against {_redact_database_url(url)} did not complete "
+        f"within {timeout_seconds:g}s. tests/database and tests/scenario "
+        "fail fast here instead of hanging indefinitely — confirm "
+        "PostgreSQL is actually reachable at that host/port "
+        "(docs/DEVELOPMENT.md §3: `docker compose up -d db` for the "
+        "local/self-hosted default) and that DATABASE_URL/"
+        "DND_AI_TEST_DATABASE_URL name the right target. "
+        f"Underlying error: {_redact_secret(str(cause), url)}"
+    )
+
+
+def _run_bounded_subprocess(
+    args: Sequence[str],
+    *,
+    timeout_seconds: float,
+    env: dict[str, str],
+    url: str | URL,
+    action: str,
+) -> None:
+    """subprocess.run(..., check=True) with a bounded timeout, translating
+    a timeout into an actionable DatabaseSetupTimeoutError. A real,
+    non-timeout failure (e.g. a genuine migration error) still raises
+    subprocess.CalledProcessError unchanged — only the "it never
+    finished" failure mode is translated here."""
+    try:
+        subprocess.run(
+            list(args),
+            check=True,
+            cwd=REPO_ROOT,
+            env=env,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _setup_timeout_error(action, url, timeout_seconds, exc) from exc
 
 
 def _run_alembic_upgrade(database_url: str) -> None:
@@ -169,11 +289,12 @@ def _run_alembic_upgrade(database_url: str) -> None:
     # entry point: identical behavior, but doesn't depend on a separate
     # PATH-resolved executable existing/being runnable at all — the
     # interpreter running this test session is already known-good.
-    subprocess.run(
+    _run_bounded_subprocess(
         [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
-        check=True,
-        cwd=REPO_ROOT,
+        timeout_seconds=_MIGRATION_SUBPROCESS_TIMEOUT_SECONDS,
         env={**os.environ, "DATABASE_URL": database_url},
+        url=database_url,
+        action="alembic upgrade head",
     )
 
 
@@ -208,14 +329,25 @@ def postgres_engine() -> Iterator[Engine]:
     # Admin/cleanup engines below are deliberately left without pre-ping/
     # recycle: each is created, used for one or two short-lived
     # statements (CREATE DATABASE / DROP DATABASE), and disposed
-    # immediately — never held open long enough to go stale, so the
-    # protection above would add overhead without addressing a real risk
-    # here.
-    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    # immediately — never held open long enough to go stale, so that
+    # protection would add overhead without addressing a real risk here.
+    # They still get the same bounded connect_args() as every other engine
+    # in this fixture, so an unreachable admin_url fails fast here too.
+    admin_engine = create_engine(
+        admin_url, isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+    )
     try:
         _require_supported_postgres(admin_engine)
-        with admin_engine.connect() as conn:
-            conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        try:
+            with admin_engine.connect() as conn:
+                conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        except OperationalError as exc:
+            raise _setup_timeout_error(
+                "Creating the ephemeral test database",
+                admin_url,
+                _DB_CONNECT_TIMEOUT_SECONDS,
+                exc,
+            ) from exc
     finally:
         admin_engine.dispose()
 
@@ -232,10 +364,38 @@ def postgres_engine() -> Iterator[Engine]:
         finally:
             engine.dispose()
     finally:
-        admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-        with admin_engine.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        admin_engine.dispose()
+        # setup_already_failed must be read *before* attempting cleanup
+        # below, while whatever exception is unwinding through this
+        # `finally` (a migration timeout, a real migration error, a test
+        # failure, or nothing at all) is still the active exception per
+        # sys.exc_info() — cleanup's own failure must never silently
+        # replace it.
+        setup_already_failed = sys.exc_info()[0] is not None
+        try:
+            admin_engine = create_engine(
+                admin_url, isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+            )
+            try:
+                with admin_engine.connect() as conn:
+                    conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+            finally:
+                admin_engine.dispose()
+        except OperationalError as exc:
+            cleanup_error = _setup_timeout_error(
+                "Dropping the ephemeral test database",
+                admin_url,
+                _DB_CONNECT_TIMEOUT_SECONDS,
+                exc,
+            )
+            if setup_already_failed:
+                # A real setup failure is already propagating (the usual
+                # case being the same unreachable-server root cause this
+                # cleanup attempt just hit too) — warn instead of raising,
+                # so that original exception remains what the caller sees
+                # per "show the real setup cause", not this one.
+                print(f"WARNING: {cleanup_error}", file=sys.stderr)
+            else:
+                raise cleanup_error from exc
 
 
 @pytest.fixture
