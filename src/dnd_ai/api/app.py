@@ -37,6 +37,7 @@ from .access_grants import router as access_grants_router
 from .auth import dispose_jwks_client
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
+from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(access_grants_router)
     app.include_router(campaign_invitations_router)
     app.include_router(campaigns_router)
+    app.include_router(character_state_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounters_router)
