@@ -1,0 +1,54 @@
+<div class="dnd-ai-adapter-form">
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.Actor"}}</label>
+    <select name="actorId">
+      {{#each linkedActors}}
+        <option value="{{this.id}}">{{this.name}}</option>
+      {{/each}}
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.Action"}}</label>
+    <select name="actionType">
+      <option value="combat-turn">{{localize "DNDAI.SyncDialog.SubmitCombatTurn"}}</option>
+      <option value="apply-condition">{{localize "DNDAI.SyncDialog.ApplyCondition"}}</option>
+      <option value="remove-condition">{{localize "DNDAI.SyncDialog.RemoveCondition"}}</option>
+      <option value="adjust-resource">{{localize "DNDAI.SyncDialog.AdjustResource"}}</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.Target"}}</label>
+    <select name="targetId">
+      <option value="">{{localize "DNDAI.SyncDialog.NoTarget"}}</option>
+      {{#each linkedActors}}
+        <option value="{{this.id}}">{{this.name}}</option>
+      {{/each}}
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.DamageAmount"}}</label>
+    <input type="number" name="damageAmount" min="0" />
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.ConditionId"}}</label>
+    <input type="text" name="conditionId" placeholder="00000000-0000-0000-0000-000000000000" />
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.ResourceDefinitionId"}}</label>
+    <input type="text" name="resourceDefinitionId" placeholder="00000000-0000-0000-0000-000000000000" />
+  </div>
+
+  <div class="form-group">
+    <label>{{localize "DNDAI.SyncDialog.Delta"}}</label>
+    <input type="number" name="delta" />
+  </div>
+
+  <footer class="form-footer">
+    <button type="submit"><i class="fa-solid fa-paper-plane"></i> {{localize "DNDAI.SyncDialog.Submit"}}</button>
+  </footer>
+</div>

@@ -1,0 +1,14 @@
+{
+  "name": "dnd-ai-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FoundryVTT client module for the D&D AI platform's Foundry adapter API. Zero runtime/dev dependencies by design (docs/DEVELOPMENT.md) — Foundry loads these as native ES modules, and tests run on Node's built-in test runner.",
+  "scripts": {
+    "test": "node --test test/",
+    "package": "node packaging/package.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

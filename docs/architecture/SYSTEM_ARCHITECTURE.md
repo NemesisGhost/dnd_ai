@@ -437,6 +437,8 @@ Integration responsibilities:
 - synchronize selected character and scene fields
 - tolerate offline or delayed synchronization
 
+Delivered (Phase 11 workstream 7): `foundry-module/` — a real, installable FoundryVTT module (dnd5e-only; FoundryVTT minimum `12`, verified `13.351`) implementing the client half of this section, over the adapter-facing API contract [§19.1](../architecture/DATABASE_MODEL.md#191-identity-and-login) and [DATABASE_MODEL.md §19](../architecture/DATABASE_MODEL.md) already establish. Combat-turn/condition/resource submission is always an explicit GM/player action (its own "D&D AI Sync" panel), never inferred from FoundryVTT's dnd5e-system-specific chat-card/damage-application internals; HP synchronization alone is automatic, wired to Foundry's `updateActor` hook with a self-updating guard so the module's own confirmed write-back never re-triggers a second submission. See `foundry-module/README.md` for the GM setup flow (`scripts/foundry_provision.py`, the OIDC-authenticated provisioning CLI standing in for the portal UI Phase 13 will eventually provide) and `tests/scenario/test_foundry_adapter_e2e.py` for the reproducible harness proving the exit criterion this integration exists to satisfy.
+
 ### 15.2 Discord
 
 Discord integration may support:
@@ -482,7 +484,7 @@ The import subsystem is intentionally isolated from canonical tables until promo
 | Discord adapter | Not yet built | Outbound gateway connection, once built |
 | Object storage | Not yet decided | Import source documents, exports, image layers |
 | Secrets | Environment variables / `.env` (gitignored) | No credential in an image, compose file, or source control |
-| FoundryVTT module | Runs in the user's Foundry instance | A client, not something this project deploys |
+| FoundryVTT module | Runs in the user's Foundry instance | A client, not something this project deploys — built and packaged from `foundry-module/` (`node packaging/package.mjs`), installed manually into the GM's own FoundryVTT instance (§15.1, `foundry-module/README.md`) |
 
 The API, worker, and adapter will share a single container image; the entrypoint selects the role, so there is one artifact to build and promote — see [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout) and [§3.6](../DEVELOPMENT.md#36-self-hosted-docker-compose).
 

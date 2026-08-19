@@ -44,6 +44,32 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src
 
+  foundry-module-check:
+    name: Foundry module tests and packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # foundry-module/ ships as native ES modules with no bundler and no
+    # npm dependencies (docs/DEVELOPMENT.md's toolchain table) — Node's
+    # own built-in test runner is the only tool this job needs beyond
+    # actions/setup-node. Independent of every other job here (no
+    # PostgreSQL, no Docker); the only place in this repository Node is
+    # used at all.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Run the test suite (node --test)
+        working-directory: foundry-module
+        run: node --test test/
+
+      - name: Package (proves the build/reproducible-zip step works)
+        working-directory: foundry-module
+        run: node packaging/package.mjs
+
   postgres-verification:
     name: Migrations and Tests (PostgreSQL 18)
     runs-on: ubuntu-latest

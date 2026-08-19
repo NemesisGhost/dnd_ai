@@ -1,0 +1,13 @@
+.dnd-ai-adapter-form fieldset {
+  margin-bottom: 0.5rem;
+}
+
+.dnd-ai-adapter-form .hint {
+  font-size: var(--font-size-12, 12px);
+  opacity: 0.75;
+}
+
+.dnd-ai-adapter-form .masked-credential {
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.1em;
+}

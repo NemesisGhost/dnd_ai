@@ -41,6 +41,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
 | Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
 | UI | **React** | Not yet started; no build tooling chosen |
+| Foundry module (`foundry-module/`) | **Plain ES modules, zero npm dependencies**; tests on Node's built-in test runner (`node --test`) | Phase 11 workstream 7. A separate, deliberately minimal choice from the still-undecided React-portal toolchain above — it ships as native ES modules FoundryVTT loads directly (`module.json`'s `esmodules`), so there is nothing to bundle or transpile. The only place Node is used in this repository; CI's `foundry-module-check` job is the only job that runs `actions/setup-node` |
 
 ---
 
@@ -61,7 +62,13 @@ The tree below describes the repository layout. `database/` holds migrations and
 ├── compose.ci.yaml            # CI override: disposable tmpfs storage
 ├── .dockerignore
 ├── docs/                      # ALL documentation (see CLAUDE.md §4)
-├── scripts/
+├── foundry-module/            # FoundryVTT client module (Phase 11 workstream 7) — its own
+│   │                          # toolchain (§1), never src/dnd_ai/ or the Python test suites
+│   ├── module.json
+│   ├── scripts/               # native ES modules, no build step
+│   ├── test/                  # node --test
+│   └── packaging/package.mjs      # zips scripts/styles/templates/lang/module.json into dist/
+├── scripts/                   # one-off CI/ops/provisioning scripts (incl. foundry_provision.py)
 ├── database/
 │   ├── alembic.ini
 │   ├── migrations/
@@ -461,9 +468,11 @@ including `compose.yaml` — there is nothing to open or revoke.
 
 CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) — it verifies the same self-hosted PostgreSQL 18 target the project deploys, not AWS RDS.
 
-`.github/workflows/ci.yml` has three jobs, none of which need AWS credentials or repository secrets:
+`.github/workflows/ci.yml` has five jobs, none of which need AWS credentials or repository secrets:
 
 **`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
+
+**`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test test/` and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
 
 **`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
@@ -475,6 +484,8 @@ CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hoste
 - the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) — `tests/conftest.py` provisions its own ephemeral database off the service container exactly as it does against a local server
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
+
+**`persistence-check`**: proves `compose.yaml`'s named PostgreSQL volume survives `--force-recreate` (a marker row written before recreation is still there after), then that `down -v` actually removes it — against the production volume mechanism itself, not `compose.ci.yaml`'s disposable tmpfs override.
 
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 
