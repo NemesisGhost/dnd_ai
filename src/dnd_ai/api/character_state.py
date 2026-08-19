@@ -15,6 +15,18 @@ scope once a caller actually needs it — the same "don't invent it
 speculatively" deferral `dnd_ai.api.movement`'s own docstring already
 states for its identical first cut.
 
+All four routes pass `allow_foundry_system=True` to `require_campaign_
+capability` (Phase 11 workstream 2 correction) — this module is squarely
+the "synchronize non-combat HP/condition/resource state" surface a Foundry
+adapter exists to drive, and none of the four names an `external_system_id`
+of its own for `dnd_ai.domain.access.assert_foundry_system_matches` to
+check (contrast `dnd_ai.api.integration`), so `require_campaign_
+capability`'s own world-binding check is the only additional gate a
+Foundry principal needs here. See `dnd_ai.domain.access.
+AuthenticatedPrincipal`'s docstring for the defect this correction closes
+and why every route accepting a Foundry credential must opt in
+explicitly rather than being reachable by default.
+
 Idempotency: every route here wires the durable `security.
 idempotent_requests` mechanism (`dnd_ai.api.idempotency`) every other
 create/mutate endpoint uses, protecting a dropped-response retry from
@@ -33,7 +45,12 @@ is always `character_id` — none of `campaign.character_state`/
 entities` row, the same owning-entity indirection `dnd_ai.api.movement`
 already applies for `character_location_history`. `world_id` is resolved
 server-side from the campaign's own pinned timeline, never caller-
-supplied.
+supplied. `acting_external_system_id` (Phase 11 workstream 2 correction)
+is always `access.principal.foundry_external_system_id` — `None` for an
+OIDC-authenticated GM, the authenticating system for a Foundry adapter —
+so the audit trail can distinguish the two without losing the linked
+`actor_user_id` either way (`dnd_ai.api.audit.record_change_log`'s own
+docstring).
 
 `record_id=None` on every call here — the first callers of `record_change_
 log` to do so. `campaign.character_state`/`.character_conditions`/
@@ -160,11 +177,15 @@ def adjust_hit_points_endpoint(
     campaign_id: uuid.UUID,  # noqa: ARG001
     character_id: uuid.UUID,
     body: AdjustHitPointsRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
+    access: Annotated[
+        AccessContext,
+        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+    ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> AdjustHitPointsResponse:
+    assert access.principal is not None
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
@@ -208,6 +229,7 @@ def adjust_hit_points_endpoint(
             correlation_id=correlation_id,
             command_name=_ADJUST_HIT_POINTS_COMMAND_NAME,
             event_id=result.event_id,
+            acting_external_system_id=access.principal.foundry_external_system_id,
         )
 
     response = AdjustHitPointsResponse(
@@ -237,11 +259,15 @@ def apply_character_condition_endpoint(
     campaign_id: uuid.UUID,  # noqa: ARG001
     character_id: uuid.UUID,
     body: ApplyCharacterConditionRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
+    access: Annotated[
+        AccessContext,
+        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+    ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> ApplyCharacterConditionResponse:
+    assert access.principal is not None
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
@@ -286,6 +312,7 @@ def apply_character_condition_endpoint(
             correlation_id=correlation_id,
             command_name=_APPLY_CONDITION_COMMAND_NAME,
             event_id=result.event_id,
+            acting_external_system_id=access.principal.foundry_external_system_id,
         )
 
     response = ApplyCharacterConditionResponse(event_id=result.event_id, changed=result.changed)
@@ -311,11 +338,15 @@ def remove_character_condition_endpoint(
     character_id: uuid.UUID,
     condition_id: uuid.UUID,
     body: RemoveCharacterConditionRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
+    access: Annotated[
+        AccessContext,
+        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+    ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> RemoveCharacterConditionResponse:
+    assert access.principal is not None
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
@@ -360,6 +391,7 @@ def remove_character_condition_endpoint(
             correlation_id=correlation_id,
             command_name=_REMOVE_CONDITION_COMMAND_NAME,
             event_id=result.event_id,
+            acting_external_system_id=access.principal.foundry_external_system_id,
         )
 
     response = RemoveCharacterConditionResponse(event_id=result.event_id, changed=result.changed)
@@ -384,11 +416,15 @@ def adjust_character_resource_endpoint(
     campaign_id: uuid.UUID,  # noqa: ARG001
     character_id: uuid.UUID,
     body: AdjustCharacterResourceRequest,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY))],
+    access: Annotated[
+        AccessContext,
+        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+    ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> AdjustCharacterResourceResponse:
+    assert access.principal is not None
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
@@ -433,6 +469,7 @@ def adjust_character_resource_endpoint(
             correlation_id=correlation_id,
             command_name=_ADJUST_RESOURCE_COMMAND_NAME,
             event_id=result.event_id,
+            acting_external_system_id=access.principal.foundry_external_system_id,
         )
 
     response = AdjustCharacterResourceResponse(

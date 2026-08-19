@@ -46,6 +46,29 @@ server-side from the campaign's own pinned timeline
 (`dnd_ai.api._shared.timeline_world_id`), never accepted from the request
 body.
 
+Foundry-adapter scope (Phase 11 workstream 2 correction — see `dnd_ai.
+domain.access.AuthenticatedPrincipal`'s own docstring for the defect this
+closes): `map_external_identifier_endpoint`, `apply_foundry_combat_sync_
+endpoint`, and `sync_state_endpoint` are this module's bounded
+adapter-facing surface — each passes `allow_foundry_system=True` to
+`require_campaign_capability`, and each also names an `external_system_id`
+of its own (a path parameter for the first and third, a body field for the
+second), so each also calls `dnd_ai.domain.access.
+assert_foundry_system_matches(access.principal, external_system_id)`
+immediately after resolving `access` — a `FoundrySystem` credential for
+system A must not be able to name system B's `external_system_id` in the
+request merely because both happen to belong to campaigns the same linked
+user can reach. `register_external_system_endpoint`, `link_foundry_
+identity_endpoint`, and `issue_foundry_system_key_endpoint` deliberately do
+*not* opt in (`allow_foundry_system` defaults to `False`): registering a
+new external system, linking a Foundry identity, and minting/rotating a
+system credential are all identity/access-administration actions a Foundry
+adapter must never be able to perform merely because the linked user
+happens to hold `access.manage` — the literal restriction docs/PLAN.md
+Phase 11's own "do not let a Foundry credential invoke identity-linking,
+system-key issuance/rotation, or campaign-access administration" exit
+criterion states.
+
 Cross-world integrity: `map_external_identifier_endpoint`,
 `link_foundry_identity_endpoint`, and `issue_foundry_system_key_endpoint`
 all pass the URL's own (already-authorized) campaign's resolved `world_id`
@@ -174,7 +197,7 @@ from dnd_ai.commands.integration import (
     _register_external_system_impl,
     apply_foundry_combat_sync,
 )
-from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.access import AccessContext, assert_foundry_system_matches
 from dnd_ai.queries.integration import InvalidSyncStateTargetError, get_sync_state_view
 
 from ._shared import timeline_world_id
@@ -425,11 +448,17 @@ def map_external_identifier_endpoint(
     external_system_id: uuid.UUID,
     body: MapExternalIdentifierRequest,
     access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY))
+        AccessContext,
+        Depends(
+            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> MapExternalIdentifierResponse:
+    assert access.principal is not None
+    assert_foundry_system_matches(access.principal, external_system_id)
+
     world_id = timeline_world_id(connection, access.timeline_id)
 
     result = _map_external_identifier_impl(
@@ -456,6 +485,7 @@ def map_external_identifier_endpoint(
         correlation_id=correlation_id,
         command_name=_MAP_EXTERNAL_IDENTIFIER_COMMAND_NAME,
         event_id=None,
+        acting_external_system_id=access.principal.foundry_external_system_id,
     )
 
     return MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)
@@ -599,15 +629,24 @@ def issue_foundry_system_key_endpoint(
 def apply_foundry_combat_sync_endpoint(
     campaign_id: uuid.UUID,
     body: ApplyFoundryCombatSyncRequest,
-    # Authorization only — this route does not otherwise use the resolved
-    # AccessContext, and deliberately does not depend on get_connection for
-    # its own work. See this module's docstring
-    # ("apply_foundry_combat_sync_endpoint") for why.
-    _access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY))
+    # Authorization, plus (Phase 11 workstream 2 correction) the source of
+    # the principal assert_foundry_system_matches checks body.
+    # external_system_id against below — this route otherwise still does
+    # not use the resolved AccessContext for anything else, and
+    # deliberately does not depend on get_connection for its own work. See
+    # this module's docstring ("apply_foundry_combat_sync_endpoint") for
+    # why.
+    access: Annotated[
+        AccessContext,
+        Depends(
+            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+        ),
     ],
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> ApplyFoundryCombatSyncResponse:
+    assert access.principal is not None
+    assert_foundry_system_matches(access.principal, body.external_system_id)
+
     result = apply_foundry_combat_sync(
         engine,
         external_system_id=body.external_system_id,
@@ -687,12 +726,18 @@ def sync_state_endpoint(
     campaign_id: uuid.UUID,
     external_system_id: uuid.UUID,
     access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_INTEGRATION_VIEW_CAPABILITY))
+        AccessContext,
+        Depends(
+            require_campaign_capability(_INTEGRATION_VIEW_CAPABILITY, allow_foundry_system=True)
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     target_entity_id: uuid.UUID | None = None,
     target_encounter_id: uuid.UUID | None = None,
 ) -> SyncStateResponse:
+    assert access.principal is not None
+    assert_foundry_system_matches(access.principal, external_system_id)
+
     world_id = timeline_world_id(connection, access.timeline_id)
     _assert_sync_state_target_owned_by_campaign(
         connection,

@@ -91,6 +91,20 @@ change_log = Table(
         ),
     ),
     Column("source_id", UUID(), ForeignKey("core.sources.source_id", ondelete="SET NULL")),
+    Column(
+        "acting_external_system_id",
+        UUID(),
+        ForeignKey("integration.external_systems.external_system_id", ondelete="SET NULL"),
+        comment=(
+            "The integration.external_systems row that authenticated this change via a "
+            "FoundrySystem credential (dnd_ai.domain.access.AuthenticatedPrincipal."
+            "foundry_external_system_id), when it was made through a delegated adapter "
+            "credential rather than directly by the person actor_user_id represents. NULL for "
+            "every OIDC-authenticated change. Distinct from actor_service, which is set "
+            "instead of actor_user_id for a non-human actor with no linked user at all — this "
+            "column is set alongside actor_user_id, never instead of it."
+        ),
+    ),
     Column("reason", Text()),
     Column("correlation_id", UUID()),
     Column("causation_id", UUID()),
@@ -124,6 +138,11 @@ change_log = Table(
 Index("ix_change_log_change_action_id", change_log.c.change_action_id)
 Index("ix_change_log_actor_user_id", change_log.c.actor_user_id)
 Index("ix_change_log_source_id", change_log.c.source_id)
+Index(
+    "ix_change_log_acting_external_system_id",
+    change_log.c.acting_external_system_id,
+    postgresql_where=change_log.c.acting_external_system_id.isnot(None),
+)
 Index("ix_change_log_correlation_id", change_log.c.correlation_id)
 Index(
     "ix_change_log_entity_id_recorded_at",

@@ -176,7 +176,7 @@ OIDC issuer URL or `subject` to be an OIDC `sub` claim
 reuses that same table rather than inventing a parallel Foundry-specific
 mapping table: it derives a synthetic issuer, `foundry:<external_system_id>`
 (`dnd_ai.domain.access.foundry_issuer` — shared with that module's own
-`resolve_foundry_system_user_id`, workstream 2's Foundry-adapter
+`resolve_foundry_system_principal`, workstream 2's Foundry-adapter
 authentication path, so both the write and the read side of this mapping
 agree on the same format by construction), scoping the mapping to one
 registered Foundry world so the same Foundry-side user id from two
@@ -570,7 +570,7 @@ def _issue_foundry_system_key_impl(
     separate "revoke without replacing" operation in this workstream: a
     GM who wants a system unable to authenticate at all can already
     deactivate it wholesale via its existing `is_active` column (checked
-    by `dnd_ai.domain.access.resolve_foundry_system_user_id`), and adding
+    by `dnd_ai.domain.access.resolve_foundry_system_principal`), and adding
     a second, narrower revoke path with no caller yet would be exactly
     the speculative surface this codebase avoids.
 

@@ -18,6 +18,19 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.access import OIDC_AUTH_METHOD, AuthenticatedPrincipal
+
+
+def oidc_principal(user_id: uuid.UUID) -> AuthenticatedPrincipal:
+    """The `AuthenticatedPrincipal` an ordinary OIDC-authenticated request
+    resolves to — what every test's `app.dependency_overrides[get_authenticated_
+    user_id]` override should return instead of a bare `user_id` (Phase 11
+    workstream 2 security correction: `get_authenticated_user_id` now returns
+    a full principal, not a `uuid.UUID`, so `dnd_ai.api.access.
+    require_campaign_capability` can tell an OIDC caller apart from a
+    delegated Foundry one). No database access — pure construction."""
+    return AuthenticatedPrincipal(user_id=user_id, auth_method=OIDC_AUTH_METHOD)
+
 
 def status_id(connection: Connection, table: str, code: str) -> uuid.UUID:
     """Look up a seeded status by code. Asserts rather than returning None."""

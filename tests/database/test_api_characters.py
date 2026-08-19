@@ -24,6 +24,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -53,6 +54,7 @@ from tests.factories import (
     make_user,
     make_world,
     make_world_time,
+    oidc_principal,
 )
 
 pytestmark = pytest.mark.database
@@ -396,7 +398,20 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_authenticated_user_id] = lambda: user_id
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
+        return TestClient(app, raise_server_exceptions=False)
+
+    return _make
+
+
+@pytest.fixture
+def foundry_client_factory(
+    postgres_engine: Engine,
+) -> Callable[[AuthenticatedPrincipal], TestClient]:
+    def _make(principal: AuthenticatedPrincipal) -> TestClient:
+        app = create_app()
+        app.dependency_overrides[get_engine] = lambda: postgres_engine
+        app.dependency_overrides[get_authenticated_user_id] = lambda: principal
         return TestClient(app, raise_server_exceptions=False)
 
     return _make
@@ -404,6 +419,10 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
 
 def _character_url(f: Fixture, character_id: uuid.UUID | None = None) -> str:
     return f"/campaigns/{f.campaign_id}/characters/{character_id or f.character_id}"
+
+
+def _inventory_url(f: Fixture, character_id: uuid.UUID | None = None) -> str:
+    return f"/campaigns/{f.campaign_id}/characters/{character_id or f.character_id}/inventory"
 
 
 # ---------------------------------------------------------------------------
@@ -655,3 +674,75 @@ def test_a_nonexistent_character_is_rejected(
     with client_factory(f.gm_user_id) as client:
         response = client.get(_character_url(f, uuid.uuid4()))
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# FoundrySystem credential scope (Phase 11 workstream 2 security correction)
+# ---------------------------------------------------------------------------
+
+
+def test_a_foundrysystem_credential_for_this_campaigns_own_world_can_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    # get_character_endpoint is part of the bounded adapter-facing surface
+    # (allow_foundry_system=True) — a credential for the campaign's own
+    # world, linked to a user who already holds full character-view access,
+    # must succeed exactly as the equivalent OIDC caller would. Constructing
+    # the AuthenticatedPrincipal directly (rather than issuing a real key and
+    # authenticating over HTTP) isolates what this test actually exercises —
+    # require_campaign_capability's own allow_foundry_system/world-binding
+    # enforcement — from header/credential parsing, already covered
+    # end-to-end by tests/database/test_api_auth.py.
+    principal = AuthenticatedPrincipal(
+        user_id=f.gm_user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.world_id,
+    )
+
+    with foundry_client_factory(principal) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["character_id"] == str(f.character_id)
+
+
+def test_a_foundrysystem_credential_for_a_different_world_cannot_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    # The defect this correction closes: f.gm_user_id genuinely holds
+    # canon.edit/full character-view in f.campaign_id (f.world_id) — but a
+    # credential that authenticated as a system registered under a
+    # *different* world (f.other_world_id) must not be able to ride that
+    # membership. Rejected identically to "no membership" (404), never a
+    # 200 or a disclosing 403.
+    principal = AuthenticatedPrincipal(
+        user_id=f.gm_user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.other_world_id,
+    )
+
+    with foundry_client_factory(principal) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 404
+
+
+def test_a_foundrysystem_credential_cannot_read_inventory(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    # get_character_inventory_endpoint deliberately does not opt in to
+    # allow_foundry_system — it is not part of the bounded adapter-facing
+    # surface any Phase 11 workstream built, so a Foundry credential is
+    # rejected outright here even though it is accepted on the sibling
+    # get_character_endpoint above, and even though the linked user
+    # (f.gm_user_id) genuinely holds full view access.
+    principal = AuthenticatedPrincipal(
+        user_id=f.gm_user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.world_id,
+    )
+
+    with foundry_client_factory(principal) as client:
+        response = client.get(_inventory_url(f))
+    assert response.status_code == 403

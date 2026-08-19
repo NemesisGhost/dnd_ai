@@ -106,6 +106,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
+from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     make_area_hazard,
     make_character,
@@ -119,6 +120,7 @@ from tests.factories import (
     make_user,
     make_world,
     make_world_time,
+    oidc_principal,
 )
 
 pytestmark = pytest.mark.database
@@ -300,10 +302,33 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_authenticated_user_id] = lambda: user_id
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
         return TestClient(app, raise_server_exceptions=False)
 
     return _make
+
+
+def test_a_foundrysystem_credential_cannot_create_a_campaign(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    # dnd_ai.api.campaigns' own module docstring: campaign creation has no
+    # campaign_id for require_campaign_capability's own allow_foundry_system
+    # gate to scope a Foundry principal's world against, and is not part of
+    # the bounded adapter-facing surface — require_oidc_user_id rejects a
+    # Foundry credential outright, regardless of whether the linked user
+    # (f.creator_user_id) otherwise holds a valid bootstrap grant.
+    principal = AuthenticatedPrincipal(
+        user_id=f.creator_user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.world_id,
+    )
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    app.dependency_overrides[get_authenticated_user_id] = lambda: principal
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/campaigns", json=_body(f))
+    assert response.status_code == 403
 
 
 def _body(f: Fixture, **overrides: object) -> dict[str, object]:

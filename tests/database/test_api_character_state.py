@@ -17,6 +17,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -26,6 +27,7 @@ from tests.factories import (
     make_character_resource,
     make_character_state,
     make_condition,
+    make_external_system,
     make_membership_role,
     make_resource_definition,
     make_role,
@@ -35,6 +37,7 @@ from tests.factories import (
     make_user,
     make_world,
     make_world_time,
+    oidc_principal,
 )
 
 pytestmark = pytest.mark.database
@@ -205,7 +208,20 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_authenticated_user_id] = lambda: user_id
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
+        return TestClient(app, raise_server_exceptions=False)
+
+    return _make
+
+
+@pytest.fixture
+def foundry_client_factory(
+    postgres_engine: Engine,
+) -> Callable[[AuthenticatedPrincipal], TestClient]:
+    def _make(principal: AuthenticatedPrincipal) -> TestClient:
+        app = create_app()
+        app.dependency_overrides[get_engine] = lambda: postgres_engine
+        app.dependency_overrides[get_authenticated_user_id] = lambda: principal
         return TestClient(app, raise_server_exceptions=False)
 
     return _make
@@ -584,5 +600,126 @@ def test_adjusting_an_untracked_resource_is_not_found(
                 "resource_definition_id": str(untracked_resource_definition_id),
                 "delta": -1,
             },
+        )
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# FoundrySystem credential scope (Phase 11 workstream 2 security correction)
+# ---------------------------------------------------------------------------
+
+
+def _foundry_principal(
+    postgres_engine: Engine, *, user_id: uuid.UUID, world_id: uuid.UUID
+) -> AuthenticatedPrincipal:
+    """Builds a real `integration.external_systems` row in `world_id` (these
+    routes' `record_change_log` calls write `foundry_external_system_id` to
+    `audit.change_log.acting_external_system_id`, a real foreign key — an
+    arbitrary, non-existent UUID would fail that insert with an
+    IntegrityError rather than exercising the authorization path this test
+    actually targets) and returns the matching principal."""
+    with postgres_engine.begin() as connection:
+        external_system_id = make_external_system(connection, world_id)
+    return AuthenticatedPrincipal(
+        user_id=user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=external_system_id,
+        foundry_world_id=world_id,
+    )
+
+
+def test_a_foundrysystem_credential_for_this_campaigns_own_world_can_adjust_hit_points(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    # All four routes in this module are part of the bounded adapter-facing
+    # surface (allow_foundry_system=True) — this is the "synchronize
+    # non-combat HP/condition/resource state" surface a Foundry adapter
+    # exists to drive. A credential for the campaign's own world, linked to
+    # a user who already holds canon.edit, must succeed exactly as the
+    # equivalent OIDC caller would.
+    principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _hp_url(f.campaign_id, f.character_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 6},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["new_hit_points"] == 16
+
+
+def test_a_foundrysystem_credential_can_apply_a_condition(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _conditions_url(f.campaign_id, f.character_id),
+            json={
+                "world_time_id": str(f.world_time_id),
+                "condition_id": str(f.poisoned_condition_id),
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["changed"] is True
+
+
+def test_a_foundrysystem_credential_can_remove_a_condition(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    with postgres_engine.begin() as connection:
+        make_character_condition(connection, f.timeline_id, f.character_id, f.poisoned_condition_id)
+
+    principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _remove_condition_url(f.campaign_id, f.character_id, f.poisoned_condition_id),
+            json={"world_time_id": str(f.world_time_id)},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["changed"] is True
+
+
+def test_a_foundrysystem_credential_can_adjust_a_resource(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _resources_url(f.campaign_id, f.character_id),
+            json={
+                "world_time_id": str(f.world_time_id),
+                "resource_definition_id": str(f.ki_resource_definition_id),
+                "delta": -1,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["new_amount"] == 1
+
+
+def test_a_foundrysystem_credential_for_a_different_world_cannot_adjust_hit_points(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    # The defect this correction closes: f.gm_user_id genuinely holds
+    # canon.edit in both f.campaign_id (f.world_id) and f.other_campaign_id
+    # (f.other_world_id) — but a credential that authenticated as a system
+    # registered under f.other_world_id must not be able to act against
+    # f.campaign_id merely because the linked user also happens to be a GM
+    # there. Rejected identically to "no membership" (404), before this
+    # route's own record_change_log call is ever reached.
+    principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.other_world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _hp_url(f.campaign_id, f.character_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 6},
         )
     assert response.status_code == 404

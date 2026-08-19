@@ -9,11 +9,15 @@ Authorization is asymmetric between the two routes, by design:
 target campaign, the same capability `dnd_ai.api.memberships` already
 requires for direct membership creation. `accept_campaign_invitation_
 endpoint` has no campaign to resolve a capability against at all — the
-caller authenticates with `dnd_ai.api.auth.get_authenticated_user_id`
-only, and the invitation *token itself* (in the request body, never the
-URL, so it never lands in access logs) is the authorization credential,
-the same "no campaign yet" shape `dnd_ai.api.campaigns.create_campaign_
-endpoint` already established.
+caller authenticates with `dnd_ai.api.auth.require_oidc_user_id`
+only (Phase 11 workstream 2 correction: a `FoundrySystem` adapter
+credential is rejected outright here, the same "no campaign_id to scope a
+Foundry principal's world against, and not part of the bounded
+adapter-facing surface" reasoning `dnd_ai.api.campaigns.create_campaign_
+endpoint` now documents for its own identical case), and the invitation
+*token itself* (in the request body, never the URL, so it never lands in
+access logs) is the authorization credential, the same "no campaign yet"
+shape `dnd_ai.api.campaigns.create_campaign_endpoint` already established.
 
 Idempotency: `create_campaign_invitation` uses the same durable `security.
 idempotent_requests` mechanism every other Phase 10 write endpoint with an
@@ -46,7 +50,7 @@ from dnd_ai.domain.access import AccessContext
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
-from .auth import get_authenticated_user_id
+from .auth import require_oidc_user_id
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
@@ -155,7 +159,7 @@ def create_campaign_invitation_endpoint(
 )
 def accept_campaign_invitation_endpoint(
     body: AcceptCampaignInvitationRequest,
-    accepting_user_id: Annotated[uuid.UUID, Depends(get_authenticated_user_id)],
+    accepting_user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> AcceptCampaignInvitationResponse:

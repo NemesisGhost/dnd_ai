@@ -39,6 +39,7 @@ from tests.factories import (
     make_user,
     make_world,
     make_world_time,
+    oidc_principal,
 )
 
 pytestmark = pytest.mark.database
@@ -261,7 +262,7 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_authenticated_user_id] = lambda: user_id
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
         return TestClient(app, raise_server_exceptions=False)
 
     return _make
@@ -1148,5 +1149,274 @@ def test_sync_state_for_an_entity_from_a_different_world_is_not_found(
     with client_factory(f.gm_user_id) as client:
         response = client.get(
             _sync_state_url(f.other_campaign_id, external_system_id, target_entity_id=f.actor_id)
+        )
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# FoundrySystem credential scope (Phase 11 workstream 2 security correction)
+# ---------------------------------------------------------------------------
+
+
+def _foundry_headers(
+    external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+) -> dict[str, str]:
+    return {
+        "Authorization": f"FoundrySystem {external_system_id}.{raw_key}",
+        "X-Foundry-User-Id": foundry_user_id,
+    }
+
+
+def _issue_and_link(
+    postgres_engine: Engine,
+    *,
+    external_system_id: uuid.UUID,
+    user_id: uuid.UUID,
+    foundry_user_id: str,
+) -> str:
+    """Issues a real system key for external_system_id and links foundry_user_id
+    to user_id — the two prerequisites every genuine (non-overridden)
+    FoundrySystem credential test below needs, factored out since three
+    routes below each need their own independently-issued credential."""
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id=foundry_user_id,
+        user_id=user_id,
+    )
+    return key_result.raw_key
+
+
+def _foundry_client(postgres_engine: Engine) -> TestClient:
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_a_foundrysystem_credential_cannot_register_an_external_system(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # register_external_system_endpoint deliberately does not opt in to
+    # allow_foundry_system — creating a new adapter registration is exactly
+    # the "campaign-access administration" class of action a Foundry
+    # credential must never reach, regardless of whether the linked user
+    # (f.gm_user_id) holds canon.edit.
+    existing_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=existing_system_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-register-attempt",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _register_url(f.campaign_id),
+            json=_register_body(),
+            headers=_foundry_headers(existing_system_id, raw_key, "foundry-register-attempt"),
+        )
+    assert response.status_code == 403
+
+
+def test_a_foundrysystem_credential_cannot_link_a_foundry_identity(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # link_foundry_identity_endpoint deliberately does not opt in either —
+    # an adapter must never be able to mint or reassign identity mappings
+    # merely because the linked user holds access.manage.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=external_system_id,
+        user_id=f.admin_user_id,
+        foundry_user_id="foundry-link-attempt",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+            headers=_foundry_headers(external_system_id, raw_key, "foundry-link-attempt"),
+        )
+    assert response.status_code == 403
+
+
+def test_a_foundrysystem_credential_cannot_issue_a_system_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # issue_foundry_system_key_endpoint deliberately does not opt in
+    # either — an adapter must never be able to rotate its own (or any
+    # other system's) credential merely because the linked user holds
+    # access.manage.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=external_system_id,
+        user_id=f.admin_user_id,
+        foundry_user_id="foundry-rotate-attempt",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            headers=_foundry_headers(external_system_id, raw_key, "foundry-rotate-attempt"),
+        )
+    assert response.status_code == 403
+
+
+def test_a_foundrysystem_credential_can_map_an_external_identifier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # map_external_identifier_endpoint IS part of the bounded adapter-facing
+    # surface — a credential for its own system, in the campaign's own
+    # world, succeeds exactly as the equivalent OIDC caller would.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=external_system_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-map",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _identifiers_url(f.campaign_id, external_system_id),
+            json={"entity_id": str(f.actor_id), "external_kind": "actor", "external_id": "actor-1"},
+            headers=_foundry_headers(external_system_id, raw_key, "foundry-map"),
+        )
+    assert response.status_code == 200, response.text
+
+
+def test_a_foundrysystem_credential_for_a_different_system_cannot_map_an_external_identifier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # The per-request companion check to the world-binding one above:
+    # system A's own credential must not be able to name system B's
+    # external_system_id in the path, even though both belong to the same,
+    # correctly-authorized world/campaign.
+    system_a_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    system_b_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=system_a_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-map-mismatch",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _identifiers_url(f.campaign_id, system_b_id),
+            json={"entity_id": str(f.actor_id), "external_kind": "actor", "external_id": "actor-1"},
+            headers=_foundry_headers(system_a_id, raw_key, "foundry-map-mismatch"),
+        )
+    assert response.status_code == 404
+
+
+def test_a_foundrysystem_credential_for_a_different_world_cannot_combat_sync(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # The defect this correction closes, for the combat-sync endpoint
+    # specifically: f.gm_user_id genuinely holds canon.edit in both
+    # f.campaign_id and f.other_campaign_id — but a credential
+    # authenticated as a system registered under f.other_world_id must not
+    # be able to act against f.campaign_id merely because the linked user
+    # is also a GM there.
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+    foreign_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=foreign_system_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-combat-cross-world",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=foreign_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+            headers=_foundry_headers(foreign_system_id, raw_key, "foundry-combat-cross-world"),
+        )
+    assert response.status_code == 404
+
+
+def test_a_foundrysystem_credential_for_a_different_system_cannot_combat_sync(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # system A's credential must not be able to name system B's
+    # external_system_id in the combat-sync request body, even when both
+    # belong to the campaign's own, correctly-authorized world.
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+    system_a_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    system_b_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=system_a_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-combat-mismatch",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=system_b_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+            headers=_foundry_headers(system_a_id, raw_key, "foundry-combat-mismatch"),
+        )
+    assert response.status_code == 404
+
+
+def test_a_foundrysystem_credential_can_read_sync_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        sync_response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+        )
+    assert sync_response.status_code == 201, sync_response.text
+
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=external_system_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-sync-state",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.get(
+            _sync_state_url(f.campaign_id, external_system_id, target_encounter_id=encounter_id),
+            headers=_foundry_headers(external_system_id, raw_key, "foundry-sync-state"),
+        )
+    assert response.status_code == 200, response.text
+
+
+def test_a_foundrysystem_credential_for_a_different_system_cannot_read_sync_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    system_a_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    system_b_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+    raw_key = _issue_and_link(
+        postgres_engine,
+        external_system_id=system_a_id,
+        user_id=f.gm_user_id,
+        foundry_user_id="foundry-sync-state-mismatch",
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.get(
+            _sync_state_url(f.campaign_id, system_b_id, target_encounter_id=encounter_id),
+            headers=_foundry_headers(system_a_id, raw_key, "foundry-sync-state-mismatch"),
         )
     assert response.status_code == 404

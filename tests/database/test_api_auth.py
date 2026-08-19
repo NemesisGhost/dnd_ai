@@ -28,10 +28,16 @@ from dnd_ai.api.auth import (
     get_authenticated_user_id,
     get_jwks_client,
     get_verified_token_claims,
+    require_oidc_user_id,
 )
 from dnd_ai.api.deps import get_connection, get_engine
 from dnd_ai.commands.integration import issue_foundry_system_key, link_foundry_identity
 from dnd_ai.config import settings
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    OIDC_AUTH_METHOD,
+    AuthenticatedPrincipal,
+)
 from dnd_ai.domain.tokens import VerifiedTokenClaims
 from tests.factories import make_external_identity, make_external_system, make_user, make_world
 from tests.jwt_helpers import RSAKeypair, generate_test_rsa_keypair, make_signed_jwt
@@ -83,10 +89,34 @@ def client_factory(
 
     @app.get("/test-authenticated-user")
     def _authenticated_user(
-        user_id: Annotated[uuid.UUID, Depends(get_authenticated_user_id)],
+        principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         # Proves the dependency really opened its own connection via
         # get_connection, not just resolved a claim in isolation.
         _connection: Annotated[Connection, Depends(get_connection)],
+    ) -> dict[str, str]:
+        return {"user_id": str(principal.user_id)}
+
+    @app.get("/test-authenticated-principal")
+    def _authenticated_principal(
+        principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
+        _connection: Annotated[Connection, Depends(get_connection)],
+    ) -> dict[str, str | None]:
+        return {
+            "user_id": str(principal.user_id),
+            "auth_method": principal.auth_method,
+            "foundry_external_system_id": (
+                str(principal.foundry_external_system_id)
+                if principal.foundry_external_system_id is not None
+                else None
+            ),
+            "foundry_world_id": (
+                str(principal.foundry_world_id) if principal.foundry_world_id is not None else None
+            ),
+        }
+
+    @app.get("/test-oidc-only-user")
+    def _oidc_only_user(
+        user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
     ) -> dict[str, str]:
         return {"user_id": str(user_id)}
 
@@ -432,5 +462,119 @@ def test_an_oidc_bearer_token_still_authenticates_when_the_foundry_path_exists(
     token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
     with client_factory() as client:
         response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {"user_id": str(user_id)}
+
+
+# ---------------------------------------------------------------------------
+# get_authenticated_user_id — AuthenticatedPrincipal scope (Phase 11
+# workstream 2 security correction)
+# ---------------------------------------------------------------------------
+
+
+def test_a_valid_foundrysystem_credential_carries_its_own_system_and_world(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    # The whole point of the correction: a FoundrySystem-authenticated
+    # request must resolve to more than a bare user_id — it must carry
+    # which external_system_id/world_id actually authenticated it, so
+    # dnd_ai.api.access.require_campaign_capability can scope authorization
+    # to that world rather than the linked user's entire membership graph.
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Foundry-Linked Player")
+        setup_connection.commit()
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=user_id,
+    )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-principal",
+            headers=_foundry_headers(external_system_id, key_result.raw_key, "foundry-user-1"),
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "user_id": str(user_id),
+        "auth_method": FOUNDRY_SYSTEM_AUTH_METHOD,
+        "foundry_external_system_id": str(external_system_id),
+        "foundry_world_id": str(world_id),
+    }
+
+
+def test_an_oidc_token_carries_no_foundry_system_or_world(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Principal Shape Tester")
+        make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-authenticated-principal", headers=_bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {
+        "user_id": str(user_id),
+        "auth_method": OIDC_AUTH_METHOD,
+        "foundry_external_system_id": None,
+        "foundry_world_id": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# require_oidc_user_id — rejects a FoundrySystem credential outright
+# (dnd_ai.api.campaigns/.campaign_invitations' own routes)
+# ---------------------------------------------------------------------------
+
+
+def test_require_oidc_user_id_rejects_a_foundrysystem_credential(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Foundry-Linked Player")
+        setup_connection.commit()
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=user_id,
+    )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-oidc-only-user",
+            headers=_foundry_headers(external_system_id, key_result.raw_key, "foundry-user-1"),
+        )
+    assert response.status_code == 403
+
+
+def test_require_oidc_user_id_accepts_an_oidc_token(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "OIDC Only Tester")
+        make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-oidc-only-user", headers=_bearer(token))
     assert response.status_code == 200
     assert response.json() == {"user_id": str(user_id)}

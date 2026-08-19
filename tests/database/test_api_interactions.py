@@ -52,6 +52,7 @@ from tests.factories import (
     make_user,
     make_world,
     make_world_time,
+    oidc_principal,
 )
 
 pytestmark = pytest.mark.database
@@ -236,7 +237,7 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_authenticated_user_id] = lambda: user_id
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
         return TestClient(app, raise_server_exceptions=False)
 
     return _make

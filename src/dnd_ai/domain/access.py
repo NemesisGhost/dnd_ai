@@ -8,6 +8,20 @@ way instead of re-deriving `security.*` joins independently
 (docs/architecture/SYSTEM_ARCHITECTURE.md §5.4 — no HTTP or framework types
 here). Read-only: this module never mutates state.
 
+`AuthenticatedPrincipal` (Phase 11 workstream 2 correction) is the other
+half of this module's contract: `resolve_access_context` still resolves an
+`AccessContext` purely from a bare `user_id`, but a caller authenticated
+via a delegated adapter credential (`FOUNDRY_SYSTEM_AUTH_METHOD`) carries
+more than a `user_id` — it carries *which* `integration.external_systems`
+row, and therefore which `core.worlds` row, actually vouched for that
+request, and that scope must be enforced on every campaign authorization
+performed for it, not just the linked user's own membership graph. See
+`AuthenticatedPrincipal`'s own docstring for the full defect this closes,
+`dnd_ai.api.access.require_campaign_capability`'s `allow_foundry_system`
+gate and world check for where the scope is enforced per campaign, and
+`assert_foundry_system_matches` for the sibling per-request check a route
+performs when its own path/body names an `external_system_id` directly.
+
 Deferred to later Phase 10 workstreams, per §19.7's own step list:
 
 - step 6, party/public knowledge-derived access — depends on the knowledge
@@ -59,6 +73,19 @@ class AccessContext:
     Resolve fresh per request rather than caching across requests — roles,
     relationships, and grants can change between calls, and nothing here
     subscribes to invalidation.
+
+    `principal`, when set, is the full `AuthenticatedPrincipal` this context
+    was resolved for — `dnd_ai.api.access.require_campaign_capability`
+    attaches it (via `dataclasses.replace`, since `resolve_access_context`
+    itself only ever takes a bare `user_id`) once it has already used the
+    principal to gate/scope the request, so route code with an
+    `AccessContext` in hand can still recover *how* the caller
+    authenticated — e.g. to call `assert_foundry_system_matches` against a
+    request's own `external_system_id` — without threading a second
+    parameter through every handler. `None` for an `AccessContext` obtained
+    any other way (most directly, from `resolve_access_context` itself, or
+    in a test that constructs one without going through the API-layer
+    dependency).
     """
 
     user_id: uuid.UUID
@@ -68,6 +95,7 @@ class AccessContext:
     role_capabilities: frozenset[str]
     character_capabilities: dict[uuid.UUID, frozenset[str]]
     grant_effects: dict[_GrantKey, dict[str, str]] = field(repr=False)
+    principal: "AuthenticatedPrincipal | None" = None
 
     def has_capability(
         self,
@@ -159,6 +187,112 @@ class AccessContext:
         return denied, allowed
 
 
+OIDC_AUTH_METHOD = "oidc"
+FOUNDRY_SYSTEM_AUTH_METHOD = "foundry_system"
+
+
+@dataclass(frozen=True)
+class AuthenticatedPrincipal:
+    """Who is making this request, and how they authenticated — resolved
+    once per request by `dnd_ai.api.auth.get_authenticated_user_id` and
+    threaded through every downstream authorization/audit decision that
+    needs to distinguish an OIDC end-user action from an adapter-delegated
+    one, or scope a `FoundrySystem` credential to the world/system it
+    actually authenticated as.
+
+    Fixes a critical scope defect in the first cut of Phase 11 workstream 2:
+    that version resolved a `FoundrySystem` credential straight down to a
+    bare `security.users.user_id` — identical in shape to an OIDC-resolved
+    one — and discarded which `integration.external_systems` row (and
+    therefore which `core.worlds` row) the credential actually
+    authenticated as. `require_campaign_capability` (`dnd_ai.api.access`)
+    then had no way to tell a request authenticated by a Foundry adapter
+    for world A apart from an ordinary OIDC request by the same linked
+    user, so a valid world-A credential could authorize against any
+    *other* campaign that same user happened to hold membership in
+    (including a different world's campaign, or one reached only via
+    `access.manage`-gated identity/credential-management routes), and
+    nothing checked that a request's own path/body `external_system_id`
+    (where one is supplied) matched the system that actually authenticated
+    it. `resolve_access_context`'s campaign-membership/role/capability
+    resolution is unaffected by this record's addition — it continues to
+    resolve purely from `user_id` — but every caller that authorizes a
+    *Foundry* principal specifically (`dnd_ai.api.access.
+    require_campaign_capability`'s `allow_foundry_system` gate, and this
+    module's own `assert_foundry_system_matches`) now has the fields it
+    needs to bind that authorization to the credential's own system/world,
+    not merely the linked user's overall membership graph.
+
+    `user_id` is always the resolved `security.users` row — for OIDC, the
+    identity itself; for `FOUNDRY_SYSTEM_AUTH_METHOD`, the platform user
+    `link_foundry_identity` previously established for this
+    `(external_system_id, foundry_user_id)` pair.
+    `foundry_external_system_id`/`foundry_world_id` are populated if, and
+    only if, `auth_method == FOUNDRY_SYSTEM_AUTH_METHOD` — enforced by
+    `__post_init__` so no caller can construct a `FOUNDRY_SYSTEM_AUTH_METHOD`
+    principal that silently carries no system/world to scope against, or an
+    `OIDC_AUTH_METHOD` one that carries a stray one."""
+
+    user_id: uuid.UUID
+    auth_method: str
+    foundry_external_system_id: uuid.UUID | None = None
+    foundry_world_id: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        is_foundry = self.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        has_foundry_fields = (
+            self.foundry_external_system_id is not None and self.foundry_world_id is not None
+        )
+        if is_foundry != has_foundry_fields:
+            raise ValueError(
+                "foundry_external_system_id/foundry_world_id must be set if, and only if, "
+                f"auth_method == {FOUNDRY_SYSTEM_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, "
+                f"foundry_external_system_id={self.foundry_external_system_id!r}, "
+                f"foundry_world_id={self.foundry_world_id!r})"
+            )
+
+
+class ForeignExternalSystemError(DomainAuthorizationError):
+    """Raised by `assert_foundry_system_matches()` when a `FoundrySystem`-
+    authenticated request names a path or body `external_system_id` other
+    than the one that actually authenticated it — e.g. system A's
+    credential submitting a combat-sync payload whose own
+    `external_system_id` names system B. A fixed, non-disclosing 404 (via
+    `DomainAuthorizationError`), the same "confirming this belongs to
+    someone else is itself a disclosure" reasoning `dnd_ai.commands.
+    integration.ExternalSystemNotFoundError` already applies to the
+    cross-world case — this is that same family of check, scoped to
+    "does the credential match the system it claims to act for," not "does
+    the system belong to the caller's authorized world" (both must hold;
+    see `dnd_ai.api.access.require_campaign_capability`'s own world check
+    for the latter)."""
+
+
+def assert_foundry_system_matches(
+    principal: AuthenticatedPrincipal, external_system_id: uuid.UUID
+) -> None:
+    """Raises `ForeignExternalSystemError` if `principal` authenticated as a
+    Foundry system other than `external_system_id` — a no-op for an OIDC
+    principal (which has no system of its own to compare against) and for
+    a Foundry principal whose own `foundry_external_system_id` already
+    matches. Every adapter-facing route that accepts an `external_system_id`
+    from the request itself (a path parameter or, for `apply_foundry_
+    combat_sync_endpoint`, a body field) must call this once `principal` is
+    known — without it, a valid credential for system A could name system
+    B's `external_system_id` in the request and act as system B merely
+    because both happen to resolve to campaigns the same linked user can
+    reach."""
+    if (
+        principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        and principal.foundry_external_system_id != external_system_id
+    ):
+        raise ForeignExternalSystemError(
+            f"FoundrySystem credential authenticated as external system "
+            f"{principal.foundry_external_system_id}, not {external_system_id}"
+        )
+
+
 def resolve_user_by_external_identity(
     connection: Connection, *, issuer: str, subject: str
 ) -> uuid.UUID | None:
@@ -206,7 +340,7 @@ def foundry_issuer(external_system_id: uuid.UUID) -> str:
     row (docs/architecture/DATABASE_MODEL.md §19.1). The single source of
     truth for this format — `dnd_ai.commands.integration.
     link_foundry_identity` (which writes the mapping) and
-    `resolve_foundry_system_user_id` below (which reads it back during
+    `resolve_foundry_system_principal` below (which reads it back during
     authentication) both call this rather than each formatting their own
     copy of the string, so the two can never drift apart."""
     return f"foundry:{external_system_id}"
@@ -221,24 +355,28 @@ def hash_foundry_system_key(raw_key: str) -> str:
     so there is nothing here for a slow KDF to protect against that a fast,
     indexable hash doesn't already close off. Shared by `dnd_ai.commands.
     integration.issue_foundry_system_key` (which mints and stores the hash)
-    and `resolve_foundry_system_user_id` below (which recomputes it from a
+    and `resolve_foundry_system_principal` below (which recomputes it from a
     presented key and compares by lookup) so both sides always agree on
     exactly how a raw key becomes its stored hash."""
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
-def resolve_foundry_system_user_id(
+def resolve_foundry_system_principal(
     connection: Connection, *, external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
-) -> uuid.UUID | None:
+) -> AuthenticatedPrincipal | None:
     """Authenticates a Foundry-adapter request as "system external_system_id,
-    acting for Foundry user foundry_user_id" and resolves it to a platform
-    `security.users.user_id` — the Foundry-adapter counterpart to
+    acting for Foundry user foundry_user_id" and resolves it to a full
+    `AuthenticatedPrincipal` — the Foundry-adapter counterpart to
     `resolve_user_by_external_identity` above, used by `dnd_ai.api.auth.
     get_authenticated_user_id` so every existing command/query endpoint
     already wired to that one dependency becomes reachable by a Foundry
     adapter with no per-route changes, under the exact same
     `require_campaign_capability` authorization every other caller goes
-    through.
+    through — now correctly scoped to the authenticated system/world via
+    the returned principal's own `foundry_external_system_id`/
+    `foundry_world_id` (see `AuthenticatedPrincipal`'s own docstring for the
+    vulnerability this closes relative to the first cut of this function,
+    which returned a bare `user_id` and discarded that scope entirely).
 
     Two checks, both required: (1) raw_key, rehashed, must match the
     active `integration.external_systems.system_key_hash` for
@@ -256,17 +394,25 @@ def resolve_foundry_system_user_id(
     establishes for its own callers, so `get_authenticated_user_id` can
     raise one uniform `UnauthorizedError` regardless of cause."""
     key_hash = hash_foundry_system_key(raw_key)
-    matched = connection.execute(
+    system_world_id = connection.execute(
         text("""
-            SELECT 1 FROM integration.external_systems
+            SELECT world_id FROM integration.external_systems
             WHERE external_system_id = :system AND system_key_hash = :hash AND is_active
         """),
         {"system": external_system_id, "hash": key_hash},
     ).scalar()
-    if matched is None:
+    if system_world_id is None:
         return None
-    return resolve_user_by_external_identity(
+    user_id = resolve_user_by_external_identity(
         connection, issuer=foundry_issuer(external_system_id), subject=foundry_user_id
+    )
+    if user_id is None:
+        return None
+    return AuthenticatedPrincipal(
+        user_id=user_id,
+        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+        foundry_external_system_id=external_system_id,
+        foundry_world_id=_as_uuid(system_world_id),
     )
 
 

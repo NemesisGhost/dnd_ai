@@ -159,8 +159,18 @@ def get_character_endpoint(
     # capability's own returned dependency callable declares campaign_id
     # itself and binds it from the URL path independently, the same way
     # every other capability-gated route's path parameter resolves.
+    #
+    # allow_foundry_system=True (Phase 11 workstream 5/2 correction): this
+    # route is what closes the "current location or encounter" exit
+    # criterion for a Foundry adapter (active_encounter_id below) — see
+    # dnd_ai.domain.access.AuthenticatedPrincipal's docstring for why every
+    # route accepting a Foundry credential must opt in explicitly.
+    # get_character_inventory_endpoint below deliberately does not opt in —
+    # it is not part of the bounded adapter-facing surface any Phase 11
+    # workstream built.
     access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+        AccessContext,
+        Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY, allow_foundry_system=True)),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterResponse:
