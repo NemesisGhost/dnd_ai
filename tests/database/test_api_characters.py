@@ -37,6 +37,8 @@ from tests.factories import (
     make_character_resource,
     make_character_state,
     make_condition,
+    make_encounter,
+    make_encounter_participant,
     make_location,
     make_membership_character_relationship,
     make_membership_role,
@@ -456,6 +458,7 @@ def test_summary_tier_returns_only_name_species_and_size(
     assert body["death_save_successes"] is None
     assert body["death_save_failures"] is None
     assert body["current_location_id"] is None
+    assert body["active_encounter_id"] is None
     assert body["conditions"] is None
     assert body["resources"] is None
 
@@ -474,12 +477,41 @@ def test_full_tier_returns_mechanical_state_conditions_resources_and_location(
     assert body["temporary_hit_points"] == 0
     assert body["exhaustion_level"] == 0
     assert body["current_location_id"] == str(f.location_id)
+    assert body["active_encounter_id"] is None
     assert body["conditions"] == [
         {"condition_code": "poisoned", "source_description": "stepped in ooze"}
     ]
     assert body["resources"] == [
         {"resource_code": "ki_points", "current_amount": 2, "maximum_amount": 4}
     ]
+
+
+def test_full_tier_returns_the_active_encounter_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(connection, f.timeline_id, f.world_time_id, status="active")
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    with client_factory(f.full_view_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["active_encounter_id"] == str(encounter_id)
+
+
+def test_full_tier_ignores_a_non_active_encounter(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        encounter_id = make_encounter(
+            connection, f.timeline_id, f.world_time_id, status="completed"
+        )
+        make_encounter_participant(connection, encounter_id, f.character_id)
+
+    with client_factory(f.full_view_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["active_encounter_id"] is None
 
 
 def test_a_gm_gets_full_tier_without_any_character_specific_relationship(

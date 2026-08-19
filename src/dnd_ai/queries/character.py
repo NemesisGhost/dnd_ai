@@ -15,6 +15,22 @@ This module is framework-free and performs no authorization of its own:
 (`dnd_ai.api.access.resolve_character_view_tier`) by the time it reaches
 here, the same "authorization happens at the API/access boundary, the
 query only filters" split `dnd_ai.queries.dungeon` established.
+
+`active_encounter_id` (Phase 11 workstream 5, "retrieve party-visible
+state for the current location or encounter") is resolved the same way as
+`current_location_id` right above it: a plain, current-state lookup, gated
+behind the identical `include_full` tier rather than a new capability or
+a separate endpoint. Deliberately just the id, not the encounter's own
+content — a caller who needs the full encounter already has
+`dnd_ai.api.encounters.get_encounter_endpoint` (already Foundry-reachable
+since Phase 11 workstream 2), and duplicating that content here would be
+exactly the kind of second copy of domain state `dnd_ai.queries.
+integration`'s own docstring (workstream 4) already explains this
+codebase avoids. A dedicated "current situation" endpoint was considered
+and rejected: `current_location_id` already answers "where," so the only
+genuinely missing piece was "what encounter, if any" — adding one field
+to an existing, already-tiered, already-authorized query is smaller and
+more consistent than a parallel resolver endpoint would have been.
 """
 
 import uuid
@@ -66,6 +82,7 @@ class CharacterView:
     death_save_successes: int | None
     death_save_failures: int | None
     current_location_id: uuid.UUID | None
+    active_encounter_id: uuid.UUID | None
     conditions: tuple[CharacterConditionView, ...] | None
     resources: tuple[CharacterResourceView, ...] | None
 
@@ -118,6 +135,7 @@ def get_character_view(
             death_save_successes=None,
             death_save_failures=None,
             current_location_id=None,
+            active_encounter_id=None,
             conditions=None,
             resources=None,
         )
@@ -141,6 +159,25 @@ def get_character_view(
             SELECT location_id FROM campaign.character_location_history
             WHERE timeline_id = :timeline AND character_id = :character
               AND departed_at_world_time_id IS NULL
+        """),
+        {"timeline": timeline_id, "character": character_id},
+    ).scalar()
+
+    # The character's currently active encounter, if any — deterministic
+    # via world_time_id even in the edge case of more than one active
+    # encounter naming this character as a participant (nothing in this
+    # domain model prevents that, unlike character_location_history's own
+    # EXCLUDE constraint for location).
+    active_encounter_id = connection.execute(
+        text("""
+            SELECT e.encounter_id
+            FROM narrative.encounters e
+            JOIN narrative.encounter_participants ep ON ep.encounter_id = e.encounter_id
+            WHERE ep.participant_entity_id = :character
+              AND e.timeline_id = :timeline
+              AND e.status = 'active'
+            ORDER BY e.world_time_id DESC
+            LIMIT 1
         """),
         {"timeline": timeline_id, "character": character_id},
     ).scalar()
@@ -195,6 +232,7 @@ def get_character_view(
         death_save_successes=(state_row["death_save_successes"] if state_row is not None else None),
         death_save_failures=(state_row["death_save_failures"] if state_row is not None else None),
         current_location_id=current_location_id,
+        active_encounter_id=active_encounter_id,
         conditions=conditions,
         resources=resources,
     )
