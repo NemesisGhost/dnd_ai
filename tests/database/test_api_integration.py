@@ -1,16 +1,17 @@
 """Tests for `dnd_ai.api.integration` — Phase 10 workstream 10's command
 endpoints over `dnd_ai.commands.integration.register_external_system`/
 `.map_external_identifier` (docs/PLAN.md Phase 10 "command endpoints over
-the existing command/application services", the `integration` domain).
-Mirrors `tests/database/test_api_events.py`'s shape: `get_authenticated_
-user_id` is overridden directly (the OIDC verification chain itself is
-already fully covered by `tests/database/test_api_auth.py`) since these
-tests exercise campaign-capability enforcement and the integration
-commands' own HTTP wiring, not token verification.
+the existing command/application services", the `integration` domain), plus
+Phase 11 workstream 1's `link_foundry_identity` endpoint. Mirrors
+`tests/database/test_api_events.py`'s shape: `get_authenticated_user_id` is
+overridden directly (the OIDC verification chain itself is already fully
+covered by `tests/database/test_api_auth.py`) since these tests exercise
+campaign-capability enforcement and the integration commands' own HTTP
+wiring, not token verification.
 
 `apply_foundry_combat_sync` has no endpoint (see `dnd_ai.api.integration`'s
-own module docstring for why — deferred to Phase 11) and is not covered
-here; its command-layer behavior remains covered by
+own module docstring for why — deferred to a follow-up Phase 11 workstream)
+and is not covered here; its command-layer behavior remains covered by
 `tests/scenario/test_foundry_sync_commands.py`.
 """
 
@@ -44,6 +45,7 @@ pytestmark = pytest.mark.database
 # contract, not by importing the module's private constants).
 _REGISTER_EXTERNAL_SYSTEM_COMMAND = "register_external_system"
 _MAP_EXTERNAL_IDENTIFIER_COMMAND = "map_external_identifier"
+_LINK_FOUNDRY_IDENTITY_COMMAND = "link_foundry_identity"
 
 
 class Fixture:
@@ -92,6 +94,39 @@ class Fixture:
         make_campaign_membership(connection, self.campaign_id, self.capless_user_id)
 
         self.outsider_user_id = make_user(connection, "Integration API Outsider")
+
+        # link_foundry_identity_endpoint requires access.manage, not
+        # canon.edit — a separate membership from self.gm_user_id (which
+        # only holds canon.edit) so tests can prove that distinction, in
+        # both this campaign and the other-world campaign (mirroring
+        # gm_user_id's own cross-world setup above).
+        self.admin_user_id = make_user(connection, "Integration API Admin")
+        admin_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.admin_user_id
+        )
+        admin_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"admin_{uuid.uuid4().hex[:8]}"
+        )
+        access_manage_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "access.manage"
+        )
+        make_role_capability(connection, admin_role_id, access_manage_id)
+        make_membership_role(connection, admin_membership_id, admin_role_id)
+
+        other_admin_membership_id = make_campaign_membership(
+            connection, self.other_campaign_id, self.admin_user_id
+        )
+        other_admin_role_id = make_role(
+            connection, campaign_id=self.other_campaign_id, code=f"admin_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, other_admin_role_id, access_manage_id)
+        make_membership_role(connection, other_admin_membership_id, other_admin_role_id)
+
+        # The platform user a Foundry user id gets linked to in the tests
+        # below — distinct from every actor above so assertions can't
+        # accidentally pass by coincidence.
+        self.link_target_user_id = make_user(connection, "Integration API Link Target")
+        self.other_link_target_user_id = make_user(connection, "Integration API Other Link Target")
 
 
 @pytest.fixture
@@ -177,6 +212,9 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.gm_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
+                    fixture.admin_user_id,
+                    fixture.link_target_user_id,
+                    fixture.other_link_target_user_id,
                 ]
             },
         )
@@ -207,6 +245,13 @@ def _register_url(campaign_id: uuid.UUID) -> str:
 
 def _identifiers_url(campaign_id: uuid.UUID, external_system_id: uuid.UUID) -> str:
     return f"/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/identifiers"
+
+
+def _foundry_identities_url(campaign_id: uuid.UUID, external_system_id: uuid.UUID) -> str:
+    return (
+        f"/campaigns/{campaign_id}/integration/external-systems/{external_system_id}"
+        "/foundry-identities"
+    )
 
 
 def _register_body() -> dict[str, object]:
@@ -447,4 +492,162 @@ def test_the_map_audit_row_uses_the_mapped_entity(
     assert row.actor_user_id == f.gm_user_id
     assert row.entity_id == f.actor_id
     assert row.world_id == f.world_id
+    assert row.change_action_code == "updated"
+
+
+# ---------------------------------------------------------------------------
+# link_foundry_identity
+# ---------------------------------------------------------------------------
+
+
+def _register_system_as_gm(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, campaign_id: uuid.UUID
+) -> uuid.UUID:
+    """register_external_system requires canon.edit, which f.admin_user_id
+    (access.manage only, for link_foundry_identity below) deliberately does
+    not hold — see test_a_member_with_only_canon_edit_gets_forbidden_for_
+    foundry_identity_link. Registration therefore always happens as
+    f.gm_user_id, on its own client, before a separate f.admin_user_id
+    client performs the actual foundry-identity link under test."""
+    with client_factory(f.gm_user_id) as client:
+        return _register_system(client, campaign_id)
+
+
+def test_a_member_with_only_canon_edit_gets_forbidden_for_foundry_identity_link(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # f.gm_user_id holds canon.edit (sufficient for register/map above) but
+    # not access.manage — proving link_foundry_identity_endpoint really
+    # requires the narrower, distinct capability documented in
+    # dnd_ai.api.integration's own module docstring, not just any
+    # integration-administration-shaped capability.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+        )
+    assert response.status_code == 403
+
+
+def test_linking_a_foundry_identity_creates_the_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+        )
+    assert response.status_code == 200, response.text
+    external_identity_id = uuid.UUID(response.json()["external_identity_id"])
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT user_id, issuer, subject, revoked_at
+                FROM security.external_identities WHERE external_identity_id = :i
+            """),
+            {"i": external_identity_id},
+        ).one()
+    assert row.user_id == f.link_target_user_id
+    assert row.issuer == f"foundry:{external_system_id}"
+    assert row.subject == "foundry-user-1"
+    assert row.revoked_at is None
+
+
+def test_relinking_the_same_foundry_user_reassigns_rather_than_duplicates(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+        )
+        second = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={
+                "foundry_user_id": "foundry-user-1",
+                "user_id": str(f.other_link_target_user_id),
+            },
+        )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    external_identity_id = uuid.UUID(first.json()["external_identity_id"])
+    assert uuid.UUID(second.json()["external_identity_id"]) == external_identity_id
+
+    with postgres_engine.connect() as verify:
+        rows = verify.execute(
+            text("""
+                SELECT user_id FROM security.external_identities
+                WHERE issuer = :issuer AND subject = 'foundry-user-1'
+            """),
+            {"issuer": f"foundry:{external_system_id}"},
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].user_id == f.other_link_target_user_id
+
+
+def test_a_foundry_link_for_an_external_system_from_a_different_world_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # f.admin_user_id also has access.manage in f.other_campaign_id (a
+    # different world), so this proves the cross-world ownership check
+    # itself, not merely access control — mirrors
+    # test_an_external_system_from_a_different_world_is_rejected above.
+    foreign_external_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, foreign_external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+        )
+    assert response.status_code == 404
+
+    with postgres_engine.connect() as verify:
+        count = verify.execute(
+            text("SELECT count(*) FROM security.external_identities WHERE issuer = :issuer"),
+            {"issuer": f"foundry:{foreign_external_system_id}"},
+        ).scalar_one()
+    assert count == 0
+
+
+def test_a_nonexistent_target_user_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(uuid.uuid4())},
+        )
+    assert response.status_code == 400
+
+
+def test_the_foundry_identity_audit_row_has_no_entity_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-user-1", "user_id": str(f.link_target_user_id)},
+        )
+    assert response.status_code == 200, response.text
+    external_identity_id = uuid.UUID(response.json()["external_identity_id"])
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT actor_user_id, entity_id, world_id, event_id, ca.code AS change_action_code
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.record_id = :i AND cl.command_name = :c
+            """),
+            {"i": external_identity_id, "c": _LINK_FOUNDRY_IDENTITY_COMMAND},
+        ).one()
+    assert row.actor_user_id == f.admin_user_id
+    assert row.entity_id is None
+    assert row.world_id == f.world_id
+    assert row.event_id is None
     assert row.change_action_code == "updated"

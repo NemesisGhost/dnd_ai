@@ -828,6 +828,8 @@ Key columns:
 
 The active identity key is unique on `(issuer, subject)`. Email is not an identity key because it may change or be reused. Password hashes and OIDC access/refresh tokens do not belong in this table when authentication is delegated to an external identity provider.
 
+Despite the table's docstring above, `issuer`/`subject` are plain, unconstrained `TEXT` — nothing requires `issuer` to be a real OIDC issuer URL or `subject` to be an OIDC `sub` claim. Phase 11 workstream 1's `link_foundry_identity` (`dnd_ai.commands.integration`) reuses this same table for Foundry-user-to-platform-user mapping rather than introducing a parallel Foundry-specific table: it derives a synthetic `issuer` of `foundry:<external_system_id>`, scoping a Foundry-side user id to the one registered `integration.external_systems` row (world) it came from, so the same Foundry-side id from two different Foundry worlds never collides. This maps identity only, not authentication — a live Foundry adapter still needs its own way to authenticate a request as acting for a given Foundry user, which is not yet built (see [docs/PLAN.md](../PLAN.md) Phase 11).
+
 ##### `security.service_accounts`
 
 Non-human application principals. Service accounts never gain campaign access merely by existing; capabilities are assigned through explicit service-account grants or narrowly scoped application configuration, and all actions identify the service principal in audit records.

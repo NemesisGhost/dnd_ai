@@ -1357,7 +1357,7 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
 | 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
 | 10 | Complete | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | None |
-| 11 | Not started | — | Foundry MVP |
+| 11 | Partially implemented | Foundry-user identity linking (`link_foundry_identity`, reusing `security.external_identities`) | Foundry adapter connectivity/authentication, retrieval and submission endpoints, campaign-scoped `apply_foundry_combat_sync` exposure, HP/condition/inventory sync, retry/reconnect handling |
 | 12 | Not started | — | Narrow AI/NPC and rules-corpus MVP |
 | 13 | Not started | — | Web portal MVP and same-origin packaging |
 | 14 | Partially implemented | PostgreSQL/API Compose services and local development topology | Production UI/worker/reverse-proxy packaging, secrets, monitoring, backup/restore and rollback hardening |
@@ -1775,11 +1775,13 @@ Phase 10 also proves secure authentication cookies, CSRF protection, and player,
 
 ### Phase 11: Foundry MVP
 
-**Status: Not started.** Implemented dependencies: integration persistence contracts and API/domain command services. Remaining: the Foundry adapter and the end-to-end encounter synchronization flow below.
+**Status: Partially implemented.** Implemented: integration persistence contracts and API/domain command services (Phase 9-10); Foundry-user-to-platform-user identity linking (workstream 1, below). Remaining: the Foundry adapter itself, its authentication scheme, and the end-to-end encounter synchronization flow.
 
 Wires Phase 9's `integration.*` schema and adapter-facing contracts through Phase 10's API to the smallest playable Foundry integration. Build the concrete encounter flow before designing any general-purpose bidirectional synchronization framework.
 
-Deliver:
+**Workstream 1 (complete): Foundry-user identity linking.** `link_foundry_identity` (`dnd_ai.commands.integration`, `POST /campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities`) maps a Foundry-side user id to an existing `security.users` row, reusing `security.external_identities` (a synthetic `foundry:<external_system_id>` issuer scopes the mapping to one registered Foundry world — see [docs/architecture/DATABASE_MODEL.md §19.1](architecture/DATABASE_MODEL.md#191-identity-and-login)) rather than a parallel Foundry-specific table. Gated on `access.manage` (an identity/access decision, distinct from `canon.edit`'s "what is canonically true" scope the other two `dnd_ai.api.integration` routes use). This delivers "map Foundry users to authenticated platform users" as *identity mapping* only — a live Foundry adapter authenticating a request as a specific Foundry user, and `apply_foundry_combat_sync` gaining an HTTP endpoint that resolves and asserts a real `campaign_id` through that mapping, remain open (see `dnd_ai.commands.integration`'s own module docstring, "Foundry identity mapping" and "HTTP exposure").
+
+Remaining deliverables:
 
 - associate Foundry worlds, scenes, actors, tokens, items, and encounters with canonical platform records
 - retrieve party-visible state for the current location or encounter
@@ -1787,7 +1789,7 @@ Deliver:
 - synchronize the minimum required character HP, conditions, resource use, inventory, and encounter results
 - handle duplicate delivery and retries safely
 - restore synchronized state after reopening or reconnecting
-- map Foundry users to authenticated platform users and enforce the same campaign, character-control, knowledge, and resource-access rules as the API and portal
+- a Foundry-adapter authentication scheme built on workstream 1's identity mapping, and enforcement of the same campaign, character-control, knowledge, and resource-access rules as the API and portal
 
 Exit criteria:
 

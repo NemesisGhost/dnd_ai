@@ -118,9 +118,44 @@ docstring above) is deliberately incompatible with the one-transaction-
 per-request model every other API command endpoint relies on for atomic
 auditing, so giving it an endpoint now would mean either breaking that
 design or writing its audit.change_log row in a second, non-atomic
-transaction after the fact. Both are left for Phase 11, when a real
-Foundry-adapter caller and its own authorization/transaction shape are
-designed together rather than retrofitted here.
+transaction after the fact. Both are left for a follow-up Phase 11
+workstream, when a real Foundry-adapter caller and its own
+authorization/transaction shape are designed together rather than
+retrofitted here.
+
+Foundry identity mapping (Phase 11 workstream 1, `link_foundry_identity`):
+the first concrete step of "map Foundry users to authenticated platform
+users" (docs/PLAN.md Phase 11). `security.external_identities`
+(migration 080) already generalizes past pure OIDC — its schema is just
+`(issuer, subject) -> user_id`, unique on `(issuer, subject) WHERE
+revoked_at IS NULL`, with no column that requires `issuer` to be a real
+OIDC issuer URL or `subject` to be an OIDC `sub` claim
+(docs/architecture/DATABASE_MODEL.md §19.1). `link_foundry_identity`
+reuses that same table rather than inventing a parallel Foundry-specific
+mapping table: it derives a synthetic issuer, `foundry:<external_system_id>`
+(`_foundry_issuer`), scoping the mapping to one registered Foundry world so
+the same Foundry-side user id from two different Foundry worlds can never
+collide. Because `integration.external_systems` is already world-scoped
+(this module's own docstring above) and `external_identities` carries no
+`world_id` of its own, `expected_world_id` reuses exactly
+`_external_system_world`'s existence/cross-world check
+`map_external_identifier_endpoint` already relies on, closing the same
+disclosure gap for this new route.
+
+This intentionally maps identity only — establishing that "Foundry user X
+in world W is platform user Y" — not authentication. A live Foundry
+adapter still needs its own way to authenticate a request as "acting for
+Foundry user X" (a bearer scheme distinct from the OIDC-bearer pipeline in
+`dnd_ai.api.auth`, since a Foundry client is not an OIDC identity
+provider); designing and wiring that, and then threading the campaign_id
+it resolves through to `apply_foundry_combat_sync`
+(`_resolve_combat_turn_impl`'s existing `campaign_id` parameter already
+supports it — see that function's own docstring), is left to the next
+Phase 11 workstream. Revoking a previously-linked Foundry identity is also
+deliberately out of scope here — `link_foundry_identity` only ever
+inserts or reassigns an active mapping; nothing in this workstream needs a
+revoke path yet, and adding one speculatively would be exactly the kind of
+un-asked-for abstraction this codebase avoids.
 """
 
 import contextlib
@@ -343,6 +378,97 @@ def map_external_identifier(
             entity_id=entity_id,
             external_kind=external_kind,
             external_id=external_id,
+            expected_world_id=expected_world_id,
+        )
+
+
+def _foundry_issuer(external_system_id: uuid.UUID) -> str:
+    """The synthetic `security.external_identities.issuer` value used to
+    scope a Foundry user id to one registered Foundry world — see this
+    module's own docstring ("Foundry identity mapping") for why this reuses
+    the generic identity table instead of a Foundry-specific one."""
+    return f"foundry:{external_system_id}"
+
+
+@dataclass(frozen=True)
+class LinkFoundryIdentityResult:
+    external_identity_id: uuid.UUID
+    world_id: uuid.UUID
+
+
+def _link_foundry_identity_impl(
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    foundry_user_id: str,
+    user_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> LinkFoundryIdentityResult:
+    """The actual work of link_foundry_identity(), on a connection the
+    caller already has open — see _map_external_identifier_impl's own
+    docstring for the composable-implementation/public-wrapper pattern
+    this mirrors.
+
+    Maps foundry_user_id (the Foundry-side user id) under external_system_id
+    to an existing platform user_id, by upserting a
+    security.external_identities row keyed on (issuer, subject) =
+    (_foundry_issuer(external_system_id), foundry_user_id). A repeat call
+    for the same (external_system_id, foundry_user_id) reassigns the
+    mapping to whatever user_id is supplied — the same "re-registering the
+    same external object is idempotent" upsert semantics
+    _map_external_identifier_impl already documents for its own table — so
+    a GM correcting a mis-linked Foundry user simply calls this again
+    rather than needing a separate revoke-then-relink flow. A nonexistent
+    user_id is rejected as a 400 by security.external_identities' own
+    user_id foreign key (the same reliance dnd_ai.commands.memberships.
+    create_campaign_membership's own docstring documents for
+    security.campaign_memberships.user_id).
+
+    expected_world_id, when supplied, asserts external_system_id belongs to
+    that world before writing anything — identical in shape and purpose to
+    _map_external_identifier_impl's own expected_world_id argument;
+    expected_world_id=None skips only this assertion."""
+    world_id = _external_system_world(connection, external_system_id)
+    if expected_world_id is not None and world_id != expected_world_id:
+        raise ExternalSystemNotFoundError(
+            f"external system {external_system_id} belongs to world {world_id!r}, "
+            f"not {expected_world_id!r}"
+        )
+
+    issuer = _foundry_issuer(external_system_id)
+    value = connection.execute(
+        text("""
+            INSERT INTO security.external_identities (user_id, issuer, subject, linked_at)
+            VALUES (:user, :issuer, :subject, now())
+            ON CONFLICT (issuer, subject) WHERE revoked_at IS NULL
+            DO UPDATE SET user_id = EXCLUDED.user_id, linked_at = now()
+            RETURNING external_identity_id
+        """),
+        {"user": user_id, "issuer": issuer, "subject": foundry_user_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+
+    return LinkFoundryIdentityResult(external_identity_id=value, world_id=world_id)
+
+
+def link_foundry_identity(
+    engine: Engine,
+    *,
+    external_system_id: uuid.UUID,
+    foundry_user_id: str,
+    user_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> LinkFoundryIdentityResult:
+    """Map a Foundry-side user id to an existing platform user. Public
+    convenience API: opens and commits its own transaction. See
+    _link_foundry_identity_impl() for the composable form a caller with
+    its own transaction (e.g. an API command endpoint) uses instead."""
+    with engine.begin() as connection:
+        return _link_foundry_identity_impl(
+            connection,
+            external_system_id=external_system_id,
+            foundry_user_id=foundry_user_id,
+            user_id=user_id,
             expected_world_id=expected_world_id,
         )
 
