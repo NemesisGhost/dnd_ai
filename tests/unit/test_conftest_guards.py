@@ -140,7 +140,19 @@ def test_test_engine_kwargs_recycles_before_a_typical_ci_run_completes() -> None
 
 
 def test_test_engine_kwargs_has_no_unexpected_keys() -> None:
-    # Pins the contract to exactly the two pool-resilience settings this
-    # correction pass added — a stray extra key here would silently
-    # change create_engine()'s behavior for every test engine.
-    assert set(_test_engine_kwargs()) == {"pool_pre_ping", "pool_recycle"}
+    # Pins the contract to exactly the pool-resilience and connection-
+    # timeout settings this project adds — a stray extra key here would
+    # silently change create_engine()'s behavior for every test engine.
+    assert set(_test_engine_kwargs()) == {"pool_pre_ping", "pool_recycle", "connect_args"}
+
+
+def test_test_engine_kwargs_sets_a_bounded_connect_timeout() -> None:
+    # Regression for postgres_engine() hanging indefinitely against an
+    # unreachable host: every engine this fixture creates must bound how
+    # long it will wait to connect, rather than the libpq default of
+    # waiting forever.
+    connect_args = _test_engine_kwargs()["connect_args"]
+    assert isinstance(connect_args, dict)
+    timeout = connect_args["connect_timeout"]
+    assert isinstance(timeout, int | float)
+    assert 0 < timeout <= 60

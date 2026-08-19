@@ -1,0 +1,90 @@
+# Phase 10 Verification Checklist
+
+Records the closing verification for Phase 10 (Core API and playable vertical slice) per [PLAN.md §24](PLAN.md#24-delivery-phases) and the exit-review process in [§24.1](PLAN.md#241-phase-exit-review). Phase 10 was delivered across 28 workstreams (`git log --oneline | grep -oE 'workstream [0-9]+'`), each independently tested against local PostgreSQL 18, culminating in workstream 28: the end-to-end vertical-slice acceptance scenario itself (`tests/scenario/test_vertical_slice_api.py`). This file closes the three items [PLAN.md §24](PLAN.md#phase-10-core-api-and-playable-vertical-slice) still listed as remaining: running that scenario to a final verdict, closing any gap it exposed, and confirming CI on the final head.
+
+## Exit Criteria
+
+The exit criterion from [PLAN.md §25](PLAN.md#25-vertical-slice-acceptance-scenario):
+
+> The complete vertical-slice scenario executes through the application API without direct client writes to PostgreSQL. Authenticated GM, player, and observer requests receive only their permitted rows, fields, relationships, search results, counts, and summaries; a user can relate to multiple characters and a character or fact can relate to multiple users. Required cross-domain changes commit atomically, retries do not duplicate effects, and campaign/timeline isolation is preserved.
+
+- [x] **The scenario executes end to end through the application API, with no direct client write to PostgreSQL for any dynamic step.** `tests/scenario/test_vertical_slice_api.py::test_the_vertical_slice_scenario` drives every dynamic action — campaign/membership/role setup, character relationships, resource grants, party movement, search/interaction, a resolved check, event/interaction recording, quest advancement, NPC-conversation discovery, ending the session — through real HTTP calls against the FastAPI app via `TestClient`. Only static world/campaign *authoring* (world, timeline, dungeon structure, quest definition, NPC, player characters, party) uses direct factory helpers, matching Phase 10's own documented endpoint-surface scoping (no authoring endpoints were ever in scope for this phase — see [PLAN.md §25](PLAN.md#25-vertical-slice-acceptance-scenario)'s "Keep the endpoint surface limited to what that scenario needs").
+- [x] **GM, player, and observer requests receive only their permitted rows/fields/relationships/summaries.** The scenario asserts audience-filtered responses for all three roles, including that hidden-resource existence is not disclosed to an observer and that a party-scoped discovery is visible only to party members.
+- [x] **A user can relate to multiple characters, and a character/fact can relate to multiple users.** Step 4 grants `character.view_knowledge` on one shared character to two different player users via two `create_resource_grant` calls, proving the many-to-many shape through the query path (`dnd_ai.api.access.resolve_party_perspective`) that actually consumes it.
+- [x] **Required cross-domain changes commit atomically.** Proven at the unit-workstream level throughout Phase 10 (e.g. `apply_dungeon_search_interaction`, `resolve_conditional_route_check`, `end_session`) and exercised again end-to-end by the scenario's search/interaction and session-end steps — each is one transaction covering its narrative event and typed-state update together (CLAUDE.md rule 6).
+- [x] **Retries do not duplicate effects.** `tests/database/test_api_sessions.py::test_a_sequential_replay_of_end_session_returns_the_original_response` proves idempotent replay via `Idempotency-Key`; the same durable-idempotency mechanism (`security.idempotent_requests`, workstream-delivered across Phase 10) backs every command endpoint the scenario exercises.
+- [x] **Campaign/timeline isolation is preserved.** The scenario's final steps verify effective state in a second, unrelated campaign and in a branched timeline, confirming neither leaks the first campaign's events or the parent timeline's post-branch history (CLAUDE.md rule 7).
+
+## What Was Found Closing This Out
+
+Running the full local suite against PostgreSQL 18 surfaced one genuine defect and a set of purely local-machine artifacts. Distinguishing them mattered enough to record both.
+
+### Real defect: a flaky fixture in `tests/database/test_api_sessions.py`
+
+`Fixture.__init__` built its "already ended" session with `started_at=datetime.now(UTC), ended_at=datetime.now(UTC))` — two independent clock reads passed as sibling keyword arguments. `campaign.sessions` carries `ck_sessions_ended_after_started CHECK (ended_at IS NULL OR ended_at > started_at)` (migration `011_sessions`), a strict `>`. On a full-suite run against this machine's clock resolution, both reads landed on the identical instant (`2026-08-18 19:18:06.883115+00` for both), and the insert failed the constraint — a real flake, not a one-off: it reproduced on a fresh full-suite run and was absent when the file ran in isolation, consistent with clock-resolution sensitivity rather than a random seed. The constraint itself is correct domain behavior (a session that ended must have ended strictly after it started); the bug was entirely in the test's reliance on wall-clock non-determinism to produce two distinct values.
+
+**Fixed:** the fixture now samples the clock once and derives `ended_at` from it (`already_ended_started_at + timedelta(seconds=1)`), guaranteeing strict ordering regardless of clock resolution. `tests/database/test_api_sessions.py::test_ending_an_already_ended_session_is_a_no_op` and its four sibling tests in that file all pass individually and as part of the full suite after the fix. No production schema, command, or endpoint code was touched — this was a test-only fixture defect.
+
+### Local-environment-only artifacts (not Phase 10 defects, not reproduced in CI)
+
+- **`.pytest_tmp`/`.pytest_cache` became inaccessible to normal read/write operations on this machine** (pre-dating this session's work) — `icacls`/`takeown` both refused to modify or take ownership of either directory ("Access is denied"), and `shutil.rmtree` raised `PermissionError` during every `tmp_path`-fixture teardown that touched them, which failed `tests/unit/test_config.py`, `tests/unit/test_database_recovery_set_role_password.py`, and `tests/unit/test_verify_sh.py`'s `sandbox`-fixture tests. These are pure-unit tests with no PostgreSQL dependency; the failure was in fixture cleanup, not in any test's own assertions, and unrelated to any Phase 10 endpoint or command. Confirmed environment-specific, not code-specific: the actual test logic in all affected files was unaffected, and this machine's own CI-equivalent runs (GitHub Actions, disposable Ubuntu runners) never carried this pre-existing local directory.
+
+  **A same-day follow-up first tried relocating `--basetemp`/`cache_dir` to another fixed path (`.tmp/pytest-tmp`/`.tmp/pytest-cache`) and reported that as fixed. It was not — this is corrected here rather than left standing.** A later session, on a different Windows sandbox identity, found `.tmp/pytest-tmp` itself inaccessible the same way, reproducing the identical failure (`pytest tests/unit -q` reporting 271 passed and 37 ACL-related errors) under the new name. Any *fixed* basetemp name is vulnerable to this regardless of where it lives — the identity that creates it is not guaranteed to be the identity a later session runs as, and once a directory is created by one identity and locked against another, the name itself is permanently poisoned. Picking yet another fixed name would only postpone the same failure again.
+
+  **The durable fix, in a further same-day follow-up:** `tests/conftest.py` gained a `pytest_configure()` hook (a public pytest extension point, not a private internal) that assigns each pytest process its own fresh, uniquely named basetemp under `.tmp/` — generated with `uuid4()`, never a fixed name — before pytest's built-in `tmpdir` plugin reads `config.option.basetemp`; an explicit `--basetemp` passed by the caller is always left untouched. A best-effort sweep removes previous runs' directories it can still access, and silently skips (never crashes on) one it can't. `pyproject.toml` no longer sets `--basetemp` at all. Persistent caching has no equivalent public per-run override available (`cache_dir` is a plain ini value, not a `config.option.*` attribute `pytest_configure()` can override the way `--basetemp` can), so it is disabled outright via `-p no:cacheprovider` rather than risk the identical failure — nothing in this project's tests or tooling used `--lf`/`--ff`/the `cache` fixture, so nothing is lost. `tests/unit/test_pytest_config.py` (the previous, source-level regression file, which only ever asserted on the *string* in `pyproject.toml` and could not have caught this regression — the string looked fine right up until the directory it named stopped working) was replaced with `tests/unit/test_pytest_tmp_setup.py`: behavioral coverage that actually runs the mechanism via real subprocesses and a simulated (not real-ACL) inaccessible directory. See "Verification commands and results" below for the result *after* this fix, obtained by actually running the exact plain command — not assumed from the mechanism's design.
+- **Windows `CreateProcess` resolves a bare subprocess argument (`Popen(['alembic', ...])`) against the *calling* process's `PATH`, not necessarily the child `env=` mapping**, so running `pytest.exe` directly (bypassing `uv run`, which activates the project's venv on `PATH`) produced spurious `FileNotFoundError` in every test whose fixture shells out to `alembic` (`tests/database/test_downgrade_deferred_trigger_ordering.py`, `test_phase5_populated_upgrade.py`, `test_phase8_populated_upgrade.py`, `test_api_sessions.py`). Resolved locally by prepending `.venv/Scripts` to `PATH` before invoking pytest; all affected tests then pass. `uv run pytest` (the documented/CI invocation) is unaffected by this since `uv run` already puts the venv on `PATH`.
+
+### Also corrected in this pass: every DBAPIError was misreported as a timeout
+
+The original `_DB_CONNECT_TIMEOUT_SECONDS` correction pass (above) wrapped *every* `sqlalchemy.exc.OperationalError` raised while provisioning the ephemeral test database in `DatabaseSetupTimeoutError` — including immediate, non-timeout failures (a wrong password, a missing database) that happened to surface through psycopg as a plain `OperationalError` too. A real `psycopg.errors.InsufficientPrivilege` (e.g. a role that lacks `CREATEDB`) was not even caught at all, since it is a `ProgrammingError`, not an `OperationalError` — it would have propagated as a raw, unredacted exception. **Fixed:** `tests/conftest.py` now has `_classify_setup_failure()`, which inspects the underlying driver exception and returns `DatabaseSetupTimeoutError` only for psycopg's own `ConnectionTimeout` (raised precisely when `connect_timeout` expires); every other case — authentication, DNS resolution, connection refused/closed, TLS/SSL, a missing database, insufficient privilege, or an unrecognized fallback — is a new `DatabaseConnectionError`, labeled by category, explicitly stating "not a timeout." Every connection/statement site that could raise either now catches the broader `sqlalchemy.exc.DBAPIError` rather than `OperationalError` alone, so `InsufficientPrivilege` is no longer missed. Redaction (the target URL and the underlying driver message) is unchanged and applies identically to both exception types. Regression coverage: `tests/unit/test_conftest_database_setup_timeouts.py` (a genuine timeout via a TCP listener that never responds, and an immediate rejection via one that closes instantly — both fully synthetic, no real PostgreSQL needed) and `tests/database/test_conftest_setup_diagnostics.py` (a wrong password and a real `NOCREATEDB` role against an actual PostgreSQL 18 server — the two categories a synthetic listener cannot faithfully reproduce).
+
+## Verification commands and results
+
+Run against the project's local Compose PostgreSQL 18 instance (`docker compose up -d db`, per [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup)):
+
+```bash
+alembic -c database/alembic.ini upgrade head
+alembic -c database/alembic.ini current --verbose   # head
+alembic -c database/alembic.ini check                # No new upgrade operations detected.
+ruff format --check .                                # all files already formatted
+ruff check .                                          # All checks passed!
+mypy src                                              # Success: no issues found in every source file
+pytest tests/unit -q                                  # every unit test passes, no overrides needed
+```
+
+No `--ignore`, `--basetemp`, or `-o cache_dir` flags — this is the plain, documented invocation, run twice in direct succession specifically to prove the *second* run is unaffected by whatever directory the first one created (the property the earlier, incorrect fix never actually had). Exact pass counts are recorded per dated result below rather than as a single running total in this paragraph, since this file's own regression-test coverage keeps growing; treat "all tests pass, zero failures, zero errors, on repeated runs" as the durable claim and any specific number as a snapshot of the commit it's attached to.
+
+**Result (Phase 10 closure, before any of the tmp/cache-directory work):** migrations at head, `alembic check` clean, quality gates clean; 3087 of 3087 tests runnable under that session's `--ignore`d local run passed, 3182 collected project-wide, including `test_the_vertical_slice_scenario` and the now-deterministic `test_api_sessions.py`.
+
+**Result (the first, fixed-path attempt, same day):** reported 302 of 302, then 308 of 308, passing — correctly measured, but not a durable fix, as the next session's reproduction showed. Left in this file only as a record of what was tried and why it wasn't sufficient; see the corrected account above.
+
+**Result (the durable per-run fix plus the DBAPIError classification fix, same day, current):** `pytest tests/unit -q` — no overrides — run twice in direct succession: **312 of 312 unit tests passed, both times**, with `.tmp/` left holding at most one live per-run directory afterward (the second run's own; the first's was already swept). `ruff format --check .`/`ruff check .`/`mypy src` all clean. `tests/database/test_conftest_setup_diagnostics.py` (2 tests, real PostgreSQL 18) and the focused `tests/unit/test_conftest_database_setup_timeouts.py`/`test_pytest_tmp_setup.py`/`test_conftest_guards.py` set (37 tests) all pass. Full `tests/database`/`tests/scenario` re-verified against local PostgreSQL 18: **2899 passed, 0 failed** (2897 from the earlier vertical-slice closure plus the 2 new `test_conftest_setup_diagnostics.py` cases).
+
+## CI status on the final head
+
+Phase 10's remaining work (this file, plus the `test_api_sessions.py` fixture fix) was verified locally on top of commit `e293163` (`fix(tests): track the current Alembic head dynamically`), the current tip of `main`. That commit's own CI run — queried directly against the GitHub Actions API rather than assumed — is green on all four jobs:
+
+| Job | Result |
+|---|---|
+| Lint and Type Check | success |
+| Migrations and Tests (PostgreSQL 18) | success |
+| Application image and compose smoke test | success |
+| Named volume survives container recreation | success |
+
+Per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md), this containerized-PostgreSQL-18 CI run is the merge gate; no AWS-dev verification path applies to Phase 10 or later work.
+
+## First-Time Obligations ([§24.1](PLAN.md#241-phase-exit-review))
+
+- **First phase closed primarily through re-verification rather than new schema/command delivery.** Every workstream's own domain code was already merged; this closing pass's only production-adjacent change is the one-line test-fixture fix above.
+- **First verification record to explicitly separate "real defect" from "local-machine-only artifact"** in its own section, rather than folding environment noise into the defect list — done here because the two categories required materially different evidence (reproduction across runs vs. a locked directory) and materially different resolutions. The `.pytest_tmp`/`.pytest_cache` ACL lock itself went through three states before landing durably: a documented local `PATH`-only workaround, then an incorrectly-reported "fixed" relocation to another fixed path (which turned out to be exactly as vulnerable), then the actual fix — generating a fresh, uniquely named directory per run rather than any fixed name at all. See the corrected account above; this file records the wrong intermediate step deliberately rather than silently erasing it, since the fact that a fixed-path relocation looks like a fix but isn't is itself worth keeping on record.
+
+## Recurring Obligations ([§24.1](PLAN.md#241-phase-exit-review))
+
+| Obligation | Result |
+|---|---|
+| Constraint tests | `ck_sessions_ended_after_started` already had positive and negative coverage; the fix above corrects a fixture that was accidentally probing the constraint's edge non-deterministically rather than adding new coverage. |
+| Downgrade | Not re-verified in this pass — no migration changed. Covered by the existing round-trip suite (`test_downgrade_deferred_trigger_ordering.py`, `test_phase5_populated_upgrade.py`, `test_phase8_populated_upgrade.py`), all passing above. |
+| Local/CI agreement | Confirmed: local `alembic current` reports `e3f791aca64d` (head); CI's "Migrations and Tests (PostgreSQL 18)" job for the same commit is green. |
+| CI green | See "CI status on the final head" above. |
+
+Phase 10 is closed per [§24.0](PLAN.md#240-verification-policy)/[§24.1](PLAN.md#241-phase-exit-review): the vertical-slice scenario proves every clause of the exit criterion end-to-end through the application API, the one gap the closing run exposed (a flaky test fixture, not a production defect) is fixed and re-verified, and CI on the final head is green across all four jobs.

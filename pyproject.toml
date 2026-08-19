@@ -96,19 +96,31 @@ pythonpath = ["scripts"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# basetemp: NOT set here. A *fixed* basetemp — this project tried both
+# the OS temp dir and, later, a fixed path under .tmp/ — can end up owned
+# by an ACL a later session (a different Windows sandbox identity, twice
+# observed on this project) can neither read, write, nor take ownership
+# of, permanently poisoning that name regardless of which fixed path was
+# chosen. tests/conftest.py's pytest_configure() hook instead assigns
+# each run its own fresh, uniquely named directory under this workspace's
+# gitignored .tmp/ — see the detailed comment there — unless --basetemp
+# is passed explicitly here or on the command line, which always wins.
+#
+# cache_dir: pytest's cache plugin has no equivalent per-run mechanism
+# available through public configuration (cache_dir is a plain ini value,
+# not a config.option.* attribute pytest_configure can override before
+# it's read, the way --basetemp's own hook does above) — disabled
+# entirely via `-p no:cacheprovider` below rather than risk the exact
+# same ACL failure the basetemp fix exists to prevent. Nothing in this
+# project's tests or tooling uses --lf/--ff/stepwise or the `cache`
+# fixture, so nothing depends on it being enabled.
 addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
     "--showlocals",
-    # Default tmp_path/tmp_path_factory basetemp is the OS temp dir
-    # (Windows: %TEMP%, under AppData\Local\Temp), shared with every other
-    # process on the machine — on at least one development sandbox this hit
-    # permission errors unrelated to any test's own logic. Pointing basetemp
-    # at a dedicated directory inside the repo (gitignored; pytest clears it
-    # at the start of every session) keeps tmp_path-based tests reproducible
-    # regardless of the ambient OS temp dir's state or permissions.
-    "--basetemp=.pytest_tmp",
+    "-p",
+    "no:cacheprovider",
 ]
 markers = [
     "unit: Unit tests with no database",
