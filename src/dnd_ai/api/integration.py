@@ -1,19 +1,24 @@
-"""World-scoped external-system, identifier-mapping, Foundry-identity, and
-(Phase 11 workstream 3) Foundry combat-sync endpoints.
+"""World-scoped external-system, identifier-mapping, Foundry-identity,
+Foundry combat-sync (Phase 11 workstream 3), and sync-state (Phase 11
+workstream 4) endpoints.
 
 Exposes
 `register_external_system`, `map_external_identifier`, (Phase 11
 workstream 1) `link_foundry_identity`, (Phase 11 workstream 2)
-`issue_foundry_system_key`, and (Phase 11 workstream 3)
-`apply_foundry_combat_sync`, over HTTP, on the same already-delivered OIDC
-authentication (`dnd_ai.api.auth`), transaction management
-(`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,
-`dnd_ai.domain.access`) every other command router uses.
+`issue_foundry_system_key`, (Phase 11 workstream 3)
+`apply_foundry_combat_sync`, and (Phase 11 workstream 4)
+`dnd_ai.queries.integration.get_sync_state_view`, over HTTP, on the same
+already-delivered OIDC authentication (`dnd_ai.api.auth`), transaction
+management (`dnd_ai.api.deps`), and access resolution
+(`dnd_ai.api.access`, `dnd_ai.domain.access`) every other command router
+uses.
 
-The first four routes run on the request's own `get_connection` transaction
-and call the connection-taking `_..._impl` form of their command (never
-the public engine-based wrapper, which would open a second, nested
-transaction) — identical to every route in `dnd_ai.api.encounters`/
+The first four routes (all writes) and `sync_state_endpoint` (a read) run
+on the request's own `get_connection` transaction and call the
+connection-taking `_..._impl` form of their command, or a plain query
+function for the read, on that same connection — never the public
+engine-based command wrapper, which would open a second, nested
+transaction — identical to every route in `dnd_ai.api.encounters`/
 `.items`/`.quests`/`.relationships`/`.events`/`.interactions`.
 `apply_foundry_combat_sync_endpoint` is the one deliberate exception — see
 its own section below and `dnd_ai.commands.integration`'s own module
@@ -126,14 +131,40 @@ integration`'s own docstring for why a combat turn's durable record is
 `narrative.events`/`interaction.combat_actions`/`integration.sync_jobs`,
 not `audit.change_log`, mirroring `resolve_combat_turn_endpoint`'s
 identical omission.
+
+`sync_state_endpoint` (Phase 11 workstream 4, "restore synchronized state
+after reopening or reconnecting"): `GET /campaigns/{campaign_id}/
+integration/external-systems/{external_system_id}/sync-state`, taking
+exactly one of `target_entity_id`/`target_encounter_id` as a query
+parameter (`dnd_ai.queries.integration.get_sync_state_view`'s own
+`InvalidSyncStateTargetError`, mapped to a 400 by the existing generic
+`ValueError` handler, rejects both or neither). Authorized on
+`campaign.view` — the read-only counterpart to this module's write
+capabilities, matching `dnd_ai.api.encounters._ENCOUNTER_VIEW_CAPABILITY`
+exactly, since a sync-status check is no more sensitive than reading the
+encounter/character state it summarizes.
+
+Ownership check, before the query even runs: `target_entity_id` must
+belong to a `core.entities` row whose `world_id` matches the campaign's
+own resolved world (`timeline_world_id`); `target_encounter_id` must
+belong to a `narrative.encounters` row whose `campaign_id` matches the
+URL's own campaign directly. Either failure, and a target genuinely never
+synced (`get_sync_state_view` returning `None`), all raise the identical
+`NotFoundError` — a caller authorized only for one campaign must never be
+able to distinguish "this target belongs to someone else" from "it was
+never synced," the same non-disclosure reasoning every cross-campaign/
+cross-world check in this module already applies (see, e.g., `map_
+external_identifier_endpoint`'s own "Cross-world integrity" section
+above).
 """
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.commands.integration import (
     ApplyFoundryCombatSyncResult,
@@ -144,12 +175,14 @@ from dnd_ai.commands.integration import (
     apply_foundry_combat_sync,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.integration import InvalidSyncStateTargetError, get_sync_state_view
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_engine, get_idempotency_key
+from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["integration"])
@@ -170,6 +203,11 @@ _INTEGRATION_MANAGE_CAPABILITY = "canon.edit"
 # ("Authorization") for why these deliberately differ from
 # _INTEGRATION_MANAGE_CAPABILITY above.
 _FOUNDRY_IDENTITY_MANAGE_CAPABILITY = "access.manage"
+
+# The read-only counterpart to _INTEGRATION_MANAGE_CAPABILITY, for
+# sync_state_endpoint — see this module's docstring ("sync_state_endpoint")
+# for why this mirrors dnd_ai.api.encounters._ENCOUNTER_VIEW_CAPABILITY.
+_INTEGRATION_VIEW_CAPABILITY = "campaign.view"
 
 # audit.change_log.command_name / the idempotency store's fingerprinted
 # command_name — one literal per route, never derived from request data.
@@ -284,6 +322,18 @@ class ApplyFoundryCombatSyncResponse(BaseModel):
             new_hit_points=result.combat_result.new_hit_points,
             replayed=result.replayed,
         )
+
+
+class SyncStateResponse(BaseModel):
+    sync_state_id: uuid.UUID
+    external_system_id: uuid.UUID
+    target_entity_id: uuid.UUID | None
+    target_encounter_id: uuid.UUID | None
+    sync_status: str
+    last_synced_at: datetime | None
+    last_sync_job_id: uuid.UUID | None
+    last_sync_job_status: str | None
+    last_sync_job_error_message: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -582,3 +632,93 @@ def apply_foundry_combat_sync_endpoint(
         campaign_id=campaign_id,
     )
     return ApplyFoundryCombatSyncResponse.from_result(result)
+
+
+def _assert_sync_state_target_owned_by_campaign(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    world_id: uuid.UUID,
+    target_entity_id: uuid.UUID | None,
+    target_encounter_id: uuid.UUID | None,
+) -> None:
+    """Raises `NotFoundError` unless the named target actually belongs to
+    the caller's own already-authorized campaign/world — see this module's
+    docstring ("sync_state_endpoint") for why this runs before the
+    sync-state query itself, and why it raises the identical error a
+    genuinely-never-synced target would also produce.
+
+    Validates the same "exactly one of target_entity_id/
+    target_encounter_id" invariant `get_sync_state_view` itself enforces
+    (raising the identical `InvalidSyncStateTargetError`) before touching
+    either branch below — without this, a caller supplying both would
+    silently have `target_encounter_id` ignored (only the entity branch
+    runs), and a caller supplying neither would hit an `AssertionError`
+    (a 500) instead of the clean 400 this mirrors."""
+    if (target_entity_id is None) == (target_encounter_id is None):
+        raise InvalidSyncStateTargetError(
+            "exactly one of target_entity_id/target_encounter_id must be supplied "
+            f"(entity={target_entity_id!r}, encounter={target_encounter_id!r})"
+        )
+
+    if target_entity_id is not None:
+        owned = connection.execute(
+            text("SELECT 1 FROM core.entities WHERE entity_id = :entity AND world_id = :world"),
+            {"entity": target_entity_id, "world": world_id},
+        ).scalar()
+    else:
+        owned = connection.execute(
+            text(
+                "SELECT 1 FROM narrative.encounters "
+                "WHERE encounter_id = :encounter AND campaign_id = :campaign"
+            ),
+            {"encounter": target_encounter_id, "campaign": campaign_id},
+        ).scalar()
+    if owned is None:
+        raise NotFoundError()
+
+
+@router.get(
+    "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/sync-state",
+    response_model=SyncStateResponse,
+    status_code=200,
+)
+def sync_state_endpoint(
+    campaign_id: uuid.UUID,
+    external_system_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_INTEGRATION_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    target_entity_id: uuid.UUID | None = None,
+    target_encounter_id: uuid.UUID | None = None,
+) -> SyncStateResponse:
+    world_id = timeline_world_id(connection, access.timeline_id)
+    _assert_sync_state_target_owned_by_campaign(
+        connection,
+        campaign_id=campaign_id,
+        world_id=world_id,
+        target_entity_id=target_entity_id,
+        target_encounter_id=target_encounter_id,
+    )
+
+    view = get_sync_state_view(
+        connection,
+        external_system_id=external_system_id,
+        target_entity_id=target_entity_id,
+        target_encounter_id=target_encounter_id,
+    )
+    if view is None:
+        raise NotFoundError()
+
+    return SyncStateResponse(
+        sync_state_id=view.sync_state_id,
+        external_system_id=view.external_system_id,
+        target_entity_id=view.target_entity_id,
+        target_encounter_id=view.target_encounter_id,
+        sync_status=view.sync_status,
+        last_synced_at=view.last_synced_at,
+        last_sync_job_id=view.last_sync_job_id,
+        last_sync_job_status=view.last_sync_job_status,
+        last_sync_job_error_message=view.last_sync_job_error_message,
+    )

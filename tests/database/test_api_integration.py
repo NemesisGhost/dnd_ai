@@ -91,7 +91,18 @@ class Fixture:
         canon_edit_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
+        # campaign.view too — sync_state_endpoint's own read-only
+        # counterpart to canon.edit (dnd_ai.api.integration's own
+        # docstring, "sync_state_endpoint") — canon.edit does not itself
+        # imply campaign.view (AccessContext.has_capability checks the
+        # exact capability_code, no hierarchy), so a role needs both
+        # granted explicitly, mirroring how migration 086 seeds the
+        # default gm role with both together.
+        campaign_view_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "campaign.view"
+        )
         make_role_capability(connection, role_id, canon_edit_id)
+        make_role_capability(connection, role_id, campaign_view_id)
         make_membership_role(connection, gm_membership_id, role_id)
 
         # Membership in the *other* campaign too, with the same capability —
@@ -104,6 +115,7 @@ class Fixture:
             connection, campaign_id=self.other_campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
         make_role_capability(connection, other_role_id, canon_edit_id)
+        make_role_capability(connection, other_role_id, campaign_view_id)
         make_membership_role(connection, other_gm_membership_id, other_role_id)
 
         self.capless_user_id = make_user(connection, "Integration API Capless Member")
@@ -993,3 +1005,148 @@ def test_a_real_foundry_credential_can_call_the_combat_sync_endpoint(
             },
         )
     assert response.status_code == 201, response.text
+
+
+# ---------------------------------------------------------------------------
+# sync_state
+# ---------------------------------------------------------------------------
+
+
+def _sync_state_url(
+    campaign_id: uuid.UUID,
+    external_system_id: uuid.UUID,
+    *,
+    target_entity_id: uuid.UUID | None = None,
+    target_encounter_id: uuid.UUID | None = None,
+) -> str:
+    query: dict[str, str] = {}
+    if target_entity_id is not None:
+        query["target_entity_id"] = str(target_entity_id)
+    if target_encounter_id is not None:
+        query["target_encounter_id"] = str(target_encounter_id)
+    base = f"/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/sync-state"
+    if not query:
+        return base
+    return base + "?" + "&".join(f"{k}={v}" for k, v in query.items())
+
+
+def test_a_non_member_gets_not_found_for_sync_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.outsider_user_id) as client:
+        response = client.get(
+            _sync_state_url(f.campaign_id, external_system_id, target_encounter_id=uuid.uuid4())
+        )
+    assert response.status_code == 404
+
+
+def test_a_member_without_campaign_view_gets_forbidden_for_sync_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.capless_user_id) as client:
+        response = client.get(
+            _sync_state_url(f.campaign_id, external_system_id, target_encounter_id=uuid.uuid4())
+        )
+    assert response.status_code == 403
+
+
+def test_supplying_both_targets_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(
+            _sync_state_url(
+                f.campaign_id,
+                external_system_id,
+                target_entity_id=f.defender_id,
+                target_encounter_id=uuid.uuid4(),
+            )
+        )
+    assert response.status_code == 400
+
+
+def test_supplying_neither_target_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_sync_state_url(f.campaign_id, external_system_id))
+    assert response.status_code == 400
+
+
+def test_a_never_synced_encounter_returns_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        response = client.get(
+            _sync_state_url(f.campaign_id, external_system_id, target_encounter_id=encounter_id)
+        )
+    assert response.status_code == 404
+
+
+def test_sync_state_reflects_a_completed_combat_sync(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        sync_response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+        )
+        assert sync_response.status_code == 201, sync_response.text
+
+        response = client.get(
+            _sync_state_url(f.campaign_id, external_system_id, target_encounter_id=encounter_id)
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["external_system_id"] == str(external_system_id)
+    assert body["target_encounter_id"] == str(encounter_id)
+    assert body["target_entity_id"] is None
+    assert body["sync_status"] == "synced"
+    assert body["last_sync_job_id"] == sync_response.json()["sync_job_id"]
+    assert body["last_sync_job_status"] == "completed"
+    assert body["last_sync_job_error_message"] is None
+    assert body["last_synced_at"] is not None
+
+
+def test_sync_state_for_an_encounter_from_a_different_campaign_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # f.gm_user_id also has campaign.view in f.other_campaign_id, so this
+    # proves the encounter-ownership check itself, not merely access
+    # control.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        response = client.get(
+            _sync_state_url(
+                f.other_campaign_id, external_system_id, target_encounter_id=encounter_id
+            )
+        )
+    assert response.status_code == 404
+
+
+def test_sync_state_for_an_entity_from_a_different_world_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # f.actor_id belongs to f.world_id, not f.other_world_id — this proves
+    # the world-ownership check for the target_entity_id branch, mirroring
+    # the encounter-ownership test above for the target_encounter_id one.
+    external_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(
+            _sync_state_url(f.other_campaign_id, external_system_id, target_entity_id=f.actor_id)
+        )
+    assert response.status_code == 404
