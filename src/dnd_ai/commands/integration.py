@@ -107,21 +107,63 @@ HTTP as of Phase 10 workstream 10 — both split into a connection-taking
 `_..._impl` plus a public engine-based wrapper below, the same composition
 every other command module in this package uses, so the API layer's
 per-request transaction can run either directly. apply_foundry_combat_sync
-deliberately has no HTTP endpoint yet: its own reasoning above already
-explains why it runs with no authoritative campaign_id to assert against
-("Phase 11 (Foundry MVP) is where Foundry users get mapped to
-authenticated platform users and campaign membership, at which point this
-function's caller ... would be the place to resolve and pass an
-authoritative campaign_id to assert against") — and separately, its
-three-transaction, session-scoped-advisory-lock design (this module's own
-docstring above) is deliberately incompatible with the one-transaction-
-per-request model every other API command endpoint relies on for atomic
-auditing, so giving it an endpoint now would mean either breaking that
-design or writing its audit.change_log row in a second, non-atomic
-transaction after the fact. Both are left for a follow-up Phase 11
-workstream, when a real Foundry-adapter caller and its own
-authorization/transaction shape are designed together rather than
-retrofitted here.
+has no such split (this module's own docstring above explains why its
+three-transaction, advisory-lock design cannot compose with a caller-
+supplied connection the way a single-transaction command can) and, until
+Phase 11 workstreams 1-3, had no authoritative campaign_id to assert
+against either — both addressed below.
+
+Foundry combat-sync endpoint (Phase 11 workstream 3,
+`apply_foundry_combat_sync_endpoint`): reachable as of this workstream at
+`POST /campaigns/{campaign_id}/integration/foundry/combat-sync`, requiring
+Foundry-adapter authentication (`dnd_ai.api.auth.
+get_authenticated_user_id`'s `FoundrySystem` path, workstream 2) and
+`canon.edit` in the target campaign — deliberately the identical
+capability and "GM/adapter-level action for this first cut" reasoning
+`dnd_ai.api.encounters._ENCOUNTER_MANAGE_CAPABILITY` already uses for
+`resolve_combat_turn_endpoint`, not a new, narrower capability: this route
+drives the exact same underlying mutation, and every default system role
+that can resolve a combat turn through the portal (gm, assistant_gm)
+should be able to do the identical thing through an authenticated Foundry
+adapter without a bespoke role grant. Unlike every other route in
+`dnd_ai.api.integration`, it calls
+the public, engine-based `apply_foundry_combat_sync()` directly rather
+than a connection-taking `_..._impl` — the one deliberate exception to
+this package's "always use the impl form so the API layer's own
+transaction owns the boundary" rule, because apply_foundry_combat_sync's
+own three-transaction/advisory-lock shape *is* its transaction boundary;
+composing it inside a second, outer request-scoped transaction would
+either deadlock (nesting `lock_connection.begin()` calls) or silently
+defeat the exactly-once claim/work/fail sequencing this module's own
+docstring spends its opening section establishing. This route therefore
+does not participate in `dnd_ai.api.deps.get_connection`'s per-request
+transaction at all.
+
+No `audit.change_log` row: this mirrors `dnd_ai.api.encounters.
+resolve_combat_turn_endpoint` — the portal-facing route this Foundry
+endpoint is the adapter-facing counterpart of — which never calls
+`record_change_log` either. A combat turn's durable record is
+`narrative.events`/`interaction.combat_actions` (created by the same
+`_resolve_combat_turn_impl` both routes call) plus, for this route
+specifically, `integration.sync_jobs`/`.delivery_attempts` — a more
+specific trail than the generic `audit.change_log` table exists to
+provide for actions with no other record of their own (contrast
+`register_external_system_endpoint`, which has no other trail and so
+does audit). This also means the "non-atomic audit" concern an earlier
+draft of this docstring raised no longer applies: there is no
+`audit.change_log` write to make atomic with apply_foundry_combat_sync's
+own three transactions in the first place.
+
+campaign_id resolution: the route's own `campaign_id` path parameter,
+already authorized via `require_campaign_capability`, is passed straight
+through as `apply_foundry_combat_sync`'s `campaign_id` argument — the
+same "URL campaign_id, already authorized, flows into the locked-row
+assertion" shape `resolve_combat_turn_endpoint` itself uses for
+`_resolve_combat_turn_impl`. A mismatched or nonexistent encounter is
+rejected by `_lock_encounter`'s existing `expected_campaign_id` check
+exactly as it already is for the portal path — no new authorization logic
+was needed here, only a caller now able to supply the argument that
+already existed.
 
 Foundry identity mapping (Phase 11 workstream 1, `link_foundry_identity`):
 the first concrete step of "map Foundry users to authenticated platform
@@ -174,7 +216,7 @@ from typing import Any
 from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.domain.access import foundry_issuer, hash_foundry_system_key
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
 
@@ -191,11 +233,27 @@ _QUARANTINED_LOCK_CONNECTIONS_LOCK = threading.Lock()
 _QUARANTINED_LOCK_CONNECTIONS: list[Connection] = []
 
 
-class ConflictingSyncPayloadError(ValueError):
+class ConflictingSyncPayloadError(SafeMessageError):
     """Raised when external_operation_id is reused with a payload that does
     not match the payload originally recorded for it — checked first,
     before status, so this can happen regardless of whether the original
-    attempt completed, failed, or crashed mid-flight."""
+    attempt completed, failed, or crashed mid-flight.
+
+    Subclasses `SafeMessageError` (not a bare `ValueError`) so this maps
+    to a fixed HTTP 409 — the same status `security.idempotent_requests`'
+    own fingerprint mismatch already produces (`dnd_ai.api.idempotency`)
+    for the identical "same key, different payload" situation — rather
+    than the generic-`ValueError` handler's 400 (Phase 11 workstream 3,
+    once this module's own `apply_foundry_combat_sync_endpoint` needed a
+    real caller-facing status for this case). Setting this here, in
+    `dnd_ai.domain.errors`-compatible fashion, avoids `dnd_ai.commands.
+    integration` importing anything from `dnd_ai.api` — this codebase's
+    commands never do (a one-way layering: `api` depends on `commands`,
+    never the reverse)."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "This operation was already submitted with different details."
 
 
 # Same CSPRNG entropy dnd_ai.commands.campaign_invitations'
@@ -569,13 +627,29 @@ def _canonical_payload(
     world_time_id: uuid.UUID,
     action_kind: str,
     target_entity_id: uuid.UUID | None,
+    item_instance_id: uuid.UUID | None,
+    spell_id: uuid.UUID | None,
     hit: bool | None,
     damage_amount: int | None,
+    damage_type_id: uuid.UUID | None,
+    resulting_condition_id: uuid.UUID | None,
+    interaction_type_code: str,
+    session_id: uuid.UUID | None,
+    event_details: str | None,
     raw_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """The full set of arguments that determine a combat-sync operation's
     meaning — persisted as sync_jobs.payload_jsonb and used to detect a
-    conflicting replay under the same external_operation_id."""
+    conflicting replay under the same external_operation_id. Mirrors every
+    argument `dnd_ai.commands.encounters._resolve_combat_turn_impl` itself
+    accepts (except campaign_id, which is an authorization assertion, not
+    part of what the operation *means* — two callers submitting the
+    identical combat action from different authorized campaigns would
+    still be the same operation) — added in Phase 11 workstream 3 so
+    `apply_foundry_combat_sync`'s HTTP endpoint has full parity with
+    `dnd_ai.api.encounters.resolve_combat_turn_endpoint` rather than
+    silently dropping item/spell/damage-type/condition/session/detail
+    information a Foundry adapter submits."""
     return {
         "encounter_id": str(encounter_id),
         "round_number": round_number,
@@ -584,8 +658,17 @@ def _canonical_payload(
         "world_time_id": str(world_time_id),
         "action_kind": action_kind,
         "target_entity_id": str(target_entity_id) if target_entity_id is not None else None,
+        "item_instance_id": str(item_instance_id) if item_instance_id is not None else None,
+        "spell_id": str(spell_id) if spell_id is not None else None,
         "hit": hit,
         "damage_amount": damage_amount,
+        "damage_type_id": str(damage_type_id) if damage_type_id is not None else None,
+        "resulting_condition_id": (
+            str(resulting_condition_id) if resulting_condition_id is not None else None
+        ),
+        "interaction_type_code": interaction_type_code,
+        "session_id": str(session_id) if session_id is not None else None,
+        "event_details": event_details,
         "raw_payload": raw_payload,
     }
 
@@ -991,9 +1074,17 @@ def apply_foundry_combat_sync(
     world_time_id: uuid.UUID,
     action_kind: str = "attack",
     target_entity_id: uuid.UUID | None = None,
+    item_instance_id: uuid.UUID | None = None,
+    spell_id: uuid.UUID | None = None,
     hit: bool | None = None,
     damage_amount: int | None = None,
+    damage_type_id: uuid.UUID | None = None,
+    resulting_condition_id: uuid.UUID | None = None,
+    interaction_type_code: str = "attack",
+    session_id: uuid.UUID | None = None,
+    event_details: str | None = None,
     raw_payload: dict[str, Any] | None = None,
+    campaign_id: uuid.UUID | None = None,
 ) -> ApplyFoundryCombatSyncResult:
     """Route an inbound Foundry combat-turn payload through the real combat-
     resolution logic (never a raw write), exactly once per
@@ -1003,22 +1094,25 @@ def apply_foundry_combat_sync(
     single-connection/advisory-lock concurrency model, and the
     replay/retry/conflict rules.
 
-    Deliberately calls _resolve_combat_turn_impl() with no campaign_id
-    (leaving _lock_encounter's own expected_campaign_id check unscoped),
-    not an oversight: this module's integration.* schema (revision 079)
-    scopes an external_system_id to a world_id only — see
-    integration.external_systems' own schema — never to a campaign, so
-    there is no authoritative campaign_id this function could authorize
-    an inbound Foundry combat turn against yet. It still resolves against
-    encounter_id's own real, current, FOR-UPDATE-locked timeline/status
-    (dnd_ai.commands.encounters._lock_encounter), so a nonexistent or
-    non-active encounter is still rejected exactly as it would be with a
-    campaign supplied — only the campaign-ownership *assertion* is
-    skipped. Phase 11 (Foundry MVP) is where Foundry users get mapped to
-    authenticated platform users and campaign membership, at which point
-    this function's caller — not this function itself, which has no
-    notion of an authenticated request — would be the place to resolve
-    and pass an authoritative campaign_id to assert against.
+    campaign_id (Phase 11 workstream 3) is passed straight through to
+    _resolve_combat_turn_impl(), which requires it to match the *locked*
+    encounter's own campaign_id (dnd_ai.commands.encounters._lock_encounter's
+    expected_campaign_id) atomically with acquiring encounter_id's FOR
+    UPDATE lock — identical to how dnd_ai.api.encounters.
+    resolve_combat_turn_endpoint already threads its own URL campaign_id
+    through the same parameter. campaign_id=None (the default, and every
+    caller before this workstream) leaves that assertion unscoped exactly
+    as before — this function's own HTTP endpoint
+    (dnd_ai.api.integration.apply_foundry_combat_sync_endpoint) is the only
+    caller expected to supply a real one, resolved from the authenticated
+    Foundry adapter's own campaign membership (dnd_ai.api.access.
+    require_campaign_capability), now that workstreams 1-2 give a Foundry
+    request an authenticated user_id to resolve that membership from at
+    all. A test or administrative caller with no campaign to assert
+    against is unaffected: encounter_id's own real, current, FOR-UPDATE-
+    locked timeline/status is still resolved either way, so a nonexistent
+    or non-active encounter is rejected the same way regardless of whether
+    campaign_id is supplied.
 
     Not asserting a campaign does not mean discarding one: the
     interaction.interactions row and any resulting narrative.events row
@@ -1027,11 +1121,21 @@ def apply_foundry_combat_sync(
     campaign_id) whenever the target encounter is campaign-owned — the
     same provenance a campaign-scoped caller would get. A campaign-less
     encounter (campaign_id NULL) still produces campaign-less records, as
-    it always has. This is provenance inheritance, not authorization —
-    Foundry callers remain unauthenticated against any particular
-    campaign until Phase 11 does that work; see
-    dnd_ai.commands.encounters._lock_encounter's and LockedEncounter's own
-    docstrings for the general contract this relies on.
+    it always has. See dnd_ai.commands.encounters._lock_encounter's and
+    LockedEncounter's own docstrings for the general contract this relies
+    on.
+
+    item_instance_id/spell_id/damage_type_id/resulting_condition_id/
+    interaction_type_code/session_id/event_details (Phase 11 workstream 3)
+    are passed straight through to _resolve_combat_turn_impl, which has
+    always accepted them — this function simply didn't expose them before,
+    silently dropping anything a caller supplied. Added for parity with
+    dnd_ai.api.encounters.resolve_combat_turn_endpoint now that this
+    function gets its own HTTP endpoint expected to support the same
+    inputs. All are included in _canonical_payload, so a replayed
+    external_operation_id whose item/spell/condition/etc. disagrees with
+    the original call is still detected as a conflicting payload, not
+    silently ignored.
     """
     payload = _canonical_payload(
         encounter_id=encounter_id,
@@ -1041,8 +1145,15 @@ def apply_foundry_combat_sync(
         world_time_id=world_time_id,
         action_kind=action_kind,
         target_entity_id=target_entity_id,
+        item_instance_id=item_instance_id,
+        spell_id=spell_id,
         hit=hit,
         damage_amount=damage_amount,
+        damage_type_id=damage_type_id,
+        resulting_condition_id=resulting_condition_id,
+        interaction_type_code=interaction_type_code,
+        session_id=session_id,
+        event_details=event_details,
         raw_payload=raw_payload,
     )
     lock_params = {"a": str(external_system_id), "b": external_operation_id}
@@ -1118,8 +1229,16 @@ def apply_foundry_combat_sync(
                     world_time_id=world_time_id,
                     action_kind=action_kind,
                     target_entity_id=target_entity_id,
+                    item_instance_id=item_instance_id,
+                    spell_id=spell_id,
                     hit=hit,
                     damage_amount=damage_amount,
+                    damage_type_id=damage_type_id,
+                    resulting_condition_id=resulting_condition_id,
+                    interaction_type_code=interaction_type_code,
+                    campaign_id=campaign_id,
+                    session_id=session_id,
+                    event_details=event_details,
                 )
                 _complete_sync_job(
                     lock_connection,

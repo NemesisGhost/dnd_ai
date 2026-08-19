@@ -1,31 +1,23 @@
-"""World-scoped external-system, identifier-mapping, and Foundry-identity
-endpoints.
+"""World-scoped external-system, identifier-mapping, Foundry-identity, and
+(Phase 11 workstream 3) Foundry combat-sync endpoints.
 
 Exposes
-`register_external_system`, `map_external_identifier`, and (Phase 11
-workstream 1) `link_foundry_identity`, plus (Phase 11 workstream 2)
-`issue_foundry_system_key`, over HTTP, on the same already-delivered OIDC
+`register_external_system`, `map_external_identifier`, (Phase 11
+workstream 1) `link_foundry_identity`, (Phase 11 workstream 2)
+`issue_foundry_system_key`, and (Phase 11 workstream 3)
+`apply_foundry_combat_sync`, over HTTP, on the same already-delivered OIDC
 authentication (`dnd_ai.api.auth`), transaction management
 (`dnd_ai.api.deps`), and access resolution (`dnd_ai.api.access`,
 `dnd_ai.domain.access`) every other command router uses.
 
-`apply_foundry_combat_sync` deliberately has no endpoint here — see
-`dnd_ai.commands.integration`'s own module docstring ("HTTP exposure")
-for why: its three-transaction, advisory-lock design is deliberately
-incompatible with the one-transaction-per-request model this module's
-routes (and every other command router) rely on for atomic auditing, and
-it belongs with a follow-up workstream that gives it a real campaign_id
-to authorize against, now that workstreams 1-2 together let a Foundry
-adapter actually authenticate as a specific campaign member
-(`dnd_ai.api.auth.get_authenticated_user_id`'s Foundry-system-credential
-path) rather than being written together with this module's own
-identity/credential-administration routes.
-
-All four routes run on the request's own `get_connection` transaction and
-call the connection-taking `_..._impl` form of their command (never the
-public engine-based wrapper, which would open a second, nested
+The first four routes run on the request's own `get_connection` transaction
+and call the connection-taking `_..._impl` form of their command (never
+the public engine-based wrapper, which would open a second, nested
 transaction) — identical to every route in `dnd_ai.api.encounters`/
 `.items`/`.quests`/`.relationships`/`.events`/`.interactions`.
+`apply_foundry_combat_sync_endpoint` is the one deliberate exception — see
+its own section below and `dnd_ai.commands.integration`'s own module
+docstring ("HTTP exposure") for why.
 
 Authorization: `register_external_system_endpoint` and
 `map_external_identifier_endpoint` require the `canon.edit` role
@@ -108,6 +100,32 @@ being mapped. `security.external_identities` rows are not `core.entities`
 rows either, and the `user_id` they map to is a `security.users` row, not
 one — so `link_foundry_identity_endpoint` also records `entity_id=None`,
 the same as `register_external_system_endpoint`.
+
+`apply_foundry_combat_sync_endpoint` (Phase 11 workstream 3): unlike the
+four routes above, this one takes `Depends(get_engine)`, not
+`Depends(get_connection)` — see `dnd_ai.commands.integration`'s own module
+docstring for why `apply_foundry_combat_sync`'s three-transaction,
+advisory-lock design cannot run inside a caller-supplied connection/
+transaction the way every other command here does. `require_campaign_
+capability` (used for authorization only) still injects its own
+`Depends(get_connection)` internally, so a request to this route holds
+two separate pooled connections briefly rather than one — an idle
+authorization-check connection alongside `apply_foundry_combat_sync`'s own
+`lock_connection` — never two connections contending with each other, so
+this introduces no new deadlock risk beyond what `dnd_ai.commands.
+integration`'s own docstring already analyzes for `lock_connection` alone.
+Authorized via `canon.edit`, matching `dnd_ai.api.encounters.
+resolve_combat_turn_endpoint` exactly (see `dnd_ai.commands.integration`'s
+own docstring, "Foundry combat-sync endpoint", for the full reasoning).
+No `Idempotency-Key` wiring: `apply_foundry_combat_sync` already provides
+exactly-once semantics via the request's own `external_operation_id`
+(`dnd_ai.commands.integration`'s own module docstring) — the same
+reasoning `map_external_identifier`/`link_foundry_identity` already use to
+skip it above. No `record_change_log` call either — see `dnd_ai.commands.
+integration`'s own docstring for why a combat turn's durable record is
+`narrative.events`/`interaction.combat_actions`/`integration.sync_jobs`,
+not `audit.change_log`, mirroring `resolve_combat_turn_endpoint`'s
+identical omission.
 """
 
 import uuid
@@ -115,13 +133,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine
 
 from dnd_ai.commands.integration import (
+    ApplyFoundryCombatSyncResult,
     _issue_foundry_system_key_impl,
     _link_foundry_identity_impl,
     _map_external_identifier_impl,
     _register_external_system_impl,
+    apply_foundry_combat_sync,
 )
 from dnd_ai.domain.access import AccessContext
 
@@ -129,15 +149,19 @@ from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
-from .deps import get_connection, get_idempotency_key
+from .deps import get_connection, get_engine, get_idempotency_key
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["integration"])
 
-# Registering an external system or mapping an entity to it is treated as a
-# GM/adapter-level administrative action for this first cut — see this
-# module's docstring for why every route here requires it rather than a
-# narrower capability.
+# Registering an external system, mapping an entity to it, or resolving a
+# Foundry combat turn are all treated as GM/adapter-level administrative
+# actions for this first cut — see this module's docstring for why every
+# route here requires it rather than a narrower capability, and
+# `dnd_ai.commands.integration`'s own docstring ("Foundry combat-sync
+# endpoint") for why the combat-sync route specifically mirrors
+# `dnd_ai.api.encounters._ENCOUNTER_MANAGE_CAPABILITY` rather than
+# inventing a distinct value that happens to be identical.
 _INTEGRATION_MANAGE_CAPABILITY = "canon.edit"
 
 # Linking a Foundry user id to a platform user, or minting the system-level
@@ -211,6 +235,55 @@ class IssueFoundrySystemKeyResponse(BaseModel):
     # dnd_ai.api.campaign_invitations already accepts storing its own raw
     # invitation token in.
     raw_key: str
+
+
+class ApplyFoundryCombatSyncRequest(BaseModel):
+    # Bounded to match integration.sync_jobs.external_operation_id's own
+    # role as a caller-supplied idempotency key — the same character-set/
+    # length discipline dnd_ai.api.deps.get_idempotency_key already applies
+    # to the generic Idempotency-Key header, even though this one arrives
+    # in the request body rather than a header.
+    external_system_id: uuid.UUID
+    external_operation_id: str = Field(min_length=1, max_length=255)
+    encounter_id: uuid.UUID
+    round_number: int = Field(ge=1)
+    turn_order: int = Field(ge=0)
+    actor_entity_id: uuid.UUID
+    world_time_id: uuid.UUID
+    action_kind: str = "attack"
+    target_entity_id: uuid.UUID | None = None
+    item_instance_id: uuid.UUID | None = None
+    spell_id: uuid.UUID | None = None
+    hit: bool | None = None
+    damage_amount: int | None = Field(default=None, ge=0)
+    damage_type_id: uuid.UUID | None = None
+    resulting_condition_id: uuid.UUID | None = None
+    interaction_type_code: str = "attack"
+    session_id: uuid.UUID | None = None
+    event_details: str | None = None
+    raw_payload: dict[str, Any] | None = None
+
+
+class ApplyFoundryCombatSyncResponse(BaseModel):
+    sync_job_id: uuid.UUID
+    encounter_turn_id: uuid.UUID
+    combat_action_id: uuid.UUID
+    event_id: uuid.UUID | None
+    previous_hit_points: int | None
+    new_hit_points: int | None
+    replayed: bool
+
+    @classmethod
+    def from_result(cls, result: ApplyFoundryCombatSyncResult) -> "ApplyFoundryCombatSyncResponse":
+        return cls(
+            sync_job_id=result.sync_job_id,
+            encounter_turn_id=result.combat_result.encounter_turn_id,
+            combat_action_id=result.combat_result.combat_action_id,
+            event_id=result.combat_result.event_id,
+            previous_hit_points=result.combat_result.previous_hit_points,
+            new_hit_points=result.combat_result.new_hit_points,
+            replayed=result.replayed,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -466,3 +539,46 @@ def issue_foundry_system_key_endpoint(
         )
 
     return response
+
+
+@router.post(
+    "/campaigns/{campaign_id}/integration/foundry/combat-sync",
+    response_model=ApplyFoundryCombatSyncResponse,
+    status_code=201,
+)
+def apply_foundry_combat_sync_endpoint(
+    campaign_id: uuid.UUID,
+    body: ApplyFoundryCombatSyncRequest,
+    # Authorization only — this route does not otherwise use the resolved
+    # AccessContext, and deliberately does not depend on get_connection for
+    # its own work. See this module's docstring
+    # ("apply_foundry_combat_sync_endpoint") for why.
+    _access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY))
+    ],
+    engine: Annotated[Engine, Depends(get_engine)],
+) -> ApplyFoundryCombatSyncResponse:
+    result = apply_foundry_combat_sync(
+        engine,
+        external_system_id=body.external_system_id,
+        external_operation_id=body.external_operation_id,
+        encounter_id=body.encounter_id,
+        round_number=body.round_number,
+        turn_order=body.turn_order,
+        actor_entity_id=body.actor_entity_id,
+        world_time_id=body.world_time_id,
+        action_kind=body.action_kind,
+        target_entity_id=body.target_entity_id,
+        item_instance_id=body.item_instance_id,
+        spell_id=body.spell_id,
+        hit=body.hit,
+        damage_amount=body.damage_amount,
+        damage_type_id=body.damage_type_id,
+        resulting_condition_id=body.resulting_condition_id,
+        interaction_type_code=body.interaction_type_code,
+        session_id=body.session_id,
+        event_details=body.event_details,
+        raw_payload=body.raw_payload,
+        campaign_id=campaign_id,
+    )
+    return ApplyFoundryCombatSyncResponse.from_result(result)

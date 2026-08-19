@@ -135,6 +135,27 @@ high-entropy, server-generated secret verified by rehash-and-lookup
 hashes, not certificates" trust model `security.campaign_invitations`
 already uses for its own token — there is no third party to verify a
 signature against, since the platform itself is the only issuer.
+
+Lazy JWKS resolution: `get_authenticated_user_id` takes a `Request`
+instead of `Depends(get_jwks_client)` directly, and resolves the JWKS
+client itself — via `request.app.dependency_overrides.get(get_jwks_client,
+get_jwks_client)()` — only inside the OIDC branch, after the Foundry
+branch has already returned. A `Depends(get_jwks_client)` *parameter*
+would be resolved unconditionally by FastAPI before this function's body
+ever runs, regardless of which branch the request actually takes; since
+`Settings` permits OIDC to be entirely unconfigured outside production
+(`dnd_ai.config._validate_oidc_settings` — all three of `oidc_issuer`/
+`oidc_audience`/`oidc_jwks_url` may be `None` together in a non-production
+environment), a deployment running Foundry-only with no OIDC provider set
+up at all would otherwise fail every Foundry-authenticated request with an
+unrelated `AssertionError` from `get_jwks_client()`'s own `assert
+settings.oidc_jwks_url is not None` — a real, reachable misconfiguration
+state, not merely a defensive check. Looking the override up manually
+(rather than simply calling `get_jwks_client()` directly) preserves
+`app.dependency_overrides[get_jwks_client] = ...`'s existing test-override
+behavior — see `tests/database/test_api_auth.py`'s `client_factory`
+fixture — since a plain function call would bypass FastAPI's override
+mechanism entirely.
 """
 
 import json
@@ -149,7 +170,7 @@ from urllib.parse import urlsplit
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import Connection
 
 from dnd_ai.config import OIDC_LOCAL_URL_SCHEMES, OIDC_PRODUCTION_URL_SCHEMES, settings
@@ -637,23 +658,26 @@ def _resolve_foundry_system_user_id(
 
 
 def get_authenticated_user_id(
+    request: Request,
     connection: Annotated[Connection, Depends(get_connection)],
-    jwks_client: Annotated[_JWKSClient, Depends(get_jwks_client)],
     authorization: Annotated[str | None, Header()] = None,
     foundry_user_id: Annotated[str | None, Header(alias="X-Foundry-User-Id")] = None,
 ) -> uuid.UUID:
     """Resolves an authenticated request to a `security.users.user_id`,
     across either of two credential shapes — see this module's docstring
-    ("Foundry-adapter authentication") for the full design and why this is
-    one dependency, not two.
+    ("Foundry-adapter authentication" and "Lazy JWKS resolution") for the
+    full design and why this is one dependency, not two, and why `request`
+    replaces a direct `Depends(get_jwks_client)` parameter.
 
     A `FoundrySystem` scheme selects `_resolve_foundry_system_user_id`
     above; anything else (including a missing header) falls through to the
-    original OIDC path — `get_verified_token_claims` is called directly as
-    a plain function (it is not itself a route, just another dependency
-    function, safely callable outside FastAPI's own resolution) with the
-    same `jwks_client`/`authorization` this function already received,
-    then resolved via `dnd_ai.domain.access.
+    original OIDC path — the JWKS client is resolved from `request.app.
+    dependency_overrides` (falling back to the real `get_jwks_client` when
+    no override is registered) only once this branch is reached, then
+    `get_verified_token_claims` is called directly as a plain function (it
+    is not itself a route, just another dependency function, safely
+    callable outside FastAPI's own resolution) with that client and this
+    function's own `authorization`, resolved via `dnd_ai.domain.access.
     resolve_user_by_external_identity` exactly as before. Raises
     `UnauthorizedError` for an unknown or revoked identity, or one linked
     to a user without an active lifecycle status — this dependency only
@@ -666,6 +690,7 @@ def get_authenticated_user_id(
             connection, credential=credential, foundry_user_id=foundry_user_id
         )
 
+    jwks_client = request.app.dependency_overrides.get(get_jwks_client, get_jwks_client)()
     claims = get_verified_token_claims(jwks_client, authorization)
     user_id = resolve_user_by_external_identity(
         connection, issuer=claims.issuer, subject=claims.subject

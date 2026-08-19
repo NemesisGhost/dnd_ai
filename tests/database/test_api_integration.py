@@ -25,17 +25,20 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.integration import issue_foundry_system_key, link_foundry_identity
 from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
     make_character,
+    make_character_state,
     make_membership_role,
     make_role,
     make_role_capability,
     make_timeline,
     make_user,
     make_world,
+    make_world_time,
 )
 
 pytestmark = pytest.mark.database
@@ -58,6 +61,18 @@ class Fixture:
         )
 
         self.actor_id = make_character(connection, self.world_id, name="Rin")
+
+        # Combat-sync fixtures (apply_foundry_combat_sync_endpoint tests).
+        self.world_time_id = make_world_time(connection, self.world_id, 100)
+        self.attacker_id = make_character(connection, self.world_id, name="Foundry Attacker")
+        self.defender_id = make_character(connection, self.world_id, name="Foundry Defender")
+        make_character_state(
+            connection,
+            self.timeline_id,
+            self.defender_id,
+            current_hit_points=20,
+            maximum_hit_points=20,
+        )
 
         # A second world/timeline/campaign, used only to prove
         # map_external_identifier rejects an external_system_id belonging
@@ -264,6 +279,44 @@ def _foundry_system_key_url(campaign_id: uuid.UUID, external_system_id: uuid.UUI
 
 def _register_body() -> dict[str, object]:
     return {"system_type": "foundry", "display_name": "Test Foundry World"}
+
+
+def _combat_sync_url(campaign_id: uuid.UUID) -> str:
+    return f"/campaigns/{campaign_id}/integration/foundry/combat-sync"
+
+
+def _start_encounter(client: TestClient, f: Fixture) -> uuid.UUID:
+    response = client.post(
+        f"/campaigns/{f.campaign_id}/encounters",
+        json={
+            "world_time_id": str(f.world_time_id),
+            "participant_entity_ids": [str(f.attacker_id), str(f.defender_id)],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return uuid.UUID(response.json()["encounter_id"])
+
+
+def _combat_sync_body(
+    f: Fixture,
+    encounter_id: uuid.UUID,
+    *,
+    external_system_id: uuid.UUID,
+    external_operation_id: str,
+) -> dict[str, object]:
+    return {
+        "external_system_id": str(external_system_id),
+        "external_operation_id": external_operation_id,
+        "encounter_id": str(encounter_id),
+        "round_number": 1,
+        "turn_order": 0,
+        "actor_entity_id": str(f.attacker_id),
+        "world_time_id": str(f.world_time_id),
+        "action_kind": "attack",
+        "target_entity_id": str(f.defender_id),
+        "hit": True,
+        "damage_amount": 7,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -780,3 +833,163 @@ def test_the_issue_key_audit_row_has_no_entity_id(
     assert row.world_id == f.world_id
     assert row.event_id is None
     assert row.change_action_code == "updated"
+
+
+# ---------------------------------------------------------------------------
+# apply_foundry_combat_sync
+# ---------------------------------------------------------------------------
+
+
+def test_a_member_without_canon_edit_gets_forbidden_for_combat_sync(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+    with client_factory(f.capless_user_id) as client:
+        response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+        )
+    assert response.status_code == 403
+
+
+def test_a_foundry_combat_sync_updates_persistent_character_state(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["previous_hit_points"] == 20
+    assert body["new_hit_points"] == 13
+    assert body["event_id"] is not None
+    assert body["replayed"] is False
+
+    with postgres_engine.connect() as verify:
+        hp = verify.execute(
+            text(
+                "SELECT current_hit_points FROM campaign.character_state "
+                "WHERE timeline_id = :t AND character_id = :c"
+            ),
+            {"t": f.timeline_id, "c": f.defender_id},
+        ).scalar()
+    assert hp == 13
+
+
+def test_a_combat_sync_for_an_encounter_from_a_different_campaign_is_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    # f.gm_user_id also has canon.edit in f.other_campaign_id, so this
+    # proves the encounter-ownership check itself, not merely access
+    # control — mirrors dnd_ai.api.encounters' own cross-campaign test.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        response = client.post(
+            _combat_sync_url(f.other_campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+        )
+    assert response.status_code == 404
+
+
+def test_replaying_the_same_operation_id_is_idempotent(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    operation_id = f"op-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        body = _combat_sync_body(
+            f,
+            encounter_id,
+            external_system_id=external_system_id,
+            external_operation_id=operation_id,
+        )
+        first = client.post(_combat_sync_url(f.campaign_id), json=body)
+        second = client.post(_combat_sync_url(f.campaign_id), json=body)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["replayed"] is False
+    assert second.json()["replayed"] is True
+    assert second.json()["sync_job_id"] == first.json()["sync_job_id"]
+    assert second.json()["new_hit_points"] == first.json()["new_hit_points"]
+
+
+def test_a_conflicting_replay_is_rejected_as_a_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    operation_id = f"op-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+        first_body = _combat_sync_body(
+            f,
+            encounter_id,
+            external_system_id=external_system_id,
+            external_operation_id=operation_id,
+        )
+        first = client.post(_combat_sync_url(f.campaign_id), json=first_body)
+        second_body = {**first_body, "damage_amount": 3}
+        second = client.post(_combat_sync_url(f.campaign_id), json=second_body)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 409, second.text
+
+
+def test_a_real_foundry_credential_can_call_the_combat_sync_endpoint(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # End-to-end proof workstreams 2-3 integrate: a genuine
+    # `Authorization: FoundrySystem ...` credential (not the client_factory
+    # get_authenticated_user_id override every other test in this file
+    # uses) reaches this endpoint and is authorized exactly like any other
+    # canon.edit-holding campaign member.
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        encounter_id = _start_encounter(client, f)
+
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-combat",
+        user_id=f.gm_user_id,
+    )
+
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            _combat_sync_url(f.campaign_id),
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-{uuid.uuid4().hex[:8]}",
+            ),
+            headers={
+                "Authorization": f"FoundrySystem {external_system_id}.{key_result.raw_key}",
+                "X-Foundry-User-Id": "foundry-user-combat",
+            },
+        )
+    assert response.status_code == 201, response.text
