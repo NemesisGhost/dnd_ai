@@ -1,0 +1,20 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #eee7da; background: #17130f; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 85% 0%, #3b2b1b 0, transparent 34rem), #17130f; }
+.app-shell { min-height: 100vh; display: grid; grid-template: auto auto 1fr / minmax(0, 1fr); }
+header { display: flex; align-items: end; justify-content: space-between; gap: 2rem; padding: 2rem clamp(1rem, 4vw, 4rem) 1.5rem; border-bottom: 1px solid #63513a; }
+h1, h2, h3 { font-family: Georgia, serif; margin: 0; line-height: 1.1; }
+h1 { font-size: clamp(2rem, 5vw, 4.5rem); font-weight: 500; }
+h2 { font-size: clamp(1.8rem, 4vw, 3.2rem); max-width: 18ch; }
+.eyebrow { color: #d8ab64; letter-spacing: .16em; text-transform: uppercase; font-size: .72rem; font-weight: 700; margin: 0 0 .5rem; }
+.context { display: flex; flex-wrap: wrap; justify-content: end; gap: .5rem; max-width: 42rem; }
+.context span { border: 1px solid #63513a; padding: .45rem .65rem; border-radius: 999px; color: #d7cbbb; font-size: .82rem; }
+nav { display: flex; gap: .35rem; overflow-x: auto; padding: .75rem clamp(1rem, 4vw, 4rem); background: #211a14cc; }
+nav a { color: #cfc3b3; text-decoration: none; padding: .55rem .8rem; border-radius: .35rem; white-space: nowrap; }
+nav a.active, nav a:hover { color: #fff; background: #6f3d2c; }
+main { padding: clamp(1rem, 4vw, 4rem); }
+.dashboard { display: grid; gap: 1rem; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.panel { padding: clamp(1.25rem, 3vw, 2.5rem); border: 1px solid #63513a; background: linear-gradient(145deg, #2a2119e8, #1c1713e8); border-radius: .7rem; box-shadow: 0 1rem 3rem #0005; }
+.panel p { color: #bdb2a3; line-height: 1.6; }
+.hero { grid-column: 1 / -1; min-height: 18rem; display: flex; flex-direction: column; justify-content: end; background: linear-gradient(90deg, #231a15 0%, #231a15c9 45%, #4b30204d), radial-gradient(circle at 80% 30%, #9d663c55, transparent 40%); }
+@media (max-width: 760px) { header { align-items: start; flex-direction: column; } .context { justify-content: start; } .dashboard { grid-template-columns: 1fr; } }
