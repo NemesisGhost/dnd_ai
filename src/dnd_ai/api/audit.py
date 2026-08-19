@@ -41,7 +41,20 @@ attributed to; conventions §24.3 requires audit records to identify
 "user, service, AI agent, integration ... where applicable," which for an
 adapter-delegated change means recording both, never one instead of the
 other (contrast `actor_service`, documented as set *instead of*
-`actor_user_id` for an actor with no linked user at all)."""
+`actor_user_id` for an actor with no linked user at all).
+
+`acting_foundry_actor_id` (second Phase 11 workstream 2 correction,
+migration 092): pass `access.principal.foundry_claimed_actor_id` alongside
+`acting_external_system_id` for the same delegated-credential calls.
+Deliberately *not* used to decide `actor_user_id` — that is, and remains,
+resolved entirely from the credential's own bound `system_key_principal_
+user_id` (`dnd_ai.domain.access.resolve_foundry_system_principal`) — this
+column exists only so an operator reviewing audit history can see what the
+Foundry client *claimed* about who triggered the action, clearly
+distinguished from who the platform actually authenticated. See `dnd_ai.
+domain.access.AuthenticatedPrincipal.foundry_claimed_actor_id`'s own
+docstring for why this is untrusted metadata, never an authorization
+input."""
 
 import uuid
 
@@ -64,6 +77,7 @@ def record_change_log(
     command_name: str,
     event_id: uuid.UUID | None,
     acting_external_system_id: uuid.UUID | None = None,
+    acting_foundry_actor_id: str | None = None,
 ) -> None:
     """Insert one `audit.change_log` row. Call once, after the command's
     own writes and before the route returns, on the same connection/
@@ -76,10 +90,11 @@ def record_change_log(
             INSERT INTO audit.change_log
                 (change_action_id, schema_name, table_name, record_id, entity_id, world_id,
                  actor_user_id, correlation_id, command_name, event_id,
-                 acting_external_system_id)
+                 acting_external_system_id, acting_foundry_actor_id)
             VALUES
                 (:action, :schema, :table, :record, :entity, :world,
-                 :actor, :correlation, :command, :event, :acting_external_system)
+                 :actor, :correlation, :command, :event, :acting_external_system,
+                 :acting_foundry_actor)
         """),
         {
             "action": change_action_id,
@@ -93,5 +108,6 @@ def record_change_log(
             "command": command_name,
             "event": event_id,
             "acting_external_system": acting_external_system_id,
+            "acting_foundry_actor": acting_foundry_actor_id,
         },
     )

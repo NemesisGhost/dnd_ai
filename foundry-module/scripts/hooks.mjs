@@ -61,7 +61,7 @@ export function registerLifecycleHooks({
 
     const client = new DndAiApiClient({
       getSettings: () => getConnectionSettings({ settingsApi: gameApi.settings }),
-      getFoundryUserId: () => gameApi.user.id,
+      getFoundryActorId: () => gameApi.user.id,
     });
     syncEngine = new SyncEngine({
       client,

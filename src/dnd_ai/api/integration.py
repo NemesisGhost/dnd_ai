@@ -286,8 +286,26 @@ class LinkFoundryIdentityResponse(BaseModel):
     external_identity_id: uuid.UUID
 
 
+class IssueFoundrySystemKeyRequest(BaseModel):
+    # The Foundry-side user id this key will authenticate as — must
+    # already be linked via link_foundry_identity_endpoint for this same
+    # external_system_id (UnlinkedFoundryPrincipalError otherwise). Second
+    # Phase 11 workstream 2 correction: binding the credential to exactly
+    # one platform principal at issuance time, rather than letting a
+    # caller select one per-request via a header, is what closes the
+    # Critical defect this module's own docstring and dnd_ai.domain.access.
+    # resolve_foundry_system_principal's describe in full. Same bounds as
+    # LinkFoundryIdentityRequest.foundry_user_id, for the same reason
+    # (matches security.external_identities.subject's own CHECK).
+    foundry_user_id: str = Field(min_length=1, max_length=255)
+
+
 class IssueFoundrySystemKeyResponse(BaseModel):
     external_system_id: uuid.UUID
+    # The platform user this key now authenticates as — echoed back so the
+    # caller (dnd_ai.foundry_provision) can confirm the binding it
+    # requested actually took, without a second round trip.
+    principal_user_id: uuid.UUID
     # Returned exactly once — see this module's docstring ("Idempotency")
     # for why a dropped-response retry still returns this same value
     # rather than a newly rotated one. Never persisted anywhere in plain
@@ -486,6 +504,7 @@ def map_external_identifier_endpoint(
         command_name=_MAP_EXTERNAL_IDENTIFIER_COMMAND_NAME,
         event_id=None,
         acting_external_system_id=access.principal.foundry_external_system_id,
+        acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
     )
 
     return MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)
@@ -548,6 +567,7 @@ def link_foundry_identity_endpoint(
 def issue_foundry_system_key_endpoint(
     campaign_id: uuid.UUID,
     external_system_id: uuid.UUID,
+    body: IssueFoundrySystemKeyRequest,
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_FOUNDRY_IDENTITY_MANAGE_CAPABILITY))
     ],
@@ -557,19 +577,23 @@ def issue_foundry_system_key_endpoint(
 ) -> IssueFoundrySystemKeyResponse:
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
-        # No request body of its own — external_system_id (the URL path
-        # parameter) is the only input, so it is the fingerprint payload,
-        # the same "include every path parameter that isn't already part
-        # of the reservation's own scope" shape
+        # external_system_id (the URL path parameter) plus body.foundry_user_id
+        # (the second Phase 11 workstream 2 correction's new required input)
+        # together determine what this call does, so both are the
+        # fingerprint payload — the same "include every input that isn't
+        # already part of the reservation's own scope" shape
         # dnd_ai.api.interactions.resolve_check_endpoint uses for
         # check_request_id. security.idempotent_requests' own uniqueness
         # scope is (actor_user_id, campaign_id, idempotency_key) — it does
-        # NOT include external_system_id — so an empty payload here would
-        # let the same Idempotency-Key reused against a *different*
-        # external_system_id in the same campaign incorrectly replay the
-        # first call's response instead of being rejected as a fingerprint
-        # mismatch.
-        fingerprint_payload: dict[str, Any] = {"external_system_id": str(external_system_id)}
+        # NOT include either of these — so an empty/partial payload here
+        # would let the same Idempotency-Key reused against a *different*
+        # external_system_id or foundry_user_id in the same campaign
+        # incorrectly replay the first call's response instead of being
+        # rejected as a fingerprint mismatch.
+        fingerprint_payload: dict[str, Any] = {
+            "external_system_id": str(external_system_id),
+            "foundry_user_id": body.foundry_user_id,
+        }
         outcome = begin_idempotent_request(
             connection,
             actor_user_id=access.user_id,
@@ -586,7 +610,10 @@ def issue_foundry_system_key_endpoint(
     world_id = timeline_world_id(connection, access.timeline_id)
 
     result = _issue_foundry_system_key_impl(
-        connection, external_system_id=external_system_id, expected_world_id=world_id
+        connection,
+        external_system_id=external_system_id,
+        principal_foundry_user_id=body.foundry_user_id,
+        expected_world_id=world_id,
     )
 
     record_change_log(
@@ -607,7 +634,9 @@ def issue_foundry_system_key_endpoint(
     )
 
     response = IssueFoundrySystemKeyResponse(
-        external_system_id=result.external_system_id, raw_key=result.raw_key
+        external_system_id=result.external_system_id,
+        principal_user_id=result.principal_user_id,
+        raw_key=result.raw_key,
     )
 
     if reservation_id is not None:

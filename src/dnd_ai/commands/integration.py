@@ -215,7 +215,11 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.access import foundry_issuer, hash_foundry_system_key
+from dnd_ai.domain.access import (
+    foundry_issuer,
+    hash_foundry_system_key,
+    resolve_user_by_external_identity,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
@@ -276,6 +280,28 @@ class ExternalSystemNotFoundError(DomainAuthorizationError):
     reasoning: confirming a resource exists but belongs to a different
     world would itself be a disclosure to a caller only authorized for the
     world it expected, so both cases raise this identical, fixed 404."""
+
+
+class UnlinkedFoundryPrincipalError(SafeMessageError):
+    """Raised by `issue_foundry_system_key()` when `principal_foundry_user_id`
+    has no active `link_foundry_identity` mapping for `external_system_id`
+    yet. A plain, disclosing 400 (not `DomainAuthorizationError`'s fixed
+    404) is deliberate and safe here: the caller already holds
+    `access.manage` in a campaign whose world owns this exact
+    `external_system_id` (checked by the same `expected_world_id` assertion
+    every sibling command in this module already applies), so confirming
+    "that Foundry user isn't linked to this system yet" discloses nothing
+    the caller isn't already authorized to know — unlike
+    `ExternalSystemNotFoundError`, which exists precisely because *that*
+    check can be reached by a caller who is *not* yet authorized for the
+    system named."""
+
+    safe_status_code = 400
+    safe_error_code = "unlinked_foundry_principal"
+    safe_message = (
+        "That Foundry user is not linked to a platform user for this external "
+        "system yet — call link_foundry_identity first."
+    )
 
 
 @dataclass(frozen=True)
@@ -541,12 +567,14 @@ class IssueFoundrySystemKeyResult:
     external_system_id: uuid.UUID
     world_id: uuid.UUID
     raw_key: str
+    principal_user_id: uuid.UUID
 
 
 def _issue_foundry_system_key_impl(
     connection: Connection,
     *,
     external_system_id: uuid.UUID,
+    principal_foundry_user_id: str,
     expected_world_id: uuid.UUID | None = None,
 ) -> IssueFoundrySystemKeyResult:
     """The actual work of issue_foundry_system_key(), on a connection the
@@ -557,22 +585,43 @@ def _issue_foundry_system_key_impl(
     Mints a fresh, high-entropy system-level credential for
     external_system_id (`secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_
     ENTROPY_BYTES)`, the same CSPRNG `create_campaign_invitation` already
-    uses for its own token) and stores only its hash
+    uses for its own token), stores only its hash
     (`dnd_ai.domain.access.hash_foundry_system_key`) in `integration.
-    external_systems.system_key_hash` (migration 089) — the raw key is
-    returned to the caller exactly once, in this result, and is never
-    logged, persisted, or otherwise retrievable again. Calling this again
-    for the same external_system_id overwrites the prior hash
-    (`ux_external_systems_system_key_hash` allows this: a plain UPDATE,
-    not an INSERT — no unique-violation possible), immediately and
-    silently invalidating whatever credential a Foundry adapter was
-    previously using — rotation, not addition. There is deliberately no
-    separate "revoke without replacing" operation in this workstream: a
-    GM who wants a system unable to authenticate at all can already
-    deactivate it wholesale via its existing `is_active` column (checked
-    by `dnd_ai.domain.access.resolve_foundry_system_principal`), and adding
-    a second, narrower revoke path with no caller yet would be exactly
-    the speculative surface this codebase avoids.
+    external_systems.system_key_hash` (migration 089), and — the second
+    Phase 11 workstream 2 correction, migration 092 — *binds* it in the
+    same statement to exactly one platform principal: the user
+    `principal_foundry_user_id` already resolves to via a prior
+    `link_foundry_identity` call for this same external_system_id. This
+    closes a Critical authentication defect the credential's first design
+    had — see `dnd_ai.domain.access.resolve_foundry_system_principal`'s own
+    docstring for the full account — by removing the step that let a
+    *caller*, not the credential's own issuance, decide which platform user
+    a presented key would authenticate as. `principal_foundry_user_id` must
+    already be linked (`UnlinkedFoundryPrincipalError` otherwise): this
+    function only *binds* an existing mapping to a credential, it does not
+    create one — `link_foundry_identity` remains the only way to establish
+    "Foundry user X is platform user Y" in the first place, so the ordering
+    a GM must follow (register, then link the intended principal, then
+    issue a key naming that same Foundry user id) is enforced structurally,
+    not merely documented.
+
+    The raw key is returned to the caller exactly once, in this result,
+    and is never logged, persisted, or otherwise retrievable again. Calling
+    this again for the same external_system_id — with the same or a
+    different principal_foundry_user_id — overwrites both the prior hash
+    and the prior binding (`ux_external_systems_system_key_hash` allows
+    this: a plain UPDATE, not an INSERT — no unique-violation possible),
+    immediately and silently invalidating whatever credential a Foundry
+    adapter was previously using — rotation, not addition; re-binding to a
+    different principal in the same call is deliberate, not an oversight,
+    since a GM rotating a compromised key and simultaneously handing it to
+    a different principal is a single, atomic operation, not two. There is
+    deliberately no separate "revoke without replacing" operation in this
+    workstream: a GM who wants a system unable to authenticate at all can
+    already deactivate it wholesale via its existing `is_active` column
+    (checked by `resolve_foundry_system_principal`), and adding a second,
+    narrower revoke path with no caller yet would be exactly the
+    speculative surface this codebase avoids.
 
     expected_world_id, when supplied, asserts external_system_id belongs
     to that world before writing anything — identical in shape and
@@ -585,19 +634,34 @@ def _issue_foundry_system_key_impl(
             f"not {expected_world_id!r}"
         )
 
+    principal_user_id = resolve_user_by_external_identity(
+        connection,
+        issuer=foundry_issuer(external_system_id),
+        subject=principal_foundry_user_id,
+    )
+    if principal_user_id is None:
+        raise UnlinkedFoundryPrincipalError(
+            f"Foundry user {principal_foundry_user_id!r} has no active link_foundry_identity "
+            f"mapping for external system {external_system_id}"
+        )
+
     raw_key = secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_ENTROPY_BYTES)
     key_hash = hash_foundry_system_key(raw_key)
     connection.execute(
         text("""
             UPDATE integration.external_systems
-            SET system_key_hash = :hash, updated_at = now()
+            SET system_key_hash = :hash, system_key_principal_user_id = :principal,
+                updated_at = now()
             WHERE external_system_id = :system
         """),
-        {"hash": key_hash, "system": external_system_id},
+        {"hash": key_hash, "principal": principal_user_id, "system": external_system_id},
     )
 
     return IssueFoundrySystemKeyResult(
-        external_system_id=external_system_id, world_id=world_id, raw_key=raw_key
+        external_system_id=external_system_id,
+        world_id=world_id,
+        raw_key=raw_key,
+        principal_user_id=principal_user_id,
     )
 
 
@@ -605,16 +669,21 @@ def issue_foundry_system_key(
     engine: Engine,
     *,
     external_system_id: uuid.UUID,
+    principal_foundry_user_id: str,
     expected_world_id: uuid.UUID | None = None,
 ) -> IssueFoundrySystemKeyResult:
     """Mint (or rotate) external_system_id's Foundry-adapter system
-    credential. Public convenience API: opens and commits its own
+    credential, bound to the platform user principal_foundry_user_id is
+    already linked to. Public convenience API: opens and commits its own
     transaction. See _issue_foundry_system_key_impl() for the composable
     form a caller with its own transaction (e.g. an API command endpoint)
     uses instead."""
     with engine.begin() as connection:
         return _issue_foundry_system_key_impl(
-            connection, external_system_id=external_system_id, expected_world_id=expected_world_id
+            connection,
+            external_system_id=external_system_id,
+            principal_foundry_user_id=principal_foundry_user_id,
+            expected_world_id=expected_world_id,
         )
 
 

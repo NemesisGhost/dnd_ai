@@ -39,6 +39,22 @@ test("registerSettings registers all four settings with the correct config visib
   assert.equal(settingsApi._definitions.get("dnd-ai-adapter.apiBaseUrl").config, true);
 });
 
+test("systemCredential is registered client-scoped — never distributed to other connected clients", () => {
+  // Regression for the Critical defect this correction closes (see
+  // scripts/settings.mjs's own docstring): a world-scoped credential is
+  // delivered by Foundry to every connected client regardless of
+  // config: false, which only hides a setting from the UI, never narrows
+  // its distribution. scope: "client" is what actually keeps this value
+  // confined to the one browser profile that set it.
+  const settingsApi = new FakeSettings();
+  registerSettings({ settingsApi });
+
+  assert.equal(settingsApi._definitions.get("dnd-ai-adapter.systemCredential").scope, "client");
+  for (const key of ["apiBaseUrl", "externalSystemId", "campaignId"]) {
+    assert.equal(settingsApi._definitions.get(`dnd-ai-adapter.${key}`).scope, "world");
+  }
+});
+
 test("setConnectionSettings/getConnectionSettings round-trip", async () => {
   const settingsApi = new FakeSettings();
   registerSettings({ settingsApi });

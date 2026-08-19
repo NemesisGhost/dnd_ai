@@ -8,17 +8,24 @@ way instead of re-deriving `security.*` joins independently
 (docs/architecture/SYSTEM_ARCHITECTURE.md §5.4 — no HTTP or framework types
 here). Read-only: this module never mutates state.
 
-`AuthenticatedPrincipal` (Phase 11 workstream 2 correction) is the other
-half of this module's contract: `resolve_access_context` still resolves an
-`AccessContext` purely from a bare `user_id`, but a caller authenticated
-via a delegated adapter credential (`FOUNDRY_SYSTEM_AUTH_METHOD`) carries
-more than a `user_id` — it carries *which* `integration.external_systems`
-row, and therefore which `core.worlds` row, actually vouched for that
-request, and that scope must be enforced on every campaign authorization
-performed for it, not just the linked user's own membership graph. See
-`AuthenticatedPrincipal`'s own docstring for the full defect this closes,
-`dnd_ai.api.access.require_campaign_capability`'s `allow_foundry_system`
-gate and world check for where the scope is enforced per campaign, and
+`AuthenticatedPrincipal` (Phase 11 workstream 2, twice corrected) is the
+other half of this module's contract: `resolve_access_context` still
+resolves an `AccessContext` purely from a bare `user_id`, but a caller
+authenticated via a delegated adapter credential
+(`FOUNDRY_SYSTEM_AUTH_METHOD`) carries more than a `user_id` — it carries
+*which* `integration.external_systems` row, and therefore which
+`core.worlds` row, actually vouched for that request, and that scope must
+be enforced on every campaign authorization performed for it, not just the
+linked user's own membership graph. The first correction pass closed that
+world/campaign scope gap; a second, more severe pass closed a Critical
+defect in *how* `user_id` itself was resolved — a caller-supplied Foundry
+identity header, combined with a credential Foundry distributes to every
+connected client regardless of `config: false`, could authenticate as any
+linked user merely by naming them. See `AuthenticatedPrincipal`'s and
+`resolve_foundry_system_principal`'s own docstrings for the full account of
+both defects and their fixes, `dnd_ai.api.access.
+require_campaign_capability`'s `allow_foundry_system` gate and world check
+for where the campaign/world scope is enforced per campaign, and
 `assert_foundry_system_matches` for the sibling per-request check a route
 performs when its own path/body names an `external_system_id` directly.
 
@@ -224,19 +231,46 @@ class AuthenticatedPrincipal:
     not merely the linked user's overall membership graph.
 
     `user_id` is always the resolved `security.users` row — for OIDC, the
-    identity itself; for `FOUNDRY_SYSTEM_AUTH_METHOD`, the platform user
-    `link_foundry_identity` previously established for this
-    `(external_system_id, foundry_user_id)` pair.
+    identity itself; for `FOUNDRY_SYSTEM_AUTH_METHOD`, the *one* platform
+    principal `issue_foundry_system_key` bound to this credential at
+    issuance time (`integration.external_systems.
+    system_key_principal_user_id`) — never a caller-selected identity. See
+    `resolve_foundry_system_principal`'s own docstring for the second,
+    more severe defect this field's resolution was corrected to close: the
+    first cut of this design (Phase 11 workstream 2, migrations 089-091)
+    still resolved `user_id` from a client-supplied `X-Foundry-User-Id`
+    header against `security.external_identities` — a world-shared
+    credential (Foundry distributes every world-scope `game.settings`
+    value, `foundry-module/`'s own `systemCredential` included, to every
+    connected client regardless of `config: false`) combined with a
+    caller-chosen identity meant any connected player who extracted that
+    shared credential could name the GM's own Foundry user id and
+    authenticate as the GM. `foundry_claimed_actor_id` below is what
+    replaced that header's role in authorization — nothing now, ever.
+
     `foundry_external_system_id`/`foundry_world_id` are populated if, and
     only if, `auth_method == FOUNDRY_SYSTEM_AUTH_METHOD` — enforced by
     `__post_init__` so no caller can construct a `FOUNDRY_SYSTEM_AUTH_METHOD`
     principal that silently carries no system/world to scope against, or an
-    `OIDC_AUTH_METHOD` one that carries a stray one."""
+    `OIDC_AUTH_METHOD` one that carries a stray one.
+
+    `foundry_claimed_actor_id` is the client-supplied `X-Foundry-Actor-Id`
+    header value (if any), carried forward *purely as untrusted metadata*
+    for `audit.change_log.acting_foundry_actor_id` — never read by any
+    authorization or identity-resolution logic anywhere in this codebase.
+    `__post_init__` enforces the mirror-image rule from the pair above: an
+    `OIDC_AUTH_METHOD` principal must never carry one (there is no
+    "Foundry actor" concept for a request that didn't authenticate via a
+    Foundry credential at all), and a `FOUNDRY_SYSTEM_AUTH_METHOD`
+    principal may or may not (a Foundry client that sends no claimed actor
+    is authenticated exactly the same as one that does — the field changes
+    nothing about who `user_id` resolves to either way)."""
 
     user_id: uuid.UUID
     auth_method: str
     foundry_external_system_id: uuid.UUID | None = None
     foundry_world_id: uuid.UUID | None = None
+    foundry_claimed_actor_id: str | None = None
 
     def __post_init__(self) -> None:
         is_foundry = self.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
@@ -250,6 +284,13 @@ class AuthenticatedPrincipal:
                 f"(got auth_method={self.auth_method!r}, "
                 f"foundry_external_system_id={self.foundry_external_system_id!r}, "
                 f"foundry_world_id={self.foundry_world_id!r})"
+            )
+        if not is_foundry and self.foundry_claimed_actor_id is not None:
+            raise ValueError(
+                "foundry_claimed_actor_id must be None unless "
+                f"auth_method == {FOUNDRY_SYSTEM_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, "
+                f"foundry_claimed_actor_id={self.foundry_claimed_actor_id!r})"
             )
 
 
@@ -362,57 +403,115 @@ def hash_foundry_system_key(raw_key: str) -> str:
 
 
 def resolve_foundry_system_principal(
-    connection: Connection, *, external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    raw_key: str,
+    claimed_foundry_actor_id: str | None,
 ) -> AuthenticatedPrincipal | None:
     """Authenticates a Foundry-adapter request as "system external_system_id,
-    acting for Foundry user foundry_user_id" and resolves it to a full
-    `AuthenticatedPrincipal` — the Foundry-adapter counterpart to
-    `resolve_user_by_external_identity` above, used by `dnd_ai.api.auth.
-    get_authenticated_user_id` so every existing command/query endpoint
-    already wired to that one dependency becomes reachable by a Foundry
-    adapter with no per-route changes, under the exact same
-    `require_campaign_capability` authorization every other caller goes
-    through — now correctly scoped to the authenticated system/world via
-    the returned principal's own `foundry_external_system_id`/
-    `foundry_world_id` (see `AuthenticatedPrincipal`'s own docstring for the
-    vulnerability this closes relative to the first cut of this function,
-    which returned a bare `user_id` and discarded that scope entirely).
+    acting as the platform principal that credential is bound to" and
+    resolves it to a full `AuthenticatedPrincipal` — the Foundry-adapter
+    counterpart to `resolve_user_by_external_identity` above, used by
+    `dnd_ai.api.auth.get_authenticated_user_id` so every existing
+    command/query endpoint already wired to that one dependency becomes
+    reachable by a Foundry adapter with no per-route changes, under the
+    exact same `require_campaign_capability` authorization every other
+    caller goes through — scoped to the authenticated system/world via the
+    returned principal's own `foundry_external_system_id`/`foundry_world_id`
+    (see `AuthenticatedPrincipal`'s own docstring for the world/campaign-
+    scope defect the *first* Phase 11 workstream 2 correction pass closed).
 
-    Two checks, both required: (1) raw_key, rehashed, must match the
-    active `integration.external_systems.system_key_hash` for
-    external_system_id, and that row's own `is_active` must be true — a
-    caller cannot authenticate as a system whose credential was never
-    issued, was rotated away, or whose whole external-system registration
-    has been deactivated; (2) the resulting synthetic issuer
-    (`foundry_issuer`) plus foundry_user_id as subject must resolve via
-    `resolve_user_by_external_identity` to an active platform user — the
-    same `link_foundry_identity`-established mapping workstream 1 built.
-    Returns None, uniformly, for every failure mode (unknown system,
-    inactive system, wrong key, unlinked or inactive Foundry user)
-    deliberately without distinguishing which — the same fail-closed,
-    non-disclosing contract `resolve_user_by_external_identity` already
-    establishes for its own callers, so `get_authenticated_user_id` can
-    raise one uniform `UnauthorizedError` regardless of cause."""
+    `claimed_foundry_actor_id` is never an authorization input — see the
+    paragraph below for why, and `AuthenticatedPrincipal.
+    foundry_claimed_actor_id`'s own docstring for what it *is* used for
+    (purely descriptive audit metadata). Passing `None` (no
+    `X-Foundry-Actor-Id` header at all) authenticates exactly the same
+    principal as passing any string value would.
+
+    Second Phase 11 workstream 2 correction — a Critical defect the first
+    pass (world/campaign scoping, above) did not touch: that pass fixed
+    *where* a FoundrySystem credential could authorize, but every version
+    of this function up to and including the first pass still resolved
+    `user_id` from a client-supplied Foundry user id (originally a
+    function parameter of that name, checked against `security.
+    external_identities`) — an identity the *caller* chose, not one the
+    credential itself determined. `integration.external_systems.
+    system_key_hash` is stored as a Foundry *world*-scoped `game.settings`
+    value (`foundry-module/scripts/settings.mjs`), and Foundry distributes
+    every world-scope setting to every client connected to that world —
+    `config: false` only hides it from the ordinary settings UI, it does
+    not narrow *distribution*. Any connected player who extracted that
+    shared credential from their own browser (a real, unprivileged
+    capability — Foundry world settings are not access-controlled per
+    client) could therefore construct a request bearing the correct
+    credential and simply *name* the GM's own, publicly-visible Foundry
+    user id in the identity header, and this function would have resolved
+    that request to the GM's own `security.users.user_id` — full GM-level
+    platform access. `game.user.isGM` checks in `foundry-module/` only
+    ever suppressed the *module's own* client-side behavior; they were
+    never consulted by, and could never be enforced by, this server-side
+    resolution.
+
+    Fixed by removing the "caller names an identity" step entirely rather
+    than adding a check that identity is legitimate (there is no
+    server-verifiable way to confirm which human is really typing at a
+    given Foundry browser tab from an HTTP request alone — a client-side
+    claim of any kind, `X-Foundry-Actor-Id` included, must never become an
+    authorization input). `dnd_ai.commands.integration.
+    issue_foundry_system_key` now binds each credential, at the moment it
+    is minted, to exactly one already-linked platform user
+    (`integration.external_systems.system_key_principal_user_id`,
+    migration 092) — the credential itself *is* the identity from here on,
+    the same "possession of the secret is the authorization" model every
+    other server-generated, hash-verified credential in this codebase
+    already uses (`security.campaign_invitations`), just no longer paired
+    with a second, independently-selectable identity claim layered on top
+    of it. This is a deliberately narrow, GM-client-only design (see
+    `foundry-module/README.md`'s "Trust boundary" section and
+    `foundry-module/scripts/hooks.mjs`, whose sync logic already only ever
+    runs on the GM's own client): true per-player identity delegation
+    through a single shared module installation is not delivered by this
+    correction and is out of scope for this MVP.
+
+    Checks, all required: (1) raw_key, rehashed, must match the active
+    `integration.external_systems.system_key_hash` for external_system_id,
+    and that row's own `is_active` must be true; (2) that row's
+    `system_key_principal_user_id` must be set (a credential that has
+    never been bound, or whose bound user was subsequently deleted, cannot
+    authenticate anything); (3) the bound user's own lifecycle status must
+    be `'active'` — the identical check `resolve_user_by_external_identity`
+    already applies to an OIDC identity's linked user, so a deactivated
+    platform user cannot keep authenticating merely because a Foundry
+    credential still names them. Returns `None`, uniformly, for every
+    failure mode (unknown system, inactive system, wrong key, unbound
+    credential, inactive bound user) deliberately without distinguishing
+    which — the same fail-closed, non-disclosing contract
+    `resolve_user_by_external_identity` already establishes for its own
+    callers, so `get_authenticated_user_id` can raise one uniform
+    `UnauthorizedError` regardless of cause."""
     key_hash = hash_foundry_system_key(raw_key)
-    system_world_id = connection.execute(
+    row = connection.execute(
         text("""
-            SELECT world_id FROM integration.external_systems
-            WHERE external_system_id = :system AND system_key_hash = :hash AND is_active
+            SELECT es.world_id, es.system_key_principal_user_id
+            FROM integration.external_systems es
+            JOIN security.users u ON u.user_id = es.system_key_principal_user_id
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE es.external_system_id = :system
+              AND es.system_key_hash = :hash
+              AND es.is_active
+              AND ls.code = 'active'
         """),
         {"system": external_system_id, "hash": key_hash},
-    ).scalar()
-    if system_world_id is None:
-        return None
-    user_id = resolve_user_by_external_identity(
-        connection, issuer=foundry_issuer(external_system_id), subject=foundry_user_id
-    )
-    if user_id is None:
+    ).one_or_none()
+    if row is None:
         return None
     return AuthenticatedPrincipal(
-        user_id=user_id,
+        user_id=_as_uuid(row.system_key_principal_user_id),
         auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
         foundry_external_system_id=external_system_id,
-        foundry_world_id=_as_uuid(system_world_id),
+        foundry_world_id=_as_uuid(row.world_id),
+        foundry_claimed_actor_id=claimed_foundry_actor_id,
     )
 
 

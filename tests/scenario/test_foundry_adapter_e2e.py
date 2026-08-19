@@ -7,10 +7,13 @@ manual procedure for whoever has one).
 
 Drives the exact HTTP request sequence `foundry-module/scripts/
 api-client.mjs`/`sync-engine.mjs` issue — real `Authorization:
-FoundrySystem <id>.<key>` + `X-Foundry-User-Id` headers, real JSON
-bodies matching `foundry-module`'s own request-construction, real
-`external_operation_id` reuse for the duplicate-delivery proof — against
-the real FastAPI application and a real, disposable PostgreSQL 18
+FoundrySystem <id>.<key>` + `X-Foundry-Actor-Id` headers (the latter
+renamed from `X-Foundry-User-Id`, and now purely descriptive metadata —
+see `dnd_ai.domain.access.resolve_foundry_system_principal`'s docstring
+for the second Phase 11 workstream 2 security correction this reflects),
+real JSON bodies matching `foundry-module`'s own request-construction,
+real `external_operation_id` reuse for the duplicate-delivery proof —
+against the real FastAPI application and a real, disposable PostgreSQL 18
 database (never the database directly, never a shortcut dependency
 override for the parts under test), via `httpx`/`TestClient` standing in
 for the browser `fetch()` a real Foundry client would use.
@@ -202,32 +205,38 @@ def _oidc_client(postgres_engine: Engine, user_id: uuid.UUID) -> TestClient:
 
 
 def _foundry_headers(
-    external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+    external_system_id: uuid.UUID, raw_key: str, claimed_actor_id: str | None = None
 ) -> dict[str, str]:
-    return {
-        "Authorization": f"FoundrySystem {external_system_id}.{raw_key}",
-        "X-Foundry-User-Id": foundry_user_id,
-    }
+    headers = {"Authorization": f"FoundrySystem {external_system_id}.{raw_key}"}
+    if claimed_actor_id is not None:
+        headers["X-Foundry-Actor-Id"] = claimed_actor_id
+    return headers
 
 
 def _provision(
     postgres_engine: Engine, *, world_id: uuid.UUID, user_id: uuid.UUID, foundry_user_id: str
 ) -> tuple[uuid.UUID, str]:
-    """The same three steps `scripts/foundry_provision.py` performs
-    (register, issue-key, link-identity) — called directly through the
-    command layer here purely to set up fixtures faster than driving
+    """The same three steps `scripts/foundry_provision.py` performs (in
+    its own corrected order: register, link-identity, issue-key — a
+    credential can only be bound to an already-linked Foundry user id per
+    the second Phase 11 workstream 2 correction) — called directly through
+    the command layer here purely to set up fixtures faster than driving
     three more HTTP round-trips per test; the provisioning script's own
     HTTP behavior is separately covered by `tests/database/test_foundry_
-    provision.py`. Everything from this point on in every test below
-    goes through the real HTTP API only."""
+    provision.py`. Everything from this point on in every test below goes
+    through the real HTTP API only."""
     with postgres_engine.begin() as connection:
         external_system_id = make_external_system(connection, world_id)
-    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
     link_foundry_identity(
         postgres_engine,
         external_system_id=external_system_id,
         foundry_user_id=foundry_user_id,
         user_id=user_id,
+    )
+    key_result = issue_foundry_system_key(
+        postgres_engine,
+        external_system_id=external_system_id,
+        principal_foundry_user_id=foundry_user_id,
     )
     return external_system_id, key_result.raw_key
 
@@ -456,6 +465,7 @@ def test_claim_5_the_same_credential_cannot_call_management_only_routes(
         )
         issue_key_response = adapter_client.post(
             f"/campaigns/{f.campaign_id}/integration/external-systems/{external_system_id}/foundry-system-key",
+            json={"foundry_user_id": "foundry-gm"},
             headers=headers,
         )
 

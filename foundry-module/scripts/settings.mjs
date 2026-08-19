@@ -1,21 +1,32 @@
 /**
  * game.settings registration and typed accessors.
  *
- * Four settings, all `scope: "world"` (shared by every client connected
- * to this world, set once by the GM — not per-browser-profile):
- * `apiBaseUrl`, `externalSystemId`, `campaignId` are `config: true`
- * (visible on the ordinary Foundry Settings sheet, since none of them is
- * secret) — `systemCredential` is `config: false` and only ever set
- * through `ui/connection-setup-app.mjs`'s own form, never the default
- * settings list, so a value that looks like a password field doesn't sit
- * in plain text alongside every other module's ordinary settings. This
- * is "as safely as Foundry permits": Foundry has no secret-vault
- * primitive — a world-scope setting is stored in that world's own
- * `Setting` documents and is readable by anyone with server/file access
- * to the world, exactly like every other Foundry module credential
- * today. `foundry-module/README.md` documents this limitation
- * explicitly rather than silently implying stronger protection than
- * Foundry can actually provide.
+ * `apiBaseUrl`/`externalSystemId`/`campaignId` are `scope: "world"`
+ * (shared by every client connected to this world, set once by the GM —
+ * not per-browser-profile) and `config: true` (visible on the ordinary
+ * Foundry Settings sheet, since none of them is secret).
+ *
+ * `systemCredential` is `scope: "client"` — stored only in the browser
+ * profile that set it, never distributed by Foundry to any other
+ * connected client — and `config: false`, set only through
+ * `ui/connection-setup-app.mjs`'s own form. This is a real, load-bearing
+ * security boundary, not merely UI tidiness: this credential now
+ * authenticates as exactly one bound platform principal, server-side
+ * (`dnd_ai.domain.access.resolve_foundry_system_principal`), and
+ * `foundry-module`'s own sync logic already only ever runs on the GM's
+ * client (`scripts/hooks.mjs` — "Exactly one client drives sync per
+ * world — the GM's"), so the credential belongs exclusively in that one
+ * client's own local storage. A *world*-scoped credential — this
+ * module's original design, and a Critical defect closed in Phase 11
+ * workstream 2's second security correction (see `foundry-module/
+ * README.md`'s "Trust boundary" section for the full account) — would be
+ * delivered by Foundry itself to every connected client's browser
+ * regardless of `config: false`, which only hides a setting from the UI,
+ * never narrows who it's sent to; any player who inspected their own
+ * client's settings (an unprivileged, ordinary capability — Foundry does
+ * not access-control world settings per client) could extract it. Client
+ * scope closes that distribution path entirely: only the browser profile
+ * that ran the connection-setup form ever receives this value at all.
  */
 
 export const MODULE_ID = "dnd-ai-adapter";
@@ -71,10 +82,12 @@ export function registerSettings({ settingsApi = game.settings, connectionSetupA
     type: String,
     default: "",
   });
-  // config: false — deliberately not listed on the ordinary settings
-  // sheet; see this module's own docstring above.
+  // scope: "client" (this browser profile only, never distributed to
+  // other connected clients) + config: false (not listed on the ordinary
+  // settings sheet) — see this module's own docstring above for why the
+  // scope specifically is a security boundary, not just UI tidiness.
   settingsApi.register(MODULE_ID, SETTING_SYSTEM_CREDENTIAL, {
-    scope: "world",
+    scope: "client",
     config: false,
     type: String,
     default: "",

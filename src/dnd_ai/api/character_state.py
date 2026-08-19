@@ -230,6 +230,7 @@ def adjust_hit_points_endpoint(
             command_name=_ADJUST_HIT_POINTS_COMMAND_NAME,
             event_id=result.event_id,
             acting_external_system_id=access.principal.foundry_external_system_id,
+            acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
         )
 
     response = AdjustHitPointsResponse(
@@ -313,6 +314,7 @@ def apply_character_condition_endpoint(
             command_name=_APPLY_CONDITION_COMMAND_NAME,
             event_id=result.event_id,
             acting_external_system_id=access.principal.foundry_external_system_id,
+            acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
         )
 
     response = ApplyCharacterConditionResponse(event_id=result.event_id, changed=result.changed)
@@ -392,6 +394,7 @@ def remove_character_condition_endpoint(
             command_name=_REMOVE_CONDITION_COMMAND_NAME,
             event_id=result.event_id,
             acting_external_system_id=access.principal.foundry_external_system_id,
+            acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
         )
 
     response = RemoveCharacterConditionResponse(event_id=result.event_id, changed=result.changed)
@@ -470,6 +473,7 @@ def adjust_character_resource_endpoint(
             command_name=_ADJUST_RESOURCE_COMMAND_NAME,
             event_id=result.event_id,
             acting_external_system_id=access.principal.foundry_external_system_id,
+            acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
         )
 
     response = AdjustCharacterResourceResponse(

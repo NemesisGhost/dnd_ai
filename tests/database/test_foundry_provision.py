@@ -195,20 +195,21 @@ def test_register_external_system_surfaces_insufficient_capability_clearly(
     assert "canon.edit" in message or "access.manage" in message
 
 
-def test_issue_and_link_end_to_end(
+def test_link_then_issue_end_to_end(
     context_factory: Callable[[uuid.UUID, uuid.UUID], ProvisioningContext],
     f: Fixture,
     postgres_engine: Engine,
 ) -> None:
+    # link-identity must run before issue-key: the second Phase 11
+    # workstream 2 correction requires issuance to bind the credential to
+    # an already-linked Foundry user id (dnd_ai.commands.integration.
+    # issue_foundry_system_key's own docstring).
     gm_ctx = context_factory(f.gm_user_id, f.campaign_id)
     external_system_id = register_external_system(
         gm_ctx, system_type="foundry", display_name="Test Foundry World"
     )
 
     admin_ctx = context_factory(f.admin_user_id, f.campaign_id)
-    raw_key = issue_system_key(admin_ctx, external_system_id=external_system_id)
-    assert len(raw_key) > 20
-
     external_identity_id = link_foundry_identity(
         admin_ctx,
         external_system_id=external_system_id,
@@ -225,6 +226,38 @@ def test_issue_and_link_end_to_end(
         ).one()
     assert row.user_id == f.link_target_user_id
 
+    raw_key = issue_system_key(
+        admin_ctx, external_system_id=external_system_id, foundry_user_id="foundry-user-1"
+    )
+    assert len(raw_key) > 20
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT system_key_principal_user_id FROM integration.external_systems "
+                "WHERE external_system_id = :s"
+            ),
+            {"s": external_system_id},
+        ).one()
+    assert row.system_key_principal_user_id == f.link_target_user_id
+
+
+def test_issue_system_key_for_an_unlinked_foundry_user_surfaces_clearly(
+    context_factory: Callable[[uuid.UUID, uuid.UUID], ProvisioningContext],
+    f: Fixture,
+) -> None:
+    gm_ctx = context_factory(f.gm_user_id, f.campaign_id)
+    external_system_id = register_external_system(
+        gm_ctx, system_type="foundry", display_name="Test Foundry World"
+    )
+    admin_ctx = context_factory(f.admin_user_id, f.campaign_id)
+
+    with pytest.raises(ProvisioningError) as exc_info:
+        issue_system_key(
+            admin_ctx, external_system_id=external_system_id, foundry_user_id="never-linked"
+        )
+    assert "400" in str(exc_info.value)
+
 
 def test_issue_system_key_surfaces_insufficient_capability_clearly(
     context_factory: Callable[[uuid.UUID, uuid.UUID], ProvisioningContext], f: Fixture
@@ -233,11 +266,20 @@ def test_issue_system_key_surfaces_insufficient_capability_clearly(
     external_system_id = register_external_system(
         gm_ctx, system_type="foundry", display_name="Test Foundry World"
     )
+    admin_ctx = context_factory(f.admin_user_id, f.campaign_id)
+    link_foundry_identity(
+        admin_ctx,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=f.link_target_user_id,
+    )
 
     # f.gm_user_id holds canon.edit (sufficient for register) but not
     # access.manage — issue-key requires the narrower capability.
     with pytest.raises(ProvisioningError) as exc_info:
-        issue_system_key(gm_ctx, external_system_id=external_system_id)
+        issue_system_key(
+            gm_ctx, external_system_id=external_system_id, foundry_user_id="foundry-user-1"
+        )
     assert "403" in str(exc_info.value)
 
 

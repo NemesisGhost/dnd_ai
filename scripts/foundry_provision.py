@@ -19,29 +19,52 @@ provision — that credential is what `foundry-module/` itself
 authenticates with once configured; this script only ever authenticates
 as the human GM.
 
+`issue-key` requires `--foundry-user-id` and binds the minted credential
+to whatever platform user that Foundry id is already linked to
+(`link-identity` must run first) — the second Phase 11 workstream 2
+security correction: a `FoundrySystem` credential now authenticates as
+exactly the one principal it was bound to at issuance, never a caller-
+selected identity (`dnd_ai.domain.access.resolve_foundry_system_
+principal`'s own docstring has the full defect this closes). This MVP's
+module only ever runs from the GM's own browser client
+(`foundry-module/README.md`'s "Trust boundary" section), so in practice
+that means: link the GM's own Foundry account, then issue a key bound to
+it — not one per player.
+
 Usage:
   uv run python scripts/foundry_provision.py register \\
       --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
       --display-name "My Foundry World" [--system-type foundry] [--external-reference <ref>]
       # prints the new external_system_id
 
-  uv run python scripts/foundry_provision.py issue-key \\
-      --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
-      --external-system-id <uuid>
-      # mints (or rotates) the system credential and prints the raw key
-      # EXACTLY ONCE - paste it into the Foundry module's connection
-      # settings immediately; it cannot be retrieved again, only rotated.
-
   uv run python scripts/foundry_provision.py link-identity \\
       --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
       --external-system-id <uuid> --foundry-user-id <foundry-user-id> --user-id <platform-user-uuid>
-      # maps one Foundry-side user id to one existing platform user;
-      # run once per player (and once for the GM's own Foundry account).
+      # maps one Foundry-side user id to one existing platform user. Run
+      # this BEFORE issue-key: a credential can only be bound to a Foundry
+      # user id that is already linked. This MVP's module only ever runs
+      # from the GM's own client (foundry-module/README.md's "Trust
+      # boundary" section) - link the GM's own Foundry account, not a
+      # player's.
+
+  uv run python scripts/foundry_provision.py issue-key \\
+      --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
+      --external-system-id <uuid> --foundry-user-id <foundry-user-id>
+      # mints (or rotates) the system credential, BOUND to the platform
+      # user --foundry-user-id is already linked to (link-identity must
+      # have been run for this exact foundry-user-id first), and prints
+      # the raw key EXACTLY ONCE - paste it into the Foundry module's
+      # connection settings immediately; it cannot be retrieved again,
+      # only rotated (which also re-binds it, possibly to a different
+      # principal if a different --foundry-user-id is given).
 
   uv run python scripts/foundry_provision.py provision \\
       --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
-      --display-name "My Foundry World"
-      # convenience: register + issue-key in one call, for first-time setup.
+      --display-name "My Foundry World" \\
+      --foundry-user-id <gm-foundry-user-id> --user-id <gm-platform-user-uuid>
+      # convenience: register + link-identity (for the one principal this
+      # credential will authenticate as - the GM, for this MVP) +
+      # issue-key, in one call, for first-time setup.
 
 An OIDC bearer token is required for every subcommand: pass `--token`, or
 set `DND_AI_OIDC_TOKEN` in the environment (preferred — keeps it out of
@@ -149,11 +172,20 @@ def register_external_system(
     return uuid.UUID(response.json()["external_system_id"])
 
 
-def issue_system_key(ctx: ProvisioningContext, *, external_system_id: uuid.UUID) -> str:
+def issue_system_key(
+    ctx: ProvisioningContext, *, external_system_id: uuid.UUID, foundry_user_id: str
+) -> str:
+    """Mints (or rotates) external_system_id's FoundrySystem credential,
+    bound to the platform user foundry_user_id is already linked to
+    (`link_foundry_identity` must have been called for this exact
+    (external_system_id, foundry_user_id) pair first — a 400 `unlinked_
+    foundry_principal` otherwise, per `_raise_for_envelope`'s general
+    handling below)."""
     response = ctx.client.post(
         f"/campaigns/{ctx.campaign_id}/integration/external-systems/"
         f"{external_system_id}/foundry-system-key",
         headers=ctx.headers(),
+        json={"foundry_user_id": foundry_user_id},
     )
     _raise_for_envelope(response)
     raw_key = response.json()["raw_key"]
@@ -203,9 +235,15 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--external-reference", default=None)
 
     issue_key_parser = subparsers.add_parser(
-        "issue-key", help="Mint or rotate a system's FoundrySystem credential"
+        "issue-key",
+        help="Mint or rotate a system's FoundrySystem credential, bound to one platform user",
     )
     issue_key_parser.add_argument("--external-system-id", required=True, type=uuid.UUID)
+    issue_key_parser.add_argument(
+        "--foundry-user-id",
+        required=True,
+        help="Must already be linked via link-identity for this external-system-id",
+    )
 
     link_parser = subparsers.add_parser(
         "link-identity", help="Map a Foundry-side user id to a platform user"
@@ -215,11 +253,23 @@ def _build_parser() -> argparse.ArgumentParser:
     link_parser.add_argument("--user-id", required=True, type=uuid.UUID)
 
     provision_parser = subparsers.add_parser(
-        "provision", help="Convenience: register + issue-key in one call"
+        "provision",
+        help="Convenience: register + link-identity + issue-key, bound to one platform user",
     )
     provision_parser.add_argument("--display-name", required=True)
     provision_parser.add_argument("--system-type", default="foundry")
     provision_parser.add_argument("--external-reference", default=None)
+    provision_parser.add_argument(
+        "--foundry-user-id",
+        required=True,
+        help="The Foundry user the issued credential will authenticate as (this MVP's GM)",
+    )
+    provision_parser.add_argument(
+        "--user-id",
+        required=True,
+        type=uuid.UUID,
+        help="The existing platform user --foundry-user-id maps to",
+    )
 
     return parser
 
@@ -253,11 +303,16 @@ def _run_command(args: argparse.Namespace, ctx: ProvisioningContext) -> int:
             print(f"external_system_id: {external_system_id}")
 
         elif args.command == "issue-key":
-            raw_key = issue_system_key(ctx, external_system_id=args.external_system_id)
+            raw_key = issue_system_key(
+                ctx,
+                external_system_id=args.external_system_id,
+                foundry_user_id=args.foundry_user_id,
+            )
             print(
                 "raw_key (shown ONCE - paste it into the Foundry module's connection "
                 f"settings now, it cannot be retrieved again): {raw_key}"
             )
+            print(f"Bound to the platform user linked to Foundry user {args.foundry_user_id!r}.")
 
         elif args.command == "link-identity":
             external_identity_id = link_foundry_identity(
@@ -276,14 +331,26 @@ def _run_command(args: argparse.Namespace, ctx: ProvisioningContext) -> int:
                 external_reference=args.external_reference,
             )
             print(f"external_system_id: {external_system_id}")
-            raw_key = issue_system_key(ctx, external_system_id=external_system_id)
+            link_foundry_identity(
+                ctx,
+                external_system_id=external_system_id,
+                foundry_user_id=args.foundry_user_id,
+                user_id=args.user_id,
+            )
+            raw_key = issue_system_key(
+                ctx,
+                external_system_id=external_system_id,
+                foundry_user_id=args.foundry_user_id,
+            )
             print(
                 "raw_key (shown ONCE - paste it into the Foundry module's connection "
                 f"settings now, it cannot be retrieved again): {raw_key}"
             )
             print(
-                "Next: run 'link-identity' once per Foundry user (including the GM's "
-                "own account) before that user can authenticate through the module."
+                f"Bound to the platform user (--user-id {args.user_id}) linked to Foundry "
+                f"user {args.foundry_user_id!r} — this credential authenticates as that one "
+                "principal only. This MVP's module runs only from the GM's own client, so "
+                "that should be the GM's own Foundry account and platform user."
             )
 
     except ProvisioningError as exc:

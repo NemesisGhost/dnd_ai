@@ -19,7 +19,7 @@ function stripTrailingSlash(url) {
 /**
  * The one place every HTTP request to the D&D AI platform is built —
  * every route method below funnels through `_request`, so
- * `Authorization`/`X-Foundry-User-Id` construction, JSON encoding, and
+ * `Authorization`/`X-Foundry-Actor-Id` construction, JSON encoding, and
  * error-envelope parsing happen exactly once, never duplicated per
  * call site. This is also what "preserve the world/system authorization
  * protections" means on the client side: nothing here can accidentally
@@ -29,6 +29,16 @@ function stripTrailingSlash(url) {
  * `assert_foundry_system_matches`) — this client cannot weaken or
  * substitute for that; it only has to not accidentally defeat its own
  * purpose by sending the wrong campaign/system.
+ *
+ * `X-Foundry-Actor-Id` (Phase 11 workstream 2's second security
+ * correction; previously `X-Foundry-User-Id`) is sent purely as
+ * descriptive audit metadata — the server never uses it to decide who is
+ * authenticated. Who this client authenticates as is determined entirely
+ * server-side, by which platform principal `systemCredential` was bound
+ * to when it was issued (`dnd_ai.commands.integration.
+ * issue_foundry_system_key`) — changing, omitting, or spoofing this
+ * header cannot change that. See `foundry-module/README.md`'s "Trust
+ * boundary" section for the full account of the defect this closed.
  */
 export class DndAiApiClient {
   /**
@@ -36,13 +46,16 @@ export class DndAiApiClient {
    * @param {() => {apiBaseUrl: string, externalSystemId: string,
    *   campaignId: string, systemCredential: string}} deps.getSettings
    * @param {typeof fetch} [deps.fetchImpl] - injectable for tests.
-   * @param {() => string} deps.getFoundryUserId - returns the current
-   *   Foundry user's own persistent id (`game.user.id` in production).
+   * @param {() => string} deps.getFoundryActorId - returns the current
+   *   Foundry user's own persistent id (`game.user.id` in production),
+   *   sent as untrusted `X-Foundry-Actor-Id` audit metadata only — never
+   *   an identity this client can authenticate as merely by returning a
+   *   different value.
    */
-  constructor({ getSettings, fetchImpl = fetch, getFoundryUserId }) {
+  constructor({ getSettings, fetchImpl = fetch, getFoundryActorId }) {
     this._getSettings = getSettings;
     this._fetch = fetchImpl;
-    this._getFoundryUserId = getFoundryUserId;
+    this._getFoundryActorId = getFoundryActorId;
   }
 
   _buildUrl(path, query) {
@@ -63,7 +76,7 @@ export class DndAiApiClient {
     const headers = {
       "Content-Type": "application/json",
       Authorization: `FoundrySystem ${externalSystemId}.${systemCredential}`,
-      "X-Foundry-User-Id": this._getFoundryUserId(),
+      "X-Foundry-Actor-Id": this._getFoundryActorId(),
     };
     if (idempotencyKey) {
       headers["Idempotency-Key"] = idempotencyKey;

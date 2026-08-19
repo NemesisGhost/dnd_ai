@@ -105,6 +105,19 @@ change_log = Table(
             "column is set alongside actor_user_id, never instead of it."
         ),
     ),
+    Column(
+        "acting_foundry_actor_id",
+        Text(),
+        comment=(
+            "The Foundry-side actor id the client claimed via X-Foundry-Actor-Id "
+            "for a change made through a delegated FoundrySystem credential — "
+            "recorded verbatim, never verified, never used to select or authorize "
+            "the acting principal (that is acting_external_system_id plus the "
+            "credential's own bound system_key_principal_user_id). NULL for every "
+            "OIDC-authenticated change and for any Foundry request that supplied "
+            "no claimed actor."
+        ),
+    ),
     Column("reason", Text()),
     Column("correlation_id", UUID()),
     Column("causation_id", UUID()),

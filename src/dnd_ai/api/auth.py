@@ -106,36 +106,47 @@ turning every authenticated request into an implicit write here would be
 both inconsistent with that rule and unnecessary write load for a bare
 verification dependency.
 
-Foundry-adapter authentication (Phase 11 workstream 2, corrected in a
-follow-up pass — see `dnd_ai.domain.access.AuthenticatedPrincipal`'s own
-docstring for the full defect the correction closes): `get_authenticated_
-user_id` recognizes a second credential shape alongside `Authorization:
-Bearer <OIDC JWT>` — `Authorization: FoundrySystem <external_system_id>.
-<raw_key>` plus an `X-Foundry-User-Id` header — and resolves it to a full
-`AuthenticatedPrincipal` (never a bare `user_id` — that was this
-workstream's original, defective shape) via `dnd_ai.domain.access.
-resolve_foundry_system_principal` (which itself layers `dnd_ai.commands.
-integration.issue_foundry_system_key`'s credential, `link_foundry_identity`
-'s identity mapping, and `resolve_user_by_external_identity`, in that
-order, and additionally carries forward which `integration.external_
-systems` row — and therefore which `core.worlds` row — actually vouched
-for the request). This is deliberately a branch inside the existing
-dependency, never a second, Foundry-only dependency routes would have to
-opt into — every route already wired to `get_authenticated_user_id`
-becomes *reachable* by a Foundry adapter with no per-route changes to
-this dependency itself, but reachability is no longer the same thing as
-*authorization*: `dnd_ai.api.access.require_campaign_capability` now
-requires each route to opt in via `allow_foundry_system=True` before a
-`FOUNDRY_SYSTEM_AUTH_METHOD` principal is accepted at all, and even an
-opted-in route only authorizes against a campaign whose own world matches
-the principal's `foundry_world_id` — see that function's own docstring.
-Routes with no `campaign_id`/capability gate at all (campaign creation,
-invitation acceptance) instead depend on `require_oidc_user_id` below,
-which rejects a Foundry principal outright. The scheme keyword
-(`FoundrySystem`, not `Bearer`) is what selects the branch — a malformed
-or absent `Authorization` header falls through to the OIDC path exactly
-as before and fails exactly as before, so this adds a new authenticated
-caller shape without changing the OIDC path's behavior at all.
+Foundry-adapter authentication (Phase 11 workstream 2, twice corrected —
+see `dnd_ai.domain.access.AuthenticatedPrincipal`'s and `resolve_foundry_
+system_principal`'s own docstrings for the full defects each correction
+closes): `get_authenticated_user_id` recognizes a second credential shape
+alongside `Authorization: Bearer <OIDC JWT>` — `Authorization: FoundrySystem
+<external_system_id>.<raw_key>` plus an optional `X-Foundry-Actor-Id`
+header — and resolves it to a full `AuthenticatedPrincipal` (never a bare
+`user_id` — that was this workstream's original, defective shape) via
+`dnd_ai.domain.access.resolve_foundry_system_principal`, which additionally
+carries forward which `integration.external_systems` row — and therefore
+which `core.worlds` row — actually vouched for the request. This is
+deliberately a branch inside the existing dependency, never a second,
+Foundry-only dependency routes would have to opt into — every route
+already wired to `get_authenticated_user_id` becomes *reachable* by a
+Foundry adapter with no per-route changes to this dependency itself, but
+reachability is no longer the same thing as *authorization*: `dnd_ai.api.
+access.require_campaign_capability` now requires each route to opt in via
+`allow_foundry_system=True` before a `FOUNDRY_SYSTEM_AUTH_METHOD` principal
+is accepted at all, and even an opted-in route only authorizes against a
+campaign whose own world matches the principal's `foundry_world_id` — see
+that function's own docstring. Routes with no `campaign_id`/capability gate
+at all (campaign creation, invitation acceptance) instead depend on
+`require_oidc_user_id` below, which rejects a Foundry principal outright.
+The scheme keyword (`FoundrySystem`, not `Bearer`) is what selects the
+branch — a malformed or absent `Authorization` header falls through to the
+OIDC path exactly as before and fails exactly as before, so this adds a
+new authenticated caller shape without changing the OIDC path's behavior
+at all.
+
+`X-Foundry-Actor-Id` is never an authorization input, and never has been
+since the second correction pass — see `resolve_foundry_system_principal`'s
+own docstring for the Critical defect that closed (a caller who knew the
+credential could previously name *any* linked Foundry user's id in this
+header and authenticate as them). `_resolve_foundry_system_principal` below
+passes it straight through, unverified, purely so it can be recorded as
+`AuthenticatedPrincipal.foundry_claimed_actor_id` — untrusted audit
+metadata, nothing more. Which platform user a `FoundrySystem` credential
+authenticates as is now determined entirely by the credential itself —
+`system_key_principal_user_id`, bound once, server-side, at `issue_foundry_
+system_key` time — never by any request header, so changing or omitting
+`X-Foundry-Actor-Id` cannot change who the request authenticates as.
 
 A Foundry-system credential is intentionally not a JWT and does not
 reuse `get_verified_token_claims`/JWKS in any way: it is a single
@@ -638,20 +649,34 @@ def get_verified_token_claims(
 
 
 def _resolve_foundry_system_principal(
-    connection: Connection, *, credential: str, foundry_user_id: str | None
+    connection: Connection, *, credential: str, claimed_foundry_actor_id: str | None
 ) -> AuthenticatedPrincipal:
     """The `FoundrySystem` scheme's own resolution path, factored out of
     `get_authenticated_user_id` purely for readability — see this module's
     docstring ("Foundry-adapter authentication") for the full design.
     `credential` is the Authorization header's value after the scheme
-    keyword, expected as `<external_system_id>.<raw_key>`. Every failure
-    mode (missing X-Foundry-User-Id, malformed credential, unknown
-    external_system_id, wrong key, unlinked Foundry user) raises the
-    identical `UnauthorizedError` — deliberately non-disclosing, the same
-    fail-closed contract the OIDC path already has via
-    `resolve_user_by_external_identity`."""
-    if foundry_user_id is None:
-        raise UnauthorizedError()
+    keyword, expected as `<external_system_id>.<raw_key>`.
+
+    `claimed_foundry_actor_id` (the `X-Foundry-Actor-Id` header, if any) is
+    never an authorization input — it is passed straight through to
+    `resolve_foundry_system_principal` purely so it can be carried into the
+    resolved `AuthenticatedPrincipal.foundry_claimed_actor_id` for audit
+    metadata. Renamed from this dependency's original `X-Foundry-User-Id`/
+    `foundry_user_id`, which *was* an authorization input in the first cut
+    of this design — a Critical defect, since it let a caller holding a
+    world-shared credential authenticate as any linked user merely by
+    naming them; see `dnd_ai.domain.access.
+    resolve_foundry_system_principal`'s own docstring for the full account.
+    The rename is deliberate, not cosmetic: keeping the old header/parameter
+    name after changing what it means would risk a future reader assuming
+    the old, authorizing semantics still applied.
+
+    Every failure mode (malformed credential, unknown external_system_id,
+    wrong key, unbound or inactive bound principal) raises the identical
+    `UnauthorizedError` — deliberately non-disclosing, the same fail-closed
+    contract the OIDC path already has via `resolve_user_by_external_
+    identity`. A missing/absent `claimed_foundry_actor_id` is not a failure
+    at all — see `resolve_foundry_system_principal`'s own docstring."""
     external_system_id_text, separator, raw_key = credential.partition(".")
     if not separator or not raw_key:
         raise UnauthorizedError()
@@ -664,7 +689,7 @@ def _resolve_foundry_system_principal(
         connection,
         external_system_id=external_system_id,
         raw_key=raw_key,
-        foundry_user_id=foundry_user_id,
+        claimed_foundry_actor_id=claimed_foundry_actor_id,
     )
     if principal is None:
         raise UnauthorizedError()
@@ -675,7 +700,7 @@ def get_authenticated_user_id(
     request: Request,
     connection: Annotated[Connection, Depends(get_connection)],
     authorization: Annotated[str | None, Header()] = None,
-    foundry_user_id: Annotated[str | None, Header(alias="X-Foundry-User-Id")] = None,
+    claimed_foundry_actor_id: Annotated[str | None, Header(alias="X-Foundry-Actor-Id")] = None,
 ) -> AuthenticatedPrincipal:
     """Resolves an authenticated request to a full `AuthenticatedPrincipal`
     — who (`security.users.user_id`) *and* how (`AuthenticatedPrincipal.
@@ -713,7 +738,7 @@ def get_authenticated_user_id(
     scheme, _, credential = (authorization or "").partition(" ")
     if scheme.lower() == _FOUNDRY_SYSTEM_AUTH_SCHEME:
         return _resolve_foundry_system_principal(
-            connection, credential=credential, foundry_user_id=foundry_user_id
+            connection, credential=credential, claimed_foundry_actor_id=claimed_foundry_actor_id
         )
 
     jwks_client = request.app.dependency_overrides.get(get_jwks_client, get_jwks_client)()

@@ -15,7 +15,7 @@ function makeClient(fetchImpl, settings = SETTINGS) {
   return new DndAiApiClient({
     getSettings: () => settings,
     fetchImpl,
-    getFoundryUserId: () => "foundry-user-42",
+    getFoundryActorId: () => "foundry-user-42",
   });
 }
 
@@ -41,7 +41,7 @@ test("mapExternalIdentifier sends the correct method, path, headers, and body", 
     init.headers.Authorization,
     "FoundrySystem 11111111-1111-1111-1111-111111111111.super-secret-key",
   );
-  assert.equal(init.headers["X-Foundry-User-Id"], "foundry-user-42");
+  assert.equal(init.headers["X-Foundry-Actor-Id"], "foundry-user-42");
   assert.equal(init.headers["Idempotency-Key"], undefined);
   assert.deepEqual(JSON.parse(init.body), {
     entity_id: "entity-1",
@@ -155,6 +155,47 @@ test("a thrown network failure is classified as retryable with status 0", async 
       assert.equal(error.retryable, true);
       return true;
     },
+  );
+});
+
+test("X-Foundry-Actor-Id never influences the Authorization header", async () => {
+  // The server-side security property (dnd_ai.domain.access.
+  // resolve_foundry_system_principal) is that this header is never an
+  // authorization input at all — this is the client-side half: proving
+  // this client itself builds Authorization purely from
+  // externalSystemId/systemCredential, with no code path that could ever
+  // let a different claimed actor id change what credential is sent.
+  const fetchImpl = createFetchStub([
+    { status: 200, body: { external_identifier_id: "id-1" } },
+    { status: 200, body: { external_identifier_id: "id-1" } },
+  ]);
+  const client = new DndAiApiClient({
+    getSettings: () => SETTINGS,
+    fetchImpl,
+    getFoundryActorId: () => "gm-foundry-id",
+  });
+  const otherClient = new DndAiApiClient({
+    getSettings: () => SETTINGS,
+    fetchImpl,
+    getFoundryActorId: () => "a-completely-different-claimed-actor",
+  });
+
+  await client.mapExternalIdentifier({
+    entityId: "entity-1",
+    externalKind: "actor",
+    externalId: "foundry-actor-1",
+  });
+  await otherClient.mapExternalIdentifier({
+    entityId: "entity-1",
+    externalKind: "actor",
+    externalId: "foundry-actor-1",
+  });
+
+  const [first, second] = fetchImpl.calls;
+  assert.equal(first.init.headers.Authorization, second.init.headers.Authorization);
+  assert.notEqual(
+    first.init.headers["X-Foundry-Actor-Id"],
+    second.init.headers["X-Foundry-Actor-Id"],
   );
 });
 

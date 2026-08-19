@@ -9,7 +9,11 @@ This module never talks to PostgreSQL, and never writes canonical state
 itself — every change goes through the same application API and
 `FoundrySystem`-credential authorization/authorization-scoping the rest of
 this repository documents (`docs/architecture/DATABASE_MODEL.md` §19.1,
-`src/dnd_ai/domain/access.py`'s `AuthenticatedPrincipal`).
+`src/dnd_ai/domain/access.py`'s `AuthenticatedPrincipal`). See "Trust
+boundary" below for what that credential actually authenticates as, and
+why — a Critical defect in an earlier version of this design let any
+connected player who extracted it authenticate as the GM; the corrected
+model is described there in full.
 
 ## Scope boundary
 
@@ -28,8 +32,11 @@ this repository documents (`docs/architecture/DATABASE_MODEL.md` §19.1,
   `updateActor` hook and submitted immediately, with loop suppression so
   the server's own confirmed value being written back never re-triggers a
   second submission (`scripts/hooks.mjs`, `scripts/sync-engine.mjs`).
-- **One writer per world.** Only the GM's own connected client drives sync;
-  every other connected client only ever observes the result.
+- **One writer per world, and one credential per world — both the GM's.**
+  Only the GM's own connected client drives sync (`scripts/hooks.mjs`);
+  every other connected client only ever observes the result. This MVP
+  deliberately does not deliver true per-player identity delegation — see
+  "Trust boundary" below for what that means and why.
 
 ## Install
 
@@ -58,48 +65,109 @@ HTTP client, run once per world and once per player:
 # 1. Register this Foundry world as an external system (once per world).
 #    Needs canon.edit in the target campaign.
 export DND_AI_OIDC_TOKEN=<your OIDC bearer token>
-uv run python scripts/foundry_provision.py provision \
+uv run python scripts/foundry_provision.py register \
     --api-base-url https://dnd-ai.example.com \
     --campaign-id <campaign-uuid> \
     --display-name "My Foundry World"
-# -> prints external_system_id and a raw_key, SHOWN ONCE
+# -> prints external_system_id
 
-# 2. Link every Foundry user who will connect (including the GM's own
-#    account) to their existing platform user. Needs access.manage.
+# 2. Link the GM's own Foundry account to their existing platform user.
+#    Needs access.manage. Must happen BEFORE step 3 — a credential can
+#    only be bound to an already-linked Foundry user id (see "Trust
+#    boundary" below for why this module is GM-only, not "once per
+#    player").
 uv run python scripts/foundry_provision.py link-identity \
     --api-base-url https://dnd-ai.example.com \
     --campaign-id <campaign-uuid> \
     --external-system-id <external-system-id-from-step-1> \
-    --foundry-user-id <foundry-user-id> \
-    --user-id <platform-user-uuid>
+    --foundry-user-id <gm-foundry-user-id> \
+    --user-id <gm-platform-user-uuid>
+
+# 3. Issue the credential, bound to the GM's platform user linked in step 2.
+uv run python scripts/foundry_provision.py issue-key \
+    --api-base-url https://dnd-ai.example.com \
+    --campaign-id <campaign-uuid> \
+    --external-system-id <external-system-id-from-step-1> \
+    --foundry-user-id <gm-foundry-user-id>
+# -> prints the raw_key, SHOWN ONCE
+
+# (steps 1-3 in one call: `provision --display-name ... --foundry-user-id
+# <gm-foundry-user-id> --user-id <gm-platform-user-uuid>`)
 ```
 
-`<foundry-user-id>` is that player's Foundry user id, visible in Foundry's
-own Configure Users screen (or `game.user.id` in that player's own browser
-console).
+`<gm-foundry-user-id>` is the GM's own Foundry user id, visible in
+Foundry's own Configure Users screen (or `game.user.id` in the GM's own
+browser console).
 
-3. In Foundry, open **Settings → D&D AI Connection Setup** (GM only) and
-   enter: the API base URL, the `external_system_id` and campaign id from
-   step 1, and the raw key printed in step 1. The credential field is
-   password-masked and never redisplayed in full once saved — see
-   "Credential storage" below for what protection that actually provides.
+4. In Foundry, **on the GM's own browser/client**, open **Settings → D&D
+   AI Connection Setup** (GM only) and enter: the API base URL, the
+   `external_system_id` and campaign id from step 1, and the raw key
+   printed in step 3. The credential field is password-masked and never
+   redisplayed in full once saved, and — see "Trust boundary" below —
+   this setting is stored only in this one browser's own profile, never
+   distributed to any other connected client.
 
-If a player's Foundry account was never linked (step 2 skipped), or the
-stored credential is wrong/rotated, or the linked platform user lacks the
-needed capability in this campaign, the module surfaces the server's own
-specific rejection reason (`DNDAI.Notifications.SyncFailed`) rather than a
-silent failure — see `scripts/errors.mjs`/`scripts/api-client.mjs`.
+If the stored credential is wrong/rotated, or the linked platform user
+lacks the needed capability in this campaign, the module surfaces the
+server's own specific rejection reason (`DNDAI.Notifications.SyncFailed`)
+rather than a silent failure — see `scripts/errors.mjs`/
+`scripts/api-client.mjs`.
 
-### Credential storage
+### Trust boundary
 
-Foundry has no secret-vault primitive. The system credential is stored as
-an ordinary world-scoped Foundry setting (`config: false`, so it does not
-appear on the default settings list) — readable by anyone with server or
-file access to the world, exactly like every other Foundry module's own
-stored credentials today. Rotate it (`foundry_provision.py issue-key`)
-if you suspect it has been exposed; the previous key stops working
-immediately (`dnd_ai.commands.integration.issue_foundry_system_key`'s own
-docstring — rotation, not addition).
+**This is a GM-client-only MVP: one credential, bound to exactly one
+platform principal (the GM), stored only in the GM's own browser.** True
+per-player identity delegation — a Foundry credential that lets *each*
+connected player's own actions attribute to their own platform account —
+is **not delivered** by this module and is out of scope for this MVP.
+
+This is a corrected design, not the original one. The first cut stored the
+system credential as a Foundry **world**-scoped `game.settings` value and
+let the caller select *which* linked Foundry user a request authenticated
+as, via an `X-Foundry-User-Id` header. That combination was a Critical
+defect: Foundry distributes every world-scope setting to *every* connected
+client regardless of `config: false` (which only hides a setting from the
+UI, never narrows who receives it) — so any connected player who inspected
+their own client's settings (an ordinary, unprivileged capability; Foundry
+does not access-control world settings per client) could extract the
+shared credential, then simply name the GM's own, publicly-visible Foundry
+user id in that header and authenticate as the GM. `game.user.isGM` checks
+in this module's own code only ever suppressed the module's *own*
+client-side behavior — they were never, and could never be, enforced
+server-side against an arbitrary HTTP request.
+
+Fixed at the credential model, server-side, not with additional
+client-side checks:
+
+- The system credential (`systemCredential`) is now registered `scope:
+  "client"` (`scripts/settings.mjs`) — stored only in the one browser
+  profile that ran the connection-setup form, never distributed by Foundry
+  to any other connected client.
+- A `FoundrySystem` credential now authenticates as exactly the one
+  platform principal it was bound to when it was issued
+  (`dnd_ai.commands.integration.issue_foundry_system_key`'s required
+  `foundry_user_id` argument, which must already be linked via
+  `link_foundry_identity`) — never a caller-selected identity. The client
+  still sends a Foundry user id (renamed `X-Foundry-Actor-Id`, from
+  `X-Foundry-User-Id`), but it is recorded only as descriptive
+  `audit.change_log.acting_foundry_actor_id` metadata — the server never
+  uses it to decide who is authenticated, so changing, omitting, or
+  spoofing it cannot change that.
+- Because only the GM's own client ever calls the API at all
+  (`scripts/hooks.mjs`'s existing "exactly one client drives sync per
+  world" design), binding the one issued credential to the GM's own
+  platform user is not a new restriction this correction invented — it
+  matches how the module already, always behaved. What changed is that the
+  *server* now enforces it structurally, rather than the module's own
+  `isGM` check merely happening to be the only thing that, in practice,
+  ever called the API.
+
+Rotate the credential (`foundry_provision.py issue-key`) if you suspect it
+has been exposed; the previous key stops working immediately
+(`dnd_ai.commands.integration.issue_foundry_system_key`'s own docstring —
+rotation, not addition). Rotating can also re-bind the credential to a
+*different* linked Foundry user id in the same call, by passing a
+different `--foundry-user-id`.
 
 ## Manual live-Foundry verification
 
@@ -140,6 +208,20 @@ instance available should run this procedure once and record the result in
    systems` (register) directly. **Expect:** 403 — the bounded
    adapter-facing route set rejects it regardless of the linked user's own
    capabilities.
+8. **Trust-boundary correction, specific to this pass.** In a second
+   browser profile (a different player's actual client, or Foundry's own
+   "log in as a different user" flow), open the Settings sheet for this
+   module. **Expect:** `systemCredential` is empty/unset — a `scope:
+   "client"` setting is never delivered to a browser that didn't set it,
+   unlike the world-scoped setting this replaced.
+9. From a raw HTTP client, send a request using the real, currently-issued
+   credential but with `X-Foundry-Actor-Id` set to some *other* value (a
+   different linked Foundry user id, an unlinked/nonexistent one, or the
+   header omitted entirely). **Expect:** every variant authenticates as the
+   *same* platform user (the credential's own bound principal) — check
+   `audit.change_log.actor_user_id` for the resulting row: it must never
+   change based on this header, only `acting_foundry_actor_id` (recorded
+   verbatim, purely as metadata) does.
 
 Record: FoundryVTT version, dnd5e system version, platform commit hash,
 and the observed result of each step.

@@ -587,6 +587,28 @@ def _register_system_as_gm(
         return _register_system(client, campaign_id)
 
 
+def _link_foundry_user(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    campaign_id: uuid.UUID,
+    external_system_id: uuid.UUID,
+    *,
+    foundry_user_id: str,
+    user_id: uuid.UUID,
+) -> None:
+    """Links foundry_user_id to user_id via the real HTTP endpoint, as
+    f.admin_user_id (access.manage) — the prerequisite every
+    issue_foundry_system_key_endpoint call below now needs, per the second
+    Phase 11 workstream 2 correction: issuance requires an existing
+    mapping and binds the credential to it atomically."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _foundry_identities_url(campaign_id, external_system_id),
+            json={"foundry_user_id": foundry_user_id, "user_id": str(user_id)},
+        )
+    assert response.status_code == 200, response.text
+
+
 def test_a_member_with_only_canon_edit_gets_forbidden_for_foundry_identity_link(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
@@ -736,8 +758,19 @@ def test_a_member_with_only_canon_edit_gets_forbidden_for_issuing_a_foundry_syst
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    _link_foundry_user(
+        client_factory,
+        f,
+        f.campaign_id,
+        external_system_id,
+        foundry_user_id="foundry-forbidden-issue",
+        user_id=f.link_target_user_id,
+    )
     with client_factory(f.gm_user_id) as client:
-        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+        response = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-forbidden-issue"},
+        )
     assert response.status_code == 403
 
 
@@ -745,34 +778,61 @@ def test_issuing_a_foundry_system_key_sets_the_hash(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    _link_foundry_user(
+        client_factory,
+        f,
+        f.campaign_id,
+        external_system_id,
+        foundry_user_id="foundry-issue-hash",
+        user_id=f.link_target_user_id,
+    )
     with client_factory(f.admin_user_id) as client:
-        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+        response = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-issue-hash"},
+        )
     assert response.status_code == 201, response.text
     body = response.json()
     assert uuid.UUID(body["external_system_id"]) == external_system_id
+    assert uuid.UUID(body["principal_user_id"]) == f.link_target_user_id
     raw_key = body["raw_key"]
     assert len(raw_key) > 20
 
     with postgres_engine.connect() as verify:
         row = verify.execute(
             text(
-                "SELECT system_key_hash FROM integration.external_systems "
-                "WHERE external_system_id = :s"
+                "SELECT system_key_hash, system_key_principal_user_id "
+                "FROM integration.external_systems WHERE external_system_id = :s"
             ),
             {"s": external_system_id},
         ).one()
     assert row.system_key_hash is not None
     assert len(row.system_key_hash) == 64
     assert row.system_key_hash != raw_key
+    assert row.system_key_principal_user_id == f.link_target_user_id
 
 
 def test_reissuing_rotates_the_key(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    _link_foundry_user(
+        client_factory,
+        f,
+        f.campaign_id,
+        external_system_id,
+        foundry_user_id="foundry-reissue",
+        user_id=f.link_target_user_id,
+    )
     with client_factory(f.admin_user_id) as client:
-        first = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
-        second = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+        first = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-reissue"},
+        )
+        second = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-reissue"},
+        )
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
     assert first.json()["raw_key"] != second.json()["raw_key"]
@@ -789,14 +849,24 @@ def test_a_sequential_replay_of_issuing_a_key_returns_the_same_key(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    _link_foundry_user(
+        client_factory,
+        f,
+        f.campaign_id,
+        external_system_id,
+        foundry_user_id="foundry-replay-issue",
+        user_id=f.link_target_user_id,
+    )
     key = f"foundry-key-replay-{uuid.uuid4().hex[:8]}"
     with client_factory(f.admin_user_id) as client:
         first = client.post(
             _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-replay-issue"},
             headers={"Idempotency-Key": key},
         )
         second = client.post(
             _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-replay-issue"},
             headers={"Idempotency-Key": key},
         )
     assert first.status_code == 201, first.text
@@ -807,9 +877,16 @@ def test_a_sequential_replay_of_issuing_a_key_returns_the_same_key(
 def test_issuing_a_key_for_an_external_system_from_a_different_world_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
+    # The world-ownership check runs before the foundry_user_id/link check
+    # (_issue_foundry_system_key_impl's own docstring/ordering), so this is
+    # rejected regardless of whether "foundry-foreign-issue" is linked to
+    # anyone anywhere — deliberately not linked here, to prove exactly that.
     foreign_external_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
     with client_factory(f.admin_user_id) as client:
-        response = client.post(_foundry_system_key_url(f.campaign_id, foreign_external_system_id))
+        response = client.post(
+            _foundry_system_key_url(f.campaign_id, foreign_external_system_id),
+            json={"foundry_user_id": "foundry-foreign-issue"},
+        )
     assert response.status_code == 404
 
     with postgres_engine.connect() as verify:
@@ -827,8 +904,19 @@ def test_the_issue_key_audit_row_has_no_entity_id(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    _link_foundry_user(
+        client_factory,
+        f,
+        f.campaign_id,
+        external_system_id,
+        foundry_user_id="foundry-issue-audit",
+        user_id=f.link_target_user_id,
+    )
     with client_factory(f.admin_user_id) as client:
-        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+        response = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-issue-audit"},
+        )
     assert response.status_code == 201, response.text
 
     with postgres_engine.connect() as verify:
@@ -981,12 +1069,16 @@ def test_a_real_foundry_credential_can_call_the_combat_sync_endpoint(
     with client_factory(f.gm_user_id) as client:
         encounter_id = _start_encounter(client, f)
 
-    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
     link_foundry_identity(
         postgres_engine,
         external_system_id=external_system_id,
         foundry_user_id="foundry-user-combat",
         user_id=f.gm_user_id,
+    )
+    key_result = issue_foundry_system_key(
+        postgres_engine,
+        external_system_id=external_system_id,
+        principal_foundry_user_id="foundry-user-combat",
     )
 
     app = create_app()
@@ -1002,7 +1094,7 @@ def test_a_real_foundry_credential_can_call_the_combat_sync_endpoint(
             ),
             headers={
                 "Authorization": f"FoundrySystem {external_system_id}.{key_result.raw_key}",
-                "X-Foundry-User-Id": "foundry-user-combat",
+                "X-Foundry-Actor-Id": "foundry-user-combat",
             },
         )
     assert response.status_code == 201, response.text
@@ -1159,12 +1251,12 @@ def test_sync_state_for_an_entity_from_a_different_world_is_not_found(
 
 
 def _foundry_headers(
-    external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+    external_system_id: uuid.UUID, raw_key: str, claimed_actor_id: str | None = None
 ) -> dict[str, str]:
-    return {
-        "Authorization": f"FoundrySystem {external_system_id}.{raw_key}",
-        "X-Foundry-User-Id": foundry_user_id,
-    }
+    headers = {"Authorization": f"FoundrySystem {external_system_id}.{raw_key}"}
+    if claimed_actor_id is not None:
+        headers["X-Foundry-Actor-Id"] = claimed_actor_id
+    return headers
 
 
 def _issue_and_link(
@@ -1174,17 +1266,25 @@ def _issue_and_link(
     user_id: uuid.UUID,
     foundry_user_id: str,
 ) -> str:
-    """Issues a real system key for external_system_id and links foundry_user_id
-    to user_id — the two prerequisites every genuine (non-overridden)
-    FoundrySystem credential test below needs, factored out since three
-    routes below each need their own independently-issued credential."""
-    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+    """Links foundry_user_id to user_id, then issues a real system key for
+    external_system_id bound to that same foundry_user_id (link must
+    happen first — issue_foundry_system_key requires an existing mapping,
+    per its own docstring) — the two prerequisites every genuine
+    (non-overridden) FoundrySystem credential test below needs, factored
+    out since several routes below each need their own independently-
+    issued, independently-bound credential."""
     link_foundry_identity(
         postgres_engine,
         external_system_id=external_system_id,
         foundry_user_id=foundry_user_id,
         user_id=user_id,
     )
+    key_result = issue_foundry_system_key(
+        postgres_engine,
+        external_system_id=external_system_id,
+        principal_foundry_user_id=foundry_user_id,
+    )
+    assert key_result.principal_user_id == user_id
     return key_result.raw_key
 
 
@@ -1257,6 +1357,7 @@ def test_a_foundrysystem_credential_cannot_issue_a_system_key(
     with _foundry_client(postgres_engine) as client:
         response = client.post(
             _foundry_system_key_url(f.campaign_id, external_system_id),
+            json={"foundry_user_id": "foundry-rotate-attempt"},
             headers=_foundry_headers(external_system_id, raw_key, "foundry-rotate-attempt"),
         )
     assert response.status_code == 403
