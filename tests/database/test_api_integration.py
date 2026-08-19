@@ -46,6 +46,7 @@ pytestmark = pytest.mark.database
 _REGISTER_EXTERNAL_SYSTEM_COMMAND = "register_external_system"
 _MAP_EXTERNAL_IDENTIFIER_COMMAND = "map_external_identifier"
 _LINK_FOUNDRY_IDENTITY_COMMAND = "link_foundry_identity"
+_ISSUE_FOUNDRY_SYSTEM_KEY_COMMAND = "issue_foundry_system_key"
 
 
 class Fixture:
@@ -251,6 +252,13 @@ def _foundry_identities_url(campaign_id: uuid.UUID, external_system_id: uuid.UUI
     return (
         f"/campaigns/{campaign_id}/integration/external-systems/{external_system_id}"
         "/foundry-identities"
+    )
+
+
+def _foundry_system_key_url(campaign_id: uuid.UUID, external_system_id: uuid.UUID) -> str:
+    return (
+        f"/campaigns/{campaign_id}/integration/external-systems/{external_system_id}"
+        "/foundry-system-key"
     )
 
 
@@ -645,6 +653,127 @@ def test_the_foundry_identity_audit_row_has_no_entity_id(
                 WHERE cl.record_id = :i AND cl.command_name = :c
             """),
             {"i": external_identity_id, "c": _LINK_FOUNDRY_IDENTITY_COMMAND},
+        ).one()
+    assert row.actor_user_id == f.admin_user_id
+    assert row.entity_id is None
+    assert row.world_id == f.world_id
+    assert row.event_id is None
+    assert row.change_action_code == "updated"
+
+
+# ---------------------------------------------------------------------------
+# issue_foundry_system_key
+# ---------------------------------------------------------------------------
+
+
+def test_a_member_with_only_canon_edit_gets_forbidden_for_issuing_a_foundry_system_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.gm_user_id) as client:
+        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+    assert response.status_code == 403
+
+
+def test_issuing_a_foundry_system_key_sets_the_hash(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert uuid.UUID(body["external_system_id"]) == external_system_id
+    raw_key = body["raw_key"]
+    assert len(raw_key) > 20
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT system_key_hash FROM integration.external_systems "
+                "WHERE external_system_id = :s"
+            ),
+            {"s": external_system_id},
+        ).one()
+    assert row.system_key_hash is not None
+    assert len(row.system_key_hash) == 64
+    assert row.system_key_hash != raw_key
+
+
+def test_reissuing_rotates_the_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+        second = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["raw_key"] != second.json()["raw_key"]
+
+    with postgres_engine.connect() as verify:
+        count = verify.execute(
+            text("SELECT count(*) FROM integration.external_systems WHERE external_system_id = :s"),
+            {"s": external_system_id},
+        ).scalar_one()
+    assert count == 1
+
+
+def test_a_sequential_replay_of_issuing_a_key_returns_the_same_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    key = f"foundry-key-replay-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _foundry_system_key_url(f.campaign_id, external_system_id),
+            headers={"Idempotency-Key": key},
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json() == first.json()
+
+
+def test_issuing_a_key_for_an_external_system_from_a_different_world_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    foreign_external_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_foundry_system_key_url(f.campaign_id, foreign_external_system_id))
+    assert response.status_code == 404
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT system_key_hash FROM integration.external_systems "
+                "WHERE external_system_id = :s"
+            ),
+            {"s": foreign_external_system_id},
+        ).one()
+    assert row.system_key_hash is None
+
+
+def test_the_issue_key_audit_row_has_no_entity_id(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_foundry_system_key_url(f.campaign_id, external_system_id))
+    assert response.status_code == 201, response.text
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT actor_user_id, entity_id, world_id, event_id, ca.code AS change_action_code
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.record_id = :s AND cl.command_name = :c
+            """),
+            {"s": external_system_id, "c": _ISSUE_FOUNDRY_SYSTEM_KEY_COMMAND},
         ).one()
     assert row.actor_user_id == f.admin_user_id
     assert row.entity_id is None

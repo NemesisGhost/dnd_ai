@@ -1071,6 +1071,8 @@ Security-sensitive audit records identify the authenticated user or service acco
 
 External IDs must never replace internal UUID identity.
 
+`integration.external_systems.system_key_hash` (migration 089, Phase 11 workstream 2) holds the sha256 hash of a Foundry-adapter system-level credential — minted by `dnd_ai.commands.integration.issue_foundry_system_key`, verified during authentication by `dnd_ai.domain.access.resolve_foundry_system_user_id`. `NULL` until a key is issued; issuing again overwrites it in place (rotation, immediately invalidating the prior key), matching `security.campaign_invitations.invitation_token_hash`'s existing "store only a hash" shape rather than a new table. See §19.1's `security.external_identities` entry for the companion identity mapping (`foundry:<external_system_id>` issuer) this credential is checked alongside.
+
 ## 20. Import staging
 
 Primary tables:

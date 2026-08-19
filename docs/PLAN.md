@@ -1357,7 +1357,7 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
 | 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
 | 10 | Complete | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | None |
-| 11 | Partially implemented | Foundry-user identity linking (`link_foundry_identity`, reusing `security.external_identities`) | Foundry adapter connectivity/authentication, retrieval and submission endpoints, campaign-scoped `apply_foundry_combat_sync` exposure, HP/condition/inventory sync, retry/reconnect handling |
+| 11 | Partially implemented | Foundry-user identity linking (`link_foundry_identity`) and adapter authentication (`issue_foundry_system_key`, `FoundrySystem` credential scheme) — every existing command/query endpoint is now Foundry-reachable | Campaign-scoped `apply_foundry_combat_sync` exposure, state-retrieval/restore endpoints, non-combat HP/condition/resource sync |
 | 12 | Not started | — | Narrow AI/NPC and rules-corpus MVP |
 | 13 | Not started | — | Web portal MVP and same-origin packaging |
 | 14 | Partially implemented | PostgreSQL/API Compose services and local development topology | Production UI/worker/reverse-proxy packaging, secrets, monitoring, backup/restore and rollback hardening |
@@ -1775,21 +1775,23 @@ Phase 10 also proves secure authentication cookies, CSRF protection, and player,
 
 ### Phase 11: Foundry MVP
 
-**Status: Partially implemented.** Implemented: integration persistence contracts and API/domain command services (Phase 9-10); Foundry-user-to-platform-user identity linking (workstream 1, below). Remaining: the Foundry adapter itself, its authentication scheme, and the end-to-end encounter synchronization flow.
+**Status: Partially implemented.** Implemented: integration persistence contracts and API/domain command services (Phase 9-10); Foundry-user-to-platform-user identity linking (workstream 1); a real Foundry-adapter authentication scheme (workstream 2, below). Remaining: the campaign-scoped combat-sync endpoint, state-retrieval/restore endpoints, and non-combat character-state synchronization.
 
 Wires Phase 9's `integration.*` schema and adapter-facing contracts through Phase 10's API to the smallest playable Foundry integration. Build the concrete encounter flow before designing any general-purpose bidirectional synchronization framework.
 
-**Workstream 1 (complete): Foundry-user identity linking.** `link_foundry_identity` (`dnd_ai.commands.integration`, `POST /campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities`) maps a Foundry-side user id to an existing `security.users` row, reusing `security.external_identities` (a synthetic `foundry:<external_system_id>` issuer scopes the mapping to one registered Foundry world — see [docs/architecture/DATABASE_MODEL.md §19.1](architecture/DATABASE_MODEL.md#191-identity-and-login)) rather than a parallel Foundry-specific table. Gated on `access.manage` (an identity/access decision, distinct from `canon.edit`'s "what is canonically true" scope the other two `dnd_ai.api.integration` routes use). This delivers "map Foundry users to authenticated platform users" as *identity mapping* only — a live Foundry adapter authenticating a request as a specific Foundry user, and `apply_foundry_combat_sync` gaining an HTTP endpoint that resolves and asserts a real `campaign_id` through that mapping, remain open (see `dnd_ai.commands.integration`'s own module docstring, "Foundry identity mapping" and "HTTP exposure").
+**Workstream 1 (complete): Foundry-user identity linking.** `link_foundry_identity` (`dnd_ai.commands.integration`, `POST /campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities`) maps a Foundry-side user id to an existing `security.users` row, reusing `security.external_identities` (a synthetic `foundry:<external_system_id>` issuer scopes the mapping to one registered Foundry world — see [docs/architecture/DATABASE_MODEL.md §19.1](architecture/DATABASE_MODEL.md#191-identity-and-login)) rather than a parallel Foundry-specific table. Gated on `access.manage` (an identity/access decision, distinct from `canon.edit`'s "what is canonically true" scope the other two `dnd_ai.api.integration` routes use).
+
+**Workstream 2 (complete): Foundry-adapter authentication.** `issue_foundry_system_key` (`dnd_ai.commands.integration`, `POST .../foundry-system-key`, migration 089's `integration.external_systems.system_key_hash`) mints a rotatable, hash-stored system-level credential for one registered external system, the same "store only a hash" shape `security.campaign_invitations.invitation_token_hash` already established. `dnd_ai.api.auth.get_authenticated_user_id` now recognizes a second credential shape — `Authorization: FoundrySystem <external_system_id>.<raw_key>` plus `X-Foundry-User-Id` — resolved via `dnd_ai.domain.access.resolve_foundry_system_user_id`, which layers the system credential check on top of workstream 1's identity mapping. This is a branch inside the *existing* dependency, not a parallel Foundry-only one: every route already wired to `get_authenticated_user_id` (nearly all of them, via `require_campaign_capability`) is reachable by a Foundry adapter with no per-route changes, under the exact same authorization every other caller goes through — delivering "map Foundry users to authenticated platform users and enforce the same campaign, character-control, knowledge, and resource-access rules as the API and portal" for every endpoint except `apply_foundry_combat_sync` (still unexposed — see below) in one stroke, rather than requiring a parallel Foundry-specific route per capability.
 
 Remaining deliverables:
 
-- associate Foundry worlds, scenes, actors, tokens, items, and encounters with canonical platform records
+- associate Foundry worlds, scenes, actors, tokens, items, and encounters with canonical platform records (already substantially covered by Phase 10's `register_external_system`/`map_external_identifier`, now reachable by an authenticated Foundry adapter per workstream 2)
 - retrieve party-visible state for the current location or encounter
-- submit interactions, checks, combat outcomes, and meaningful state changes through the API
-- synchronize the minimum required character HP, conditions, resource use, inventory, and encounter results
-- handle duplicate delivery and retries safely
-- restore synchronized state after reopening or reconnecting
-- a Foundry-adapter authentication scheme built on workstream 1's identity mapping, and enforcement of the same campaign, character-control, knowledge, and resource-access rules as the API and portal
+- submit interactions, checks, combat outcomes, and meaningful state changes through the API (already substantially covered — every existing command/query endpoint is Foundry-reachable per workstream 2 — except `apply_foundry_combat_sync` itself, below)
+- synchronize the minimum required character HP, conditions, resource use, inventory, and encounter results (inventory already covered by Phase 9's item commands; HP/conditions/resource use outside a combat turn have no command yet)
+- handle duplicate delivery and retries safely (already covered for every `Idempotency-Key`-wired command endpoint and for `apply_foundry_combat_sync`'s own `external_operation_id`)
+- restore synchronized state after reopening or reconnecting (`integration.sync_state` has no read path yet)
+- give `apply_foundry_combat_sync` a real, campaign-scoped HTTP endpoint, now that a Foundry adapter can actually authenticate (workstream 2) — its three-transaction/advisory-lock design still needs to be reconciled with the one-transaction-per-request model every other endpoint uses (`dnd_ai.commands.integration`'s own module docstring, "HTTP exposure")
 
 Exit criteria:
 

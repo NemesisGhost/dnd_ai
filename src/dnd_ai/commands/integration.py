@@ -133,9 +133,13 @@ OIDC issuer URL or `subject` to be an OIDC `sub` claim
 (docs/architecture/DATABASE_MODEL.md §19.1). `link_foundry_identity`
 reuses that same table rather than inventing a parallel Foundry-specific
 mapping table: it derives a synthetic issuer, `foundry:<external_system_id>`
-(`_foundry_issuer`), scoping the mapping to one registered Foundry world so
-the same Foundry-side user id from two different Foundry worlds can never
-collide. Because `integration.external_systems` is already world-scoped
+(`dnd_ai.domain.access.foundry_issuer` — shared with that module's own
+`resolve_foundry_system_user_id`, workstream 2's Foundry-adapter
+authentication path, so both the write and the read side of this mapping
+agree on the same format by construction), scoping the mapping to one
+registered Foundry world so the same Foundry-side user id from two
+different Foundry worlds can never collide. Because `integration.
+external_systems` is already world-scoped
 (this module's own docstring above) and `external_identities` carries no
 `world_id` of its own, `expected_world_id` reuses exactly
 `_external_system_world`'s existence/cross-world check
@@ -161,6 +165,7 @@ un-asked-for abstraction this codebase avoids.
 import contextlib
 import json
 import logging
+import secrets
 import threading
 import uuid
 from dataclasses import dataclass
@@ -168,6 +173,7 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.domain.access import foundry_issuer, hash_foundry_system_key
 from dnd_ai.domain.errors import DomainAuthorizationError
 
 from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
@@ -190,6 +196,13 @@ class ConflictingSyncPayloadError(ValueError):
     not match the payload originally recorded for it — checked first,
     before status, so this can happen regardless of whether the original
     attempt completed, failed, or crashed mid-flight."""
+
+
+# Same CSPRNG entropy dnd_ai.commands.campaign_invitations'
+# _INVITATION_TOKEN_ENTROPY_BYTES already uses for its own server-generated
+# secret, and the same reasoning dnd_ai.domain.access.hash_foundry_system_key
+# relies on for choosing plain SHA-256 over a slow KDF.
+_FOUNDRY_SYSTEM_KEY_ENTROPY_BYTES = 32
 
 
 class ExternalSystemNotFoundError(DomainAuthorizationError):
@@ -382,14 +395,6 @@ def map_external_identifier(
         )
 
 
-def _foundry_issuer(external_system_id: uuid.UUID) -> str:
-    """The synthetic `security.external_identities.issuer` value used to
-    scope a Foundry user id to one registered Foundry world — see this
-    module's own docstring ("Foundry identity mapping") for why this reuses
-    the generic identity table instead of a Foundry-specific one."""
-    return f"foundry:{external_system_id}"
-
-
 @dataclass(frozen=True)
 class LinkFoundryIdentityResult:
     external_identity_id: uuid.UUID
@@ -412,7 +417,7 @@ def _link_foundry_identity_impl(
     Maps foundry_user_id (the Foundry-side user id) under external_system_id
     to an existing platform user_id, by upserting a
     security.external_identities row keyed on (issuer, subject) =
-    (_foundry_issuer(external_system_id), foundry_user_id). A repeat call
+    (foundry_issuer(external_system_id), foundry_user_id). A repeat call
     for the same (external_system_id, foundry_user_id) reassigns the
     mapping to whatever user_id is supplied — the same "re-registering the
     same external object is idempotent" upsert semantics
@@ -435,7 +440,7 @@ def _link_foundry_identity_impl(
             f"not {expected_world_id!r}"
         )
 
-    issuer = _foundry_issuer(external_system_id)
+    issuer = foundry_issuer(external_system_id)
     value = connection.execute(
         text("""
             INSERT INTO security.external_identities (user_id, issuer, subject, linked_at)
@@ -470,6 +475,88 @@ def link_foundry_identity(
             foundry_user_id=foundry_user_id,
             user_id=user_id,
             expected_world_id=expected_world_id,
+        )
+
+
+@dataclass(frozen=True)
+class IssueFoundrySystemKeyResult:
+    external_system_id: uuid.UUID
+    world_id: uuid.UUID
+    raw_key: str
+
+
+def _issue_foundry_system_key_impl(
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> IssueFoundrySystemKeyResult:
+    """The actual work of issue_foundry_system_key(), on a connection the
+    caller already has open — see _link_foundry_identity_impl's own
+    docstring for the composable-implementation/public-wrapper pattern
+    this mirrors.
+
+    Mints a fresh, high-entropy system-level credential for
+    external_system_id (`secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_
+    ENTROPY_BYTES)`, the same CSPRNG `create_campaign_invitation` already
+    uses for its own token) and stores only its hash
+    (`dnd_ai.domain.access.hash_foundry_system_key`) in `integration.
+    external_systems.system_key_hash` (migration 089) — the raw key is
+    returned to the caller exactly once, in this result, and is never
+    logged, persisted, or otherwise retrievable again. Calling this again
+    for the same external_system_id overwrites the prior hash
+    (`ux_external_systems_system_key_hash` allows this: a plain UPDATE,
+    not an INSERT — no unique-violation possible), immediately and
+    silently invalidating whatever credential a Foundry adapter was
+    previously using — rotation, not addition. There is deliberately no
+    separate "revoke without replacing" operation in this workstream: a
+    GM who wants a system unable to authenticate at all can already
+    deactivate it wholesale via its existing `is_active` column (checked
+    by `dnd_ai.domain.access.resolve_foundry_system_user_id`), and adding
+    a second, narrower revoke path with no caller yet would be exactly
+    the speculative surface this codebase avoids.
+
+    expected_world_id, when supplied, asserts external_system_id belongs
+    to that world before writing anything — identical in shape and
+    purpose to _link_foundry_identity_impl's own expected_world_id
+    argument; expected_world_id=None skips only this assertion."""
+    world_id = _external_system_world(connection, external_system_id)
+    if expected_world_id is not None and world_id != expected_world_id:
+        raise ExternalSystemNotFoundError(
+            f"external system {external_system_id} belongs to world {world_id!r}, "
+            f"not {expected_world_id!r}"
+        )
+
+    raw_key = secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_ENTROPY_BYTES)
+    key_hash = hash_foundry_system_key(raw_key)
+    connection.execute(
+        text("""
+            UPDATE integration.external_systems
+            SET system_key_hash = :hash, updated_at = now()
+            WHERE external_system_id = :system
+        """),
+        {"hash": key_hash, "system": external_system_id},
+    )
+
+    return IssueFoundrySystemKeyResult(
+        external_system_id=external_system_id, world_id=world_id, raw_key=raw_key
+    )
+
+
+def issue_foundry_system_key(
+    engine: Engine,
+    *,
+    external_system_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> IssueFoundrySystemKeyResult:
+    """Mint (or rotate) external_system_id's Foundry-adapter system
+    credential. Public convenience API: opens and commits its own
+    transaction. See _issue_foundry_system_key_impl() for the composable
+    form a caller with its own transaction (e.g. an API command endpoint)
+    uses instead."""
+    with engine.begin() as connection:
+        return _issue_foundry_system_key_impl(
+            connection, external_system_id=external_system_id, expected_world_id=expected_world_id
         )
 
 

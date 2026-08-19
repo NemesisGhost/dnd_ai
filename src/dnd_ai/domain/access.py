@@ -21,6 +21,7 @@ Deferred to later Phase 10 workstreams, per §19.7's own step list:
   command) to be the right place to decide that.
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 
@@ -197,6 +198,76 @@ def resolve_user_by_external_identity(
         {"issuer": issuer, "subject": subject},
     ).scalar()
     return _as_uuid(value) if value is not None else None
+
+
+def foundry_issuer(external_system_id: uuid.UUID) -> str:
+    """The synthetic `security.external_identities.issuer` value that scopes
+    a Foundry-side user id to one registered `integration.external_systems`
+    row (docs/architecture/DATABASE_MODEL.md §19.1). The single source of
+    truth for this format — `dnd_ai.commands.integration.
+    link_foundry_identity` (which writes the mapping) and
+    `resolve_foundry_system_user_id` below (which reads it back during
+    authentication) both call this rather than each formatting their own
+    copy of the string, so the two can never drift apart."""
+    return f"foundry:{external_system_id}"
+
+
+def hash_foundry_system_key(raw_key: str) -> str:
+    """sha256 hex digest of a Foundry-adapter system key. Same rehash-and-
+    compare pattern as `dnd_ai.commands.campaign_invitations`'
+    `invitation_token_hash` — that module's own docstring justifies plain
+    SHA-256 over a slow password-hashing KDF: the input is 256 bits of
+    `secrets.token_urlsafe` CSPRNG entropy, never attacker-guessable text,
+    so there is nothing here for a slow KDF to protect against that a fast,
+    indexable hash doesn't already close off. Shared by `dnd_ai.commands.
+    integration.issue_foundry_system_key` (which mints and stores the hash)
+    and `resolve_foundry_system_user_id` below (which recomputes it from a
+    presented key and compares by lookup) so both sides always agree on
+    exactly how a raw key becomes its stored hash."""
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def resolve_foundry_system_user_id(
+    connection: Connection, *, external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+) -> uuid.UUID | None:
+    """Authenticates a Foundry-adapter request as "system external_system_id,
+    acting for Foundry user foundry_user_id" and resolves it to a platform
+    `security.users.user_id` — the Foundry-adapter counterpart to
+    `resolve_user_by_external_identity` above, used by `dnd_ai.api.auth.
+    get_authenticated_user_id` so every existing command/query endpoint
+    already wired to that one dependency becomes reachable by a Foundry
+    adapter with no per-route changes, under the exact same
+    `require_campaign_capability` authorization every other caller goes
+    through.
+
+    Two checks, both required: (1) raw_key, rehashed, must match the
+    active `integration.external_systems.system_key_hash` for
+    external_system_id, and that row's own `is_active` must be true — a
+    caller cannot authenticate as a system whose credential was never
+    issued, was rotated away, or whose whole external-system registration
+    has been deactivated; (2) the resulting synthetic issuer
+    (`foundry_issuer`) plus foundry_user_id as subject must resolve via
+    `resolve_user_by_external_identity` to an active platform user — the
+    same `link_foundry_identity`-established mapping workstream 1 built.
+    Returns None, uniformly, for every failure mode (unknown system,
+    inactive system, wrong key, unlinked or inactive Foundry user)
+    deliberately without distinguishing which — the same fail-closed,
+    non-disclosing contract `resolve_user_by_external_identity` already
+    establishes for its own callers, so `get_authenticated_user_id` can
+    raise one uniform `UnauthorizedError` regardless of cause."""
+    key_hash = hash_foundry_system_key(raw_key)
+    matched = connection.execute(
+        text("""
+            SELECT 1 FROM integration.external_systems
+            WHERE external_system_id = :system AND system_key_hash = :hash AND is_active
+        """),
+        {"system": external_system_id, "hash": key_hash},
+    ).scalar()
+    if matched is None:
+        return None
+    return resolve_user_by_external_identity(
+        connection, issuer=foundry_issuer(external_system_id), subject=foundry_user_id
+    )
 
 
 class UnauthorizedTimelineError(DomainAuthorizationError):

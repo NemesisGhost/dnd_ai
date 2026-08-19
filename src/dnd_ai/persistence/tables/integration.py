@@ -38,7 +38,21 @@ external_systems = Table(
     Column("display_name", Text(), nullable=False),
     Column("external_reference", Text()),
     Column("is_active", Boolean(), nullable=False, server_default=text("true")),
+    Column(
+        "system_key_hash",
+        Text(),
+        comment=(
+            "sha256 hex digest of a Foundry-adapter system-level credential "
+            "(dnd_ai.domain.access.hash_foundry_system_key). NULL until "
+            "dnd_ai.commands.integration.issue_foundry_system_key is called for "
+            "this row; issuing a new key overwrites this in place (rotation, not "
+            "append) rather than tracking history. Never the raw key itself — see "
+            "security.campaign_invitations.invitation_token_hash for the identical "
+            "hash-only pattern."
+        ),
+    ),
     *_timestamps(),
+    UniqueConstraint("system_key_hash", name="ux_external_systems_system_key_hash"),
     schema="integration",
     comment=(
         "A configured external system connection for a world — a specific "

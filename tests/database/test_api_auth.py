@@ -1,14 +1,15 @@
 """Tests for `dnd_ai.api.auth` — the OIDC bearer-token dependencies wired
 into FastAPI (header extraction, JWKS resolution, and resolution to a
-`security.users` row). `dnd_ai.domain.tokens`' own signature/claims
-verification is covered directly, with no database, by
-`tests/unit/test_token_verification.py`; this module proves the
-request-scoped wiring around it end to end against real PostgreSQL —
-`get_engine` overridden the same way `test_api_deps.py` already
-establishes, and `get_jwks_client` overridden with a fake JWKS client (a
-dict lookup against a locally generated keypair, never a live identity
-provider or JWKS HTTP server — the same no-live-provider strategy the
-unit tests use).
+`security.users` row), plus (Phase 11 workstream 2) the `FoundrySystem`
+credential path `get_authenticated_user_id` also recognizes.
+`dnd_ai.domain.tokens`' own signature/claims verification is covered
+directly, with no database, by `tests/unit/test_token_verification.py`;
+this module proves the request-scoped wiring around it end to end against
+real PostgreSQL — `get_engine` overridden the same way `test_api_deps.py`
+already establishes, and `get_jwks_client` overridden with a fake JWKS
+client (a dict lookup against a locally generated keypair, never a live
+identity provider or JWKS HTTP server — the same no-live-provider strategy
+the unit tests use).
 """
 
 import uuid
@@ -20,7 +21,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import Depends
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import (
@@ -29,9 +30,10 @@ from dnd_ai.api.auth import (
     get_verified_token_claims,
 )
 from dnd_ai.api.deps import get_connection, get_engine
+from dnd_ai.commands.integration import issue_foundry_system_key, link_foundry_identity
 from dnd_ai.config import settings
 from dnd_ai.domain.tokens import VerifiedTokenClaims
-from tests.factories import make_external_identity, make_user
+from tests.factories import make_external_identity, make_external_system, make_user, make_world
 from tests.jwt_helpers import RSAKeypair, generate_test_rsa_keypair, make_signed_jwt
 
 pytestmark = pytest.mark.database
@@ -207,6 +209,223 @@ def test_a_token_for_a_linked_active_identity_resolves_the_correct_user(
     subject = f"subject-{uuid.uuid4().hex[:8]}"
     with postgres_engine.connect() as setup_connection:
         user_id = make_user(setup_connection, "Linked Identity Tester")
+        make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
+        setup_connection.commit()
+
+    token = make_signed_jwt(keypair, issuer=_ISSUER, audience=_AUDIENCE, subject=subject)
+    with client_factory() as client:
+        response = client.get("/test-authenticated-user", headers=_bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {"user_id": str(user_id)}
+
+
+# ---------------------------------------------------------------------------
+# get_authenticated_user_id — the FoundrySystem credential path
+# ---------------------------------------------------------------------------
+
+
+def _foundry_headers(
+    external_system_id: uuid.UUID, raw_key: str, foundry_user_id: str
+) -> dict[str, str]:
+    return {
+        "Authorization": f"FoundrySystem {external_system_id}.{raw_key}",
+        "X-Foundry-User-Id": foundry_user_id,
+    }
+
+
+def test_a_foundrysystem_credential_with_no_foundry_user_id_header_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers={"Authorization": f"FoundrySystem {external_system_id}.{key_result.raw_key}"},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "not-a-uuid.some-key",
+        "no-separator-at-all",
+        "",
+    ],
+)
+def test_a_malformed_foundrysystem_credential_is_rejected(
+    credential: str, client_factory: Callable[[], TestClient]
+) -> None:
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers={
+                "Authorization": f"FoundrySystem {credential}",
+                "X-Foundry-User-Id": "some-foundry-user",
+            },
+        )
+    assert response.status_code == 401
+
+
+def test_a_foundrysystem_credential_for_an_unknown_external_system_is_rejected(
+    client_factory: Callable[[], TestClient],
+) -> None:
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(uuid.uuid4(), "some-raw-key", "some-foundry-user"),
+        )
+    assert response.status_code == 401
+
+
+def test_a_foundrysystem_credential_with_the_wrong_key_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(
+                external_system_id, "definitely-the-wrong-key", "foundry-user-1"
+            ),
+        )
+    assert response.status_code == 401
+
+
+def test_a_foundrysystem_credential_for_an_unlinked_foundry_user_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(external_system_id, key_result.raw_key, "never-linked-user"),
+        )
+    assert response.status_code == 401
+
+
+def test_a_foundrysystem_credential_for_an_inactive_external_system_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Foundry-Linked Player")
+        setup_connection.commit()
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=user_id,
+    )
+    with postgres_engine.begin() as setup_connection:
+        setup_connection.execute(
+            text(
+                "UPDATE integration.external_systems SET is_active = false "
+                "WHERE external_system_id = :s"
+            ),
+            {"s": external_system_id},
+        )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(external_system_id, key_result.raw_key, "foundry-user-1"),
+        )
+    assert response.status_code == 401
+
+
+def test_a_valid_foundrysystem_credential_resolves_the_linked_user(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    key_result = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Foundry-Linked Player")
+        setup_connection.commit()
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=user_id,
+    )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(external_system_id, key_result.raw_key, "foundry-user-1"),
+        )
+    assert response.status_code == 200
+    assert response.json() == {"user_id": str(user_id)}
+
+
+def test_rotating_the_foundry_system_key_invalidates_the_old_one(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-auth-{uuid.uuid4().hex[:8]}")
+        external_system_id = make_external_system(setup_connection, world_id)
+        setup_connection.commit()
+    old_key = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Foundry-Linked Player")
+        setup_connection.commit()
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-user-1",
+        user_id=user_id,
+    )
+
+    new_key = issue_foundry_system_key(postgres_engine, external_system_id=external_system_id)
+    assert new_key.raw_key != old_key.raw_key
+
+    with client_factory() as client:
+        old_response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(external_system_id, old_key.raw_key, "foundry-user-1"),
+        )
+        new_response = client.get(
+            "/test-authenticated-user",
+            headers=_foundry_headers(external_system_id, new_key.raw_key, "foundry-user-1"),
+        )
+    assert old_response.status_code == 401
+    assert new_response.status_code == 200
+    assert new_response.json() == {"user_id": str(user_id)}
+
+
+def test_an_oidc_bearer_token_still_authenticates_when_the_foundry_path_exists(
+    keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    # Regression guard: adding the FoundrySystem branch must not change the
+    # OIDC path's behavior for an ordinary Bearer token at all.
+    subject = f"subject-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.connect() as setup_connection:
+        user_id = make_user(setup_connection, "Still OIDC Tester")
         make_external_identity(setup_connection, user_id, issuer=_ISSUER, subject=subject)
         setup_connection.commit()
 

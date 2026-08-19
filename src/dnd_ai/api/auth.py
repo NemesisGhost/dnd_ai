@@ -105,6 +105,36 @@ and belongs in a dedicated login/session-establishment command later —
 turning every authenticated request into an implicit write here would be
 both inconsistent with that rule and unnecessary write load for a bare
 verification dependency.
+
+Foundry-adapter authentication (Phase 11 workstream 2): `get_authenticated_
+user_id` recognizes a second credential shape alongside `Authorization:
+Bearer <OIDC JWT>` — `Authorization: FoundrySystem <external_system_id>.
+<raw_key>` plus an `X-Foundry-User-Id` header — and resolves it to a
+platform `user_id` via `dnd_ai.domain.access.
+resolve_foundry_system_user_id` (which itself layers `dnd_ai.commands.
+integration.issue_foundry_system_key`'s credential, `link_foundry_identity`
+'s identity mapping, and `resolve_user_by_external_identity`, in that
+order). This is deliberately a branch inside the existing dependency,
+never a second, Foundry-only dependency routes would have to opt into —
+every route already wired to `get_authenticated_user_id` (which is nearly
+all of them, via `dnd_ai.api.access.require_campaign_capability`) becomes
+reachable by a Foundry adapter with no per-route changes, under the exact
+same `resolve_access_context`/capability enforcement every other caller
+goes through — the literal "enforce the same campaign, character-control,
+knowledge, and resource-access rules as the API and portal" requirement
+docs/PLAN.md Phase 11 states. The scheme keyword (`FoundrySystem`, not
+`Bearer`) is what selects the branch — a malformed or absent `Authorization`
+header falls through to the OIDC path exactly as before and fails exactly
+as before, so this adds a new authenticated caller shape without changing
+the OIDC path's behavior at all.
+
+A Foundry-system credential is intentionally not a JWT and does not
+reuse `get_verified_token_claims`/JWKS in any way: it is a single
+high-entropy, server-generated secret verified by rehash-and-lookup
+(`dnd_ai.domain.access.hash_foundry_system_key`), the same "compare
+hashes, not certificates" trust model `security.campaign_invitations`
+already uses for its own token — there is no third party to verify a
+signature against, since the platform itself is the only issuer.
 """
 
 import json
@@ -123,11 +153,17 @@ from fastapi import Depends, Header
 from sqlalchemy import Connection
 
 from dnd_ai.config import OIDC_LOCAL_URL_SCHEMES, OIDC_PRODUCTION_URL_SCHEMES, settings
-from dnd_ai.domain.access import resolve_user_by_external_identity
+from dnd_ai.domain.access import resolve_foundry_system_user_id, resolve_user_by_external_identity
 from dnd_ai.domain.tokens import VerifiedTokenClaims, verify_bearer_token
 
 from .deps import get_connection
 from .errors import UnauthorizedError
+
+# The Authorization scheme keyword that selects the Foundry-adapter
+# credential path below instead of the OIDC/JWT one — see this module's
+# docstring ("Foundry-adapter authentication"). Compared case-insensitively,
+# the same way the existing "bearer" scheme check already is.
+_FOUNDRY_SYSTEM_AUTH_SCHEME = "foundrysystem"
 
 # Tier-1 (JWKS-set) cache TTL — long enough that routine per-request traffic
 # never refetches the document, short enough that a rotated signing key is
@@ -566,18 +602,71 @@ def get_verified_token_claims(
     )
 
 
-def get_authenticated_user_id(
-    claims: Annotated[VerifiedTokenClaims, Depends(get_verified_token_claims)],
-    connection: Annotated[Connection, Depends(get_connection)],
+def _resolve_foundry_system_user_id(
+    connection: Connection, *, credential: str, foundry_user_id: str | None
 ) -> uuid.UUID:
-    """Resolves a verified token to the `security.users` row linked to its
-    `(issuer, subject)` pair, via the already-existing
-    `dnd_ai.domain.access.resolve_user_by_external_identity`. Raises
+    """The `FoundrySystem` scheme's own resolution path, factored out of
+    `get_authenticated_user_id` purely for readability — see this module's
+    docstring ("Foundry-adapter authentication") for the full design.
+    `credential` is the Authorization header's value after the scheme
+    keyword, expected as `<external_system_id>.<raw_key>`. Every failure
+    mode (missing X-Foundry-User-Id, malformed credential, unknown
+    external_system_id, wrong key, unlinked Foundry user) raises the
+    identical `UnauthorizedError` — deliberately non-disclosing, the same
+    fail-closed contract the OIDC path already has via
+    `resolve_user_by_external_identity`."""
+    if foundry_user_id is None:
+        raise UnauthorizedError()
+    external_system_id_text, separator, raw_key = credential.partition(".")
+    if not separator or not raw_key:
+        raise UnauthorizedError()
+    try:
+        external_system_id = uuid.UUID(external_system_id_text)
+    except ValueError as exc:
+        raise UnauthorizedError() from exc
+
+    user_id = resolve_foundry_system_user_id(
+        connection,
+        external_system_id=external_system_id,
+        raw_key=raw_key,
+        foundry_user_id=foundry_user_id,
+    )
+    if user_id is None:
+        raise UnauthorizedError()
+    return user_id
+
+
+def get_authenticated_user_id(
+    connection: Annotated[Connection, Depends(get_connection)],
+    jwks_client: Annotated[_JWKSClient, Depends(get_jwks_client)],
+    authorization: Annotated[str | None, Header()] = None,
+    foundry_user_id: Annotated[str | None, Header(alias="X-Foundry-User-Id")] = None,
+) -> uuid.UUID:
+    """Resolves an authenticated request to a `security.users.user_id`,
+    across either of two credential shapes — see this module's docstring
+    ("Foundry-adapter authentication") for the full design and why this is
+    one dependency, not two.
+
+    A `FoundrySystem` scheme selects `_resolve_foundry_system_user_id`
+    above; anything else (including a missing header) falls through to the
+    original OIDC path — `get_verified_token_claims` is called directly as
+    a plain function (it is not itself a route, just another dependency
+    function, safely callable outside FastAPI's own resolution) with the
+    same `jwks_client`/`authorization` this function already received,
+    then resolved via `dnd_ai.domain.access.
+    resolve_user_by_external_identity` exactly as before. Raises
     `UnauthorizedError` for an unknown or revoked identity, or one linked
     to a user without an active lifecycle status — this dependency only
     establishes *who is making the request*; provisioning a new user on
-    first login is a separate application command, per that function's
-    own docstring, not something a read dependency does implicitly."""
+    first login is a separate application command, per that function's own
+    docstring, not something a read dependency does implicitly."""
+    scheme, _, credential = (authorization or "").partition(" ")
+    if scheme.lower() == _FOUNDRY_SYSTEM_AUTH_SCHEME:
+        return _resolve_foundry_system_user_id(
+            connection, credential=credential, foundry_user_id=foundry_user_id
+        )
+
+    claims = get_verified_token_claims(jwks_client, authorization)
     user_id = resolve_user_by_external_identity(
         connection, issuer=claims.issuer, subject=claims.subject
     )
