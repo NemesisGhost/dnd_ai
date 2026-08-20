@@ -49,6 +49,7 @@ from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, foundry_allowed_ori
 
 from .access_grants import router as access_grants_router
 from .ai_npc import router as ai_npc_router
+from .ai_synthesis import router as ai_synthesis_router
 from .auth import dispose_jwks_client
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
     app.include_router(access_grants_router)
     app.include_router(ai_npc_router)
+    app.include_router(ai_synthesis_router)
     app.include_router(campaign_invitations_router)
     app.include_router(campaigns_router)
     app.include_router(character_state_router)

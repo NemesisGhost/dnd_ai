@@ -2,10 +2,16 @@
 portrayal use case (docs/PLAN.md).
 
 `request_npc_conversation_turn_endpoint` is authorized on `character.
-interact` — the same capability `dnd_ai.api.interactions` already uses for
-"a character does something in the world," which a conversation with an NPC
-is. The caller must additionally hold that capability *for the specific
-`requesting_character_id`* they name (`AccessContext.has_capability(...,
+interact` — an existing seeded capability (`database/seeds/security.
+capabilities.yaml`) with no route using it until this module;
+`dnd_ai.api.interactions`/`.movement` instead treat their own actions as
+GM/adapter-level canon mutation and require `canon.edit`, but an NPC
+conversation is squarely a *player*-facing action through their own
+character, which `character.interact` — shared vocabulary between
+`security.role_capabilities` and `security.character_relationship_type_
+capabilities` — names for exactly this purpose. The caller must
+additionally hold that capability *for the specific `requesting_
+character_id`* they name (`AccessContext.has_capability(...,
 character_id=...)`), never a bare campaign-wide grant — the same
 resource-scoped check `dnd_ai.api.access.resolve_party_perspective` already
 requires for exactly the same reason: a same-campaign member naming any
@@ -144,7 +150,7 @@ def _world_id(engine: Engine, timeline_id: uuid.UUID) -> uuid.UUID:
     status_code=200,
 )
 def review_proposed_change_endpoint(
-    campaign_id: uuid.UUID,  # noqa: ARG001
+    campaign_id: uuid.UUID,
     ai_proposed_change_id: uuid.UUID,
     body: ReviewProposedChangeRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_REVIEW_CAPABILITY))],
@@ -153,6 +159,7 @@ def review_proposed_change_endpoint(
     result = review_proposed_change(
         engine,
         ai_proposed_change_id=ai_proposed_change_id,
+        campaign_id=campaign_id,
         reviewer_user_id=access.user_id,
         decision=body.decision,
         comments=body.comments,

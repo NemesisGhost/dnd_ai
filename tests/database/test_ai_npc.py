@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.commands.ai_npc import request_npc_conversation_turn
-from dnd_ai.commands.ai_proposals import review_proposed_change
+from dnd_ai.commands.ai_proposals import ProposedChangeNotFoundError, review_proposed_change
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from dnd_ai.domain.context_assembly import assemble_npc_conversation_context
 from tests.factories import (
@@ -178,6 +178,66 @@ def test_public_reveal_is_auto_approved_and_applied(
         assert aware == 1
 
 
+def test_review_rejects_a_proposal_from_a_different_campaign(
+    postgres_engine: Engine, committed: Fixture
+) -> None:
+    """A GM authorized (`canon.edit`) for one campaign must not be able to
+    review/apply a pending proposal belonging to a different campaign,
+    merely by naming its `ai_proposed_change_id` — see `ProposedChangeNot
+    FoundError`'s own docstring for the confused-deputy risk this closes."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET sensitivity = 'secret' "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"k": committed.secret_id},
+        )
+        other_campaign_id = make_campaign(
+            connection, committed.timeline_id, "Other Campaign", lifecycle_status_code="pending"
+        )
+        reviewer_user_id = make_user(connection, "Cross-Campaign Reviewer")
+
+    result = request_npc_conversation_turn(
+        postgres_engine,
+        agent_assignment_id=committed.assignment_id,
+        requesting_user_id=None,
+        requesting_character_id=committed.pc_id,
+        requesting_party_id=committed.party_id,
+        player_message="Tell me a secret.",
+        provider=FakeAiProvider(dialogue="Perhaps another time.", reveal_first_candidate=True),
+        timeline_id=committed.timeline_id,
+        expected_world_id=committed.world_id,
+        world_time_id=committed.world_time_id,
+    )
+    assert result.ai_proposed_change_id is not None
+
+    with pytest.raises(ProposedChangeNotFoundError):
+        review_proposed_change(
+            postgres_engine,
+            ai_proposed_change_id=result.ai_proposed_change_id,
+            campaign_id=other_campaign_id,
+            reviewer_user_id=reviewer_user_id,
+            decision="approve",
+        )
+
+    with postgres_engine.connect() as verify:
+        status = verify.execute(
+            text("SELECT status FROM ai.proposed_changes WHERE ai_proposed_change_id = :id"),
+            {"id": result.ai_proposed_change_id},
+        ).scalar()
+        assert status == "pending"
+
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(
+            text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"),
+            {"c": other_campaign_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
+        )
+
+
 def test_secret_reveal_requires_approval_and_review_applies_it(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
@@ -221,6 +281,7 @@ def test_secret_reveal_requires_approval_and_review_applies_it(
     review = review_proposed_change(
         postgres_engine,
         ai_proposed_change_id=result.ai_proposed_change_id,
+        campaign_id=committed.campaign_id,
         reviewer_user_id=reviewer_user_id,
         decision="approve",
     )
@@ -272,6 +333,7 @@ def test_rejecting_a_proposal_leaves_canonical_state_unchanged(
     review = review_proposed_change(
         postgres_engine,
         ai_proposed_change_id=result.ai_proposed_change_id,
+        campaign_id=committed.campaign_id,
         reviewer_user_id=reviewer_user_id,
         decision="reject",
     )

@@ -27,11 +27,20 @@ from .knowledge import _reveal_knowledge_to_party_impl
 
 class ProposedChangeNotFoundError(DomainAuthorizationError):
     """Raised for an `ai_proposed_change_id` that does not resolve to an
-    existing `ai.proposed_changes` row. Fixed, non-disclosing 404 — a
-    proposal can concern sensitive, not-yet-revealed knowledge, so its
-    existence is not confirmed to an unauthorized caller (the API layer's
-    own campaign-scoped capability check is what actually authorizes this;
-    this error only covers "doesn't exist at all")."""
+    existing `ai.proposed_changes` row belonging exactly to the caller's
+    own `campaign_id` — including a nonexistent proposal and one belonging
+    to a different campaign, identically (the same `SessionNotInCampaignError`/
+    `PartyNotInCampaignError` reasoning `dnd_ai.commands._shared` already
+    documents: a caller-supplied resource id is never trusted on its own,
+    even after the API layer's own campaign-scoped `canon.edit` check —
+    without this, a GM of one campaign could review/apply a pending
+    proposal belonging to a campaign they hold no capability in at all,
+    simply by guessing or observing another campaign's `ai_proposed_
+    change_id`). Fixed, non-disclosing 404 — a proposal can concern
+    sensitive, not-yet-revealed knowledge, so its existence is not
+    confirmed to an unauthorized caller. The supplied ids are included
+    only in the constructor's `detail` argument (`str(self)`), never in
+    `safe_message`."""
 
 
 class ProposedChangeNotPendingError(SafeMessageError):
@@ -52,8 +61,8 @@ class ReviewProposedChangeResult:
 
 
 def _lock_pending_proposal(
-    connection: Connection, ai_proposed_change_id: uuid.UUID
-) -> tuple[str, uuid.UUID, dict[str, object]]:
+    connection: Connection, *, ai_proposed_change_id: uuid.UUID, campaign_id: uuid.UUID
+) -> tuple[str, dict[str, object]]:
     row = connection.execute(
         text("""
             SELECT status, campaign_id, proposed_arguments
@@ -63,11 +72,14 @@ def _lock_pending_proposal(
         """),
         {"id": ai_proposed_change_id},
     ).one_or_none()
-    if row is None:
-        raise ProposedChangeNotFoundError(f"proposed change {ai_proposed_change_id} not found")
+    if row is None or row.campaign_id != campaign_id:
+        raise ProposedChangeNotFoundError(
+            f"proposed change {ai_proposed_change_id} not found for campaign {campaign_id} "
+            f"(actual campaign: {row.campaign_id if row is not None else None})"
+        )
     if row.status != "pending":
         raise ProposedChangeNotPendingError()
-    return row.status, row.campaign_id, row.proposed_arguments
+    return row.status, row.proposed_arguments
 
 
 def _apply_proposal(
@@ -119,6 +131,7 @@ def review_proposed_change(
     engine: Engine,
     *,
     ai_proposed_change_id: uuid.UUID,
+    campaign_id: uuid.UUID,
     reviewer_user_id: uuid.UUID,
     decision: str,
     comments: str | None = None,
@@ -126,10 +139,13 @@ def review_proposed_change(
     """Record a human reviewer's decision on a `requires_approval`
     proposal, and apply it immediately if approved — atomically, one
     transaction. `decision` is `'approve'` or `'reject'`
-    (`ai.change_reviews.decision`'s own CHECK)."""
+    (`ai.change_reviews.decision`'s own CHECK). `campaign_id` is always the
+    caller's own already-authorized campaign (the API layer's URL path,
+    never trusted from the proposal row alone) — see
+    `ProposedChangeNotFoundError`'s own docstring for why."""
     with engine.begin() as connection:
-        _, campaign_id, proposed_arguments = _lock_pending_proposal(
-            connection, ai_proposed_change_id
+        _, proposed_arguments = _lock_pending_proposal(
+            connection, ai_proposed_change_id=ai_proposed_change_id, campaign_id=campaign_id
         )
 
         proposal_kind = connection.execute(

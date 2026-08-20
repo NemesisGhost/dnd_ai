@@ -35,6 +35,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.summary import get_campaign_summary_view
 
 
 @dataclass(frozen=True)
@@ -233,4 +234,126 @@ def assemble_npc_conversation_context(
             party_id=requesting_party_id,
             npc_entity_id=npc_entity_id,
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Audience-aware campaign synthesis (GM brief / player-character question /
+# observer-safe summary) — `dnd_ai.commands.ai_synthesis.request_campaign_
+# synthesis`, docs/PLAN.md Phase 12's exit criterion "the same question
+# produces appropriately different GM, player-character, and observer
+# answers from pre-filtered context, and inaccessible facts never enter the
+# provider request."
+#
+# The three tiers differ in which *query path* assembles their context, not
+# in a post-hoc filter over one shared payload — the same "fetch nothing
+# rather than fetch-and-withhold" discipline `dnd_ai.queries.summary` and
+# every other query module in this package already follow:
+#   - gm_brief:          dnd_ai.queries.summary.get_campaign_summary_view
+#                         with include_draft_events=True (only a caller who
+#                         already holds canon.edit may request this tier —
+#                         enforced by dnd_ai.api.ai_synthesis, not here).
+#   - player_summary:    the same query with include_draft_events=False,
+#                         plus requesting_party_id's own known-knowledge
+#                         statements (campaign.party_knowledge) — requires an
+#                         authorized character/party perspective
+#                         (dnd_ai.api.access.resolve_party_perspective).
+#   - observer_summary:  the same non-draft query only — no party-knowledge
+#                         layer at all, regardless of what the caller
+#                         supplies; see assemble_campaign_synthesis_context's
+#                         own docstring.
+# ---------------------------------------------------------------------------
+
+GM_BRIEF = "gm_brief"
+PLAYER_SUMMARY = "player_summary"
+OBSERVER_SUMMARY = "observer_summary"
+_AUDIENCE_TIERS = frozenset({GM_BRIEF, PLAYER_SUMMARY, OBSERVER_SUMMARY})
+
+
+@dataclass(frozen=True)
+class CampaignSynthesisContext:
+    audience_tier: str
+    current_session_title: str | None
+    previous_session_recap: str | None
+    recent_event_summaries: tuple[str, ...]
+    party_known_facts: tuple[str, ...]
+
+    def as_prompt_payload(self) -> dict[str, Any]:
+        return {
+            "audience_tier": self.audience_tier,
+            "current_session_title": self.current_session_title,
+            "previous_session_recap": self.previous_session_recap,
+            "recent_event_summaries": list(self.recent_event_summaries),
+            "party_known_facts": list(self.party_known_facts),
+        }
+
+
+def _party_known_facts(
+    connection: Connection, *, timeline_id: uuid.UUID, party_id: uuid.UUID, limit: int = 15
+) -> tuple[str, ...]:
+    """The party's own most recently acquired beliefs, campaign-wide — the
+    general-purpose sibling of `_known_facts_about_npc`, with no
+    `subject_entity_id` filter."""
+    rows = connection.execute(
+        text("""
+            SELECT COALESCE(pk.interpretation, ki.canonical_statement) AS statement
+            FROM campaign.party_knowledge pk
+            JOIN knowledge.knowledge_items ki ON ki.knowledge_item_id = pk.knowledge_item_id
+            WHERE pk.timeline_id = :timeline AND pk.party_id = :party
+            ORDER BY pk.created_at DESC
+            LIMIT :limit
+        """),
+        {"timeline": timeline_id, "party": party_id, "limit": limit},
+    ).scalars()
+    return tuple(rows)
+
+
+def assemble_campaign_synthesis_context(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    audience_tier: str,
+    timeline_id: uuid.UUID | None = None,
+    requesting_party_id: uuid.UUID | None = None,
+) -> CampaignSynthesisContext:
+    """Assemble audience-filtered campaign context for one synthesis
+    request. `audience_tier` must be one of `GM_BRIEF`/`PLAYER_SUMMARY`/
+    `OBSERVER_SUMMARY`.
+
+    This function performs no authorization of its own (matching every
+    other function in this module) but it does enforce one structural
+    safety rule directly, since violating it would mean an inaccessible
+    fact reaching the provider request regardless of what the caller
+    passes: `requesting_party_id` is only ever consulted for `PLAYER_
+    SUMMARY` — for `GM_BRIEF` and `OBSERVER_SUMMARY` it is accepted but
+    silently ignored, so a caller (or a future bug in `dnd_ai.api.ai_
+    synthesis`) that passes a party id alongside `OBSERVER_SUMMARY` can
+    never leak that party's own knowledge into an observer-tier answer."""
+    if audience_tier not in _AUDIENCE_TIERS:
+        raise ValueError(
+            f"audience_tier must be one of {sorted(_AUDIENCE_TIERS)}, got {audience_tier!r}"
+        )
+
+    summary = get_campaign_summary_view(
+        connection, campaign_id=campaign_id, include_draft_events=(audience_tier == GM_BRIEF)
+    )
+
+    party_known: tuple[str, ...] = ()
+    if (
+        audience_tier == PLAYER_SUMMARY
+        and requesting_party_id is not None
+        and timeline_id is not None
+    ):
+        party_known = _party_known_facts(
+            connection, timeline_id=timeline_id, party_id=requesting_party_id
+        )
+
+    return CampaignSynthesisContext(
+        audience_tier=audience_tier,
+        current_session_title=(
+            summary.current_session.title if summary.current_session is not None else None
+        ),
+        previous_session_recap=summary.previous_session_recap,
+        recent_event_summaries=tuple(e.summary or e.name for e in summary.recent_events),
+        party_known_facts=party_known,
     )

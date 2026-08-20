@@ -36,6 +36,7 @@ from .context_assembly import NpcConversationContext
 _ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_API_VERSION = "2023-06-01"
 _RECORD_NPC_TURN_TOOL_NAME = "record_npc_turn"
+_RECORD_SYNTHESIS_ANSWER_TOOL_NAME = "record_synthesis_answer"
 
 
 class NpcTurnOutput(BaseModel):
@@ -50,6 +51,14 @@ class NpcTurnOutput(BaseModel):
     reveal_knowledge_item_id: uuid.UUID | None = None
 
 
+class SynthesisOutput(BaseModel):
+    """The structured-output shape `dnd_ai.commands.ai_synthesis` produces —
+    a single audience-tier-appropriate prose answer, grounded only in the
+    already-filtered `CampaignSynthesisContext` payload it was given."""
+
+    answer: str
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     raw_response: str | None
@@ -59,10 +68,23 @@ class ProviderResult:
     error_message: str | None
 
 
+@dataclass(frozen=True)
+class SynthesisProviderResult:
+    raw_response: str | None
+    structured_output: SynthesisOutput | None
+    finish_reason: str | None
+    latency_ms: int | None
+    error_message: str | None
+
+
 class AiProvider(Protocol):
     def generate_npc_turn(
         self, *, context: NpcConversationContext, player_message: str
     ) -> ProviderResult: ...
+
+    def generate_synthesis(
+        self, *, context: dict[str, Any], audience_tier: str, question_text: str
+    ) -> SynthesisProviderResult: ...
 
 
 class FakeAiProvider:
@@ -95,6 +117,22 @@ class FakeAiProvider:
             structured_output=NpcTurnOutput(
                 dialogue=self._dialogue, reveal_knowledge_item_id=reveal_id
             ),
+            finish_reason="end_turn",
+            latency_ms=0,
+            error_message=None,
+        )
+
+    def generate_synthesis(
+        self,
+        *,
+        context: dict[str, Any],
+        audience_tier: str,  # noqa: ARG002 — fixed canned answer; part of the AiProvider contract
+        question_text: str,  # noqa: ARG002 — fixed canned answer; part of the AiProvider contract
+    ) -> SynthesisProviderResult:
+        answer = f"({context.get('audience_tier')}) {self._dialogue}"
+        return SynthesisProviderResult(
+            raw_response=answer,
+            structured_output=SynthesisOutput(answer=answer),
             finish_reason="end_turn",
             latency_ms=0,
             error_message=None,
@@ -209,6 +247,96 @@ class AnthropicAiProvider:
             latency_ms=latency_ms,
             error_message=None,
         )
+
+    def generate_synthesis(
+        self, *, context: dict[str, Any], audience_tier: str, question_text: str
+    ) -> SynthesisProviderResult:
+        import httpx
+
+        started = time.monotonic()
+        try:
+            response = httpx.post(
+                _ANTHROPIC_API_URL,
+                headers={
+                    "x-api-key": self._api_key,
+                    "anthropic-version": _ANTHROPIC_API_VERSION,
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self._model_identifier,
+                    "max_tokens": 1024,
+                    "system": _build_synthesis_system_prompt(context, audience_tier=audience_tier),
+                    "messages": [{"role": "user", "content": question_text}],
+                    "tools": [_synthesis_answer_tool_schema()],
+                    "tool_choice": {"type": "tool", "name": _RECORD_SYNTHESIS_ANSWER_TOOL_NAME},
+                },
+                timeout=self._timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            return SynthesisProviderResult(
+                raw_response=None,
+                structured_output=None,
+                finish_reason=None,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                error_message=f"{type(exc).__name__} calling the Anthropic Messages API",
+            )
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        body = response.json()
+        raw_response = str(body)
+        tool_input = _extract_tool_input(body)
+        if tool_input is None:
+            return SynthesisProviderResult(
+                raw_response=raw_response,
+                structured_output=None,
+                finish_reason=body.get("stop_reason"),
+                latency_ms=latency_ms,
+                error_message="Provider response did not include the expected tool call.",
+            )
+        try:
+            structured_output = SynthesisOutput.model_validate(tool_input)
+        except ValidationError as exc:
+            return SynthesisProviderResult(
+                raw_response=raw_response,
+                structured_output=None,
+                finish_reason=body.get("stop_reason"),
+                latency_ms=latency_ms,
+                error_message=f"Provider tool call failed schema validation: {exc.error_count()} error(s)",
+            )
+        return SynthesisProviderResult(
+            raw_response=raw_response,
+            structured_output=structured_output,
+            finish_reason=body.get("stop_reason"),
+            latency_ms=latency_ms,
+            error_message=None,
+        )
+
+
+def _synthesis_answer_tool_schema() -> dict[str, Any]:
+    return {
+        "name": _RECORD_SYNTHESIS_ANSWER_TOOL_NAME,
+        "description": "Record the audience-appropriate prose answer to this campaign question.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+        },
+    }
+
+
+def _build_synthesis_system_prompt(context: dict[str, Any], *, audience_tier: str) -> str:
+    recent = "; ".join(context.get("recent_event_summaries", [])) or "nothing recent"
+    known = "; ".join(context.get("party_known_facts", [])) or "nothing beyond the above"
+    recap = context.get("previous_session_recap") or "none recorded"
+    return (
+        f"You answer questions about an ongoing tabletop RPG campaign for a {audience_tier} "
+        f"audience, using only the context below — never invent facts outside it. "
+        f"Current session: {context.get('current_session_title') or 'none in progress'}. "
+        f"Previous session recap: {recap}. Recent events: {recent}. "
+        f"This audience additionally knows: {known}. "
+        "Reply only through the record_synthesis_answer tool."
+    )
 
 
 def _extract_tool_input(body: dict[str, Any]) -> dict[str, Any] | None:
