@@ -199,6 +199,20 @@ services:
       DND_AI_OIDC_ISSUER: ${API_OIDC_ISSUER:?API_OIDC_ISSUER is required — copy .env.example to .env and set it to your OIDC provider's issuer URL (HTTPS) before starting the api service}
       DND_AI_OIDC_AUDIENCE: ${API_OIDC_AUDIENCE:?API_OIDC_AUDIENCE is required — copy .env.example to .env and set it to your OIDC provider's audience before starting the api service}
       DND_AI_OIDC_JWKS_URL: ${API_OIDC_JWKS_URL:?API_OIDC_JWKS_URL is required — copy .env.example to .env and set it to your OIDC provider's JWKS URL (HTTPS) before starting the api service}
+      # Issue 1's CORS fix: the explicit allowlist of browser origins the
+      # FoundryVTT module is served from (see .env.example's "Foundry CORS"
+      # section). Optional soft defaults here on purpose — most self-hosted
+      # deployments don't run FoundryVTT at all — but both defaults are
+      # deliberately *safe*, never permissive: an unset feature flag stays
+      # `false`, and an unset allowlist stays empty (dnd_ai.config.Settings
+      # treats an empty string identically to "unconfigured" — no cross-
+      # origin browser access, never a wildcard). If you set
+      # API_FEATURE_FOUNDRY_INTEGRATION=true, dnd_ai.config.Settings then
+      # requires API_FOUNDRY_ALLOWED_ORIGINS to be set too, with no
+      # fallback, and requires every origin in it to be HTTPS (this file
+      # always runs `api` with DND_AI_ENVIRONMENT=production).
+      DND_AI_FEATURE_FOUNDRY_INTEGRATION: ${API_FEATURE_FOUNDRY_INTEGRATION:-false}
+      DND_AI_FOUNDRY_ALLOWED_ORIGINS: ${API_FOUNDRY_ALLOWED_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy

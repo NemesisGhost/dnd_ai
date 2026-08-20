@@ -18,8 +18,21 @@ against, so it authenticates the caller directly via `dnd_ai.api.auth.
 get_authenticated_user_id` instead — see its own module docstring. This
 module remains the plumbing every router builds on: app factory, error
 contract, correlation IDs, health/readiness, per-request transaction
-management, and authentication — routers register their own paths, this
-module only mounts them.
+management, authentication, and CORS — routers register their own paths,
+this module only mounts them.
+
+CORS (`CORSMiddleware` below, `dnd_ai.config.Settings.foundry_allowed_
+origins`) exists specifically for the FoundryVTT module: it runs as
+browser JavaScript on its own origin, separate from this API's origin in
+the documented deployment topology (`docs/LOCAL_DEPLOYMENT.md`), so a real
+browser sends an `OPTIONS` preflight before every authenticated request.
+No other client of this API is a browser page reading another origin's
+response — the React UI is expected to share this API's origin, and the
+Discord bot/MCP interface/`scripts/foundry_provision.py` are server-side
+or CLI HTTP clients CORS does not apply to at all (a browser-enforced
+restriction, not a server-side authorization mechanism) — so the
+allowlist is deliberately narrow and never defaults to permitting any
+origin.
 """
 
 import logging
@@ -29,14 +42,16 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI
 from sqlalchemy import Engine, text
+from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, settings
+from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, foundry_allowed_origins_tuple, settings
 
 from .access_grants import router as access_grants_router
 from .auth import dispose_jwks_client
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
+from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
 from .deps import dispose_engine, get_engine, verify_database_identity
@@ -91,11 +106,30 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="D&D AI World Platform API", lifespan=_lifespan)
+    # Outermost middleware (added first — Starlette applies user middleware
+    # in the order added, from outside in), so a browser's CORS preflight
+    # is answered, and CORS headers are attached to every response
+    # including errors, before anything else in the stack runs.
+    # `dnd_ai.config.settings.foundry_allowed_origins` is the only source
+    # of truth for the allowlist (no wildcard, ever — see that module's
+    # own docstring); an empty allowlist is a safe default that permits no
+    # cross-origin browser access rather than widening to "allow anything."
+    # `allow_credentials=False`: the FoundryVTT module authenticates with
+    # an `Authorization` header, never a cookie, so there is no reason to
+    # enable credentialed CORS requests here.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(foundry_allowed_origins_tuple(settings)),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Foundry-Actor-Id", "Idempotency-Key"],
+    )
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
     app.include_router(campaign_invitations_router)
     app.include_router(campaigns_router)
+    app.include_router(character_state_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)
     app.include_router(encounters_router)

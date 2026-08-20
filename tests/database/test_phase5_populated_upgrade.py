@@ -22,6 +22,7 @@ checkpoint and at head.
 
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -40,6 +41,26 @@ pytestmark = pytest.mark.database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
+
+# Matches tests/conftest.py's _MIGRATION_SUBPROCESS_TIMEOUT_SECONDS — a
+# hung alembic subprocess must fail this test clearly (subprocess.
+# TimeoutExpired) rather than freeze the whole test session forever with
+# no recovery, which is what an un-bounded subprocess.run() here previously
+# allowed.
+_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS = 300
+
+# Matches tests/conftest.py's _DB_CONNECT_TIMEOUT_SECONDS/_connect_args() —
+# every create_engine() call below previously had no connect_timeout at
+# all, so a stalled TCP handshake (observed in practice: py-spy showed a
+# connect() blocked indefinitely in psycopg's own select() wait, with no
+# bound to ever fail it) froze the whole test session with no recovery,
+# rather than raising a clear, fast connection error.
+_CONNECT_TIMEOUT_SECONDS = 10
+
+
+def _connect_args() -> dict[str, object]:
+    return {"connect_timeout": _CONNECT_TIMEOUT_SECONDS}
+
 
 K0, K1, K2, K3 = 100, 200, 300, 400
 
@@ -61,7 +82,9 @@ def _provision_database() -> tuple[str, str]:
     db_name = f"dnd_ai_phase5_upgrade_{uuid.uuid4().hex[:12]}"
     test_url = admin_url.set(database=db_name)
 
-    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    admin_engine = create_engine(
+        admin_url, isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+    )
     with admin_engine.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     admin_engine.dispose()
@@ -74,18 +97,25 @@ def _provision_database() -> tuple[str, str]:
 
 def _drop_database(admin_url: str, test_url: str) -> None:
     db_name = make_url(test_url).database
-    admin_engine = create_engine(make_url(admin_url), isolation_level="AUTOCOMMIT")
+    admin_engine = create_engine(
+        make_url(admin_url), isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+    )
     with admin_engine.connect() as conn:
         conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
     admin_engine.dispose()
 
 
 def _alembic_upgrade(database_url: str, target: str) -> None:
+    # sys.executable -m alembic, not the "alembic" console-script entry
+    # point — see tests/conftest.py's _run_alembic_upgrade for the same
+    # choice and why (doesn't depend on a separate PATH-resolved
+    # executable, and avoids that shim's own extra process-spawn layer).
     subprocess.run(
-        ["alembic", "-c", str(ALEMBIC_INI), "upgrade", target],
+        [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", target],
         check=True,
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": database_url},
+        timeout=_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
 
@@ -99,7 +129,7 @@ def test_a_populated_revision_042_database_backfills_location_period_through_hea
     try:
         _alembic_upgrade(test_url, "042_close_phase4_location_refs")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         with engine.begin() as conn:
             world = make_world(conn, slug="populated-upgrade-positive")
             timeline = make_timeline(conn, world, is_primary=True)
@@ -133,7 +163,7 @@ def test_a_populated_revision_042_database_backfills_location_period_through_hea
 
         _alembic_upgrade(test_url, "head")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         with engine.connect() as conn:
             closed_period = conn.execute(
                 text(
@@ -168,7 +198,7 @@ def test_a_populated_revision_042_database_with_conflicting_legacy_rows_fails_th
     try:
         _alembic_upgrade(test_url, "042_close_phase4_location_refs")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         with engine.begin() as conn:
             world = make_world(conn, slug="populated-upgrade-negative")
             timeline = make_timeline(conn, world, is_primary=True)
@@ -201,11 +231,12 @@ def test_a_populated_revision_042_database_with_conflicting_legacy_rows_fails_th
         engine.dispose()
 
         result = subprocess.run(
-            ["alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
+            [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
             cwd=REPO_ROOT,
             env={**os.environ, "DATABASE_URL": test_url},
             capture_output=True,
             text=True,
+            timeout=_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS,
         )
         assert result.returncode != 0, "upgrade should have failed on the conflicting legacy rows"
         combined_output = result.stdout + result.stderr
@@ -230,7 +261,7 @@ def test_a_populated_revision_042_database_with_a_missing_arrival_endpoint_fails
     try:
         _alembic_upgrade(test_url, "042_close_phase4_location_refs")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         with engine.begin() as conn:
             world = make_world(conn, slug="populated-upgrade-no-arrival")
             timeline = make_timeline(conn, world, is_primary=True)
@@ -250,11 +281,12 @@ def test_a_populated_revision_042_database_with_a_missing_arrival_endpoint_fails
         engine.dispose()
 
         result = subprocess.run(
-            ["alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
+            [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "upgrade", "head"],
             cwd=REPO_ROOT,
             env={**os.environ, "DATABASE_URL": test_url},
             capture_output=True,
             text=True,
+            timeout=_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS,
         )
         assert result.returncode != 0, "upgrade should have failed on the missing arrival endpoint"
         combined_output = result.stdout + result.stderr
@@ -262,12 +294,13 @@ def test_a_populated_revision_042_database_with_a_missing_arrival_endpoint_fails
         assert "null value" in combined_output.lower() or "not-null" in combined_output.lower()
 
         current = subprocess.run(
-            ["alembic", "-c", str(ALEMBIC_INI), "current"],
+            [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), "current"],
             cwd=REPO_ROOT,
             env={**os.environ, "DATABASE_URL": test_url},
             capture_output=True,
             text=True,
             check=True,
+            timeout=_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS,
         )
         assert "042_close_phase4_location_refs" in current.stdout, (
             "the upgrade should have stopped at revision 043, before ever reaching 052"

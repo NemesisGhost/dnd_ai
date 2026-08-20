@@ -16,6 +16,35 @@ exist" from "you have no access to it"), while an authenticated member who
 simply lacks the required capability — membership itself is already not in
 question — gets `ForbiddenError`.
 
+`require_campaign_capability`'s `allow_foundry_system` parameter (Phase 11
+workstream 2 correction) is a fail-closed gate on top of the ordinary
+membership/capability check: by default (`allow_foundry_system=False`,
+every route built before this correction and every route with no reason
+to accept adapter-delegated traffic), a request authenticated via a
+`FoundrySystem` credential (`dnd_ai.api.auth.get_authenticated_user_id`'s
+Foundry branch) is rejected with `ForbiddenError` before `resolve_access_
+context` ever runs — reachability through `get_authenticated_user_id` is
+not the same thing as authorization here. A route that *is* part of the
+bounded Foundry-adapter surface passes `allow_foundry_system=True`
+explicitly (see `dnd_ai.api.integration`, `.character_state`, and the one
+read route in `.characters` for the current, deliberately narrow set) and
+additionally gets a second check this module performs on its behalf: the
+resolved campaign's own world (via `dnd_ai.api._shared.timeline_world_id`)
+must equal the authenticated principal's own `foundry_world_id`, or the
+request is rejected exactly like a missing membership (`NotFoundError` —
+non-disclosing, the same reasoning already documented below for a bare
+membership). Without this, a valid credential for one Foundry world could
+authorize against *any* campaign the same linked platform user happens to
+hold membership in, including ones in a completely different world — see
+`dnd_ai.domain.access.AuthenticatedPrincipal`'s own docstring for the full
+defect this closes. A route whose own path or body additionally names an
+`external_system_id` (`map_external_identifier_endpoint`, `sync_state_
+endpoint`, `apply_foundry_combat_sync_endpoint`) must also call
+`dnd_ai.domain.access.assert_foundry_system_matches` once it has the
+resolved `AccessContext.principal` in hand — that is a per-request check
+this module cannot perform generically, since which request field carries
+`external_system_id` varies by route.
+
 `resolve_party_perspective()` and `resolve_character_view_tier()` below
 are this module's resource-scoped resolvers: not "does this caller have a
 campaign-wide capability" but "is this caller authorized to view fictional
@@ -33,6 +62,7 @@ to a user only when that user has the appropriate character relationship
 and capability for the requested perspective").
 """
 
+import dataclasses
 import uuid
 from collections.abc import Callable
 from typing import Annotated
@@ -41,17 +71,23 @@ from fastapi import Depends
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands._shared import validate_campaign_party
-from dnd_ai.domain.access import AccessContext, resolve_access_context
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    AccessContext,
+    AuthenticatedPrincipal,
+    resolve_access_context,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError
 
+from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
 
 
 def require_campaign_capability(
-    capability_code: str,
-) -> Callable[[uuid.UUID, uuid.UUID, Connection], AccessContext]:
+    capability_code: str, *, allow_foundry_system: bool = False
+) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
     the campaign named by the route's own `campaign_id` path parameter.
@@ -59,19 +95,46 @@ def require_campaign_capability(
     Resolves access against the campaign's own pinned timeline only — never
     a caller-supplied timeline — matching `resolve_access_context`'s own
     scope rule; no route built on this dependency accepts a `timeline_id`
-    from the request."""
+    from the request.
+
+    `allow_foundry_system` (default `False`, fail-closed) gates whether a
+    `FoundrySystem`-authenticated request may use this route at all, and,
+    when `True`, additionally binds the authorization to the credential's
+    own world — see this module's docstring ("`require_campaign_
+    capability`'s `allow_foundry_system` parameter") for the full design
+    and the defect it closes. The returned `AccessContext` always carries
+    the resolved `principal` (`dataclasses.replace`, since `resolve_access_
+    context` itself only ever takes a bare `user_id`) so route code can
+    still recover how the caller authenticated afterward."""
 
     def _dependency(
         campaign_id: uuid.UUID,
-        user_id: Annotated[uuid.UUID, Depends(get_authenticated_user_id)],
+        principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         connection: Annotated[Connection, Depends(get_connection)],
     ) -> AccessContext:
-        access = resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id)
+        is_foundry = principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        if is_foundry and not allow_foundry_system:
+            raise ForbiddenError()
+
+        access = resolve_access_context(
+            connection, user_id=principal.user_id, campaign_id=campaign_id
+        )
         if access is None:
             raise NotFoundError()
+
+        if is_foundry:
+            campaign_world_id = timeline_world_id(connection, access.timeline_id)
+            if campaign_world_id != principal.foundry_world_id:
+                # Indistinguishable from "no active membership" — a
+                # FoundrySystem credential for a different world must not be
+                # able to learn that this campaign exists at all, any more
+                # than a non-member OIDC caller can. See this module's
+                # docstring for the full reasoning.
+                raise NotFoundError()
+
         if not access.has_capability(capability_code):
             raise ForbiddenError()
-        return access
+        return dataclasses.replace(access, principal=principal)
 
     return _dependency
 

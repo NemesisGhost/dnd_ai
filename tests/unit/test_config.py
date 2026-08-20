@@ -755,6 +755,133 @@ def test_production_with_real_environment_plus_mounted_secret_is_accepted(
     assert payload["database_url"] == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
 
 
+# ---------------------------------------------------------------------------
+# foundry_allowed_origins — the CORS allowlist for the FoundryVTT module's
+# browser-origin requests (Issue 1, transport-layer correction). Mirrors the
+# OIDC settings' shape: production requires HTTPS on every origin, and (only
+# when the Foundry feature flag is also on) requires the setting to be
+# present at all; local/test also permit HTTP and never require it.
+# ---------------------------------------------------------------------------
+
+
+def test_foundry_allowed_origins_defaults_to_none_outside_production() -> None:
+    settings = Settings()
+    assert settings.foundry_allowed_origins is None
+
+
+def test_production_without_foundry_integration_does_not_require_allowed_origins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    settings = Settings()  # must not raise — feature_foundry_integration defaults False
+    assert settings.foundry_allowed_origins is None
+
+
+def test_production_with_foundry_integration_enabled_requires_allowed_origins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_FEATURE_FOUNDRY_INTEGRATION", "true")
+    with pytest.raises(ValidationError, match="DND_AI_FOUNDRY_ALLOWED_ORIGINS"):
+        Settings()
+
+
+def test_production_with_foundry_integration_enabled_accepts_a_configured_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_FEATURE_FOUNDRY_INTEGRATION", "true")
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "https://foundry.example.com")
+    settings = Settings()
+    assert settings.foundry_allowed_origins == "https://foundry.example.com"
+
+
+def test_a_blank_foundry_allowed_origins_value_is_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compose interpolating an unset host variable to an empty string
+    (`${VAR:-}`) must not be a validation error — it means "not
+    configured," identically to the variable being absent."""
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "")
+    settings = Settings()
+    assert settings.foundry_allowed_origins is None
+
+
+def test_foundry_allowed_origins_rejects_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "*")
+    with pytest.raises(ValidationError, match="wildcard"):
+        Settings()
+
+
+def test_foundry_allowed_origins_rejects_wildcarded_subdomain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "https://*.example.com")
+    with pytest.raises(ValidationError, match="wildcard"):
+        Settings()
+
+
+def test_foundry_allowed_origins_rejects_http_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_env(monkeypatch, _PRODUCTION_ENV)
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "http://foundry.example.com")
+    with pytest.raises(ValidationError, match="https"):
+        Settings()
+
+
+def test_foundry_allowed_origins_permits_http_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", "http://localhost:30000")
+    settings = Settings()
+    assert settings.foundry_allowed_origins == "http://localhost:30000"
+
+
+@pytest.mark.parametrize(
+    "bad_origin",
+    [
+        "https://foundry.example.com/some-path",
+        "https://foundry.example.com?query=1",
+        "https://foundry.example.com#frag",
+        "https://user:pass@foundry.example.com",
+        "not-a-url",
+        "ftp://foundry.example.com",
+    ],
+)
+def test_foundry_allowed_origins_rejects_malformed_entries(
+    bad_origin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DND_AI_FOUNDRY_ALLOWED_ORIGINS", bad_origin)
+    with pytest.raises(ValidationError, match="DND_AI_FOUNDRY_ALLOWED_ORIGINS"):
+        Settings()
+
+
+def test_foundry_allowed_origins_normalizes_default_port_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
+        "HTTPS://Foundry.Example.com:443, https://foundry.example.com, https://other.example.com:8443",
+    )
+    settings = Settings()
+    assert settings.foundry_allowed_origins == (
+        "https://foundry.example.com,https://other.example.com:8443"
+    )
+
+
 def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) -> None:
     result = _run_config_import(
         {

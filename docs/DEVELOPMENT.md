@@ -41,6 +41,7 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
 | Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
 | UI | **React** | Not yet started; no build tooling chosen |
+| Foundry module (`foundry-module/`) | **Plain ES modules, zero npm dependencies**; tests on Node's built-in test runner (`node --test`) | Phase 11 workstream 7. A separate, deliberately minimal choice from the still-undecided React-portal toolchain above — it ships as native ES modules FoundryVTT loads directly (`module.json`'s `esmodules`), so there is nothing to bundle or transpile. The only place Node is used in this repository; CI's `foundry-module-check` job is the only job that runs `actions/setup-node` |
 
 ---
 
@@ -61,7 +62,13 @@ The tree below describes the repository layout. `database/` holds migrations and
 ├── compose.ci.yaml            # CI override: disposable tmpfs storage
 ├── .dockerignore
 ├── docs/                      # ALL documentation (see CLAUDE.md §4)
-├── scripts/
+├── foundry-module/            # FoundryVTT client module (Phase 11 workstream 7) — its own
+│   │                          # toolchain (§1), never src/dnd_ai/ or the Python test suites
+│   ├── module.json
+│   ├── scripts/               # native ES modules, no build step
+│   ├── test/                  # node --test
+│   └── packaging/package.mjs      # zips scripts/styles/templates/lang/module.json into dist/
+├── scripts/                   # one-off CI/ops/provisioning scripts (incl. foundry_provision.py)
 ├── database/
 │   ├── alembic.ini
 │   ├── migrations/
@@ -227,6 +234,7 @@ There is deliberately **no fallback password or configuration value** anywhere i
 - `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` — `api` connects to PostgreSQL as **`app_read_write`**, the DML-only login role `001_bootstrap` creates (`docs/DATABASE_CONVENTIONS.md` §27.1, ADR 0009) — never `postgres`, `migration_runner`, or `migration_owner`. This is a production security boundary, not an interim convenience: `app_read_write` holds `SELECT`/`INSERT`/`UPDATE`/`DELETE` on application tables only — no schema DDL, no role management, no membership in `migration_owner`, not a superuser, not a schema owner, no `CREATEDB`/`CREATEROLE`/`BYPASSRLS`. `001_bootstrap` creates the role with no password, so it cannot authenticate until you provision one — see "Provisioning the `app_read_write` credential" below — then build `API_DATABASE_URL` from that password yourself, the same percent-encoding rule as `MIGRATION_DATABASE_URL`.
 - `API_OIDC_ISSUER`/`API_OIDC_AUDIENCE`/`API_OIDC_JWKS_URL` — the `api` service's OIDC provider settings, required together with no fallback. `compose.yaml` runs `api` with `DND_AI_ENVIRONMENT=production` unconditionally (a fixed value in `compose.yaml` itself — this file is the self-hosted/production deployment topology, not a "local" convenience default), so `dnd_ai.config.Settings` additionally requires the issuer and JWKS URL to be absolute, credential-free, fragment-free **HTTPS** URLs with a host, and the audience to be non-empty with no leading/trailing whitespace — see `.env.example`'s OIDC section for the full rule and why running the API directly on the host (outside Docker) is different.
 - `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below). This one still authenticates as `postgres` — it is the admin/test connection developers and CI use directly, unrelated to what the containerized `api` service connects as.
+- `API_FEATURE_FOUNDRY_INTEGRATION`/`API_FOUNDRY_ALLOWED_ORIGINS` — optional, with safe (off/empty) defaults if left unset, unlike the settings above. Only needed if this deployment serves the FoundryVTT module from a separate browser origin (`docs/LOCAL_DEPLOYMENT.md`); see `.env.example`'s "Foundry CORS" section for the full rule, including why turning the feature flag on then requires the allowlist too.
 
 `MIGRATION_DATABASE_URL` and `DATABASE_URL` are not assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` by Compose interpolation — that would be plain string substitution, not a URL encoder, and would silently break for a password containing characters that are special in a URL (`@ : / ? # [ ] %` and similar). Build each URL yourself and percent-encode the password segment if it needs one (Python: `urllib.parse.quote(password, safe="")`) — see `.env.example` for a worked example.
 
@@ -461,9 +469,11 @@ including `compose.yaml` — there is nothing to open or revoke.
 
 CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) — it verifies the same self-hosted PostgreSQL 18 target the project deploys, not AWS RDS.
 
-`.github/workflows/ci.yml` has three jobs, none of which need AWS credentials or repository secrets:
+`.github/workflows/ci.yml` has five jobs, none of which need AWS credentials or repository secrets:
 
 **`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
+
+**`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test test/` and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
 
 **`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
@@ -475,6 +485,8 @@ CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hoste
 - the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) — `tests/conftest.py` provisions its own ephemeral database off the service container exactly as it does against a local server
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
+
+**`persistence-check`**: proves `compose.yaml`'s named PostgreSQL volume survives `--force-recreate` (a marker row written before recreation is still there after), then that `down -v` actually removes it — against the production volume mechanism itself, not `compose.ci.yaml`'s disposable tmpfs override.
 
 Seed idempotency became a required CI step in Phase 2 when the first lookup content was added. Every later seed change participates in the same check; do not create a second seeding path outside `apply_seed()`.
 

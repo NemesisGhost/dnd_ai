@@ -11,7 +11,9 @@ campaign (the same base gate `dnd_ai.api.dungeon` uses), then a second,
 resource-scoped decision specific to this endpoint: how much detail about
 *this* character the caller may see. `dnd_ai.api.access.
 resolve_character_view_tier` returns `True` (full mechanical detail — hit
-points, conditions, resources, current location) for a caller holding
+points, conditions, resources, current location, and — Phase 11 workstream
+5 — the active encounter this character currently participates in, if
+any) for a caller holding
 `canon.edit` (a GM) or `character.view_full` for this exact `character_id`,
 `False` (name/species/size only) for one holding only `character.
 view_summary`, and raises a fixed, non-disclosing 404 for a caller holding
@@ -116,6 +118,9 @@ class CharacterResponse(BaseModel):
     death_save_successes: int | None
     death_save_failures: int | None
     current_location_id: uuid.UUID | None
+    # Phase 11 workstream 5 — see dnd_ai.queries.character's own docstring
+    # for why this is a plain id, not the encounter's own content.
+    active_encounter_id: uuid.UUID | None
     conditions: list[CharacterConditionResponse] | None
     resources: list[CharacterResourceResponse] | None
 
@@ -154,8 +159,18 @@ def get_character_endpoint(
     # capability's own returned dependency callable declares campaign_id
     # itself and binds it from the URL path independently, the same way
     # every other capability-gated route's path parameter resolves.
+    #
+    # allow_foundry_system=True (Phase 11 workstream 5/2 correction): this
+    # route is what closes the "current location or encounter" exit
+    # criterion for a Foundry adapter (active_encounter_id below) — see
+    # dnd_ai.domain.access.AuthenticatedPrincipal's docstring for why every
+    # route accepting a Foundry credential must opt in explicitly.
+    # get_character_inventory_endpoint below deliberately does not opt in —
+    # it is not part of the bounded adapter-facing surface any Phase 11
+    # workstream built.
     access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+        AccessContext,
+        Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY, allow_foundry_system=True)),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterResponse:
@@ -181,6 +196,7 @@ def get_character_endpoint(
         death_save_successes=view.death_save_successes,
         death_save_failures=view.death_save_failures,
         current_location_id=view.current_location_id,
+        active_encounter_id=view.active_encounter_id,
         conditions=(
             None
             if view.conditions is None

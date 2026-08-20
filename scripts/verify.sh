@@ -8,7 +8,7 @@
 #
 # Usage:
 #   scripts/verify.sh --help | -h           # print usage and exit 0
-#   scripts/verify.sh quality               # ruff format --check, ruff check, mypy src (no AWS)
+#   scripts/verify.sh quality               # ruff format --check, ruff check, mypy src, foundry-module tests (no AWS)
 #   scripts/verify.sh unit                  # pytest tests/unit (no AWS)
 #   scripts/verify.sh database              # pytest tests/database (opens/closes dev ingress)
 #   scripts/verify.sh scenario              # pytest tests/scenario (opens/closes dev ingress)
@@ -187,6 +187,17 @@ run_quality() {
   run_stage "ruff format --check" uv run ruff format --check .
   run_stage "ruff check" uv run ruff check .
   run_stage "mypy src" uv run mypy src
+  # foundry-module/ has its own, entirely separate toolchain (plain ES
+  # modules, zero npm dependencies, Node's built-in test runner —
+  # docs/DEVELOPMENT.md's toolchain table) — no ruff/mypy involvement,
+  # so it runs as its own run_stage call rather than folding into the
+  # three above. Guarded on the directory existing, the same way
+  # run_scenario guards on tests/scenario/ below — lets this script run
+  # unmodified against a stripped-down sandbox (tests/unit/test_verify_
+  # sh.py's own stubbed CWD) that has no foundry-module/ at all.
+  if [[ -d foundry-module ]]; then
+    run_stage "node --test foundry-module" node --test foundry-module/test/
+  fi
 }
 
 run_unit() {

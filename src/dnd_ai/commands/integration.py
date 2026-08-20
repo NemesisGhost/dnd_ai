@@ -107,25 +107,107 @@ HTTP as of Phase 10 workstream 10 — both split into a connection-taking
 `_..._impl` plus a public engine-based wrapper below, the same composition
 every other command module in this package uses, so the API layer's
 per-request transaction can run either directly. apply_foundry_combat_sync
-deliberately has no HTTP endpoint yet: its own reasoning above already
-explains why it runs with no authoritative campaign_id to assert against
-("Phase 11 (Foundry MVP) is where Foundry users get mapped to
-authenticated platform users and campaign membership, at which point this
-function's caller ... would be the place to resolve and pass an
-authoritative campaign_id to assert against") — and separately, its
-three-transaction, session-scoped-advisory-lock design (this module's own
-docstring above) is deliberately incompatible with the one-transaction-
-per-request model every other API command endpoint relies on for atomic
-auditing, so giving it an endpoint now would mean either breaking that
-design or writing its audit.change_log row in a second, non-atomic
-transaction after the fact. Both are left for Phase 11, when a real
-Foundry-adapter caller and its own authorization/transaction shape are
-designed together rather than retrofitted here.
+has no such split (this module's own docstring above explains why its
+three-transaction, advisory-lock design cannot compose with a caller-
+supplied connection the way a single-transaction command can) and, until
+Phase 11 workstreams 1-3, had no authoritative campaign_id to assert
+against either — both addressed below.
+
+Foundry combat-sync endpoint (Phase 11 workstream 3,
+`apply_foundry_combat_sync_endpoint`): reachable as of this workstream at
+`POST /campaigns/{campaign_id}/integration/foundry/combat-sync`, requiring
+Foundry-adapter authentication (`dnd_ai.api.auth.
+get_authenticated_user_id`'s `FoundrySystem` path, workstream 2) and
+`canon.edit` in the target campaign — deliberately the identical
+capability and "GM/adapter-level action for this first cut" reasoning
+`dnd_ai.api.encounters._ENCOUNTER_MANAGE_CAPABILITY` already uses for
+`resolve_combat_turn_endpoint`, not a new, narrower capability: this route
+drives the exact same underlying mutation, and every default system role
+that can resolve a combat turn through the portal (gm, assistant_gm)
+should be able to do the identical thing through an authenticated Foundry
+adapter without a bespoke role grant. Unlike every other route in
+`dnd_ai.api.integration`, it calls
+the public, engine-based `apply_foundry_combat_sync()` directly rather
+than a connection-taking `_..._impl` — the one deliberate exception to
+this package's "always use the impl form so the API layer's own
+transaction owns the boundary" rule, because apply_foundry_combat_sync's
+own three-transaction/advisory-lock shape *is* its transaction boundary;
+composing it inside a second, outer request-scoped transaction would
+either deadlock (nesting `lock_connection.begin()` calls) or silently
+defeat the exactly-once claim/work/fail sequencing this module's own
+docstring spends its opening section establishing. This route therefore
+does not participate in `dnd_ai.api.deps.get_connection`'s per-request
+transaction at all.
+
+No `audit.change_log` row: this mirrors `dnd_ai.api.encounters.
+resolve_combat_turn_endpoint` — the portal-facing route this Foundry
+endpoint is the adapter-facing counterpart of — which never calls
+`record_change_log` either. A combat turn's durable record is
+`narrative.events`/`interaction.combat_actions` (created by the same
+`_resolve_combat_turn_impl` both routes call) plus, for this route
+specifically, `integration.sync_jobs`/`.delivery_attempts` — a more
+specific trail than the generic `audit.change_log` table exists to
+provide for actions with no other record of their own (contrast
+`register_external_system_endpoint`, which has no other trail and so
+does audit). This also means the "non-atomic audit" concern an earlier
+draft of this docstring raised no longer applies: there is no
+`audit.change_log` write to make atomic with apply_foundry_combat_sync's
+own three transactions in the first place.
+
+campaign_id resolution: the route's own `campaign_id` path parameter,
+already authorized via `require_campaign_capability`, is passed straight
+through as `apply_foundry_combat_sync`'s `campaign_id` argument — the
+same "URL campaign_id, already authorized, flows into the locked-row
+assertion" shape `resolve_combat_turn_endpoint` itself uses for
+`_resolve_combat_turn_impl`. A mismatched or nonexistent encounter is
+rejected by `_lock_encounter`'s existing `expected_campaign_id` check
+exactly as it already is for the portal path — no new authorization logic
+was needed here, only a caller now able to supply the argument that
+already existed.
+
+Foundry identity mapping (Phase 11 workstream 1, `link_foundry_identity`):
+the first concrete step of "map Foundry users to authenticated platform
+users" (docs/PLAN.md Phase 11). `security.external_identities`
+(migration 080) already generalizes past pure OIDC — its schema is just
+`(issuer, subject) -> user_id`, unique on `(issuer, subject) WHERE
+revoked_at IS NULL`, with no column that requires `issuer` to be a real
+OIDC issuer URL or `subject` to be an OIDC `sub` claim
+(docs/architecture/DATABASE_MODEL.md §19.1). `link_foundry_identity`
+reuses that same table rather than inventing a parallel Foundry-specific
+mapping table: it derives a synthetic issuer, `foundry:<external_system_id>`
+(`dnd_ai.domain.access.foundry_issuer` — shared with that module's own
+`resolve_foundry_system_principal`, workstream 2's Foundry-adapter
+authentication path, so both the write and the read side of this mapping
+agree on the same format by construction), scoping the mapping to one
+registered Foundry world so the same Foundry-side user id from two
+different Foundry worlds can never collide. Because `integration.
+external_systems` is already world-scoped
+(this module's own docstring above) and `external_identities` carries no
+`world_id` of its own, `expected_world_id` reuses exactly
+`_external_system_world`'s existence/cross-world check
+`map_external_identifier_endpoint` already relies on, closing the same
+disclosure gap for this new route.
+
+This intentionally maps identity only — establishing that "Foundry user X
+in world W is platform user Y" — not authentication. A live Foundry
+adapter still needs its own way to authenticate a request as "acting for
+Foundry user X" (a bearer scheme distinct from the OIDC-bearer pipeline in
+`dnd_ai.api.auth`, since a Foundry client is not an OIDC identity
+provider); designing and wiring that, and then threading the campaign_id
+it resolves through to `apply_foundry_combat_sync`
+(`_resolve_combat_turn_impl`'s existing `campaign_id` parameter already
+supports it — see that function's own docstring), is left to the next
+Phase 11 workstream. Revoking a previously-linked Foundry identity is also
+deliberately out of scope here — `link_foundry_identity` only ever
+inserts or reassigns an active mapping; nothing in this workstream needs a
+revoke path yet, and adding one speculatively would be exactly the kind of
+un-asked-for abstraction this codebase avoids.
 """
 
 import contextlib
 import json
 import logging
+import secrets
 import threading
 import uuid
 from dataclasses import dataclass
@@ -133,7 +215,12 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.access import (
+    foundry_issuer,
+    hash_foundry_system_key,
+    resolve_user_by_external_identity,
+)
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
 
@@ -150,11 +237,34 @@ _QUARANTINED_LOCK_CONNECTIONS_LOCK = threading.Lock()
 _QUARANTINED_LOCK_CONNECTIONS: list[Connection] = []
 
 
-class ConflictingSyncPayloadError(ValueError):
+class ConflictingSyncPayloadError(SafeMessageError):
     """Raised when external_operation_id is reused with a payload that does
     not match the payload originally recorded for it — checked first,
     before status, so this can happen regardless of whether the original
-    attempt completed, failed, or crashed mid-flight."""
+    attempt completed, failed, or crashed mid-flight.
+
+    Subclasses `SafeMessageError` (not a bare `ValueError`) so this maps
+    to a fixed HTTP 409 — the same status `security.idempotent_requests`'
+    own fingerprint mismatch already produces (`dnd_ai.api.idempotency`)
+    for the identical "same key, different payload" situation — rather
+    than the generic-`ValueError` handler's 400 (Phase 11 workstream 3,
+    once this module's own `apply_foundry_combat_sync_endpoint` needed a
+    real caller-facing status for this case). Setting this here, in
+    `dnd_ai.domain.errors`-compatible fashion, avoids `dnd_ai.commands.
+    integration` importing anything from `dnd_ai.api` — this codebase's
+    commands never do (a one-way layering: `api` depends on `commands`,
+    never the reverse)."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "This operation was already submitted with different details."
+
+
+# Same CSPRNG entropy dnd_ai.commands.campaign_invitations'
+# _INVITATION_TOKEN_ENTROPY_BYTES already uses for its own server-generated
+# secret, and the same reasoning dnd_ai.domain.access.hash_foundry_system_key
+# relies on for choosing plain SHA-256 over a slow KDF.
+_FOUNDRY_SYSTEM_KEY_ENTROPY_BYTES = 32
 
 
 class ExternalSystemNotFoundError(DomainAuthorizationError):
@@ -170,6 +280,28 @@ class ExternalSystemNotFoundError(DomainAuthorizationError):
     reasoning: confirming a resource exists but belongs to a different
     world would itself be a disclosure to a caller only authorized for the
     world it expected, so both cases raise this identical, fixed 404."""
+
+
+class UnlinkedFoundryPrincipalError(SafeMessageError):
+    """Raised by `issue_foundry_system_key()` when `principal_foundry_user_id`
+    has no active `link_foundry_identity` mapping for `external_system_id`
+    yet. A plain, disclosing 400 (not `DomainAuthorizationError`'s fixed
+    404) is deliberate and safe here: the caller already holds
+    `access.manage` in a campaign whose world owns this exact
+    `external_system_id` (checked by the same `expected_world_id` assertion
+    every sibling command in this module already applies), so confirming
+    "that Foundry user isn't linked to this system yet" discloses nothing
+    the caller isn't already authorized to know — unlike
+    `ExternalSystemNotFoundError`, which exists precisely because *that*
+    check can be reached by a caller who is *not* yet authorized for the
+    system named."""
+
+    safe_status_code = 400
+    safe_error_code = "unlinked_foundry_principal"
+    safe_message = (
+        "That Foundry user is not linked to a platform user for this external "
+        "system yet — call link_foundry_identity first."
+    )
 
 
 @dataclass(frozen=True)
@@ -347,6 +479,214 @@ def map_external_identifier(
         )
 
 
+@dataclass(frozen=True)
+class LinkFoundryIdentityResult:
+    external_identity_id: uuid.UUID
+    world_id: uuid.UUID
+
+
+def _link_foundry_identity_impl(
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    foundry_user_id: str,
+    user_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> LinkFoundryIdentityResult:
+    """The actual work of link_foundry_identity(), on a connection the
+    caller already has open — see _map_external_identifier_impl's own
+    docstring for the composable-implementation/public-wrapper pattern
+    this mirrors.
+
+    Maps foundry_user_id (the Foundry-side user id) under external_system_id
+    to an existing platform user_id, by upserting a
+    security.external_identities row keyed on (issuer, subject) =
+    (foundry_issuer(external_system_id), foundry_user_id). A repeat call
+    for the same (external_system_id, foundry_user_id) reassigns the
+    mapping to whatever user_id is supplied — the same "re-registering the
+    same external object is idempotent" upsert semantics
+    _map_external_identifier_impl already documents for its own table — so
+    a GM correcting a mis-linked Foundry user simply calls this again
+    rather than needing a separate revoke-then-relink flow. A nonexistent
+    user_id is rejected as a 400 by security.external_identities' own
+    user_id foreign key (the same reliance dnd_ai.commands.memberships.
+    create_campaign_membership's own docstring documents for
+    security.campaign_memberships.user_id).
+
+    expected_world_id, when supplied, asserts external_system_id belongs to
+    that world before writing anything — identical in shape and purpose to
+    _map_external_identifier_impl's own expected_world_id argument;
+    expected_world_id=None skips only this assertion."""
+    world_id = _external_system_world(connection, external_system_id)
+    if expected_world_id is not None and world_id != expected_world_id:
+        raise ExternalSystemNotFoundError(
+            f"external system {external_system_id} belongs to world {world_id!r}, "
+            f"not {expected_world_id!r}"
+        )
+
+    issuer = foundry_issuer(external_system_id)
+    value = connection.execute(
+        text("""
+            INSERT INTO security.external_identities (user_id, issuer, subject, linked_at)
+            VALUES (:user, :issuer, :subject, now())
+            ON CONFLICT (issuer, subject) WHERE revoked_at IS NULL
+            DO UPDATE SET user_id = EXCLUDED.user_id, linked_at = now()
+            RETURNING external_identity_id
+        """),
+        {"user": user_id, "issuer": issuer, "subject": foundry_user_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+
+    return LinkFoundryIdentityResult(external_identity_id=value, world_id=world_id)
+
+
+def link_foundry_identity(
+    engine: Engine,
+    *,
+    external_system_id: uuid.UUID,
+    foundry_user_id: str,
+    user_id: uuid.UUID,
+    expected_world_id: uuid.UUID | None = None,
+) -> LinkFoundryIdentityResult:
+    """Map a Foundry-side user id to an existing platform user. Public
+    convenience API: opens and commits its own transaction. See
+    _link_foundry_identity_impl() for the composable form a caller with
+    its own transaction (e.g. an API command endpoint) uses instead."""
+    with engine.begin() as connection:
+        return _link_foundry_identity_impl(
+            connection,
+            external_system_id=external_system_id,
+            foundry_user_id=foundry_user_id,
+            user_id=user_id,
+            expected_world_id=expected_world_id,
+        )
+
+
+@dataclass(frozen=True)
+class IssueFoundrySystemKeyResult:
+    external_system_id: uuid.UUID
+    world_id: uuid.UUID
+    raw_key: str
+    principal_user_id: uuid.UUID
+
+
+def _issue_foundry_system_key_impl(
+    connection: Connection,
+    *,
+    external_system_id: uuid.UUID,
+    principal_foundry_user_id: str,
+    expected_world_id: uuid.UUID | None = None,
+) -> IssueFoundrySystemKeyResult:
+    """The actual work of issue_foundry_system_key(), on a connection the
+    caller already has open — see _link_foundry_identity_impl's own
+    docstring for the composable-implementation/public-wrapper pattern
+    this mirrors.
+
+    Mints a fresh, high-entropy system-level credential for
+    external_system_id (`secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_
+    ENTROPY_BYTES)`, the same CSPRNG `create_campaign_invitation` already
+    uses for its own token), stores only its hash
+    (`dnd_ai.domain.access.hash_foundry_system_key`) in `integration.
+    external_systems.system_key_hash` (migration 089), and — the second
+    Phase 11 workstream 2 correction, migration 092 — *binds* it in the
+    same statement to exactly one platform principal: the user
+    `principal_foundry_user_id` already resolves to via a prior
+    `link_foundry_identity` call for this same external_system_id. This
+    closes a Critical authentication defect the credential's first design
+    had — see `dnd_ai.domain.access.resolve_foundry_system_principal`'s own
+    docstring for the full account — by removing the step that let a
+    *caller*, not the credential's own issuance, decide which platform user
+    a presented key would authenticate as. `principal_foundry_user_id` must
+    already be linked (`UnlinkedFoundryPrincipalError` otherwise): this
+    function only *binds* an existing mapping to a credential, it does not
+    create one — `link_foundry_identity` remains the only way to establish
+    "Foundry user X is platform user Y" in the first place, so the ordering
+    a GM must follow (register, then link the intended principal, then
+    issue a key naming that same Foundry user id) is enforced structurally,
+    not merely documented.
+
+    The raw key is returned to the caller exactly once, in this result,
+    and is never logged, persisted, or otherwise retrievable again. Calling
+    this again for the same external_system_id — with the same or a
+    different principal_foundry_user_id — overwrites both the prior hash
+    and the prior binding (`ux_external_systems_system_key_hash` allows
+    this: a plain UPDATE, not an INSERT — no unique-violation possible),
+    immediately and silently invalidating whatever credential a Foundry
+    adapter was previously using — rotation, not addition; re-binding to a
+    different principal in the same call is deliberate, not an oversight,
+    since a GM rotating a compromised key and simultaneously handing it to
+    a different principal is a single, atomic operation, not two. There is
+    deliberately no separate "revoke without replacing" operation in this
+    workstream: a GM who wants a system unable to authenticate at all can
+    already deactivate it wholesale via its existing `is_active` column
+    (checked by `resolve_foundry_system_principal`), and adding a second,
+    narrower revoke path with no caller yet would be exactly the
+    speculative surface this codebase avoids.
+
+    expected_world_id, when supplied, asserts external_system_id belongs
+    to that world before writing anything — identical in shape and
+    purpose to _link_foundry_identity_impl's own expected_world_id
+    argument; expected_world_id=None skips only this assertion."""
+    world_id = _external_system_world(connection, external_system_id)
+    if expected_world_id is not None and world_id != expected_world_id:
+        raise ExternalSystemNotFoundError(
+            f"external system {external_system_id} belongs to world {world_id!r}, "
+            f"not {expected_world_id!r}"
+        )
+
+    principal_user_id = resolve_user_by_external_identity(
+        connection,
+        issuer=foundry_issuer(external_system_id),
+        subject=principal_foundry_user_id,
+    )
+    if principal_user_id is None:
+        raise UnlinkedFoundryPrincipalError(
+            f"Foundry user {principal_foundry_user_id!r} has no active link_foundry_identity "
+            f"mapping for external system {external_system_id}"
+        )
+
+    raw_key = secrets.token_urlsafe(_FOUNDRY_SYSTEM_KEY_ENTROPY_BYTES)
+    key_hash = hash_foundry_system_key(raw_key)
+    connection.execute(
+        text("""
+            UPDATE integration.external_systems
+            SET system_key_hash = :hash, system_key_principal_user_id = :principal,
+                updated_at = now()
+            WHERE external_system_id = :system
+        """),
+        {"hash": key_hash, "principal": principal_user_id, "system": external_system_id},
+    )
+
+    return IssueFoundrySystemKeyResult(
+        external_system_id=external_system_id,
+        world_id=world_id,
+        raw_key=raw_key,
+        principal_user_id=principal_user_id,
+    )
+
+
+def issue_foundry_system_key(
+    engine: Engine,
+    *,
+    external_system_id: uuid.UUID,
+    principal_foundry_user_id: str,
+    expected_world_id: uuid.UUID | None = None,
+) -> IssueFoundrySystemKeyResult:
+    """Mint (or rotate) external_system_id's Foundry-adapter system
+    credential, bound to the platform user principal_foundry_user_id is
+    already linked to. Public convenience API: opens and commits its own
+    transaction. See _issue_foundry_system_key_impl() for the composable
+    form a caller with its own transaction (e.g. an API command endpoint)
+    uses instead."""
+    with engine.begin() as connection:
+        return _issue_foundry_system_key_impl(
+            connection,
+            external_system_id=external_system_id,
+            principal_foundry_user_id=principal_foundry_user_id,
+            expected_world_id=expected_world_id,
+        )
+
+
 def _canonical_payload(
     *,
     encounter_id: uuid.UUID,
@@ -356,13 +696,29 @@ def _canonical_payload(
     world_time_id: uuid.UUID,
     action_kind: str,
     target_entity_id: uuid.UUID | None,
+    item_instance_id: uuid.UUID | None,
+    spell_id: uuid.UUID | None,
     hit: bool | None,
     damage_amount: int | None,
+    damage_type_id: uuid.UUID | None,
+    resulting_condition_id: uuid.UUID | None,
+    interaction_type_code: str,
+    session_id: uuid.UUID | None,
+    event_details: str | None,
     raw_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """The full set of arguments that determine a combat-sync operation's
     meaning — persisted as sync_jobs.payload_jsonb and used to detect a
-    conflicting replay under the same external_operation_id."""
+    conflicting replay under the same external_operation_id. Mirrors every
+    argument `dnd_ai.commands.encounters._resolve_combat_turn_impl` itself
+    accepts (except campaign_id, which is an authorization assertion, not
+    part of what the operation *means* — two callers submitting the
+    identical combat action from different authorized campaigns would
+    still be the same operation) — added in Phase 11 workstream 3 so
+    `apply_foundry_combat_sync`'s HTTP endpoint has full parity with
+    `dnd_ai.api.encounters.resolve_combat_turn_endpoint` rather than
+    silently dropping item/spell/damage-type/condition/session/detail
+    information a Foundry adapter submits."""
     return {
         "encounter_id": str(encounter_id),
         "round_number": round_number,
@@ -371,8 +727,17 @@ def _canonical_payload(
         "world_time_id": str(world_time_id),
         "action_kind": action_kind,
         "target_entity_id": str(target_entity_id) if target_entity_id is not None else None,
+        "item_instance_id": str(item_instance_id) if item_instance_id is not None else None,
+        "spell_id": str(spell_id) if spell_id is not None else None,
         "hit": hit,
         "damage_amount": damage_amount,
+        "damage_type_id": str(damage_type_id) if damage_type_id is not None else None,
+        "resulting_condition_id": (
+            str(resulting_condition_id) if resulting_condition_id is not None else None
+        ),
+        "interaction_type_code": interaction_type_code,
+        "session_id": str(session_id) if session_id is not None else None,
+        "event_details": event_details,
         "raw_payload": raw_payload,
     }
 
@@ -778,9 +1143,17 @@ def apply_foundry_combat_sync(
     world_time_id: uuid.UUID,
     action_kind: str = "attack",
     target_entity_id: uuid.UUID | None = None,
+    item_instance_id: uuid.UUID | None = None,
+    spell_id: uuid.UUID | None = None,
     hit: bool | None = None,
     damage_amount: int | None = None,
+    damage_type_id: uuid.UUID | None = None,
+    resulting_condition_id: uuid.UUID | None = None,
+    interaction_type_code: str = "attack",
+    session_id: uuid.UUID | None = None,
+    event_details: str | None = None,
     raw_payload: dict[str, Any] | None = None,
+    campaign_id: uuid.UUID | None = None,
 ) -> ApplyFoundryCombatSyncResult:
     """Route an inbound Foundry combat-turn payload through the real combat-
     resolution logic (never a raw write), exactly once per
@@ -790,22 +1163,25 @@ def apply_foundry_combat_sync(
     single-connection/advisory-lock concurrency model, and the
     replay/retry/conflict rules.
 
-    Deliberately calls _resolve_combat_turn_impl() with no campaign_id
-    (leaving _lock_encounter's own expected_campaign_id check unscoped),
-    not an oversight: this module's integration.* schema (revision 079)
-    scopes an external_system_id to a world_id only — see
-    integration.external_systems' own schema — never to a campaign, so
-    there is no authoritative campaign_id this function could authorize
-    an inbound Foundry combat turn against yet. It still resolves against
-    encounter_id's own real, current, FOR-UPDATE-locked timeline/status
-    (dnd_ai.commands.encounters._lock_encounter), so a nonexistent or
-    non-active encounter is still rejected exactly as it would be with a
-    campaign supplied — only the campaign-ownership *assertion* is
-    skipped. Phase 11 (Foundry MVP) is where Foundry users get mapped to
-    authenticated platform users and campaign membership, at which point
-    this function's caller — not this function itself, which has no
-    notion of an authenticated request — would be the place to resolve
-    and pass an authoritative campaign_id to assert against.
+    campaign_id (Phase 11 workstream 3) is passed straight through to
+    _resolve_combat_turn_impl(), which requires it to match the *locked*
+    encounter's own campaign_id (dnd_ai.commands.encounters._lock_encounter's
+    expected_campaign_id) atomically with acquiring encounter_id's FOR
+    UPDATE lock — identical to how dnd_ai.api.encounters.
+    resolve_combat_turn_endpoint already threads its own URL campaign_id
+    through the same parameter. campaign_id=None (the default, and every
+    caller before this workstream) leaves that assertion unscoped exactly
+    as before — this function's own HTTP endpoint
+    (dnd_ai.api.integration.apply_foundry_combat_sync_endpoint) is the only
+    caller expected to supply a real one, resolved from the authenticated
+    Foundry adapter's own campaign membership (dnd_ai.api.access.
+    require_campaign_capability), now that workstreams 1-2 give a Foundry
+    request an authenticated user_id to resolve that membership from at
+    all. A test or administrative caller with no campaign to assert
+    against is unaffected: encounter_id's own real, current, FOR-UPDATE-
+    locked timeline/status is still resolved either way, so a nonexistent
+    or non-active encounter is rejected the same way regardless of whether
+    campaign_id is supplied.
 
     Not asserting a campaign does not mean discarding one: the
     interaction.interactions row and any resulting narrative.events row
@@ -814,11 +1190,21 @@ def apply_foundry_combat_sync(
     campaign_id) whenever the target encounter is campaign-owned — the
     same provenance a campaign-scoped caller would get. A campaign-less
     encounter (campaign_id NULL) still produces campaign-less records, as
-    it always has. This is provenance inheritance, not authorization —
-    Foundry callers remain unauthenticated against any particular
-    campaign until Phase 11 does that work; see
-    dnd_ai.commands.encounters._lock_encounter's and LockedEncounter's own
-    docstrings for the general contract this relies on.
+    it always has. See dnd_ai.commands.encounters._lock_encounter's and
+    LockedEncounter's own docstrings for the general contract this relies
+    on.
+
+    item_instance_id/spell_id/damage_type_id/resulting_condition_id/
+    interaction_type_code/session_id/event_details (Phase 11 workstream 3)
+    are passed straight through to _resolve_combat_turn_impl, which has
+    always accepted them — this function simply didn't expose them before,
+    silently dropping anything a caller supplied. Added for parity with
+    dnd_ai.api.encounters.resolve_combat_turn_endpoint now that this
+    function gets its own HTTP endpoint expected to support the same
+    inputs. All are included in _canonical_payload, so a replayed
+    external_operation_id whose item/spell/condition/etc. disagrees with
+    the original call is still detected as a conflicting payload, not
+    silently ignored.
     """
     payload = _canonical_payload(
         encounter_id=encounter_id,
@@ -828,8 +1214,15 @@ def apply_foundry_combat_sync(
         world_time_id=world_time_id,
         action_kind=action_kind,
         target_entity_id=target_entity_id,
+        item_instance_id=item_instance_id,
+        spell_id=spell_id,
         hit=hit,
         damage_amount=damage_amount,
+        damage_type_id=damage_type_id,
+        resulting_condition_id=resulting_condition_id,
+        interaction_type_code=interaction_type_code,
+        session_id=session_id,
+        event_details=event_details,
         raw_payload=raw_payload,
     )
     lock_params = {"a": str(external_system_id), "b": external_operation_id}
@@ -905,8 +1298,16 @@ def apply_foundry_combat_sync(
                     world_time_id=world_time_id,
                     action_kind=action_kind,
                     target_entity_id=target_entity_id,
+                    item_instance_id=item_instance_id,
+                    spell_id=spell_id,
                     hit=hit,
                     damage_amount=damage_amount,
+                    damage_type_id=damage_type_id,
+                    resulting_condition_id=resulting_condition_id,
+                    interaction_type_code=interaction_type_code,
+                    campaign_id=campaign_id,
+                    session_id=session_id,
+                    event_details=event_details,
                 )
                 _complete_sync_job(
                     lock_connection,

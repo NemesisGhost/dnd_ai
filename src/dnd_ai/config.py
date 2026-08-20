@@ -100,6 +100,36 @@ redirect-scheme enforcement applied to the actual JWKS network fetch
 (`OIDC_PRODUCTION_URL_SCHEMES`/`OIDC_LOCAL_URL_SCHEMES` below are the
 single shared source of truth both modules validate against).
 
+`foundry_allowed_origins` (`DND_AI_FOUNDRY_ALLOWED_ORIGINS`) is the explicit
+CORS allowlist for the FoundryVTT module's browser-origin requests
+(`docs/LOCAL_DEPLOYMENT.md`'s documented separate-origin deployment — the
+Foundry client and this API sit behind different public hostnames). A
+comma-separated list of exact origins (`scheme://host[:port]`, never a
+path/query/fragment/credentials, never a wildcard `*` or a wildcarded
+subdomain) — `_validate_foundry_allowed_origins` rejects anything else
+outright at `Settings()` construction, the same fail-fast posture as the
+OIDC settings above, and normalizes each surviving origin (lowercased
+scheme/host, default port stripped, order-preserving de-duplication) so
+`dnd_ai.api.app` never has to repeat that parsing. Defaults to `None`
+(no cross-origin browser access permitted — `dnd_ai.api.app.create_app`
+still installs `CORSMiddleware`, just with an empty allowlist, which is a
+safe default: it never widens to "allow anything," it simply permits
+nothing extra), except when `DND_AI_ENVIRONMENT=production` **and**
+`DND_AI_FEATURE_FOUNDRY_INTEGRATION=true` — a production deployment that
+has actually turned the integration on cannot silently ship with no
+Foundry origin able to reach the API at all, so that combination requires
+`DND_AI_FOUNDRY_ALLOWED_ORIGINS` to be set, with no fallback value.
+Scheme policy mirrors the OIDC settings exactly: production requires every
+origin to use **HTTPS** (a plain-HTTP origin cannot itself be
+authenticated as anything, but it does tell a network observer this
+deployment's Foundry credential travels in the clear); local/test also
+permit `http://`, since a developer's own Foundry instance is routinely
+plain HTTP. See `dnd_ai.api.app`'s own `CORSMiddleware` wiring for how
+this allowlist is actually enforced, and `foundry-module/README.md`'s
+"Trust boundary"/"Transport security" sections for the client-side half of
+this correction (the module's own connection validator requires HTTPS for
+any non-loopback API base URL).
+
 `database_url` carries one more production-only rule beyond the one
 above: `Settings()` also parses it (with SQLAlchemy's own URL parser, not
 string splitting) and refuses to start unless its username is exactly
@@ -186,6 +216,7 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_ISSUER",
         "DND_AI_OIDC_AUDIENCE",
         "DND_AI_OIDC_JWKS_URL",
+        "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
     }
 )
 
@@ -277,6 +308,92 @@ def _validate_oidc_audience(value: str) -> None:
         )
 
 
+_FOUNDRY_ORIGIN_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _validate_and_normalize_foundry_origin(value: str, *, require_https: bool) -> str:
+    """One entry of `DND_AI_FOUNDRY_ALLOWED_ORIGINS` — validated and
+    returned in a canonical form (lowercased scheme/host, default port
+    stripped) so `dnd_ai.api.app` can pass the result straight to
+    `CORSMiddleware(allow_origins=...)` without repeating this parsing.
+    Rejects, rather than silently repairs: a wildcard anywhere in the
+    value (an allowlist entry meant to be exact, never a subdomain
+    pattern), a scheme outside the allowed set for this environment, a
+    missing host, embedded credentials, a path/query/fragment (an Origin
+    is scheme+host+port only — CLAUDE.md rule "no unsafe fallback
+    values"), or an unparseable/invalid-port URL."""
+    if not value or value != value.strip():
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS contains an empty or whitespace-padded entry: {value!r}"
+        )
+    if "*" in value:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS must not contain a wildcard origin: {value!r} — "
+            "every entry must be one exact scheme://host[:port], never a pattern"
+        )
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS contains a malformed origin {value!r}: {exc}"
+        ) from exc
+    allowed_schemes = {"https"} if require_https else {"http", "https"}
+    scheme = parsed.scheme.lower()
+    if scheme not in allowed_schemes:
+        allowed = " or ".join(sorted(allowed_schemes))
+        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must use {allowed}")
+    if not parsed.hostname:
+        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain embedded credentials"
+        )
+    if parsed.path not in ("", "/"):
+        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a path")
+    if parsed.query:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a query string"
+        )
+    if parsed.fragment:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a URL fragment"
+        )
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} has an invalid port"
+        ) from exc
+    host = parsed.hostname.lower()
+    if port is not None and port != _FOUNDRY_ORIGIN_DEFAULT_PORTS[scheme]:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
+
+def _parse_foundry_allowed_origins(raw: str, *, require_https: bool) -> tuple[str, ...]:
+    """Splits, validates, normalizes, and order-preserving-deduplicates a
+    raw `DND_AI_FOUNDRY_ALLOWED_ORIGINS` value."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for entry in raw.split(","):
+        origin = _validate_and_normalize_foundry_origin(entry.strip(), require_https=require_https)
+        if origin not in seen:
+            seen.add(origin)
+            normalized.append(origin)
+    return tuple(normalized)
+
+
+def foundry_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
+    """The parsed, already-validated CORS allowlist `dnd_ai.api.app`
+    passes to `CORSMiddleware(allow_origins=...)` — `Settings` itself
+    stores the normalized comma-joined string (see
+    `_validate_foundry_allowed_origins`), so this only ever re-splits
+    already-validated data; it never re-runs validation or can fail."""
+    if not settings_obj.foundry_allowed_origins:
+        return ()
+    return tuple(settings_obj.foundry_allowed_origins.split(","))
+
+
 class Settings(BaseSettings):
     """Application settings loaded from `DND_AI_*` environment variables
     (including those `.env` supplies outside production — see
@@ -309,6 +426,12 @@ class Settings(BaseSettings):
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
+
+    # Explicit CORS allowlist for the FoundryVTT module's browser-origin
+    # requests — required only when production and the Foundry feature
+    # flag are both on; see _validate_foundry_allowed_origins and this
+    # module's own docstring.
+    foundry_allowed_origins: str | None = None
 
     @model_validator(mode="after")
     def _resolve_database_url(self) -> "Settings":
@@ -434,6 +557,41 @@ class Settings(BaseSettings):
             self.oidc_jwks_url, field_name="DND_AI_OIDC_JWKS_URL", allowed_schemes=allowed_schemes
         )
         _validate_oidc_audience(self.oidc_audience)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_foundry_allowed_origins(self) -> "Settings":
+        """No unsafe fallback value, ever: unset means "no cross-origin
+        Foundry access" (a safe, narrowing default — `dnd_ai.api.app`
+        still installs `CORSMiddleware`, just with an empty allowlist),
+        never a wildcard. A blank/whitespace-only value (e.g. Compose
+        interpolating an unset host variable to `""`) is treated
+        identically to unset, not as a validation error. Required, with no
+        fallback, only once a production deployment has actually turned
+        the Foundry integration on (`feature_foundry_integration`) — see
+        the module docstring's `foundry_allowed_origins` paragraph for the
+        full policy, which otherwise mirrors the OIDC settings above:
+        production requires HTTPS on every origin, local/test also permit
+        HTTP. Normalizes the field in place (comma-joined, deduplicated,
+        canonical form) so `dnd_ai.api.app.foundry_allowed_origins_tuple`
+        never has to re-validate."""
+        raw = self.foundry_allowed_origins
+        if raw is not None and raw.strip() == "":
+            raw = None
+        if raw is None:
+            if self.environment == "production" and self.feature_foundry_integration:
+                raise ValueError(
+                    "DND_AI_FOUNDRY_ALLOWED_ORIGINS is required when "
+                    "DND_AI_ENVIRONMENT=production and "
+                    "DND_AI_FEATURE_FOUNDRY_INTEGRATION=true — a browser-based FoundryVTT "
+                    "client needs an explicit CORS allowlist; there is no safe wildcard or "
+                    "default origin."
+                )
+            self.foundry_allowed_origins = None
+            return self
+        require_https = self.environment == "production"
+        origins = _parse_foundry_allowed_origins(raw, require_https=require_https)
+        self.foundry_allowed_origins = ",".join(origins)
         return self
 
 

@@ -38,7 +38,35 @@ external_systems = Table(
     Column("display_name", Text(), nullable=False),
     Column("external_reference", Text()),
     Column("is_active", Boolean(), nullable=False, server_default=text("true")),
+    Column(
+        "system_key_hash",
+        Text(),
+        comment=(
+            "sha256 hex digest of a Foundry-adapter system-level credential "
+            "(dnd_ai.domain.access.hash_foundry_system_key). NULL until "
+            "dnd_ai.commands.integration.issue_foundry_system_key is called for "
+            "this row; issuing a new key overwrites this in place (rotation, not "
+            "append) rather than tracking history. Never the raw key itself — see "
+            "security.campaign_invitations.invitation_token_hash for the identical "
+            "hash-only pattern."
+        ),
+    ),
+    Column(
+        "system_key_principal_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The one platform user this row's system_key_hash authenticates as "
+            "(dnd_ai.domain.access.resolve_foundry_system_principal). NULL until "
+            "dnd_ai.commands.integration.issue_foundry_system_key binds it, or if "
+            "the bound user is later deleted — a credential in either state cannot "
+            "authenticate at all. Never a client-selected identity: this is the "
+            "sole source of truth for which security.users row a FoundrySystem "
+            "credential resolves to."
+        ),
+    ),
     *_timestamps(),
+    UniqueConstraint("system_key_hash", name="ux_external_systems_system_key_hash"),
     schema="integration",
     comment=(
         "A configured external system connection for a world — a specific "
@@ -51,6 +79,11 @@ external_systems = Table(
 
 Index("ix_external_systems_world_id", external_systems.c.world_id)
 Index("ix_external_systems_system_type", external_systems.c.system_type)
+Index(
+    "ix_external_systems_system_key_principal_user_id",
+    external_systems.c.system_key_principal_user_id,
+    postgresql_where=external_systems.c.system_key_principal_user_id.isnot(None),
+)
 
 external_identifiers = Table(
     "external_identifiers",
