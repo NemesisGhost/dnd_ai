@@ -213,6 +213,35 @@ services:
       # always runs `api` with DND_AI_ENVIRONMENT=production).
       DND_AI_FEATURE_FOUNDRY_INTEGRATION: ${API_FEATURE_FOUNDRY_INTEGRATION:-false}
       DND_AI_FOUNDRY_ALLOWED_ORIGINS: ${API_FOUNDRY_ALLOWED_ORIGINS:-}
+      # Phase 12 AI provider (see .env.example's "AI provider" section for
+      # the full explanation). Same soft-default posture as the Foundry
+      # block above: the feature flag stays off, the base URL defaults to
+      # real hosted OpenAI, the model defaults to gpt-4o, and the key stays
+      # unset — dnd_ai.config.Settings is what actually refuses to start
+      # (DND_AI_ENVIRONMENT=production above) once
+      # DND_AI_FEATURE_AI_NPC_DIALOGUE=true, DND_AI_AI_PROVIDER_BASE_URL is
+      # still the hosted default, and no key is configured (env var or
+      # mounted secret). Point API_AI_PROVIDER_BASE_URL at a locally hosted,
+      # OpenAI-API-compatible model server (Ollama, vLLM, LM Studio, ...)
+      # for the "local model" path instead — that operator-controlled
+      # server may need no key at all. dnd_ai.config.Settings treats a
+      # blank DND_AI_AI_PROVIDER_API_KEY (this file's own `:-` fallback
+      # when API_AI_PROVIDER_API_KEY is unset) identically to it being
+      # absent — never as a real, empty credential.
+      #
+      # Prefer a mounted secret over API_AI_PROVIDER_API_KEY for a real
+      # hosted-OpenAI key: mount it at
+      # ${DND_AI_SECRETS_DIR}/dnd_ai_ai_provider_api_key inside this
+      # container (the same generic host-mounted-secret-file mechanism
+      # DND_AI_DATABASE_URL's own secret file already uses —
+      # dnd_ai.config.Settings' secrets_dir applies to every field, not only
+      # database_url) and leave API_AI_PROVIDER_API_KEY unset in .env — an
+      # environment variable set here is still visible via `docker
+      # inspect`/`docker compose config`, which a mounted file is not.
+      DND_AI_FEATURE_AI_NPC_DIALOGUE: ${API_FEATURE_AI_NPC_DIALOGUE:-false}
+      DND_AI_AI_PROVIDER_BASE_URL: ${API_AI_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      DND_AI_AI_PROVIDER_MODEL: ${API_AI_PROVIDER_MODEL:-gpt-4o}
+      DND_AI_AI_PROVIDER_API_KEY: ${API_AI_PROVIDER_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

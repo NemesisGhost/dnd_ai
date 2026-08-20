@@ -33,7 +33,7 @@ Append `/32` to make it a CIDR block.
 
 ## 2. (Optional) Add API keys
 
-Only needed for the OpenAI or Discord integrations, neither of which is built yet.
+Only needed for the OpenAI integration (implemented — see `docs/CONTRIBUTING.md` §2) or the Discord integration (not built yet), and only if you're using this optional AWS Secrets Manager path rather than the self-hosted Compose deployment's `.env`/mounted-secret path (`.env.example`'s "AI provider" section).
 
 ```powershell
 Copy-Item terraform/environments/dev/secrets.local.json.example terraform/environments/dev/secrets.local.json

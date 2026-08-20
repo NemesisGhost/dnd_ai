@@ -42,11 +42,14 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
 from .context_assembly import NpcConversationContext
+
+if TYPE_CHECKING:
+    import httpx
 
 _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _RECORD_NPC_TURN_FUNCTION_NAME = "record_npc_turn"
@@ -258,7 +261,15 @@ class OpenAiCompatibleProvider:
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
-        body = response.json()
+        body, parse_error = _parse_response_body(response)
+        if body is None:
+            return ProviderResult(
+                raw_response=None,
+                structured_output=None,
+                finish_reason=None,
+                latency_ms=latency_ms,
+                error_message=parse_error,
+            )
         raw_response = str(body)
         finish_reason = _finish_reason(body)
         tool_input = _extract_tool_call(body, function_name=_RECORD_NPC_TURN_FUNCTION_NAME)
@@ -328,7 +339,15 @@ class OpenAiCompatibleProvider:
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
-        body = response.json()
+        body, parse_error = _parse_response_body(response)
+        if body is None:
+            return SynthesisProviderResult(
+                raw_response=None,
+                structured_output=None,
+                finish_reason=None,
+                latency_ms=latency_ms,
+                error_message=parse_error,
+            )
         raw_response = str(body)
         finish_reason = _finish_reason(body)
         tool_input = _extract_tool_call(body, function_name=_RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME)
@@ -386,6 +405,25 @@ def _build_synthesis_system_prompt(context: dict[str, Any], *, audience_tier: st
         f"This audience additionally knows: {known}. "
         "Reply only through the record_synthesis_answer function."
     )
+
+
+def _parse_response_body(response: "httpx.Response") -> tuple[dict[str, Any] | None, str | None]:
+    """Parses an HTTP 2xx response body as a JSON object — untrusted input,
+    same posture as `_extract_tool_call`'s own docstring: a provider or
+    self-hosted local model server is never assumed to return well-formed
+    JSON, let alone a JSON *object*, just because it returned a successful
+    status code. Returns `(body, None)` on success, or `(None, message)` for
+    either a body that isn't valid JSON at all or one that parses to
+    something other than a JSON object (e.g. a bare array or scalar) — both
+    reported as an ordinary `ProviderResult`/`SynthesisProviderResult`
+    `error_message`, never an unhandled exception."""
+    try:
+        parsed = response.json()
+    except ValueError:
+        return None, "Provider response was not valid JSON."
+    if not isinstance(parsed, dict):
+        return None, "Provider response was not a JSON object."
+    return parsed, None
 
 
 def _finish_reason(body: dict[str, Any]) -> str | None:

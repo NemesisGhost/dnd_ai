@@ -618,6 +618,26 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _normalize_ai_provider_api_key(self) -> "Settings":
+        """Docker Compose cannot omit an environment key entirely when the
+        host-side variable is unset — `${API_AI_PROVIDER_API_KEY:-}`
+        interpolates to the literal empty string, never a genuinely absent
+        `DND_AI_AI_PROVIDER_API_KEY` (compose.yaml's own comment on this
+        setting explains why no fallback default other than blank is safe
+        for a secret). Treat blank/whitespace-only identically to unset —
+        mirrors `_validate_foundry_allowed_origins`' identical reasoning for
+        `DND_AI_FOUNDRY_ALLOWED_ORIGINS` — so both
+        `_require_ai_provider_key_in_production` below and
+        `dnd_ai.api.ai_npc._resolve_provider` see `None`, never a falsy-but-
+        not-`None` `""` that would silently skip the required-key check and
+        then send an unauthenticated request to hosted OpenAI. Runs before
+        `_require_ai_provider_key_in_production` (definition order) so that
+        validator always sees the normalized value."""
+        if self.ai_provider_api_key is not None and self.ai_provider_api_key.strip() == "":
+            self.ai_provider_api_key = None
+        return self
+
+    @model_validator(mode="after")
     def _require_ai_provider_key_in_production(self) -> "Settings":
         """No unsafe fallback: a production deployment that has turned
         `feature_ai_npc_dialogue` on cannot silently ship with no AI
