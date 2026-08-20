@@ -46,6 +46,14 @@ class RevealableKnowledge:
 
 
 @dataclass(frozen=True)
+class RelatedQuest:
+    quest_id: uuid.UUID
+    name: str
+    participant_role: str
+    status_code: str
+
+
+@dataclass(frozen=True)
 class NpcConversationContext:
     npc_entity_id: uuid.UUID
     npc_name: str
@@ -57,6 +65,7 @@ class NpcConversationContext:
     active_encounter_id: uuid.UUID | None
     known_facts_about_npc: tuple[str, ...]
     revealable_knowledge: tuple[RevealableKnowledge, ...]
+    related_quests: tuple[RelatedQuest, ...]
 
     def as_prompt_payload(self) -> dict[str, Any]:
         """The exact structure persisted to `ai.context_snapshots.
@@ -81,6 +90,15 @@ class NpcConversationContext:
             "revealable_knowledge": [
                 {"knowledge_item_id": str(k.knowledge_item_id), "statement": k.statement}
                 for k in self.revealable_knowledge
+            ],
+            "related_quests": [
+                {
+                    "quest_id": str(q.quest_id),
+                    "name": q.name,
+                    "participant_role": q.participant_role,
+                    "status": q.status_code,
+                }
+                for q in self.related_quests
             ],
         }
 
@@ -178,6 +196,45 @@ def _revealable_knowledge(
     )
 
 
+def _related_quests(
+    connection: Connection, *, timeline_id: uuid.UUID, party_id: uuid.UUID, npc_entity_id: uuid.UUID
+) -> tuple[RelatedQuest, ...]:
+    """Quests `npc_entity_id` participates in, with `party_id`'s own
+    current status for each (`campaign.quest_state`, preferring a party-
+    scoped row over a campaign/timeline-wide one when both exist) — the
+    "responses can reference current ... quest ... state" exit criterion.
+    Only the quest's own name and status are included, never per-
+    objective detail: `narrative.quests` carries no visibility split of
+    its own (unlike `narrative.quest_objectives.visibility_policy`), so
+    surfacing anything more granular here would risk exposing GM-only
+    objective content through an NPC's mouth."""
+    rows = connection.execute(
+        text("""
+            SELECT DISTINCT ON (q.quest_id)
+                q.quest_id, ce.canonical_name AS name, qp.participant_role, qs.code AS status_code
+            FROM narrative.quest_participants qp
+            JOIN narrative.quests q ON q.quest_id = qp.quest_id
+            JOIN core.entities ce ON ce.entity_id = q.quest_id
+            JOIN campaign.quest_state cqs
+                ON cqs.quest_id = q.quest_id AND cqs.timeline_id = :timeline
+               AND (cqs.party_id = :party OR cqs.party_id IS NULL)
+            JOIN campaign.quest_statuses qs ON qs.quest_status_id = cqs.quest_status_id
+            WHERE qp.participant_entity_id = :npc
+            ORDER BY q.quest_id, cqs.party_id NULLS LAST
+        """),
+        {"npc": npc_entity_id, "timeline": timeline_id, "party": party_id},
+    ).all()
+    return tuple(
+        RelatedQuest(
+            quest_id=row.quest_id,
+            name=row.name,
+            participant_role=row.participant_role,
+            status_code=row.status_code,
+        )
+        for row in rows
+    )
+
+
 def assemble_npc_conversation_context(
     connection: Connection,
     *,
@@ -229,6 +286,12 @@ def assemble_npc_conversation_context(
             npc_entity_id=npc_entity_id,
         ),
         revealable_knowledge=_revealable_knowledge(
+            connection,
+            timeline_id=timeline_id,
+            party_id=requesting_party_id,
+            npc_entity_id=npc_entity_id,
+        ),
+        related_quests=_related_quests(
             connection,
             timeline_id=timeline_id,
             party_id=requesting_party_id,

@@ -160,6 +160,13 @@ def _build_system_prompt(context: NpcConversationContext) -> str:
         "; ".join(f"{k.knowledge_item_id}: {k.statement}" for k in context.revealable_knowledge)
         or "none"
     )
+    quests = (
+        "; ".join(
+            f"{q.name} ({q.participant_role}, currently {q.status_code})"
+            for q in context.related_quests
+        )
+        or "none"
+    )
     return (
         f"You are {context.npc_name}, an NPC in a tabletop RPG, speaking with "
         f"{context.requesting_character_name}. Relationship status: "
@@ -168,6 +175,7 @@ def _build_system_prompt(context: NpcConversationContext) -> str:
         f"{context.requesting_character_name} already knows: {known}. "
         f"You may optionally reveal exactly one of these facts, by id, if it fits the "
         f"conversation naturally — never invent a fact or an id not in this list: {candidates}. "
+        f"Quests you are involved in: {quests}. "
         "Reply only through the record_npc_turn tool."
     )
 

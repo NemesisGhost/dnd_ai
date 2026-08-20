@@ -33,6 +33,9 @@ from tests.factories import (
     make_party,
     make_party_knowledge,
     make_party_membership,
+    make_quest,
+    make_quest_participant,
+    make_quest_state,
     make_timeline,
     make_user,
     make_world,
@@ -83,6 +86,21 @@ class Fixture:
         )
         make_party_knowledge(connection, self.timeline_id, self.party_id, self.known_id)
 
+        # A quest the NPC is involved in, with the party's own current
+        # status for it — "responses can reference current ... quest ...
+        # state."
+        self.quest_id = make_quest(connection, self.world_id, name="Find the Lost Amulet")
+        make_quest_participant(
+            connection, self.quest_id, self.npc_id, participant_role="quest_giver"
+        )
+        make_quest_state(
+            connection,
+            self.timeline_id,
+            self.quest_id,
+            party_id=self.party_id,
+            status_code="active",
+        )
+
 
 @pytest.fixture
 def f(db_connection: Connection) -> Fixture:
@@ -102,6 +120,26 @@ def test_context_assembly_offers_only_unknown_facts(db_connection: Connection, f
     revealable_ids = {k.knowledge_item_id for k in context.revealable_knowledge}
     assert revealable_ids == {f.secret_id}
     assert "runs the local inn" in " ".join(context.known_facts_about_npc)
+
+
+def test_context_assembly_includes_the_partys_own_quest_state(
+    db_connection: Connection, f: Fixture
+) -> None:
+    context = assemble_npc_conversation_context(
+        db_connection,
+        npc_entity_id=f.npc_id,
+        timeline_id=f.timeline_id,
+        expected_world_id=f.world_id,
+        requesting_character_id=f.pc_id,
+        requesting_party_id=f.party_id,
+    )
+
+    assert len(context.related_quests) == 1
+    quest = context.related_quests[0]
+    assert quest.quest_id == f.quest_id
+    assert quest.name == "Find the Lost Amulet"
+    assert quest.participant_role == "quest_giver"
+    assert quest.status_code == "active"
 
 
 def test_context_payload_is_json_serializable(db_connection: Connection, f: Fixture) -> None:
