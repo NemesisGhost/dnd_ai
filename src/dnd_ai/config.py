@@ -217,6 +217,8 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_AUDIENCE",
         "DND_AI_OIDC_JWKS_URL",
         "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
+        "DND_AI_AI_PROVIDER_API_KEY",
+        "DND_AI_AI_PROVIDER_MODEL",
     }
 )
 
@@ -433,6 +435,15 @@ class Settings(BaseSettings):
     # module's own docstring.
     foundry_allowed_origins: str | None = None
 
+    # Phase 12 AI provider credential/model pin (dnd_ai.domain.ai_provider.
+    # AnthropicAiProvider) — required, with no fallback, only once a
+    # production deployment has actually turned feature_ai_npc_dialogue on;
+    # see _require_ai_provider_key_in_production below. Never a default
+    # value: an API key is a secret (CLAUDE.md rule 10 — no secrets in code
+    # or seed files), so there is nothing safe to default it to.
+    ai_provider_api_key: str | None = None
+    ai_provider_model: str = "claude-sonnet-5"
+
     @model_validator(mode="after")
     def _resolve_database_url(self) -> "Settings":
         """No silent fallback to the local development database/credentials
@@ -592,6 +603,29 @@ class Settings(BaseSettings):
         require_https = self.environment == "production"
         origins = _parse_foundry_allowed_origins(raw, require_https=require_https)
         self.foundry_allowed_origins = ",".join(origins)
+        return self
+
+    @model_validator(mode="after")
+    def _require_ai_provider_key_in_production(self) -> "Settings":
+        """No unsafe fallback: a production deployment that has turned
+        `feature_ai_npc_dialogue` on cannot silently ship with no AI
+        provider credential configured at all — the same "required, with
+        no fallback, once the feature is actually on" posture
+        `_validate_foundry_allowed_origins` already applies to its own
+        setting. Outside production, or with the feature flag off, an
+        unconfigured key is a safe default (`dnd_ai.api.ai_npc.
+        _resolve_provider` returns 503 rather than silently degrading to a
+        fake/no-op provider)."""
+        if (
+            self.environment == "production"
+            and self.feature_ai_npc_dialogue
+            and self.ai_provider_api_key is None
+        ):
+            raise ValueError(
+                "DND_AI_AI_PROVIDER_API_KEY (as an environment variable, or a mounted secret) is "
+                "required when DND_AI_ENVIRONMENT=production and "
+                "DND_AI_FEATURE_AI_NPC_DIALOGUE=true."
+            )
         return self
 
 

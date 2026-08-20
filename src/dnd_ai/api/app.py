@@ -48,6 +48,7 @@ from starlette.responses import JSONResponse
 from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, foundry_allowed_origins_tuple, settings
 
 from .access_grants import router as access_grants_router
+from .ai_npc import router as ai_npc_router
 from .auth import dispose_jwks_client
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
@@ -66,6 +67,7 @@ from .knowledge import router as knowledge_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
 from .quests import router as quests_router
+from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
 from .sessions import router as sessions_router
 from .summary import router as summary_router
@@ -127,6 +129,7 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
+    app.include_router(ai_npc_router)
     app.include_router(campaign_invitations_router)
     app.include_router(campaigns_router)
     app.include_router(character_state_router)
@@ -141,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(memberships_router)
     app.include_router(movement_router)
     app.include_router(quests_router)
+    app.include_router(reference_corpus_router)
     app.include_router(relationships_router)
     app.include_router(sessions_router)
     app.include_router(summary_router)

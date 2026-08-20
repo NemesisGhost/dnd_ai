@@ -2902,3 +2902,131 @@ def make_delivery_attempt(
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_agent(
+    connection: Connection,
+    *,
+    agent_role_code: str = "npc_portrayal",
+    provider: str = "fake",
+    model_identifier: str = "fake-model",
+) -> uuid.UUID:
+    agent_role_id = lookup_id(connection, "ai", "agent_roles", "agent_role_id", agent_role_code)
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.agents (agent_role_id, display_name, provider, model_identifier)
+            VALUES (:role, :name, :provider, :model)
+            RETURNING agent_id
+        """),
+        {
+            "role": agent_role_id,
+            "name": f"Test agent {agent_role_code}",
+            "provider": provider,
+            "model": model_identifier,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_agent_assignment(
+    connection: Connection, agent_id: uuid.UUID, campaign_id: uuid.UUID, entity_id: uuid.UUID
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.agent_assignments (agent_id, campaign_id, entity_id)
+            VALUES (:agent, :campaign, :entity)
+            RETURNING agent_assignment_id
+        """),
+        {"agent": agent_id, "campaign": campaign_id, "entity": entity_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_source_document(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    title: str = "Test Sourcebook",
+    classification: str = "srd",
+    file_hash: str | None = None,
+    source_version_label: str = "v1",
+    visibility: str = "general",
+    source_type_code: str = "rulebook",
+    status: str = "active",
+) -> uuid.UUID:
+    source_type_id = lookup_id(
+        connection, "core", "source_types", "source_type_id", source_type_code
+    )
+    value = connection.execute(
+        text("""
+            INSERT INTO core.source_documents
+                (source_type_id, ruleset_version_id, title, classification, file_hash,
+                 source_version_label, visibility, status, usage_rights_status)
+            VALUES (:stype, :ruleset, :title, :classification, :hash, :version, :visibility,
+                    :status, 'verified_srd_license')
+            RETURNING source_document_id
+        """),
+        {
+            "stype": source_type_id,
+            "ruleset": ruleset_version_id,
+            "title": title,
+            "classification": classification,
+            "hash": file_hash or uuid.uuid4().hex,
+            "version": source_version_label,
+            "visibility": visibility,
+            "status": status,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_reference_passage(
+    connection: Connection,
+    source_document_id: uuid.UUID,
+    *,
+    passage_order: int = 0,
+    content: str = "The fireball spell deals fire damage in a 20-foot radius.",
+    chapter: str | None = "Chapter 10: Spells",
+    section: str | None = "Fireball",
+    page_label: str | None = "241",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.reference_passages
+                (source_document_id, passage_order, chapter, section, page_label, content)
+            VALUES (:source, :order, :chapter, :section, :page, :content)
+            RETURNING reference_passage_id
+        """),
+        {
+            "source": source_document_id,
+            "order": passage_order,
+            "chapter": chapter,
+            "section": section,
+            "page": page_label,
+            "content": content,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_reference_source_campaign_grant(
+    connection: Connection,
+    source_document_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    *,
+    is_house_rule: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.reference_source_campaigns (source_document_id, campaign_id, is_house_rule)
+            VALUES (:source, :campaign, :house_rule)
+            RETURNING reference_source_campaign_id
+        """),
+        {"source": source_document_id, "campaign": campaign_id, "house_rule": is_house_rule},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
