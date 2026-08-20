@@ -6,24 +6,39 @@ broader AI infrastructure").
 interface, never on a concrete provider class, so normal automated tests
 inject `FakeAiProvider` (deterministic, no network call, no API key) and
 only a deliberate smoke-test script would ever construct
-`AnthropicAiProvider` — matching docs/PLAN.md's "Normal automated tests
-must not depend on live provider calls; real-provider testing is limited
-to deliberate smoke verification."
+`OpenAiCompatibleProvider` — matching docs/PLAN.md's "Normal automated
+tests must not depend on live provider calls; real-provider testing is
+limited to deliberate smoke verification."
 
 Structured generated output (docs/PLAN.md's own exit-criteria-adjacent
 deliverable "structured generated output"): every provider returns
 `ProviderResult.structured_output` as an already-validated `NpcTurnOutput`
-or `None` (never a bare, unvalidated dict) — `AnthropicAiProvider` forces
-this via tool use (`tool_choice`), never by asking the model to emit JSON
-in free text and hoping it parses.
+or `None` (never a bare, unvalidated dict) — `OpenAiCompatibleProvider`
+forces this via function-calling (`tool_choice` naming one function),
+never by asking the model to emit JSON in free text and hoping it parses.
 
-`AnthropicAiProvider` uses `httpx` directly against the Messages API rather
-than the `anthropic` SDK — this codebase already depends on `httpx`
-(`scripts/foundry_provision.py`) and adding a second HTTP client dependency
-for one call shape was not judged worth it; revisit if a second provider or
-a broader use case needs the SDK's other functionality.
+`OpenAiCompatibleProvider` targets the OpenAI Chat Completions API shape —
+`POST {base_url}/chat/completions`, bearer auth, `tools`/`tool_choice`
+function calling — rather than a vendor SDK, for two reasons at once: this
+codebase already depends on `httpx` (`scripts/foundry_provision.py`) and
+adding a vendor SDK dependency for one call shape was not judged worth it,
+and the Chat Completions request/response shape is also the one nearly
+every self-hosted inference server (Ollama, vLLM, LM Studio,
+text-generation-webui, llama.cpp's own server, ...) chooses to mirror
+specifically so existing OpenAI clients work against them unchanged. One
+provider class therefore serves both real OpenAI (`base_url` defaults to
+`https://api.openai.com/v1`) and a locally hosted model (point `base_url`
+at the local server instead — see `dnd_ai.config.Settings.ai_provider_
+base_url`) — the "path forward for a locally hosted model" is this same
+class with different configuration, not a second implementation. Function-
+calling fidelity still varies by local model/runtime; a model that ignores
+`tool_choice` surfaces as an ordinary `error_message` result
+(`_extract_tool_call` returning `None`), the same as any other malformed
+provider response — never a crash, and never treated as this class's own
+bug.
 """
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -33,10 +48,9 @@ from pydantic import BaseModel, ValidationError
 
 from .context_assembly import NpcConversationContext
 
-_ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-_ANTHROPIC_API_VERSION = "2023-06-01"
-_RECORD_NPC_TURN_TOOL_NAME = "record_npc_turn"
-_RECORD_SYNTHESIS_ANSWER_TOOL_NAME = "record_synthesis_answer"
+_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+_RECORD_NPC_TURN_FUNCTION_NAME = "record_npc_turn"
+_RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME = "record_synthesis_answer"
 
 
 class NpcTurnOutput(BaseModel):
@@ -139,17 +153,20 @@ class FakeAiProvider:
         )
 
 
-def _npc_turn_tool_schema() -> dict[str, Any]:
+def _npc_turn_function_schema() -> dict[str, Any]:
     return {
-        "name": _RECORD_NPC_TURN_TOOL_NAME,
-        "description": "Record this NPC's spoken reply and, optionally, one fact to reveal.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dialogue": {"type": "string"},
-                "reveal_knowledge_item_id": {"type": ["string", "null"]},
+        "type": "function",
+        "function": {
+            "name": _RECORD_NPC_TURN_FUNCTION_NAME,
+            "description": "Record this NPC's spoken reply and, optionally, one fact to reveal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dialogue": {"type": "string"},
+                    "reveal_knowledge_item_id": {"type": ["string", "null"]},
+                },
+                "required": ["dialogue"],
             },
-            "required": ["dialogue"],
         },
     }
 
@@ -176,21 +193,35 @@ def _build_system_prompt(context: NpcConversationContext) -> str:
         f"You may optionally reveal exactly one of these facts, by id, if it fits the "
         f"conversation naturally — never invent a fact or an id not in this list: {candidates}. "
         f"Quests you are involved in: {quests}. "
-        "Reply only through the record_npc_turn tool."
+        "Reply only through the record_npc_turn function."
     )
 
 
-class AnthropicAiProvider:
-    """The real provider — one HTTPS call per turn, structured output
-    forced via tool use. Never constructed by normal automated tests; see
-    this module's own docstring."""
+class OpenAiCompatibleProvider:
+    """The real provider — one HTTPS call per turn against an OpenAI Chat
+    Completions-shaped endpoint, structured output forced via function
+    calling. Never constructed by normal automated tests; see this
+    module's own docstring for why this one class covers both real OpenAI
+    and a locally hosted, OpenAI-API-compatible model server."""
 
     def __init__(
-        self, *, api_key: str, model_identifier: str, timeout_seconds: float = 30.0
+        self,
+        *,
+        api_key: str | None,
+        model_identifier: str,
+        base_url: str = _DEFAULT_OPENAI_BASE_URL,
+        timeout_seconds: float = 30.0,
     ) -> None:
         self._api_key = api_key
         self._model_identifier = model_identifier
+        self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"content-type": "application/json"}
+        if self._api_key:
+            headers["authorization"] = f"Bearer {self._api_key}"
+        return headers
 
     def generate_npc_turn(
         self, *, context: NpcConversationContext, player_message: str
@@ -200,19 +231,19 @@ class AnthropicAiProvider:
         started = time.monotonic()
         try:
             response = httpx.post(
-                _ANTHROPIC_API_URL,
-                headers={
-                    "x-api-key": self._api_key,
-                    "anthropic-version": _ANTHROPIC_API_VERSION,
-                    "content-type": "application/json",
-                },
+                f"{self._base_url}/chat/completions",
+                headers=self._headers(),
                 json={
                     "model": self._model_identifier,
-                    "max_tokens": 1024,
-                    "system": _build_system_prompt(context),
-                    "messages": [{"role": "user", "content": player_message}],
-                    "tools": [_npc_turn_tool_schema()],
-                    "tool_choice": {"type": "tool", "name": _RECORD_NPC_TURN_TOOL_NAME},
+                    "messages": [
+                        {"role": "system", "content": _build_system_prompt(context)},
+                        {"role": "user", "content": player_message},
+                    ],
+                    "tools": [_npc_turn_function_schema()],
+                    "tool_choice": {
+                        "type": "function",
+                        "function": {"name": _RECORD_NPC_TURN_FUNCTION_NAME},
+                    },
                 },
                 timeout=self._timeout_seconds,
             )
@@ -223,20 +254,21 @@ class AnthropicAiProvider:
                 structured_output=None,
                 finish_reason=None,
                 latency_ms=int((time.monotonic() - started) * 1000),
-                error_message=f"{type(exc).__name__} calling the Anthropic Messages API",
+                error_message=f"{type(exc).__name__} calling the chat completions endpoint",
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
         body = response.json()
         raw_response = str(body)
-        tool_input = _extract_tool_input(body)
+        finish_reason = _finish_reason(body)
+        tool_input = _extract_tool_call(body, function_name=_RECORD_NPC_TURN_FUNCTION_NAME)
         if tool_input is None:
             return ProviderResult(
                 raw_response=raw_response,
                 structured_output=None,
-                finish_reason=body.get("stop_reason"),
+                finish_reason=finish_reason,
                 latency_ms=latency_ms,
-                error_message="Provider response did not include the expected tool call.",
+                error_message="Provider response did not include the expected function call.",
             )
         try:
             structured_output = NpcTurnOutput.model_validate(tool_input)
@@ -244,14 +276,14 @@ class AnthropicAiProvider:
             return ProviderResult(
                 raw_response=raw_response,
                 structured_output=None,
-                finish_reason=body.get("stop_reason"),
+                finish_reason=finish_reason,
                 latency_ms=latency_ms,
-                error_message=f"Provider tool call failed schema validation: {exc.error_count()} error(s)",
+                error_message=f"Provider function call failed schema validation: {exc.error_count()} error(s)",
             )
         return ProviderResult(
             raw_response=raw_response,
             structured_output=structured_output,
-            finish_reason=body.get("stop_reason"),
+            finish_reason=finish_reason,
             latency_ms=latency_ms,
             error_message=None,
         )
@@ -264,19 +296,24 @@ class AnthropicAiProvider:
         started = time.monotonic()
         try:
             response = httpx.post(
-                _ANTHROPIC_API_URL,
-                headers={
-                    "x-api-key": self._api_key,
-                    "anthropic-version": _ANTHROPIC_API_VERSION,
-                    "content-type": "application/json",
-                },
+                f"{self._base_url}/chat/completions",
+                headers=self._headers(),
                 json={
                     "model": self._model_identifier,
-                    "max_tokens": 1024,
-                    "system": _build_synthesis_system_prompt(context, audience_tier=audience_tier),
-                    "messages": [{"role": "user", "content": question_text}],
-                    "tools": [_synthesis_answer_tool_schema()],
-                    "tool_choice": {"type": "tool", "name": _RECORD_SYNTHESIS_ANSWER_TOOL_NAME},
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": _build_synthesis_system_prompt(
+                                context, audience_tier=audience_tier
+                            ),
+                        },
+                        {"role": "user", "content": question_text},
+                    ],
+                    "tools": [_synthesis_answer_function_schema()],
+                    "tool_choice": {
+                        "type": "function",
+                        "function": {"name": _RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME},
+                    },
                 },
                 timeout=self._timeout_seconds,
             )
@@ -287,20 +324,21 @@ class AnthropicAiProvider:
                 structured_output=None,
                 finish_reason=None,
                 latency_ms=int((time.monotonic() - started) * 1000),
-                error_message=f"{type(exc).__name__} calling the Anthropic Messages API",
+                error_message=f"{type(exc).__name__} calling the chat completions endpoint",
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
         body = response.json()
         raw_response = str(body)
-        tool_input = _extract_tool_input(body)
+        finish_reason = _finish_reason(body)
+        tool_input = _extract_tool_call(body, function_name=_RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME)
         if tool_input is None:
             return SynthesisProviderResult(
                 raw_response=raw_response,
                 structured_output=None,
-                finish_reason=body.get("stop_reason"),
+                finish_reason=finish_reason,
                 latency_ms=latency_ms,
-                error_message="Provider response did not include the expected tool call.",
+                error_message="Provider response did not include the expected function call.",
             )
         try:
             structured_output = SynthesisOutput.model_validate(tool_input)
@@ -308,27 +346,30 @@ class AnthropicAiProvider:
             return SynthesisProviderResult(
                 raw_response=raw_response,
                 structured_output=None,
-                finish_reason=body.get("stop_reason"),
+                finish_reason=finish_reason,
                 latency_ms=latency_ms,
-                error_message=f"Provider tool call failed schema validation: {exc.error_count()} error(s)",
+                error_message=f"Provider function call failed schema validation: {exc.error_count()} error(s)",
             )
         return SynthesisProviderResult(
             raw_response=raw_response,
             structured_output=structured_output,
-            finish_reason=body.get("stop_reason"),
+            finish_reason=finish_reason,
             latency_ms=latency_ms,
             error_message=None,
         )
 
 
-def _synthesis_answer_tool_schema() -> dict[str, Any]:
+def _synthesis_answer_function_schema() -> dict[str, Any]:
     return {
-        "name": _RECORD_SYNTHESIS_ANSWER_TOOL_NAME,
-        "description": "Record the audience-appropriate prose answer to this campaign question.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"answer": {"type": "string"}},
-            "required": ["answer"],
+        "type": "function",
+        "function": {
+            "name": _RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME,
+            "description": "Record the audience-appropriate prose answer to this campaign question.",
+            "parameters": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
         },
     }
 
@@ -343,14 +384,50 @@ def _build_synthesis_system_prompt(context: dict[str, Any], *, audience_tier: st
         f"Current session: {context.get('current_session_title') or 'none in progress'}. "
         f"Previous session recap: {recap}. Recent events: {recent}. "
         f"This audience additionally knows: {known}. "
-        "Reply only through the record_synthesis_answer tool."
+        "Reply only through the record_synthesis_answer function."
     )
 
 
-def _extract_tool_input(body: dict[str, Any]) -> dict[str, Any] | None:
-    for block in body.get("content", []):
-        if isinstance(block, dict) and block.get("type") == "tool_use":
-            input_value = block.get("input")
-            if isinstance(input_value, dict):
-                return input_value
+def _finish_reason(body: dict[str, Any]) -> str | None:
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    reason = first.get("finish_reason")
+    return reason if isinstance(reason, str) else None
+
+
+def _extract_tool_call(body: dict[str, Any], *, function_name: str) -> dict[str, Any] | None:
+    """The parsed JSON `arguments` of the first matching tool call in an
+    OpenAI Chat Completions response — `choices[0].message.tool_calls`.
+    Returns `None` for any shape mismatch (no choices, no tool call, wrong
+    function name, unparseable arguments) rather than raising: a
+    provider/model response is untrusted input, never assumed well-formed,
+    the same posture `dnd_ai.api.errors` takes for every other external
+    input in this codebase."""
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return None
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return None
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict) or function.get("name") != function_name:
+            continue
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):
+            continue
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
     return None

@@ -892,3 +892,62 @@ def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) ->
     )
     assert result.returncode != 0
     assert "DND_AI_DATABASE_URL" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# ai_provider_api_key / ai_provider_base_url (dnd_ai.domain.ai_provider.
+# OpenAiCompatibleProvider) — required only in production, only for the
+# real hosted OpenAI default, and only once feature_ai_npc_dialogue is on.
+# ---------------------------------------------------------------------------
+
+
+def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/.well-known/jwks.json")
+
+
+def test_ai_provider_defaults_to_real_openai_with_no_key_required_outside_production() -> None:
+    settings = Settings()
+    assert settings.ai_provider_base_url == "https://api.openai.com/v1"
+    assert settings.ai_provider_api_key is None
+
+
+def test_production_with_dialogue_feature_on_and_no_key_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _production_env(monkeypatch)
+    monkeypatch.setenv("DND_AI_FEATURE_AI_NPC_DIALOGUE", "true")
+    with pytest.raises(ValidationError, match="DND_AI_AI_PROVIDER_API_KEY"):
+        Settings()
+
+
+def test_production_with_dialogue_feature_on_and_a_key_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _production_env(monkeypatch)
+    monkeypatch.setenv("DND_AI_FEATURE_AI_NPC_DIALOGUE", "true")
+    monkeypatch.setenv("DND_AI_AI_PROVIDER_API_KEY", "sk-test-key")
+    settings = Settings()
+    assert settings.ai_provider_api_key == "sk-test-key"
+
+
+def test_production_with_dialogue_feature_on_and_a_local_base_url_needs_no_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _production_env(monkeypatch)
+    monkeypatch.setenv("DND_AI_FEATURE_AI_NPC_DIALOGUE", "true")
+    monkeypatch.setenv("DND_AI_AI_PROVIDER_BASE_URL", "http://model-server.internal:8000/v1")
+    settings = Settings()
+    assert settings.ai_provider_api_key is None
+    assert settings.ai_provider_base_url == "http://model-server.internal:8000/v1"
+
+
+def test_production_with_dialogue_feature_off_needs_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    _production_env(monkeypatch)
+    settings = Settings()
+    assert settings.ai_provider_api_key is None

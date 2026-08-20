@@ -24,10 +24,13 @@ canon-mutating route in this codebase already takes.
 
 The AI provider itself is resolved once per process
 (`dnd_ai.config.settings`-driven, `_resolve_provider()` below) — real
-(`AnthropicAiProvider`) whenever `DND_AI_AI_PROVIDER_API_KEY` is configured,
-otherwise unavailable (503) rather than silently falling back to a fake
-provider in production. Tests override this via `app.dependency_overrides`
-(the same mechanism `dnd_ai.api.deps.get_engine` already uses), never a
+(`OpenAiCompatibleProvider`, targeting real hosted OpenAI by default or a
+locally hosted, OpenAI-API-compatible model server when `DND_AI_AI_
+PROVIDER_BASE_URL` points elsewhere — see that class's own docstring)
+whenever configuration for the resolved endpoint is present, otherwise
+unavailable (503) rather than silently falling back to a fake provider in
+production. Tests override this via `app.dependency_overrides` (the same
+mechanism `dnd_ai.api.deps.get_engine` already uses), never a
 monkeypatched module global.
 """
 
@@ -42,7 +45,7 @@ from dnd_ai.commands.ai_npc import request_npc_conversation_turn
 from dnd_ai.commands.ai_proposals import review_proposed_change
 from dnd_ai.config import settings
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.domain.ai_provider import AiProvider, AnthropicAiProvider
+from dnd_ai.domain.ai_provider import AiProvider, OpenAiCompatibleProvider
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
@@ -54,12 +57,21 @@ router = APIRouter(tags=["ai-npc"])
 _INTERACT_CAPABILITY = "character.interact"
 _REVIEW_CAPABILITY = "canon.edit"
 
+# Mirrors dnd_ai.config._DEFAULT_OPENAI_BASE_URL — duplicated (not
+# imported) for the same "no dnd_ai.api dependency on dnd_ai.config
+# internals" reason that module doesn't import from dnd_ai.domain either.
+_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
 
 class AiProviderUnavailableError(ApiError):
-    """No AI provider is configured (`DND_AI_AI_PROVIDER_API_KEY` unset) —
-    HTTP 503, distinct from every other error contract in this module:
-    the request itself may well be valid, but this deployment cannot
-    currently serve it."""
+    """No AI provider is configured — HTTP 503, distinct from every other
+    error contract in this module: the request itself may well be valid,
+    but this deployment cannot currently serve it. Only raised when the
+    resolved endpoint is still the real, hosted OpenAI default and no API
+    key is configured; a `DND_AI_AI_PROVIDER_BASE_URL` pointed at a
+    locally hosted model server is always considered available — that
+    server's own reachability/access control is the operator's concern,
+    not this module's to pre-validate."""
 
     status_code = 503
     error_code = "ai_provider_unavailable"
@@ -67,10 +79,15 @@ class AiProviderUnavailableError(ApiError):
 
 
 def _resolve_provider() -> AiProvider:
-    if settings.ai_provider_api_key is None:
+    if (
+        settings.ai_provider_base_url == _DEFAULT_OPENAI_BASE_URL
+        and settings.ai_provider_api_key is None
+    ):
         raise AiProviderUnavailableError()
-    return AnthropicAiProvider(
-        api_key=settings.ai_provider_api_key, model_identifier=settings.ai_provider_model
+    return OpenAiCompatibleProvider(
+        api_key=settings.ai_provider_api_key,
+        model_identifier=settings.ai_provider_model,
+        base_url=settings.ai_provider_base_url,
     )
 
 
