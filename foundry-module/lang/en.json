@@ -32,6 +32,7 @@
   "DNDAI.Notifications.SyncSubmitted": "Submitted to D&D AI.",
   "DNDAI.Notifications.ConnectionSaved": "D&D AI connection settings saved.",
   "DNDAI.Errors.InvalidApiBaseUrl": "The API base URL must be a valid http(s) URL.",
+  "DNDAI.Errors.InsecureApiBaseUrl": "The API base URL must use https:// — plain http:// is only permitted for localhost, 127.0.0.1, or [::1] during local development. Your D&D AI credential is sent in plaintext over an insecure connection otherwise.",
   "DNDAI.Errors.InvalidExternalSystemId": "The external system ID must be a valid UUID.",
   "DNDAI.Errors.InvalidCampaignId": "The campaign ID must be a valid UUID.",
   "DNDAI.Errors.MissingCredential": "A system credential is required."

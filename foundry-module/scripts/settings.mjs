@@ -54,6 +54,39 @@ export function isValidHttpUrl(value) {
   }
 }
 
+// Recognized loopback development hosts only — never a private/LAN
+// address (10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12, ...), which is not
+// automatically safe: a shared network can still observe plaintext
+// traffic to it. This is a closed, explicit allowlist, not a heuristic.
+// "[::1]" (bracketed) is deliberate, not a typo: WHATWG URL.hostname keeps
+// the brackets for an IPv6 literal host, unlike Python's
+// urllib.parse.urlsplit().hostname, which strips them — the Python-side
+// equivalent (scripts/foundry_provision.py's _LOOPBACK_HOSTS) uses "::1"
+// for exactly that reason.
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function isLoopbackHost(hostname) {
+  return typeof hostname === "string" && LOOPBACK_HOSTS.has(hostname.toLowerCase());
+}
+
+/** Transport-security policy for the configured API base URL, on top of
+ * `isValidHttpUrl`'s plain shape check: `https:` is always accepted;
+ * `http:` is accepted only for a recognized loopback host
+ * (`isLoopbackHost`). A long-lived `FoundrySystem` credential travels in
+ * the `Authorization` header on every request this module makes — over
+ * plain HTTP to any non-loopback host, a network observer can read it
+ * outright; password-masking the credential field in the settings UI and
+ * storing it `scope: "client"` (see this module's own docstring above)
+ * protect it from other *users*, not from the *network*, so this check
+ * exists independently of both. */
+export function isSecureApiBaseUrl(value) {
+  if (!isValidHttpUrl(value)) {
+    return false;
+  }
+  const parsed = new URL(value);
+  return parsed.protocol === "https:" || isLoopbackHost(parsed.hostname);
+}
+
 /** Registers every setting this module reads. Call once, from
  * `Hooks.once("init", ...)` — Foundry itself enforces "register during
  * init," so this is never called lazily on demand. */
@@ -143,6 +176,11 @@ export function validateConnectionSettings({
   const problems = [];
   if (!isValidHttpUrl(apiBaseUrl)) {
     problems.push("DNDAI.Errors.InvalidApiBaseUrl");
+  } else if (!isSecureApiBaseUrl(apiBaseUrl)) {
+    // Well-formed but plain HTTP to a non-loopback host — a real,
+    // structural mismatch, not a malformed-URL problem, so it gets its
+    // own message rather than reusing InvalidApiBaseUrl.
+    problems.push("DNDAI.Errors.InsecureApiBaseUrl");
   }
   if (!isValidUuid(externalSystemId)) {
     problems.push("DNDAI.Errors.InvalidExternalSystemId");

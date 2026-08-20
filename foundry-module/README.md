@@ -169,6 +169,44 @@ rotation, not addition). Rotating can also re-bind the credential to a
 *different* linked Foundry user id in the same call, by passing a
 different `--foundry-user-id`.
 
+### Transport security
+
+Two more corrections, both about how a request actually travels over the
+network rather than who it authenticates as — `scope: "client"` and
+credential-binding above stop a *user* from misusing the credential; these
+stop the *network* from ever seeing it.
+
+**HTTPS is mandatory for the API base URL, except on your own machine.**
+`scripts/settings.mjs`'s `isSecureApiBaseUrl` (used by the connection-setup
+form's own validation) requires `https://` for `apiBaseUrl` unless the host
+is a recognized loopback address (`localhost`, `127.0.0.1`, `[::1]`) — a
+private/LAN address (`192.168.x.x`, `10.x.x.x`, ...) is **not** treated as
+automatically safe, since anyone else on that network can still observe
+plaintext traffic. `scripts/foundry_provision.py`'s `--api-base-url`
+enforces the identical policy (`_validate_api_base_url`), since it sends an
+OIDC bearer token and prints a long-lived `FoundrySystem` credential over
+the same connection. Password-masking the credential field and storing it
+`scope: "client"` (above) protect it from other Foundry *users*; neither
+protects it from a network observer if the connection itself is plain
+HTTP — this check exists independently of both, for that reason.
+
+**CORS: the server only accepts browser requests from an explicitly
+configured origin.** FoundryVTT and this platform's API are genuinely
+separate browser origins in the documented deployment topology
+(`docs/LOCAL_DEPLOYMENT.md` — e.g. `https://foundry.example.com` calling
+`https://world.example.com/api`), so this module's `fetch()` calls trigger
+a real CORS preflight (`OPTIONS`) before every authenticated request.
+`src/dnd_ai/api/app.py` installs `CORSMiddleware` against the exact
+allowlist in `DND_AI_FOUNDRY_ALLOWED_ORIGINS` (`.env.example`'s "Foundry
+CORS" section) — never a wildcard, and never widened by `config: false` or
+any client-side setting; if your deployment doesn't list this module's own
+origin there, every request fails with a CORS error in the browser
+console before it ever reaches the server's own authentication or
+authorization checks (which is a *deployment configuration* problem, not a
+credential/identity one — check the browser console's exact CORS error,
+then your deployment's `DND_AI_FOUNDRY_ALLOWED_ORIGINS`, before assuming
+the credential itself is wrong).
+
 ## Manual live-Foundry verification
 
 This module's request-construction, identifier-binding, retry, reconnect,
@@ -222,6 +260,23 @@ instance available should run this procedure once and record the result in
    `audit.change_log.actor_user_id` for the resulting row: it must never
    change based on this header, only `acting_foundry_actor_id` (recorded
    verbatim, purely as metadata) does.
+10. **Transport-security correction, specific to this pass.** With
+    FoundryVTT and the platform API served from two different real origins
+    (not `localhost` for either), open this module's connection-setup form
+    in a real browser, configure it, and submit a sync action from the "D&D
+    AI Sync" panel. **Expect:** the browser's own network inspector shows a
+    successful `OPTIONS` preflight (status 200,
+    `Access-Control-Allow-Origin` matching FoundryVTT's exact origin)
+    immediately before the real request, and the real request succeeds.
+    Then remove that origin from the deployment's
+    `DND_AI_FOUNDRY_ALLOWED_ORIGINS` and repeat. **Expect:** the browser
+    console reports a CORS error and the request never reaches the
+    server's own authentication check.
+11. In the connection-setup form, attempt to save a plain `http://` API
+    base URL pointed at the real (non-loopback) deployment host. **Expect:**
+    the form rejects it (`DNDAI.Errors.InsecureApiBaseUrl`) without saving,
+    and the same URL passed to `scripts/foundry_provision.py
+    --api-base-url` is rejected before any request is sent.
 
 Record: FoundryVTT version, dnd5e system version, platform commit hash,
 and the observed result of each step.

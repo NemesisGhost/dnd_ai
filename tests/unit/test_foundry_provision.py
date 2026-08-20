@@ -9,7 +9,7 @@ the request-construction/end-to-end side of the same script.
 
 import httpx
 import pytest
-from foundry_provision import ProvisioningError, _raise_for_envelope
+from foundry_provision import ProvisioningError, _raise_for_envelope, _validate_api_base_url
 
 pytestmark = pytest.mark.unit
 
@@ -53,3 +53,36 @@ def test_a_response_with_no_json_body_still_raises_a_readable_error() -> None:
     response = httpx.Response(500, content=b"not json")
     with pytest.raises(ProvisioningError, match=r"500"):
         _raise_for_envelope(response)
+
+
+# ---------------------------------------------------------------------------
+# _validate_api_base_url — Issue 2 (transport security): a FoundrySystem
+# credential or OIDC bearer token must never be sent to a plain-HTTP,
+# non-loopback host.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://dnd-ai.example.com",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://[::1]:8000",
+    ],
+)
+def test_validate_api_base_url_accepts_https_or_loopback_http(value: str) -> None:
+    _validate_api_base_url(value)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://dnd-ai.example.com",
+        "http://192.168.1.50:8000",
+        "http://10.0.0.5:8000",
+    ],
+)
+def test_validate_api_base_url_rejects_remote_or_lan_http(value: str) -> None:
+    with pytest.raises(ProvisioningError, match=r"https://"):
+        _validate_api_base_url(value)

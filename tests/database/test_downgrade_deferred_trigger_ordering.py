@@ -33,6 +33,7 @@ upgrade proofs, adapted here for a populated *downgrade*.
 
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -63,6 +64,26 @@ CONSTRAINT_ERRORS = (IntegrityError, InternalError, ProgrammingError)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
 
+# Matches tests/conftest.py's _MIGRATION_SUBPROCESS_TIMEOUT_SECONDS — a
+# hung alembic subprocess must fail this test clearly (subprocess.
+# TimeoutExpired) rather than freeze the whole test session forever with
+# no recovery, which is what an un-bounded subprocess.run() here previously
+# allowed.
+_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS = 300
+
+# Matches tests/conftest.py's _DB_CONNECT_TIMEOUT_SECONDS/_connect_args() —
+# every create_engine() call below previously had no connect_timeout at
+# all, so a stalled TCP handshake (observed in practice: py-spy showed a
+# connect() blocked indefinitely in psycopg's own select() wait, with no
+# bound to ever fail it) froze the whole test session with no recovery,
+# rather than raising a clear, fast connection error.
+_CONNECT_TIMEOUT_SECONDS = 10
+
+
+def _connect_args() -> dict[str, object]:
+    return {"connect_timeout": _CONNECT_TIMEOUT_SECONDS}
+
+
 _SYSTEM_ROLE_CODES = ("gm", "assistant_gm", "player", "observer")
 
 
@@ -88,7 +109,9 @@ def _provision_database(label: str) -> tuple[str, str]:
     db_name = f"dnd_ai_downgrade_{label}_{uuid.uuid4().hex[:12]}"
     test_url = admin_url.set(database=db_name)
 
-    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    admin_engine = create_engine(
+        admin_url, isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+    )
     with admin_engine.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     admin_engine.dispose()
@@ -101,7 +124,9 @@ def _provision_database(label: str) -> tuple[str, str]:
 
 def _drop_database(admin_url: str, test_url: str) -> None:
     db_name = make_url(test_url).database
-    admin_engine = create_engine(make_url(admin_url), isolation_level="AUTOCOMMIT")
+    admin_engine = create_engine(
+        make_url(admin_url), isolation_level="AUTOCOMMIT", connect_args=_connect_args()
+    )
     with admin_engine.connect() as conn:
         conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
     admin_engine.dispose()
@@ -110,12 +135,17 @@ def _drop_database(admin_url: str, test_url: str) -> None:
 def _alembic(
     database_url: str, *args: str, env_extra: dict[str, str] | None = None
 ) -> "subprocess.CompletedProcess[str]":
+    # sys.executable -m alembic, not the "alembic" console-script entry
+    # point — see tests/conftest.py's _run_alembic_upgrade for the same
+    # choice and why (doesn't depend on a separate PATH-resolved
+    # executable, and avoids that shim's own extra process-spawn layer).
     return subprocess.run(
-        ["alembic", "-c", str(ALEMBIC_INI), *args],
+        [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), *args],
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": database_url, **(env_extra or {})},
         capture_output=True,
         text=True,
+        timeout=_ALEMBIC_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
 
@@ -253,7 +283,7 @@ def test_downgrading_from_086_to_085_succeeds_with_populated_system_role_assignm
     try:
         _alembic_upgrade(test_url, "086_system_role_capabilities")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             with engine.begin() as conn:
                 _populate_campaign_with_system_role_assignments(conn)
@@ -264,7 +294,7 @@ def test_downgrading_from_086_to_085_succeeds_with_populated_system_role_assignm
         assert result.returncode == 0, result.stdout + result.stderr
         assert _current_revision(test_url) == "085_campaign_owner_capabilities"
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             with engine.connect() as conn:
                 remaining_system_role_caps = conn.execute(
@@ -297,7 +327,7 @@ def test_downgrading_from_085_to_084_succeeds_with_active_campaigns_and_owner_as
     try:
         _alembic_upgrade(test_url, "085_campaign_owner_capabilities")
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         campaign_id: uuid.UUID
         try:
             with engine.begin() as conn:
@@ -324,7 +354,7 @@ def test_downgrading_from_085_to_084_succeeds_with_active_campaigns_and_owner_as
         assert result.returncode == 0, result.stdout + result.stderr
         assert _current_revision(test_url) == "084_hazard_interaction_types"
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             with engine.connect() as conn:
                 owner_cap_count = conn.execute(
@@ -414,7 +444,7 @@ def test_a_fresh_migrated_database_survives_a_full_downgrade_to_base_and_reupgra
         _alembic_upgrade(test_url, "head")
         assert _current_revision(test_url) == head_revision
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             _assert_retention_invariant_still_enforced(engine)
         finally:
@@ -431,7 +461,7 @@ def test_a_realistically_populated_database_survives_a_full_downgrade_to_base_an
         _alembic_upgrade(test_url, "head")
         head_revision = _current_revision(test_url)
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             with engine.begin() as conn:
                 _populate_full_head_state(conn)
@@ -444,7 +474,7 @@ def test_a_realistically_populated_database_survives_a_full_downgrade_to_base_an
         _alembic_upgrade(test_url, "head")
         assert _current_revision(test_url) == head_revision
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             _assert_retention_invariant_still_enforced(engine)
         finally:
@@ -477,7 +507,7 @@ def test_a_failed_downgrade_rolls_back_leaving_the_original_revision_and_full_sc
         _alembic_upgrade(test_url, "head")
         head_revision = _current_revision(test_url)
 
-        lock_engine = create_engine(test_url)
+        lock_engine = create_engine(test_url, connect_args=_connect_args())
         lock_conn = lock_engine.connect()
         lock_conn.execute(text("BEGIN"))
         lock_conn.execute(text("LOCK TABLE security.role_capabilities IN ACCESS EXCLUSIVE MODE"))
@@ -497,7 +527,7 @@ def test_a_failed_downgrade_rolls_back_leaving_the_original_revision_and_full_sc
 
         assert _current_revision(test_url) == head_revision
 
-        engine = create_engine(test_url)
+        engine = create_engine(test_url, connect_args=_connect_args())
         try:
             with engine.connect() as conn:
                 for schema, table in [

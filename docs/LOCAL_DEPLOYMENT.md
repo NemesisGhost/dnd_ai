@@ -39,6 +39,7 @@ Do not expose Uvicorn or PostgreSQL directly. Route all inbound HTTP/HTTPS throu
 ## Web security
 
 - Prefer the same `world` origin for UI and API.
+- FoundryVTT (`https://foundry.<domain>/`) is a genuinely separate browser origin from the API (`https://world.<domain>/api/*`), so its module needs an explicit CORS allowlist (`DND_AI_FOUNDRY_ALLOWED_ORIGINS`/`API_FOUNDRY_ALLOWED_ORIGINS` — see `.env.example`) naming that exact origin; the API never falls back to a wildcard, and unset means no cross-origin browser access at all rather than an open one.
 - Use `Secure`, `HttpOnly` authentication cookies with the narrowest practical `Path`, `Domain`, and `SameSite` scope.
 - Protect every cookie-authenticated state-changing request with a CSRF token and origin checks.
 - Enforce authentication and player/GM/observer authorization in FastAPI, including user-to-detail many-to-many access; UI visibility is never authorization.

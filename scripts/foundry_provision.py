@@ -82,10 +82,46 @@ import os
 import sys
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
 _TOKEN_ENV_VAR = "DND_AI_OIDC_TOKEN"
+
+# Recognized loopback development hosts only — never a private/LAN address
+# (10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12, ...), which is not
+# automatically safe (a shared network can still observe plaintext traffic
+# to it). Mirrors foundry-module/scripts/settings.mjs's identical
+# `LOOPBACK_HOSTS`/`isLoopbackHost` — the same policy enforced on both the
+# module's own connection-setup form and this CLI, since both mint or
+# transmit the same long-lived `FoundrySystem` credential.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _validate_api_base_url(value: str) -> None:
+    """Issue 2 (transport security): a `FoundrySystem` credential this
+    script prints (issue-key/provision) or the OIDC bearer token it sends
+    on every request must never be allowed to travel to a plain-HTTP,
+    non-loopback `--api-base-url` — a network observer between this
+    machine and that host could read either outright. Raises
+    `ProvisioningError` with a message safe to print (never includes the
+    token)."""
+    parsed = urlsplit(value)
+    if parsed.scheme == "https":
+        return
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname is not None
+        and parsed.hostname.lower() in _LOOPBACK_HOSTS
+    ):
+        return
+    raise ProvisioningError(
+        f"--api-base-url {value!r} must use https://, or http:// only for a recognized "
+        f"loopback host ({', '.join(sorted(_LOOPBACK_HOSTS))}) — this script sends an OIDC "
+        "bearer token, and issue-key/provision print a long-lived FoundrySystem credential, on "
+        "every request; either would travel in the clear over a plain-HTTP connection to any "
+        "other host."
+    )
 
 
 class ProvisioningError(Exception):
@@ -279,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        _validate_api_base_url(args.api_base_url)
         with httpx.Client(base_url=args.api_base_url) as client:
             ctx = ProvisioningContext(
                 client=client,
