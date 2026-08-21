@@ -174,6 +174,11 @@ from sqlalchemy.exc import ArgumentError
 
 _LOCAL_DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai"
 
+# The real, hosted OpenAI API — dnd_ai.domain.ai_provider.OpenAiCompatibleProvider's
+# own default. Duplicated here (not imported from that module) to keep this
+# module's own layering simple — dnd_ai.config has no dependency on dnd_ai.domain.
+_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
 # The exact login role the containerized `api` service must authenticate
 # to PostgreSQL as, once DND_AI_ENVIRONMENT=production — 001_bootstrap's
 # DML-only role (SELECT/INSERT/UPDATE/DELETE on application tables, no
@@ -217,6 +222,9 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_AUDIENCE",
         "DND_AI_OIDC_JWKS_URL",
         "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
+        "DND_AI_AI_PROVIDER_API_KEY",
+        "DND_AI_AI_PROVIDER_MODEL",
+        "DND_AI_AI_PROVIDER_BASE_URL",
     }
 )
 
@@ -433,6 +441,21 @@ class Settings(BaseSettings):
     # module's own docstring.
     foundry_allowed_origins: str | None = None
 
+    # Phase 12 AI provider credential/model/endpoint pin (dnd_ai.domain.
+    # ai_provider.OpenAiCompatibleProvider). ai_provider_base_url defaults
+    # to real, hosted OpenAI; pointing it at a locally hosted, OpenAI-API-
+    # compatible model server (Ollama, vLLM, LM Studio, ...) is the
+    # supported "path forward for a locally hosted model" — see that
+    # module's own docstring. ai_provider_api_key is required, with no
+    # fallback, only when talking to the real hosted API in production
+    # (_require_ai_provider_key_in_production below) — a self-hosted
+    # server the operator controls may need no key at all. Never a default
+    # value: an API key is a secret (CLAUDE.md rule 10 — no secrets in code
+    # or seed files), so there is nothing safe to default it to.
+    ai_provider_api_key: str | None = None
+    ai_provider_model: str = "gpt-4o"
+    ai_provider_base_url: str = _DEFAULT_OPENAI_BASE_URL
+
     @model_validator(mode="after")
     def _resolve_database_url(self) -> "Settings":
         """No silent fallback to the local development database/credentials
@@ -592,6 +615,58 @@ class Settings(BaseSettings):
         require_https = self.environment == "production"
         origins = _parse_foundry_allowed_origins(raw, require_https=require_https)
         self.foundry_allowed_origins = ",".join(origins)
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_ai_provider_api_key(self) -> "Settings":
+        """Docker Compose cannot omit an environment key entirely when the
+        host-side variable is unset — `${API_AI_PROVIDER_API_KEY:-}`
+        interpolates to the literal empty string, never a genuinely absent
+        `DND_AI_AI_PROVIDER_API_KEY` (compose.yaml's own comment on this
+        setting explains why no fallback default other than blank is safe
+        for a secret). Treat blank/whitespace-only identically to unset —
+        mirrors `_validate_foundry_allowed_origins`' identical reasoning for
+        `DND_AI_FOUNDRY_ALLOWED_ORIGINS` — so both
+        `_require_ai_provider_key_in_production` below and
+        `dnd_ai.api.ai_npc._resolve_provider` see `None`, never a falsy-but-
+        not-`None` `""` that would silently skip the required-key check and
+        then send an unauthenticated request to hosted OpenAI. Runs before
+        `_require_ai_provider_key_in_production` (definition order) so that
+        validator always sees the normalized value."""
+        if self.ai_provider_api_key is not None and self.ai_provider_api_key.strip() == "":
+            self.ai_provider_api_key = None
+        return self
+
+    @model_validator(mode="after")
+    def _require_ai_provider_key_in_production(self) -> "Settings":
+        """No unsafe fallback: a production deployment that has turned
+        `feature_ai_npc_dialogue` on cannot silently ship with no AI
+        provider credential configured at all — the same "required, with
+        no fallback, once the feature is actually on" posture
+        `_validate_foundry_allowed_origins` already applies to its own
+        setting. This only applies when `ai_provider_base_url` is still
+        the real, hosted OpenAI default: a production deployment pointed
+        at its own self-hosted, OpenAI-API-compatible model server (the
+        "locally hosted model" path `dnd_ai.domain.ai_provider.
+        OpenAiCompatibleProvider` documents) is exactly the case where no
+        key may be needed at all, and that operator's own server is
+        responsible for whatever access control it wants. Outside
+        production, or with the feature flag off, an unconfigured key is a
+        safe default (`dnd_ai.api.ai_npc._resolve_provider` returns 503
+        rather than silently degrading to a fake/no-op provider)."""
+        if (
+            self.environment == "production"
+            and self.feature_ai_npc_dialogue
+            and self.ai_provider_base_url == _DEFAULT_OPENAI_BASE_URL
+            and self.ai_provider_api_key is None
+        ):
+            raise ValueError(
+                "DND_AI_AI_PROVIDER_API_KEY (as an environment variable, or a mounted secret) is "
+                "required when DND_AI_ENVIRONMENT=production, "
+                "DND_AI_FEATURE_AI_NPC_DIALOGUE=true, and DND_AI_AI_PROVIDER_BASE_URL is unset "
+                "(still the real, hosted OpenAI API) — a locally hosted model server may not "
+                "need one at all."
+            )
         return self
 
 

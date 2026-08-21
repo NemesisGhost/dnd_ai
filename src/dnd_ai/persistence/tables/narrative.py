@@ -386,6 +386,23 @@ event_effects = Table(
             "(revision 057, last extended by revision 073)."
         ),
     ),
+    # Added by revision 095_knowledge_event_target (Phase 12), once
+    # dnd_ai.commands.knowledge.reveal_knowledge_to_party existed to write
+    # it — the eighth column in the at-most-one-target pattern.
+    Column(
+        "target_knowledge_item_id",
+        UUID(),
+        ForeignKey("knowledge.knowledge_items.knowledge_item_id", ondelete="SET NULL"),
+        comment=(
+            "The knowledge.knowledge_items row whose campaign.party_knowledge "
+            "state changed, when this effect is that kind of change "
+            "(dnd_ai.commands.knowledge.reveal_knowledge_to_party) — distinct "
+            "from target_entity_id, since a knowledge item is itself core-"
+            "entities-rooted (CLAUDE.md rule 4) and reusing target_entity_id "
+            "would make this effect indistinguishable from one about the entity "
+            "the fact concerns rather than the fact itself."
+        ),
+    ),
     schema="narrative",
     comment=(
         "A change caused by an event: target, affected component, old/new "
@@ -435,6 +452,11 @@ Index(
     "ix_event_effects_target_relationship_id",
     event_effects.c.target_relationship_id,
     postgresql_where=event_effects.c.target_relationship_id.isnot(None),
+)
+Index(
+    "ix_event_effects_target_knowledge_item_id",
+    event_effects.c.target_knowledge_item_id,
+    postgresql_where=event_effects.c.target_knowledge_item_id.isnot(None),
 )
 
 event_observations = Table(

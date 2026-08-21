@@ -64,10 +64,10 @@ Follow [CLAUDE.md §4](../CLAUDE.md#4-documentation-map-and-context-loading-poli
 
 ## 2. External API keys
 
-Needed only for the OpenAI and Discord integrations, neither of which is implemented yet.
+Needed only for the OpenAI and Discord integrations.
 
-- **OpenAI**: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-- **Discord bot**: [discord.com/developers/applications](https://discord.com/developers/applications) — create an application, add a bot, copy the token, application ID, and public key
+- **OpenAI**: the NPC-conversation and campaign-synthesis adapter (`src/dnd_ai/domain/ai_provider.py`, `OpenAiCompatibleProvider`) is implemented and calls the **OpenAI Chat Completions API** (`POST /chat/completions`, function-calling for structured output) — not the Responses API. The same class also serves a locally hosted, OpenAI-API-compatible model server (Ollama, vLLM, LM Studio, ...) by pointing it at that server's base URL instead; see `.env.example`'s "AI provider" section. Get a key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys) — this is an OpenAI **Platform** key, billed per API call, not a ChatGPT subscription key.
+- **Discord bot**: not implemented yet. [discord.com/developers/applications](https://discord.com/developers/applications) — create an application, add a bot, copy the token, application ID, and public key
 
 Store them in your local environment or a host-mounted secret, not in source control. Never put a real key in `.env`, a `.tf` file, a seed file, or a commit.
 

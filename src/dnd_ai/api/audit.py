@@ -78,10 +78,22 @@ def record_change_log(
     event_id: uuid.UUID | None,
     acting_external_system_id: uuid.UUID | None = None,
     acting_foundry_actor_id: str | None = None,
+    ai_proposal_id: uuid.UUID | None = None,
 ) -> None:
     """Insert one `audit.change_log` row. Call once, after the command's
     own writes and before the route returns, on the same connection/
-    transaction the command ran on."""
+    transaction the command ran on.
+
+    `ai_proposal_id` (Phase 12) is the `ai.proposed_changes.
+    ai_proposed_change_id` an applied change resulted from — set only by
+    `dnd_ai.api.ai_npc`/`.ai_proposals` for a route that actually applied
+    an AI proposal, `None` for every other (human-authored) call site.
+    `audit.change_log.ai_proposal_id` has carried no foreign key since its
+    original migration ("the things these point at may not exist yet, or
+    ever" — revision 007); it is not added retroactively here either,
+    matching that same reasoning now that a real target table exists but
+    this column's own contract was always informational, not referential
+    integrity."""
     change_action_id = lookup_id(
         connection, "audit", "change_actions", "change_action_id", change_action_code
     )
@@ -90,11 +102,11 @@ def record_change_log(
             INSERT INTO audit.change_log
                 (change_action_id, schema_name, table_name, record_id, entity_id, world_id,
                  actor_user_id, correlation_id, command_name, event_id,
-                 acting_external_system_id, acting_foundry_actor_id)
+                 acting_external_system_id, acting_foundry_actor_id, ai_proposal_id)
             VALUES
                 (:action, :schema, :table, :record, :entity, :world,
                  :actor, :correlation, :command, :event, :acting_external_system,
-                 :acting_foundry_actor)
+                 :acting_foundry_actor, :ai_proposal)
         """),
         {
             "action": change_action_id,
@@ -109,5 +121,6 @@ def record_change_log(
             "event": event_id,
             "acting_external_system": acting_external_system_id,
             "acting_foundry_actor": acting_foundry_actor_id,
+            "ai_proposal": ai_proposal_id,
         },
     )

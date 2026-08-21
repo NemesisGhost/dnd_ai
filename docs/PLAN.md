@@ -159,6 +159,18 @@ Use qualified terminology because the two document paths have different destinat
 
 They may share low-level file handling and text-extraction utilities, but never promotion behavior. Reference passages become retrievable, cited request context; campaign import staging contains untrusted proposals that may become canonical only after validation, GM review, and application commands. The rules/reference corpus does not use canonical promotion batches, and campaign import staging does not double as the AI rules corpus.
 
+### 2.8 Browser authentication is local and uses a server-side session boundary
+
+D&D AI authenticates portal users directly. Local usernames, Argon2id password hashes, account status, activation/reset tokens, and session records live in the application security schema; campaign invitations, memberships, capabilities, user-character relationships, resource grants, and revocation remain separate authorization data. Pocket ID is no longer a planned dependency, and OIDC is not required for either the portal or Foundry. The Phase 10 OIDC bearer-token verifier may remain as an optional compatibility integration, but it is not the default human-login path and must not be required for application startup.
+
+The React portal never receives or stores passwords after login or durable bearer/refresh credentials in browser storage. FastAPI verifies credentials, rotates the login session, and issues an opaque server-side browser session through a secure `HttpOnly` cookie. New accounts use single-use activation links or codes rather than administrator-known temporary passwords; administrator resets revoke active sessions and issue a new single-use reset token rather than setting a replacement password.
+
+Foundry uses a separate hybrid pairing model: non-secret account-binding metadata may follow a Foundry user through a user-scoped setting, but every browser/device receives its own long-lived client-scoped credential and holds short-lived API access tokens in memory only. Foundry credentials are issued and validated by D&D AI, independently of portal authentication.
+
+### 2.9 Phase 13 UI code is owner-authored
+
+The project owner will write the production React UI rather than delegate its implementation to a generative-AI coding agent. Generative AI may be used as a tutor, explainer, reviewer, or debugging partner when requested, but not as the primary author of screens or bulk UI code. Phase 13 is therefore divided into small, demonstrable increments that introduce React and TypeScript concepts from a beginner perspective and leave the owner able to explain and maintain each change.
+
 ---
 
 ## 3. PostgreSQL schema organization
@@ -1264,12 +1276,19 @@ The web portal is the primary out-of-session client. Foundry remains the in-sess
 
 ### 23.1 Identity and campaign membership
 
-Authentication establishes a user identity; application authorization determines what that user may do or discover. Use an OIDC-compatible identity provider for login, with the application database retaining campaign membership, roles, capabilities, resource relationships, and audit history.
+Authentication establishes a user identity; application authorization determines what that user may do or discover. D&D AI is the initial credential authority for human users. The application database retains local login credentials, account lifecycle, campaign membership, roles, capabilities, resource relationships, invitations, revocation, and audit history. Authentication and campaign admission remain separate: possessing an active login account does not grant access to any campaign.
+
+An administrator creates an account and its campaign membership, then generates a cryptographically random, short-lived, single-use activation link or code. The user uses it to choose a password; the administrator never assigns or learns a temporary or permanent password. An administrator-initiated reset revokes the user's existing browser sessions and Foundry device credentials when the reset policy requests a full sign-out, generates a new short-lived single-use reset token, and requires the user to choose a new password. Ordinary password change and recovery behavior must clearly state which browser sessions and Foundry devices will be revoked.
+
+Passwords are stored only as Argon2id hashes with unique salts and parameters recorded for future rehashing. Accept passphrases of at least 15 characters, permit at least 64 characters plus spaces and Unicode, reject common/compromised values through a locally enforceable denylist or approved privacy-preserving check, and do not impose composition formulas or periodic forced changes. Login, activation, and reset endpoints use rate limits, uniform non-disclosing responses, audit events, and bounded token lifetimes. There are no default production credentials; initial-administrator bootstrap is an explicit one-time deployment operation that fails closed after use.
 
 Implement or evolve concepts equivalent to:
 
 - `security.users`
-- external identity-provider subjects linked many-to-one to a user
+- local password credentials and credential-history/security metadata separated from the user profile
+- hashed, expiring, single-use activation and password-reset tokens
+- opaque server-side browser sessions with creation, last-use, expiry, revocation, and CSRF state
+- optional external identity subjects retained only for compatibility and Foundry identity binding, not required for local login
 - campaign memberships joining users to campaigns
 - membership roles joining memberships to one or more campaign-scoped roles
 - configurable capabilities assigned to roles
@@ -1313,9 +1332,62 @@ For each request, the application layer:
 
 Inaccessible resources must be non-discoverable: clients must not infer them from identifiers, search suggestions, counts, relationship edges, error differences, or AI responses. Client-side hiding is presentation only; enforcement occurs in application services and query construction before data reaches a client or AI provider. AI answers are generated from already authorized context, never from a broader answer followed by redaction.
 
-### 23.4 Web-portal experience
+### 23.4 Browser-session boundary
+
+FastAPI owns the local login and browser-session lifecycle. The flow is:
+
+1. The browser submits a username and password to a same-origin FastAPI endpoint over HTTPS; loopback HTTP is permitted only for development.
+2. FastAPI applies account/IP-aware rate limits and performs a constant-work credential check that does not disclose whether the username exists, the account is disabled, or the password is wrong.
+3. After successful verification, FastAPI rotates any pre-authentication session identifier, creates an opaque server-side session, and records the authenticated user, CSRF secret, creation/last-use time, absolute expiry, idle expiry, and revocation state.
+4. The browser receives `__Host-dnd_ai_session` with `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain` attribute. A development-only cookie name/configuration may omit `Secure` strictly on loopback.
+5. The session-bootstrap endpoint returns the current user, campaigns, capabilities, selected perspective, CSRF token, and server feature manifest; it never returns a password hash, reset/activation token, or durable API credential.
+
+The portal must not put bearer or refresh tokens in `localStorage`, `sessionStorage`, IndexedDB, JavaScript-readable cookies, URLs, or application state. Cookie-authenticated state-changing requests also require `X-CSRF-Token`, validation against the current server-side session, an allowed `Origin`, and the existing command idempotency contract. Identity is not authorization: every request re-resolves active campaign membership, roles, capabilities, relationships, grants, restrictions, and the selected character perspective so revocation takes effect without waiting for the browser session to expire.
+
+Successful login rotates the session; logout revokes it server-side and clears the cookie. Password reset, account disablement, membership revocation, and administrator sign-out controls take effect on the next relevant request. Session identifiers and activation/reset tokens are stored only as hashes. Token-generating endpoints reveal each raw token only once and never log it.
+
+The existing OIDC bearer-token verifier remains an optional compatibility path for explicitly configured non-browser clients; local authentication must work with OIDC entirely unconfigured. Browser sessions, optional OIDC principals, and Foundry device/access principals converge on the same `AuthenticatedPrincipal`, authorization, query, command, audit, visibility, and non-disclosure boundaries. Credential type determines identity only and never bypasses campaign authorization.
+
+Development uses FastAPI at `http://localhost:8000` and React/Vite at `http://localhost:5173`, with Vite proxying `/api` and `/auth` to preserve the same-origin browser contract. Production uses HTTPS at the `world` origin for both portal and API. No identity-provider callback or separate identity hostname is required.
+
+### 23.5 Foundry hybrid pairing and device authentication
+
+Foundry authentication is separate from portal login and does not make D&D AI an OAuth or OIDC provider. Every Foundry user who uses D&D AI pairs each browser/device independently. The credential authenticates one D&D AI user on one Foundry origin, world/external system, Foundry user, campaign connection, and device; it never represents a shared world-wide secret and never derives identity from a caller-supplied actor header.
+
+Pairing flow:
+
+1. The user signs into the D&D AI portal with local authentication and selects a campaign/Foundry connection they are permitted to use.
+2. D&D AI creates a random, hashed-at-rest, single-use pairing code valid for 5–10 minutes. The code records the user, campaign, requested connection, bounded scopes, creator/session, expiry, and unused state.
+3. In Foundry, the same user enters the pairing code. The module sends the code plus the exact Foundry origin, world id, Foundry user id, module/Foundry versions, and a generated device id.
+4. D&D AI atomically consumes the code, validates campaign membership and connection/world binding, creates or confirms the non-secret Foundry-user binding, and returns a one-time long-lived device secret plus an initial short-lived access token.
+5. The module stores only non-secret binding metadata in a Foundry `user`-scoped setting. It stores the device id and long-lived device secret in a `client`-scoped setting bound to the API origin, Foundry origin, world id, Foundry user id, connection id, and device id. It holds the access token in memory only.
+6. On later starts, the module exchanges the stored device credential for a new access token. A restart does not require pairing again; a new browser/device, cleared client storage, revoked/expired device credential, changed Foundry identity/world, or materially expanded scope does.
+
+Use distinct credential types and endpoints rather than overloading local browser sessions or the Phase 10 OIDC verifier:
+
+| Credential | Lifetime and storage | Use |
+|---|---|---|
+| Pairing code | 5–10 minutes, single-use; hash stored by D&D AI; raw value never persisted by Foundry | Bootstrap one user/device connection |
+| Foundry device credential | 30–90 days or until revoked/rotated; hash stored by D&D AI; raw value in one client-scoped Foundry setting | Obtain access tokens only |
+| Foundry access token | 10–30 minutes; opaque server-side token; memory only in the module | Ordinary permitted Foundry API requests |
+
+Conceptual schemes are `Authorization: FoundryDevice <connection-or-device-id>.<secret>` only at the token endpoint and `Authorization: FoundryAccess <opaque-token>` on opted-in adapter endpoints. Names may change during implementation, but the two credential classes, storage boundary, and route separation may not. Access-token issuance revalidates the device, user, campaign membership, Foundry binding, connection, scopes, and revocation state. Every API request again resolves current capabilities and resource access so an access token cannot preserve revoked campaign authorization.
+
+The portable user-scoped setting contains no bearer secret. It may contain a connection id, D&D AI user id/display label, paired status, Foundry world/user binding, and last-known API origin. Because Foundry user-scoped settings require Foundry v13, the hybrid implementation raises the supported module minimum from v12 to v13 rather than silently falling back to a world-scoped secret. A user-scoped value is portability metadata, not an authorization assertion; the server accepts only the device/access credential.
+
+Initial Foundry scopes remain closed and narrow: encounter/current-state reads, synchronization status reads, combat synchronization, character-state synchronization, and only the location/state reads required by the module. Foundry credentials cannot manage users, roles, grants, campaign invitations, Foundry connections, device credentials other than their own rotation/revocation flow, imports, or unrestricted GM/AI operations. Every route explicitly opts into Foundry access and validates campaign, world, external-system, Foundry-user, and device bindings.
+
+The authenticated principal is the D&D AI user bound during pairing. A supplied Foundry actor id remains descriptive audit metadata only and cannot select or impersonate another principal. Audit records identify the user, connection/external system, Foundry user, device, access-token/session id, claimed actor metadata when supplied, provisioning portal session, and operation/correlation id without storing secrets.
+
+Portal connection management shows each user's paired devices and, for authorized GMs, campaign connection health: Foundry origin/world, Foundry user, device label, scopes, creator, created/last-used time, last-used IP, module/Foundry version, expiry, and active/revoked state. Users can revoke their own devices; authorized GMs can revoke campaign devices or the connection. Rotation issues a new secret once, invalidates the prior secret after a bounded overlap only when explicitly requested, and does not change the portable binding.
+
+### 23.6 Web-portal experience
 
 The portal provides a shared authenticated shell with campaign, timeline, viewing role, and optional character perspective always visible. Initial navigation covers Home, World, Characters, Quests, Sessions, Knowledge, Ask, GM Tools, and Access Management when permitted.
+
+The portal uses React, TypeScript, and Vite under `portal/`. During development Vite runs at `http://localhost:5173` and proxies `/api` and `/auth` to FastAPI at `http://localhost:8000`, preserving the same-origin browser contract. Production serves the built portal and `/api/*` from the same `world` origin. The portal uses ordinary same-origin login/session endpoints and does not install a browser OIDC library such as `oidc-client-ts`.
+
+The initial route structure is `/login`, `/campaigns`, and `/app/:campaignId/{home,world,characters,quests,sessions,knowledge,ask}`. GM and access-management destinations appear only when the session bootstrap reports the required capabilities. Route visibility improves usability but never replaces server authorization.
 
 The MVP includes:
 
@@ -1325,14 +1397,16 @@ The MVP includes:
 - audience-aware knowledge, quest, session, and summary views
 - an on-demand assistant for campaign summaries, details, rules questions, and GM preparation using authorized structured queries and cited rules/reference passages
 - observer views built from explicitly published or granted resources
-- GM tools for canon browsing, preparation, visibility preview, user invitations, role assignment, user-character relationships, resource grants, and audit history
+- GM tools for canon browsing, preparation, visibility preview, user/account activation, password-reset initiation, campaign invitations, role assignment, user-character relationships, resource grants, Foundry connection/device management, and audit history
 - Phase 15 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
 
-The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience.
+The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience. UI implementation is intentionally owner-authored in small learning increments; automated generation of the portal is outside the Phase 13 workflow.
 
-### 23.5 Audience-aware summaries and questions
+### 23.7 Audience-aware summaries, questions, and feature boundaries
 
-Deterministic query services provide current campaign/session state, active quests/objectives, recent events, locations, characters, NPCs/factions, inventory, knowledge, and recaps. Phase 12 adds AI synthesis over those already-filtered results and the authorized rules/reference corpus. Phase 13 exposes both through the portal.
+Deterministic query services provide current campaign/session state, active quests/objectives, recent events, locations, characters, NPCs/factions, inventory, knowledge, and recaps. Phase 12 adds AI synthesis over those already-filtered results and the authorized rules/reference corpus. Phase 13 may expose deterministic data immediately, but Phase 12 is not complete. Ask, AI-generated summaries, GM briefs, and cited rules questions therefore begin as disabled or clearly labeled placeholder surfaces behind a server-provided feature manifest.
+
+Use one central session/bootstrap response to report capabilities equivalent to `ask`, `aiSummaries`, `gmBriefs`, and `citedRules`; do not scatter build-time flags or hard-coded Phase 12 assumptions through components. A disabled capability must not issue Phase 12 network requests, preload protected results, or leave cached AI output reachable. The server remains authoritative even when a surface is enabled. Phase 12 completion and deliberate enablement activate each capability without requiring the rest of the portal to be rebuilt.
 
 Every summary or answer records or returns its campaign, timeline, effective point in time, requesting user, viewing role/perspective, visibility scope, source records or citations, and whether it is deterministic, cached, or AI-synthesized. The same question may correctly produce different player, character, observer, GM, or session-preparation answers.
 
@@ -1356,10 +1430,10 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 7 | Complete | Quests and expanded knowledge behavior | None |
 | 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
 | 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
-| 10 | Complete | FastAPI boundary, OIDC verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | None |
-| 11 | Partially implemented (all 7 workstreams delivered and security-corrected, not yet CI-closed) | Foundry-user identity linking (`link_foundry_identity`), adapter authentication (`issue_foundry_system_key`, `FoundrySystem` credential scheme, scoped by `AuthenticatedPrincipal`/`require_campaign_capability`'s `allow_foundry_system` gate to a bounded, explicitly opted-in route set — never "every endpoint reachable"), a campaign-scoped combat-sync endpoint (`apply_foundry_combat_sync_endpoint`), sync-state retrieval (`sync_state_endpoint`), current-location/encounter retrieval (`CharacterView.active_encounter_id`), non-combat HP/condition/resource commands (`dnd_ai.commands.character_state`), and a real, installable FoundryVTT client module (`foundry-module/`) with its OIDC-authenticated GM provisioning CLI (`scripts/foundry_provision.py`) and reproducible harness-based E2E verification (`tests/scenario/test_foundry_adapter_e2e.py`) | CI verification and `docs/PHASE11_VERIFICATION.md` |
-| 12 | Not started | — | Narrow AI/NPC and rules-corpus MVP |
-| 13 | Not started | — | Web portal MVP and same-origin packaging |
+| 10 | Complete | FastAPI boundary, optional OIDC bearer verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | Local password/session and Foundry device credential work is additive Phase 11/13 work, not a reopening of the verified domain/API foundation |
+| 11 | Partially implemented; tactical synchronization delivered, authentication revision required | Existing Foundry identity linking, bounded adapter routes, combat/state synchronization, sync-state/current-state retrieval, client module, CORS/HTTPS hardening, and E2E harness remain useful. The shared/GM-bound `FoundrySystem` credential and OIDC-authenticated provisioning CLI are superseded by the hybrid per-user/per-device design. | Implement 11R credential/pairing migration, update module/tests/docs, then perform live Foundry v13 verification and record `docs/PHASE11_VERIFICATION.md` |
+| 12 | Partially implemented | Rules/reference corpus, AI agent/context/proposal schema, one NPC-conversation use case with two proposal kinds (`reveal_knowledge`, `advance_quest_objective`), audience-aware synthesis service, OpenAI-compatible provider with a local-model path | Real-provider smoke verification and `docs/PHASE12_VERIFICATION.md` |
+| 13 | Ready to begin (not started) | Architecture boundary decided: owner-authored React/TypeScript/Vite portal, local application authentication, FastAPI browser sessions, Foundry device-management/pairing UI, Phase 12 feature gates | Implement and verify increments 13A–13H; Phase 12-dependent surfaces remain disabled until that phase closes |
 | 14 | Partially implemented | PostgreSQL/API Compose services and local development topology | Production UI/worker/reverse-proxy packaging, secrets, monitoring, backup/restore and rollback hardening |
 | 15 | Not started | — | Controlled world and campaign-data import |
 
@@ -1624,7 +1698,7 @@ Exit criteria:
 Implemented:
 
 - FastAPI/Uvicorn application, health/readiness checks, configuration, correlation IDs, stable error contracts, and request transactions.
-- OIDC bearer-token verification, identity resolution, campaign authorization, role/capability management, invitations, memberships, character relationships, and resource grants.
+- optional OIDC bearer-token verification, authenticated-principal resolution, campaign authorization, role/capability management, invitations, memberships, character relationships, and resource grants. Local password/session authentication is intentionally added in Phase 13 rather than retroactively folded into this completed phase.
 - Command endpoints for campaigns, sessions, events, interactions, movement, dungeons, encounters, items, quests, relationships, organizations, and integrations.
 - Audience-filtered queries for the vertical-slice domains and campaign/session summaries.
 - Durable idempotency and auditing, including pre-campaign creation reservations and timeline bootstrap grants.
@@ -1744,7 +1818,7 @@ Still to come: the remaining pieces of the summary/detail deliverable (active qu
 - query services for the effective dungeon, character, quest, relationship, inventory, encounter, and knowledge state required by the vertical slice
 - deterministic, audience-filtered summary and detail query services for current campaign/session state, active quests, recent events, locations, characters, NPCs/factions, inventory, knowledge, and the prior-session recap
 - stable request and response contracts usable by the web portal, Foundry, and future clients
-- OIDC-backed login integration for `dev`, authenticated user mapping, campaign invitations/memberships, campaign-scoped multi-role assignment, capabilities, and access revocation
+- optional OIDC bearer verification and authenticated-principal mapping for API verification, plus campaign invitations/memberships, campaign-scoped multi-role assignment, capabilities, and access revocation; local portal login belongs to Phase 13
 - many-to-many user-character relationships and resource-access grants sufficient for the vertical slice, including access derived through roles, controlled characters, parties, and knowledge
 - centralized access resolution and server-side filtering for rows, fields, relationships, counts, search results, and summary inputs
 - audit records for login-linked identity changes, role/access changes, sensitive reads, and all writes
@@ -1771,19 +1845,19 @@ Keep the endpoint surface limited to what that scenario needs:
 
 Testing focuses on application behavior and this end-to-end scenario. Do not create another generalized test framework or duplicate database invariants already adequately tested in earlier phases.
 
-Phase 10 also proves secure authentication cookies, CSRF protection, and player, GM, observer, and user-to-detail many-to-many access enforcement through the reverse proxy. Its application contracts, command/query services, transaction/session management, validation, authorization, audit, correlation, and idempotency behavior remain platform-neutral.
+Phase 10 proves player, GM, observer, and user-to-detail many-to-many authorization through the API. Secure local-login cookies and CSRF protection are Phase 13 additions over this completed boundary. Phase 10's application contracts, command/query services, transaction/session management, validation, authorization, audit, correlation, and idempotency behavior remain platform-neutral; its OIDC verifier is retained as optional compatibility code rather than the required portal or Foundry login mechanism.
 
 ### Phase 11: Foundry MVP
 
-**Status: Partially implemented — all seven workstreams delivered and verified, including three follow-up security corrections (two to workstream 2's authentication design, one transport-layer) and a real, installable FoundryVTT client module (workstream 7); CI is green on this work's final head commit ([PR #32](https://github.com/NemesisGhost/dnd_ai/pull/32), commit `c0273dd`: all five jobs — lint/type-check, the Foundry module's own `node --test`, the full PostgreSQL 18 unit/database/scenario suite, the Docker Compose image/smoke test, and the named-volume persistence check — passed), but the phase is still not closed per [§24.0](#240-verification-policy): real-Foundry-instance verification and `docs/PHASE11_VERIFICATION.md` remain outstanding, and closing this phase now requires that live verification specifically, not just CI — see the security corrections below for why.** Implemented: integration persistence contracts and API/domain command services (Phase 9-10); Foundry-user-to-platform-user identity linking (workstream 1); a real Foundry-adapter authentication scheme, bound to exactly one platform principal at credential-issuance time and restricted to a bounded adapter-facing route set (workstream 2, twice corrected); a campaign-scoped combat-sync endpoint (workstream 3); sync-state retrieval (workstream 4); current location/encounter retrieval (workstream 5); non-combat HP/condition/resource commands (workstream 6); the FoundryVTT client module itself, its OIDC-authenticated GM provisioning CLI, CORS/HTTPS transport-layer hardening, and a reproducible harness-based E2E verification proving the phase's exit criterion (workstream 7, below). Remaining: real-Foundry-instance verification of the corrected trust boundary and live browser transport, recorded in `docs/PHASE11_VERIFICATION.md` — the one item this repository cannot complete without someone providing a licensed FoundryVTT instance to test against.
+**Status: Partially implemented — the seven original workstreams, three security corrections, installable module, and automated verification were delivered and CI-green on [PR #32](https://github.com/NemesisGhost/dnd_ai/pull/32), commit `c0273dd`; the tactical synchronization and transport work remain valid, but the authentication/provisioning design is superseded by the local-authentication and hybrid per-user/per-device decision recorded in §23.4–§23.5.** Existing `FoundrySystem` code, the OIDC-authenticated GM provisioning CLI, GM-only principal binding, and module credential handling are historical implementation, not the target architecture. Phase 11 must complete workstream 11R below before live verification or closure. Remaining: implement the pairing/device/access-token migration without regressing the bounded adapter routes; update tests, module documentation, and operator flows; then verify the redesigned module against a real licensed Foundry v13 instance and record `docs/PHASE11_VERIFICATION.md`.
 
 Wires Phase 9's `integration.*` schema and adapter-facing contracts through Phase 10's API to the smallest playable Foundry integration. Build the concrete encounter flow before designing any general-purpose bidirectional synchronization framework.
 
 Deliver:
 
 - a real, installable FoundryVTT module associating Foundry actors/scenes/items and the current encounter with canonical identifiers, submitting interactions and checks, and receiving/applying state updates
-- an explicit GM setup/linking flow: register or select the external system, issue/rotate its credential through an OIDC-authenticated management flow, and map Foundry users to platform users
-- every adapter request bound to the configured `external_system_id`, the current Foundry user, the `FoundrySystem` credential, and the target campaign — under the same world/system authorization protections every other route already enforces
+- an explicit portal setup/linking flow: an authorized GM registers/selects the external system, and each user pairs each browser/device through a local-authenticated, single-use code flow
+- every adapter request bound to the configured `external_system_id`, campaign, D&D AI user, Foundry user, Foundry origin/world, connection, and device through a short-lived Foundry access token — under the same world/system authorization protections every other route already enforces
 - the minimum playable synchronization path: current character/location/encounter and sync-bookkeeping state retrieval, combat-turn submission, and non-combat HP/condition/resource submission, with returned canonical state applied back to Foundry without feedback loops
 - duplicate/reconnect handling: stable idempotency keys across retries, bounded retry/backoff for transient failures only, and reload/reconnect restoration from canonical reads rather than a replayed local queue
 - automated tests for the client's own request construction, identifier binding, retry/reconnect, and loop suppression, plus a reproducible end-to-end verification procedure
@@ -1808,15 +1882,28 @@ Deliver:
 
 **Workstream 7 (complete): FoundryVTT client module.** Closes a real gap the phase's earlier status line understated: workstream 2 made every opted-in server route *reachable* by a Foundry adapter, but reachability is not a client — until this workstream, the repository contained no installable FoundryVTT module at all (no `module.json`, no client JS, no packaging, no GM setup flow), so the exit criterion below could not actually be exercised. `foundry-module/` is a real, installable module (FoundryVTT minimum `12`, verified `13.351`, dnd5e-only), shipped as plain ES modules with zero npm dependencies (`docs/DEVELOPMENT.md`'s toolchain table) — Foundry loads them natively via `module.json`'s `esmodules`, and `foundry-module/test/` (`node --test`, 60+ tests) covers request construction (`scripts/api-client.mjs`), identifier binding (`scripts/sync-engine.mjs`, via a Foundry document flag plus the real `map_external_identifier` call for actors/scenes/items — an encounter's own canonical id has no such endpoint to call, per `narrative.encounters` not being a `core.entities` row, so encounter linking is local-only), stable retry/idempotency-key derivation (`scripts/ids.mjs` — a deterministic FNV-1a hash of an operation's own semantic identity, never a fresh UUID per attempt, so a retried request stays the *same* logical operation server-side), bounded exponential-backoff retry that never retries an authorization or conflicting-payload failure (`scripts/retry.mjs`), reconnect restoration (`SyncEngine.restoreFromServer` — reads only, never a replayed write), and write-back loop suppression (a self-updating guard around `SyncEngine.applyHitPoints`, paired with `scripts/hooks.mjs`'s `updateActor` handler). Combat-turn/condition/resource submission is always an explicit GM/player action through a small "D&D AI Sync" panel, never inferred from dnd5e's own chat-card/damage-application internals — deliberately, so every code path stays something the test suite proves correct rather than a best-effort scrape; HP sync alone is automatic via the `updateActor` hook. `scripts/foundry_provision.py` (repository root) is the "explicit GM setup/linking flow" the request required: an OIDC-authenticated, `httpx`-based CLI (never a database client — CLAUDE.md rule 3) wrapping `register_external_system`/`issue_foundry_system_key`/`link_foundry_identity`, standing in for the portal UI Phase 13 will eventually provide, covered by `tests/database/test_foundry_provision.py` (imports its functions directly against a real `TestClient`+PostgreSQL, proving clear error surfacing for a missing mapping, an invalid credential, and insufficient capability) and `tests/unit/test_foundry_provision.py` (pure response-classification tests). `tests/scenario/test_foundry_adapter_e2e.py` is the "reproducible Foundry test harness" the request's own exit-verification item accepts as an alternative to a real licensed Foundry client: it drives the exact HTTP sequence `foundry-module/`'s own client issues — real `FoundrySystem`/`X-Foundry-User-Id` headers, real request bodies, real `external_operation_id` reuse — against the real application and a real disposable PostgreSQL 18, proving all five claims the exit criterion below and the security correction together require: a real encounter and a non-combat HP change update canonical state only through the API; duplicate delivery creates no duplicate `narrative.events` row; a simulated reconnect (sync-state plus character reads, no client-side state carried over) restores the updated state; a credential authenticated for a different world's external system is rejected against this campaign; and the identical credential cannot call `register_external_system`/`link_foundry_identity`/`issue_foundry_system_key`. `foundry-module/README.md`'s "Manual live-Foundry verification" section documents the corresponding procedure against a real, licensed FoundryVTT instance for whoever has one — not run this session; this workstream's own claims rest on the harness, not a live client.
 
+**Workstream 11R (required revision): local-authenticated hybrid Foundry pairing.** Preserve the completed combat/state endpoints, external-identifier mappings, retry/idempotency behavior, reconnect restoration, loop suppression, exact-origin CORS allowlist, HTTPS enforcement, and route-by-route fail-closed authorization. Replace only the superseded identity/credential/provisioning layer and the module code/tests that depend on it:
+
+1. Add schema and commands for hashed single-use pairing codes, portable Foundry-user connections, per-device hash-stored credentials, short-lived opaque access-token/session records, scope assignments, expiry, last use, rotation, and revocation. Bind every record to the D&D AI user, campaign, external system/world, Foundry origin, Foundry user id, and device as applicable.
+2. Add local-session-authenticated portal endpoints to create pairing codes, list/revoke/rotate the caller's devices, and—behind `access.manage`—manage the campaign's Foundry connection and revoke campaign devices. Pairing/token endpoints accept no browser cookie as authorization except where explicitly creating/managing the pairing from the same-origin portal.
+3. Replace the runtime `FoundrySystem` principal with `foundry_device`/`foundry_access` principal handling. Rename or replace `allow_foundry_system` with an explicit Foundry-access opt-in. Keep route reachability bounded and recheck campaign capabilities on every request. The device credential may call only the token/rotation endpoint; only a short-lived access token may call ordinary adapter routes.
+4. Update audit attribution to record the authoritative D&D AI user plus connection/external system, Foundry user, device, and access-token/session identifiers. Preserve `X-Foundry-Actor-Id` only as untrusted descriptive metadata; it never selects the principal or expands authorization.
+5. Update `foundry-module/` to Foundry v13 minimum. Store non-secret connection/binding metadata in a `user`-scoped setting, store each device secret in a `client`-scoped setting, keep access tokens in memory, refresh them on startup/expiry, and require pairing on every new browser/device. Never migrate a raw `FoundrySystem` secret into user scope.
+6. Replace the OIDC-authenticated `scripts/foundry_provision.py` flow with the local-session portal pairing workflow. The CLI may be retired or retained only as an explicitly diagnostic/admin client that uses the same public pairing APIs; it must not require OIDC or issue the superseded credential.
+7. Provide an explicit forward-only transition: deploy schema/endpoints and updated clients first; allow old `FoundrySystem` credentials only during a short, configured compatibility window if operationally necessary; require every user/device to pair; revoke all old keys; then remove or permanently disable legacy issuance and runtime acceptance. No automatic conversion is possible because only hashes of old secrets exist.
+8. Update the existing unit/database/scenario/module tests rather than building a new harness. Prove single-use/expiry/concurrent pairing consumption, per-device isolation, new-device pairing, startup token renewal, memory-only access tokens, user-scope metadata containing no secret, revocation on the next request, scope and cross-world/campaign/user/device rejection, non-impersonation through claimed actor ids, CORS/HTTPS behavior, and unchanged canonical sync/idempotency outcomes.
+
+Until 11R is implemented, the existing module is useful for controlled development verification but is not the final production authentication design. Live-Foundry closure testing must exercise the 11R path, not merely reconfirm the superseded `FoundrySystem` path.
+
 Exit criteria:
 
-> A real Foundry encounter updates canonical state through the application API, and reopening or reconnecting retrieves the updated state without duplicate events or direct database access.
+> A real Foundry v13 encounter updates canonical state through the application API using an individually paired device; reopening the same browser retrieves the updated state without duplicate events or interactive reauthentication, a different browser requires its own pairing, and revoking either device takes effect on its next request without affecting the other device.
 
-All seven workstreams above are delivered and verified, including workstream 7's harness-based proof of the exit criterion itself, and — as of the transport-layer correction pass — a green CI run on the final head commit ([PR #32](https://github.com/NemesisGhost/dnd_ai/pull/32), commit `c0273dd`: all five jobs passed). Per [§24.0](#240-verification-policy)/[§24.1](#241-phase-exit-review), that is necessary but not sufficient to close the phase: a recorded `docs/PHASE11_VERIFICATION.md`, backed by an actual run against a real, licensed FoundryVTT instance (`foundry-module/README.md`'s "Manual live-Foundry verification" procedure), is still required before the status line above may say "Complete" — not done as of this correction pass, since no such instance was available to this work. This phase remains "Partially implemented" until that live verification and its record happen in a later change.
+The seven original workstreams and their green CI remain evidence that the tactical adapter works; they no longer prove the revised authentication exit criterion. Phase 11 remains "Partially implemented" until 11R is delivered, its focused regression suite is green, and `docs/PHASE11_VERIFICATION.md` records a real Foundry v13 run covering same-device restart, second-device pairing, independent revocation, cross-origin transport, and canonical synchronization without duplicate events.
 
 ### Phase 12: Narrow AI/NPC MVP
 
-**Status: Not started.** Implemented dependencies: audience-filtered structured queries and authorization boundaries. Remaining: the NPC portrayal service, rules/reference corpus, cited retrieval, proposal workflow, and auditing below.
+**Status: Partially implemented.** Delivered: the full rules/reference corpus (registration and rights metadata, immutable source/hash retention, structured-extraction ingestion, chapter/section/page citation, PostgreSQL full-text retrieval, campaign/edition/house-rule filtering, removal, and retrieval auditing — `core.source_documents`, `ai.reference_passages`, `.reference_source_campaigns`, `.reference_retrievals`/`.reference_retrieval_results`, migration `094_reference_corpus`); the AI agent/context/proposal schema (`ai.agents`, `.agent_roles`, `.agent_assignments` — `entity_id` made nullable by migration `096_campaign_scoped_agents` for a campaign-wide role with no single in-world target — `.prompt_templates`, `.prompt_fragments`, `.context_requests`, `.context_snapshots`, `.generated_outputs`, `.proposed_changes`, `.change_reviews`, migration `093_ai_domain`); one NPC-portrayal/conversation use case (`dnd_ai.domain.context_assembly`, `dnd_ai.domain.ai_provider` — `FakeAiProvider` for tests, `OpenAiCompatibleProvider` for the one real provider, targeting real hosted OpenAI by default or a locally hosted, OpenAI-API-compatible model server (Ollama, vLLM, LM Studio, ...) when `DND_AI_AI_PROVIDER_BASE_URL` points elsewhere — `dnd_ai.commands.ai_npc`); the proposed-change validation/approval pipeline (`dnd_ai.commands.ai_proposals`, `dnd_ai.commands.knowledge.reveal_knowledge_to_party` as the one wired target command, auto-approve vs. requires-approval risk classification by knowledge sensitivity); the audience-aware GM-brief/player-summary/observer-summary synthesis service (`dnd_ai.domain.context_assembly.assemble_campaign_synthesis_context`, layered over the existing `dnd_ai.queries.summary.get_campaign_summary_view`; `dnd_ai.commands.ai_synthesis`), satisfying the "same question, appropriately different GM/player-character/observer answers, inaccessible facts never enter the provider request" exit criterion through three separately-authorized query paths rather than one payload filtered after the fact; and API routes for all of the above (`dnd_ai.api.reference_corpus`, `dnd_ai.api.ai_npc`, `dnd_ai.api.ai_synthesis`). NPC-conversation context includes current encounter, relationship, and quest state (the NPC's own `narrative.quest_participants` involvement, joined to the requesting party's own `campaign.quest_state`), satisfying that exit criterion in full. A second proposal kind, `advance_quest_objective`, is also delivered (migration `097_advance_objective_kind` widens `ai.proposed_changes.proposal_kind`'s closed CHECK set): an NPC conversation may propose completing or failing one quest objective it participates in, drawn only from `dnd_ai.domain.context_assembly.assemble_npc_conversation_context`'s own `advanceable_objectives` candidate set (reusing `dnd_ai.queries.quest.get_quest_view`'s existing party-scoped, non-GM visibility/status resolution — never a `'gm_only'` or already-terminal objective), dispatched by `dnd_ai.commands.ai_proposals._apply_proposal`'s same closed table to the existing `dnd_ai.commands.quests._advance_objective_impl` canonical command — no new or duplicate mutation path. Unlike `reveal_knowledge`, it is always `requires_approval` (`dnd_ai.domain.ai_policy.classify_advance_quest_objective_risk`), never auto-approved. Remaining, per [§24.0](#240-verification-policy): a deliberate real-provider smoke-verification run against a live endpoint (real OpenAI or an operator-supplied locally hosted model server) and a recorded `docs/PHASE12_VERIFICATION.md` — normal automated tests (`tests/unit`, `tests/database`, `tests/scenario`) never contact a live provider; `FakeAiProvider` and mocked-HTTP-transport tests (`tests/unit/test_ai_provider.py`) stand in for every automated test's provider call, and `scripts/ai_provider_smoke_test.py` is the deliberately-separate, opt-in script that exercises a real endpoint.
 
 AI delivery is separate from the web-portal implementation and world/campaign-data import. Start with one NPC portrayal/conversation use case, one provider, one audience-aware summary/question path, and one authorized representative rules source—preferably an applicable SRD or user-authored homebrew document—before broader AI infrastructure.
 
@@ -1849,19 +1936,35 @@ Do not create a general-purpose document-ingestion or vector-search framework fo
 
 ### Phase 13: Web portal MVP and same-origin packaging
 
-**Status: Not started.** Implemented dependencies: the API, authentication, authorization, and audience-filtered query contracts. Remaining: the React portal and browser-facing workflows below.
+**Status: Ready to begin; implementation not started.** Implemented dependencies: the API, optional bearer-token verification, authorization, audience-filtered query contracts, and the partially implemented Phase 12 services. Local application authentication, the secure browser-session boundary, and the hybrid Foundry pairing model are decided here; their FastAPI/database implementation, the Phase 11R adapter changes, and the React portal remain.
 
-The web portal becomes the primary out-of-session interface over the Phase 10 API and Phase 12 on-demand assistant. Implement the bounded experience in [§23](#23-identity-authorization-and-web-portal-implementation) and [UI_DESIGN.md](UI_DESIGN.md); do not turn this phase into an unrestricted content-management platform.
+The web portal becomes the primary out-of-session interface over the Phase 10 API. Phase 13 may start before Phases 11 and 12 close, but it must respect both boundaries: begin with UI-only work that avoids Phase 11R's active backend files, and keep Phase 12-dependent surfaces disabled until the corresponding server features are verified and enabled. Before authentication or Foundry-management backend work begins, integrate the latest Phase 11 branch/main changes and resolve overlaps deliberately, especially around `auth.py`, `config.py`, `app.py`, security tables/migrations, and the integration routes.
+
+The project owner writes the portal code, learning React and TypeScript through small checkpoints. GenAI assistance is limited to teaching, explaining, reviewing, and debugging at the owner's direction. Each increment should be runnable and understandable before the next begins; avoid a large generated scaffold or an unrestricted content-management platform.
+
+Implement in this order:
+
+| Increment | Scope | Completion checkpoint |
+|---|---|---|
+| 13A — UI foundation | Create `portal/` with React, TypeScript, and Vite; add the responsive application shell, navigation, route placeholders, and visible campaign/role/perspective chrome using local fixture data only | The owner can run the portal, navigate every placeholder route, and explain the component, props, state, and routing used; no backend files change |
+| 13B — Local account and browser session | Add account bootstrap/admin creation, Argon2id password verification, activation/reset token flows, login/logout, opaque server-side sessions, secure cookie handling, CSRF/origin checks, rate limits, and one session-bootstrap endpoint | Activation, login, logout, reset, session expiry, and administrative revocation work without temporary passwords or durable browser-readable credentials |
+| 13C — Campaign context | Replace fixture identity data with the bootstrap response; add campaign selection and explicit timeline/role/character perspective | Changing campaign or perspective refreshes authorized data and never grants capabilities locally |
+| 13D — Read-only portal | Build Home, World, Characters, Quests, Sessions, and Knowledge with loading, empty, denied, expired-session, and recoverable-error states | GM, player, assistant-GM, and observer views differ correctly; inaccessible records are non-discoverable |
+| 13E — GM access tools | Add account creation/activation, password-reset initiation, campaign invitation, role, user-character relationship, resource-grant, audit-history, and preview-as-user/perspective workflows | Changes use existing command/idempotency/audit contracts and revocation takes effect on the next request |
+| 13F — Foundry connections and devices | Add user pairing-code creation, own-device list/revoke/rotate, and capability-gated GM connection/device administration over Phase 11R APIs | Two browsers pair independently, portable metadata contains no secret, and revoking one device does not revoke the other |
+| 13G — Phase 12 surfaces | Enable Ask, AI summaries, GM briefs, and cited rules questions only through the server feature manifest after Phase 12 verification | Disabled states make no Phase 12 calls; enabled results use pre-authorized context and appropriate citations |
+| 13H — Acceptance and packaging | Add focused browser E2E coverage, accessibility/responsive checks, and production static-asset packaging for the same `world` origin | The Phase 13 exit criteria pass through the packaged portal |
 
 Deliver:
 
-- a responsive React portal hosted as static assets and authenticated through the Phase 10 OIDC flow
-- login, logout, invitation acceptance, campaign selection, and visible campaign/timeline/role/character perspective
+- a responsive, owner-authored React/TypeScript/Vite portal hosted as static assets and authenticated through FastAPI local login and server-side browser sessions
+- account activation, login, logout, password change/reset, invitation acceptance, campaign selection, and visible campaign/timeline/role/character perspective
 - personalized Home dashboard with recap, current situation, active quests, recent discoveries, relevant NPCs/factions, reminders, and Ask entry point
 - filtered World, Characters, Quests, Sessions, and Knowledge views
-- on-demand summaries, campaign questions, GM briefs, and cited rules questions through deterministic queries and the Phase 12 AI service
+- server-provided feature boundaries and disabled/placeholder states for Ask, AI summaries, GM briefs, and cited rules questions until Phase 12 closes, followed by deliberate activation through deterministic queries and the Phase 12 AI service
 - observer-safe curated views
-- GM user/role management, user-character relationship management, resource grants, visibility preview, and access audit history
+- GM user/role management, activation/reset initiation, user-character relationship management, resource grants, visibility preview, access audit history, and Foundry connection/device administration
+- self-service Foundry pairing-code creation plus per-device list, rotation, and revocation for every user
 - consistent loading, empty, denied, expired-session, and recoverable-error states without leaking hidden-resource existence
 
 Exit criteria:
@@ -1872,21 +1975,25 @@ Exit criteria:
 - Inaccessible resources cannot be inferred through routes, identifiers, fields, search suggestions, counts, relationship edges, errors, cached content, or AI responses.
 - A GM can preview the portal as a selected user/character perspective before publishing or granting information.
 - Portal commands use the same authorization, command, query, audit, visibility, and idempotency boundaries as Foundry and other API clients.
+- The browser contains no password after submission or durable bearer/refresh credential; local login produces only an opaque `Secure`, `HttpOnly`, `SameSite=Lax` application-session cookie, and state-changing requests pass CSRF and Origin validation.
+- Every Foundry user/device pairs independently; only non-secret metadata follows the Foundry user, device secrets remain client-scoped, access tokens remain memory-only, and revocation takes effect on the next request.
+- When Phase 12 capabilities are disabled, their surfaces are visibly unavailable and issue no Phase 12 requests; when enabled, the same portal activates them from the server-provided manifest.
+- The project owner can build, run, explain, and continue maintaining each delivered UI increment without depending on generated production UI code.
 
 ### Phase 14: Local production deployment and hardening
 
-**Status: Partially implemented.** PostgreSQL, migration, and API containers plus the local Compose network exist. Remaining: UI and worker packaging, reverse-proxy ingress, production secrets and observability, backup/restore automation, deployment rollback, and the production-readiness evidence below.
+**Status: Partially implemented.** PostgreSQL, migration, and API containers plus the local Compose network exist. Remaining: UI and worker packaging; local-auth/session and Foundry-device production configuration; reverse-proxy ingress; production secrets and observability; backup/restore automation; deployment rollback; and the production-readiness evidence below.
 
 Deliver:
 
-- Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration;
+- Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration; no separate identity-provider container is required;
 - production multi-stage Dockerfiles and `.dockerignore` files that produce minimal, non-root runtime images, with dependencies pinned and images tagged immutably to a release and Git commit;
 - an explicitly recorded mini-PC CPU architecture and a build/release path that produces compatible images (including a multi-platform build when development/CI and production architectures differ);
 - a version-controlled `compose.yaml` with health checks, dependency readiness, persistent named volumes, external secret/configuration inputs, and a one-off migration service using the same application image as the API/worker where practical;
 - private networking with no public PostgreSQL port and no direct Uvicorn exposure;
 - preferred same-origin `world` UI plus `/api/*`, separate Foundry routing, No-IP updates, and automatic HTTPS;
-- secure cookies, CSRF, login/AI rate limits, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
-- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery, including documented one-command deployment and application-image rollback procedures that preserve the prior image and account for schema compatibility; and
+- secure cookies, CSRF, login/activation/reset/pairing/token/AI rate limits, Argon2id cost configuration, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
+- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery, including local credential/session/device records and documented one-command deployment and application-image rollback procedures that preserve the prior image and account for schema compatibility; and
 - end-to-end local verification of Phase 10 authentication, authorization, and the vertical slice.
 
 Exact hostnames remain a deployment-time decision. Foundry and D&D AI retain separate data, authentication, configuration, lifecycle, and backups. The detailed acceptance gate is [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#production-readiness-gate).
@@ -2030,6 +2137,10 @@ When a harness limitation remains after the material risks are covered:
 
 The same rule applies during review: a reviewer must distinguish production defects, inadequate evidence for a production claim, realistic harness defects, and theoretical harness limitations. Only the first three can block a phase, and a harness defect must be fixed with the smallest sufficient change rather than a new general-purpose framework.
 
+### 26.7 Portal testing
+
+Keep Phase 13 UI testing proportional and behavior-focused. Use component/unit tests only for meaningful state or authorization-presentation logic. Use a small browser E2E suite for the boundaries most likely to fail across layers: local activation/login/session/logout/reset, uniform failed-login/recovery responses, absence of durable browser-readable credentials, CSRF rejection, campaign/perspective changes, GM/player/observer distinctions, grant/session/device revocation on the next request, two-device Foundry pairing and isolation, feature-disabled Phase 12 surfaces making no requests, and hidden-resource non-disclosure. Do not build a generalized UI test harness or duplicate domain/query tests already covered below the portal.
+
 ---
 
 ## 27. Operational strategy
@@ -2056,10 +2167,11 @@ Local and `dev` must stay in agreement on PostgreSQL major version, installed ex
 
 Before production use, configure:
 
-- automated RDS backups
-- point-in-time recovery
+- automated PostgreSQL backups
+- point-in-time recovery where the selected PostgreSQL deployment supports it
 - periodic restore tests
 - export of critical world and campaign records
+- local credential, activation/reset token, browser-session, Foundry pairing/device, and revocation records as part of PostgreSQL backup and restore verification
 
 ### 27.4 Observability
 
@@ -2307,9 +2419,10 @@ This reuses infrastructure that already exists rather than adding a new module. 
 The initial topology is:
 
 ```text
-Browser → static React portal
-Browser/Foundry → OIDC login and access token
-Authorized clients → API Gateway HTTP API
+Browser → React portal → FastAPI local login/server-side session adapter
+Foundry users/devices → pairing code → device credential → short-lived Foundry access token
+Optional external machine clients → explicitly configured OIDC bearer verification or separately scoped API credentials
+Authorized requests → API Gateway HTTP API
   → one FastAPI Lambda handler
     → application/domain services and access resolver
       → PostgreSQL
@@ -2344,8 +2457,9 @@ Resolve networking during Phase 10 deployment design from the actual Lambda, RDS
 ### 31.5 Identity, portal hosting, and secrets
 
 - The Lambda gets a least-privilege execution role; later persistent services get their own roles only if they exist.
-- Phase 10 deploys an OIDC-compatible login provider for `dev`; AWS Cognito is the initial default unless deployment design records a cheaper or simpler equivalent that meets the same token-validation, invitation, revocation, and account-recovery needs.
-- Identity-provider tokens establish identity only. Campaign roles, capabilities, character/resource relationships, and detailed authorization remain in PostgreSQL and are resolved by the application.
+- FastAPI authenticates local application users and issues the secure `HttpOnly` application-session cookie described in [§23.4](#234-browser-session-boundary). An optional AWS deployment does not require Cognito, Pocket ID, or another identity provider.
+- Password hashes, session identifiers, activation/reset tokens, Foundry pairing codes, and device/access credentials follow the hash-at-rest and one-time-display boundaries in §23.1, §23.4, and §23.5. Application peppers or signing/encryption keys, if implementation selects them, remain external deployment secrets rather than database values or artifacts.
+- Authentication establishes identity only. Campaign roles, capabilities, character/resource relationships, and detailed authorization remain in PostgreSQL and are resolved by the application on every relevant request.
 - Phase 13 hosts versioned React assets on the smallest managed static-hosting path that provides HTTPS and controlled cache invalidation. Do not introduce a persistent web server solely to serve the portal.
 - Database access uses the appropriate login role from [§30.5](#305-database-role-schema-and-extension-bootstrap), with credentials and IAM policy scoped to the application rather than shared broadly.
 - External credentials remain outside artifacts and source control. Provision and retrieve only credentials required by the phase being delivered.
@@ -2356,7 +2470,7 @@ Resolve networking during Phase 10 deployment design from the actual Lambda, RDS
 2. Build immutable Lambda and, when applicable, portal artifacts tied to the commit.
 3. Run the existing deliberate AWS database verification checkpoint.
 4. Apply any required compatible migration before application code that depends on it.
-5. Deploy the Phase 10 OIDC provider, API Gateway, and single FastAPI Lambda handler to `dev`.
+5. Deploy API Gateway plus the single FastAPI Lambda handler to `dev`, including local authentication, browser-session storage, and Foundry pairing/token endpoints before deploying their clients.
 6. Exercise the Phase 10 authenticated API scenario and record the deployment evidence.
 7. From Phase 13 onward, deploy versioned portal assets, invalidate only the required cached paths, and exercise GM, player, and observer flows against the live API.
 
@@ -2379,10 +2493,10 @@ The additional obligations in this section begin when the corresponding deployab
 
 | From | Additionally deployed and verified in `dev` |
 |---|---|
-| Phase 10 (Core API and playable vertical slice) | OIDC login provider, API Gateway HTTP API, and one FastAPI Lambda handler; the complete §25 authenticated and audience-filtered scenario exercised through it |
+| Phase 10 (Core API and playable vertical slice) | Existing bearer-token authentication, API Gateway HTTP API, and one FastAPI Lambda handler; the complete §25 authenticated and audience-filtered scenario exercised through it |
 | Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
 | Phase 12 (Narrow AI/NPC MVP) | Deliberate one-provider smoke verification for NPC and audience-aware assistant behavior only; normal automated tests use no live provider |
-| Phase 13 (Web portal MVP) | Versioned static React portal; GM, player, assistant-GM, and observer flows exercised against the live authenticated API |
+| Phase 13 (Web portal MVP) | Versioned static React portal plus FastAPI local authentication/server-side sessions and Foundry pairing/device management; GM, player, assistant-GM, and observer flows exercised without durable browser-readable credentials |
 | Phase 14 (Local production hardening) | Compose, local PostgreSQL, reverse proxy, No-IP/HTTPS, backup/restore, security and operational controls verified end to end |
 | Phase 15 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
 
@@ -2391,7 +2505,7 @@ A phase is not done when its code merges; it is done when its deployables are ru
 ### 31.9 Open items
 
 - **Lambda-to-RDS networking and egress** ([§31.4](#314-networking-decisions-for-phase-10)) — resolve from the Phase 10 flow without assuming public-subnet internet access, NAT, RDS Proxy, or a broad endpoint set.
-- **Terraform modules**: the OIDC, API Gateway/Lambda, and static portal deployment paths do not exist. Add only the bounded infrastructure required by Phase 10, then Phase 13; ECS service and ALB modules remain deferred.
+- **Terraform modules**: the optional external OIDC compatibility path, API Gateway/Lambda, and static portal deployment paths do not exist. Add only the bounded infrastructure required by the selected AWS deployment; no identity-provider infrastructure is required for local application authentication, and ECS service/ALB modules remain deferred.
 - **CI/CD platform**: GitHub Actions is already used for CI ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-continuous-integration)); deployment is assumed to extend it rather than introduce a second system, but the OIDC role and environment protection rules are unbuilt.
 - **`staging`/`prod` environments** remain unbuilt per [§30.3](#303-environments-dev-staging-prod); everything above is specified for `dev` first.
 - **Cost and scaling**: set bounded Lambda concurrency from the development RDS connection budget, begin with direct connections, and measure before adding RDS Proxy, persistent compute, NAT, or performance infrastructure.
@@ -2400,10 +2514,12 @@ A phase is not done when its code merges; it is done when its deployables are ru
 
 ## 32. Local production deployment plan
 
-Production is planned to run on the existing Ubuntu mini-PC using Docker Compose, per [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md), which builds on [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)'s self-hosted Docker Compose decision. Nothing in this section is built yet.
+Production is planned to run on the existing Ubuntu mini-PC using Docker Compose, per [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md), which builds on [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)'s self-hosted Docker Compose decision. D&D AI provides local human authentication; no Pocket ID or other identity-provider service is part of the supported production topology.
 
-The application project would contain the React UI, FastAPI under Uvicorn, PostgreSQL, and only those worker/scheduled-job containers the delivered features require. A Caddy- or Traefik-class reverse proxy would be the sole inbound HTTP/HTTPS service; PostgreSQL and Uvicorn would publish no host ports. The preferred routes are `world.<domain>/` for UI, `world.<domain>/api/*` for API, and `foundry.<domain>/` for Foundry; ADR 0013 records both supported DNS arrangements without inventing a domain.
+The application project contains the React UI, FastAPI under Uvicorn, PostgreSQL, and only those worker/scheduled-job containers the delivered features require. A Caddy- or Traefik-class reverse proxy is the sole inbound HTTP/HTTPS service; PostgreSQL and Uvicorn publish no host ports. Preferred routes are `world.<domain>/` for UI plus `world.<domain>/api/*` and `/auth/*` for the same-origin API/session adapter, and `foundry.<domain>/` for Foundry; no `id.<domain>` route is required. ADR 0013 records supported DNS arrangements without inventing a domain.
 
-Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 13 packages React for the same `world` origin. Phase 14 would integrate Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
+Local user credentials, activation/reset state, browser sessions, Foundry connections, pairing codes, device credentials, short-lived access-token records, and revocation state live in PostgreSQL under the security/integration boundaries defined above. Raw passwords and raw tokens are never stored. Any server-only pepper, signing key, or encryption key selected during implementation is supplied through a mounted secret and backed up separately from ordinary data.
+
+Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 11R replaces the superseded Foundry authentication layer. Phase 13 packages React for the same `world` origin and adds local login/server-side sessions plus Foundry pairing/device administration. Phase 14 integrates Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
 
 AWS RDS remains available as an optional, no-longer-CI-verified path regardless of whether this plan is ever built ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)); nothing here requires tearing it down.
