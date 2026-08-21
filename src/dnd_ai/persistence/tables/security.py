@@ -710,6 +710,19 @@ resource_grants = Table(
         UUID(),
         ForeignKey("narrative.events.event_id", ondelete="CASCADE"),
     ),
+    # Added by revision 094_reference_corpus (Phase 12), once
+    # core.source_documents/ai.proposed_changes existed as target tables —
+    # two of the eight §19.6 target columns revision 080 deferred.
+    Column(
+        "source_document_id",
+        UUID(),
+        ForeignKey("core.source_documents.source_document_id", ondelete="CASCADE"),
+    ),
+    Column(
+        "ai_proposed_change_id",
+        UUID(),
+        ForeignKey("ai.proposed_changes.ai_proposed_change_id", ondelete="CASCADE"),
+    ),
     Column(
         "granted_by_membership_id",
         UUID(),
@@ -780,6 +793,16 @@ Index(
     "ix_resource_grants_event_id",
     resource_grants.c.event_id,
     postgresql_where=resource_grants.c.event_id.isnot(None),
+)
+Index(
+    "ix_resource_grants_source_document_id",
+    resource_grants.c.source_document_id,
+    postgresql_where=resource_grants.c.source_document_id.isnot(None),
+)
+Index(
+    "ix_resource_grants_ai_proposed_change_id",
+    resource_grants.c.ai_proposed_change_id,
+    postgresql_where=resource_grants.c.ai_proposed_change_id.isnot(None),
 )
 Index(
     "ix_resource_grants_granted_by_membership_id",

@@ -195,6 +195,115 @@ sources = Table(
     ),
 )
 
+# Added by revision 094_reference_corpus (Phase 12) — a registered
+# reference/rules source, alongside its lightweight sources/source_types
+# siblings above (docs/architecture/DATABASE_MODEL.md §5.5, §18.3).
+source_documents = Table(
+    "source_documents",
+    metadata,
+    _uuid_pk("source_document_id"),
+    Column(
+        "source_type_id",
+        UUID(),
+        ForeignKey("core.source_types.source_type_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "ruleset_version_id",
+        UUID(),
+        ForeignKey("rules.ruleset_versions.ruleset_version_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("title", Text(), nullable=False),
+    Column("publisher_or_author", Text()),
+    Column(
+        "classification",
+        Text(),
+        nullable=False,
+        comment=(
+            "official/third_party/srd/homebrew — the classification §18.3 requires "
+            "recording, distinct from source_type_id (core.source_types, shared with "
+            "core.sources — how the row was authored/imported, not what kind of "
+            "publication it is)."
+        ),
+    ),
+    Column(
+        "usage_rights_status", Text(), nullable=False, server_default=text("'pending_review'::text")
+    ),
+    Column("usage_rights_notes", Text()),
+    Column("file_hash", Text(), nullable=False),
+    Column("file_hash_algorithm", Text(), nullable=False, server_default=text("'sha256'::text")),
+    Column("source_version_label", Text(), nullable=False),
+    Column(
+        "supersedes_source_document_id",
+        UUID(),
+        ForeignKey("core.source_documents.source_document_id", ondelete="SET NULL"),
+    ),
+    Column(
+        "visibility",
+        Text(),
+        nullable=False,
+        server_default=text("'campaign_restricted'::text"),
+        comment=(
+            "'general': retrievable by any campaign whose own ruleset_version_id "
+            "matches (a licensed SRD). 'campaign_restricted': retrievable only by a "
+            "campaign with an active ai.reference_source_campaigns grant (homebrew, "
+            "or a sourcebook only some campaigns are licensed for)."
+        ),
+    ),
+    Column("allow_indexing", Boolean(), nullable=False, server_default=text("true")),
+    Column("allow_quotation", Boolean(), nullable=False, server_default=text("true")),
+    Column("allow_summarization", Boolean(), nullable=False, server_default=text("true")),
+    Column("allow_export", Boolean(), nullable=False, server_default=text("false")),
+    Column("allow_training", Boolean(), nullable=False, server_default=text("false")),
+    Column("status", Text(), nullable=False, server_default=text("'active'::text")),
+    Column("removed_at", TIMESTAMP(timezone=True)),
+    Column("removed_by_user_id", UUID(), ForeignKey("security.users.user_id", ondelete="SET NULL")),
+    Column("removal_reason", Text()),
+    Column(
+        "ingested_by_user_id", UUID(), ForeignKey("security.users.user_id", ondelete="SET NULL")
+    ),
+    *_timestamps(),
+    UniqueConstraint("file_hash", name="ux_source_documents_file_hash"),
+    schema="core",
+    comment=(
+        "A registered reference/rules source — an authorized SRD, a licensed "
+        "sourcebook, a homebrew document (docs/PLAN.md §18.3). Immutable identity: "
+        "file_hash is unique and never reused; a revised edition is a new row with "
+        "supersedes_source_document_id pointing at the one it replaces, not an "
+        "in-place edit. Registering or ingesting a source never creates or mutates "
+        "canonical campaign state — this table, ai.reference_passages, and "
+        "ai.reference_source_campaigns are corpus/administrative records under the "
+        "AI/context boundary, not campaign.* or narrative.* rows."
+    ),
+)
+
+Index("ix_source_documents_ruleset_version_id", source_documents.c.ruleset_version_id)
+Index(
+    "ix_source_documents_active_ruleset",
+    source_documents.c.ruleset_version_id,
+    postgresql_where=source_documents.c.status == "active",
+)
+Index("ix_source_documents_status", source_documents.c.status)
+Index(
+    "ix_source_documents_supersedes",
+    source_documents.c.supersedes_source_document_id,
+    postgresql_where=source_documents.c.supersedes_source_document_id.isnot(None),
+)
+# 098_ai_domain_fk_indexes: same-phase correction pass adding the FK
+# indexes 094_reference_corpus omitted (conventions §19.1).
+Index("ix_source_documents_source_type_id", source_documents.c.source_type_id)
+Index(
+    "ix_source_documents_ingested_by_user_id",
+    source_documents.c.ingested_by_user_id,
+    postgresql_where=source_documents.c.ingested_by_user_id.isnot(None),
+)
+Index(
+    "ix_source_documents_removed_by_user_id",
+    source_documents.c.removed_by_user_id,
+    postgresql_where=source_documents.c.removed_by_user_id.isnot(None),
+)
+
 entities = Table(
     "entities",
     metadata,

@@ -207,6 +207,12 @@ MANAGED_TABLES = [
     ("security", "timeline_bootstrap_grants"),
     # Phase 10, workstream 33 — pre-campaign idempotency
     ("security", "campaign_creation_reservations"),
+    # Phase 12 — rules/reference corpus: the registered source document
+    # itself lives in core (alongside its §5.5 siblings, core.sources/.
+    # source_types), while the corpus's extracted/indexed/retrieved halves
+    # live in ai.* — out of this file's scope entirely, since 'ai' is not
+    # a MANAGED_SCHEMAS entry (see that list's own comment).
+    ("core", "source_documents"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

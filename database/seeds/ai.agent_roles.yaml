@@ -1,0 +1,52 @@
+# AI agent roles — the eight initial roles docs/PLAN.md §18 names.
+# Only npc_portrayal is wired to a concrete ai.agents row in Phase 12's
+# application code (dnd_ai.commands.ai_npc); the rest are named here so the
+# lookup vocabulary is complete without inventing new codes ad hoc later.
+
+- code: npc_portrayal
+  display_name: NPC Portrayal
+  description: Portrays a specific NPC in conversation with players.
+  sort_order: 10
+  is_active: true
+
+- code: dungeon_state_agent
+  display_name: Dungeon State Agent
+  description: Manages dungeon/encounter state narration. Not yet implemented.
+  sort_order: 20
+  is_active: true
+
+- code: quest_manager
+  display_name: Quest Manager
+  description: Tracks and narrates quest progression. Not yet implemented.
+  sort_order: 30
+  is_active: true
+
+- code: rules_assistant
+  display_name: Rules Assistant
+  description: Answers cited rules questions from the reference corpus. Not yet implemented.
+  sort_order: 40
+  is_active: true
+
+- code: world_state_manager
+  display_name: World State Manager
+  description: Manages broader world-state narration. Not yet implemented.
+  sort_order: 50
+  is_active: true
+
+- code: lore_consistency_checker
+  display_name: Lore Consistency Checker
+  description: Flags contradictions against established canon. Not yet implemented.
+  sort_order: 60
+  is_active: true
+
+- code: session_summarizer
+  display_name: Session Summarizer
+  description: Produces audience-filtered session recaps. Not yet implemented.
+  sort_order: 70
+  is_active: true
+
+- code: rumor_propagation_agent
+  display_name: Rumor Propagation Agent
+  description: Simulates rumor spread between NPCs and locations. Not yet implemented.
+  sort_order: 80
+  is_active: true

@@ -25,7 +25,13 @@ Phase 10 campaign-scoped security schema (13 new tables, 1 table dropped).
 Revision 082 (a Phase 10 workstream 6 correction pass) added
 security.idempotent_requests. Revision 087 (Phase 10 workstream 32) added
 security.timeline_bootstrap_grants. Revision 088 (Phase 10 workstream 33)
-added security.campaign_creation_reservations.
+added security.campaign_creation_reservations. Revisions 093-094 (Phase 12)
+added the ai.* agent/prompt/context/proposal domain (10 tables), the
+ai.reference_* rules-corpus retrieval tables (4 tables), and
+core.source_documents (1 table) — a same-phase correction pass, since the
+original delivery never added them to this package's own metadata mirror at
+all (caught only once alembic check was actually run against these
+revisions).
 """
 
 import importlib
@@ -42,6 +48,22 @@ pytestmark = pytest.mark.unit
 # owning module here should only ever be a deliberate move, never a side
 # effect of an unrelated change.
 EXPECTED_TABLES = {
+    "ai": [
+        "ai.agent_assignments",
+        "ai.agent_roles",
+        "ai.agents",
+        "ai.change_reviews",
+        "ai.context_requests",
+        "ai.context_snapshots",
+        "ai.generated_outputs",
+        "ai.prompt_fragments",
+        "ai.prompt_templates",
+        "ai.proposed_changes",
+        "ai.reference_passages",
+        "ai.reference_retrieval_results",
+        "ai.reference_retrievals",
+        "ai.reference_source_campaigns",
+    ],
     "audit": ["audit.change_actions", "audit.change_log"],
     "campaign": [
         "campaign.area_connection_state",
@@ -100,6 +122,7 @@ EXPECTED_TABLES = {
         "core.entity_types",
         "core.lifecycle_statuses",
         "core.name_types",
+        "core.source_documents",
         "core.source_types",
         "core.sources",
         "core.tags",

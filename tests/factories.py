@@ -2902,3 +2902,329 @@ def make_delivery_attempt(
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_agent(
+    connection: Connection,
+    *,
+    agent_role_code: str = "npc_portrayal",
+    provider: str = "fake",
+    model_identifier: str = "fake-model",
+) -> uuid.UUID:
+    agent_role_id = lookup_id(connection, "ai", "agent_roles", "agent_role_id", agent_role_code)
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.agents (agent_role_id, display_name, provider, model_identifier)
+            VALUES (:role, :name, :provider, :model)
+            RETURNING agent_id
+        """),
+        {
+            "role": agent_role_id,
+            "name": f"Test agent {agent_role_code}",
+            "provider": provider,
+            "model": model_identifier,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_agent_assignment(
+    connection: Connection, agent_id: uuid.UUID, campaign_id: uuid.UUID, entity_id: uuid.UUID
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.agent_assignments (agent_id, campaign_id, entity_id)
+            VALUES (:agent, :campaign, :entity)
+            RETURNING agent_assignment_id
+        """),
+        {"agent": agent_id, "campaign": campaign_id, "entity": entity_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def cleanup_committed_ai_world(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    agent_id: uuid.UUID | None = None,
+) -> None:
+    """Fully tears down a genuinely committed (not rolled-back)
+    world+campaign fixture built via `make_world`/`make_campaign`/
+    `make_party`/`make_agent_assignment` — the shared counterpart every
+    `postgres_engine`-based `committed` fixture in the ai_* test files
+    (`test_ai_npc.py`, `test_ai_synthesis.py`,
+    `test_ai_advance_objective_proposal.py`, `test_api_ai_and_corpus.py`)
+    needs, factored out once duplicating it four times (each getting the
+    dependency order slightly wrong in a different way, in practice)
+    proved worse than one shared, carefully-ordered implementation.
+
+    The caller must run this under `session_replication_role = replica`
+    (`connection.execute(text("SET LOCAL session_replication_role =
+    replica"))` first) and every statement here is a fully explicit
+    delete, in dependency order, never relying on FK CASCADE — replica
+    mode suppresses *every* trigger for the rest of the transaction, not
+    a chosen few, including the ordinary FK CASCADE/RESTRICT enforcement
+    that would otherwise handle most of this automatically. It also
+    suppresses two protective triggers whose job is to stop this exact
+    class of physical deletion outside of a test:
+    `narrative.enforce_recorded_event_not_deletable()` (revision 069 —
+    "a recorded event is history and may only be voided or corrected,
+    not removed") and `core.enforce_entity_subtype()`. Bypassing both is
+    correct here specifically, not a workaround: docs/ENTITY_LIFECYCLE.md
+    §14 explicitly reserves physical deletion for "unreferenced drafts/
+    test fixtures," and that is exactly what everything this function
+    deletes is — never a played campaign's real recorded history.
+
+    One inherent limitation, not a bug: `narrative.events.timeline_id` is
+    `NOT NULL` and cannot be repointed at nothing, so a test that actually
+    caused a real event to be recorded (approving an `advance_quest_
+    objective`/`reveal_knowledge` proposal) leaves that one event row
+    behind with a now-dangling `timeline_id` — the event itself can never
+    be deleted (by the same revision-069 rule, correctly not bypassed
+    for the row itself, only for what points *at* it), and this function
+    still deletes the timeline it was recorded on. `campaign_id` is
+    nulled out explicitly below first, so at least that reference never
+    dangles. No test in this suite queries `narrative.events` by a
+    since-deleted `timeline_id`/`world_id`, so this is inert rather than
+    a functional leak — unlike the alternative (never deleting the
+    timeline at all), which is what silently reintroduced the campaign.
+    campaigns/.timelines/.parties/.party_memberships leak this function
+    exists to close (see git history for the original bug report: extra
+    committed campaign.campaigns rows collided with a deferred
+    constraint trigger campaign.campaigns itself carries, breaking
+    tests/database/test_seed_idempotency.py, and extra campaign.
+    party_memberships rows broke tests/database/test_party_memberships.py's
+    own assertions, which read that table with no WHERE clause on the
+    assumption that exactly one row — each test's own — exists)."""
+    connection.execute(
+        text("UPDATE narrative.events SET campaign_id = NULL WHERE campaign_id = :c"),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.change_reviews WHERE ai_proposed_change_id IN (
+                SELECT ai_proposed_change_id FROM ai.proposed_changes WHERE campaign_id = :c
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("DELETE FROM ai.proposed_changes WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.generated_outputs WHERE context_request_id IN (
+                SELECT context_request_id FROM ai.context_requests
+                WHERE agent_assignment_id IN (
+                    SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+                )
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.context_snapshots WHERE context_request_id IN (
+                SELECT context_request_id FROM ai.context_requests
+                WHERE agent_assignment_id IN (
+                    SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+                )
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.context_requests WHERE agent_assignment_id IN (
+                SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("DELETE FROM ai.agent_assignments WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("DELETE FROM campaign.campaign_parties WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("""
+            DELETE FROM campaign.party_memberships WHERE timeline_id IN (
+                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+            )
+        """),
+        {"w": world_id},
+    )
+    connection.execute(
+        text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(text("DELETE FROM campaign.parties WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM campaign.timelines WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world_id})
+    if agent_id is not None:
+        connection.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": agent_id})
+
+
+def make_source_document(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    title: str = "Test Sourcebook",
+    classification: str = "srd",
+    file_hash: str | None = None,
+    source_version_label: str = "v1",
+    visibility: str = "general",
+    source_type_code: str = "rulebook",
+    status: str = "active",
+) -> uuid.UUID:
+    source_type_id = lookup_id(
+        connection, "core", "source_types", "source_type_id", source_type_code
+    )
+    value = connection.execute(
+        text("""
+            INSERT INTO core.source_documents
+                (source_type_id, ruleset_version_id, title, classification, file_hash,
+                 source_version_label, visibility, status, usage_rights_status)
+            VALUES (:stype, :ruleset, :title, :classification, :hash, :version, :visibility,
+                    :status, 'verified_srd_license')
+            RETURNING source_document_id
+        """),
+        {
+            "stype": source_type_id,
+            "ruleset": ruleset_version_id,
+            "title": title,
+            "classification": classification,
+            "hash": file_hash or uuid.uuid4().hex,
+            "version": source_version_label,
+            "visibility": visibility,
+            "status": status,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_reference_passage(
+    connection: Connection,
+    source_document_id: uuid.UUID,
+    *,
+    passage_order: int = 0,
+    content: str = "The fireball spell deals fire damage in a 20-foot radius.",
+    chapter: str | None = "Chapter 10: Spells",
+    section: str | None = "Fireball",
+    page_label: str | None = "241",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.reference_passages
+                (source_document_id, passage_order, chapter, section, page_label, content)
+            VALUES (:source, :order, :chapter, :section, :page, :content)
+            RETURNING reference_passage_id
+        """),
+        {
+            "source": source_document_id,
+            "order": passage_order,
+            "chapter": chapter,
+            "section": section,
+            "page": page_label,
+            "content": content,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_reference_source_campaign_grant(
+    connection: Connection,
+    source_document_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    *,
+    is_house_rule: bool = False,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.reference_source_campaigns (source_document_id, campaign_id, is_house_rule)
+            VALUES (:source, :campaign, :house_rule)
+            RETURNING reference_source_campaign_id
+        """),
+        {"source": source_document_id, "campaign": campaign_id, "house_rule": is_house_rule},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_context_request(
+    connection: Connection,
+    agent_assignment_id: uuid.UUID,
+    *,
+    request_kind: str = "npc_conversation",
+    input_text: str = "Test input",
+    requesting_character_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.context_requests
+                (agent_assignment_id, requesting_character_id, request_kind, input_text)
+            VALUES (:assignment, :character, :kind, :input_text)
+            RETURNING context_request_id
+        """),
+        {
+            "assignment": agent_assignment_id,
+            "character": requesting_character_id,
+            "kind": request_kind,
+            "input_text": input_text,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_generated_output(
+    connection: Connection,
+    context_request_id: uuid.UUID,
+    *,
+    provider: str = "fake",
+    model_identifier: str = "fake-model",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.generated_outputs (context_request_id, provider, model_identifier)
+            VALUES (:request, :provider, :model)
+            RETURNING generated_output_id
+        """),
+        {"request": context_request_id, "provider": provider, "model": model_identifier},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_proposed_change(
+    connection: Connection,
+    generated_output_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    *,
+    proposal_kind: str,
+    proposed_arguments: dict[str, object],
+    risk_tier: str = "requires_approval",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.proposed_changes
+                (generated_output_id, campaign_id, proposal_kind, proposed_arguments, risk_tier)
+            VALUES (:output, :campaign, :kind, :arguments, :risk_tier)
+            RETURNING ai_proposed_change_id
+        """),
+        {
+            "output": generated_output_id,
+            "campaign": campaign_id,
+            "kind": proposal_kind,
+            "arguments": json.dumps(proposed_arguments),
+            "risk_tier": risk_tier,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value

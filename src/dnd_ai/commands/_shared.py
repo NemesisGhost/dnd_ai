@@ -135,7 +135,11 @@ class PartyNotInCampaignError(DomainAuthorizationError):
 
 
 def validate_campaign_party(
-    connection: Connection, *, campaign_id: uuid.UUID | None, party_id: uuid.UUID | None
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+    lock: bool = False,
 ) -> None:
     """Rejects a caller-supplied party_id that is not actually associated
     with campaign_id, before anything is inserted, updated, or read.
@@ -147,14 +151,24 @@ def validate_campaign_party(
     `campaign_id = NULL`/`party_id = NULL` comparisons in the query below
     never match (SQL NULL semantics), so a `campaign_id=None` caller with a
     `party_id` supplied is rejected the same way a mismatched campaign
-    would be — no separate `is None` branch is needed."""
+    would be — no separate `is None` branch is needed.
+
+    `lock=True` (default `False`, so every existing caller keeps its
+    original unlocked-read behavior unchanged) additionally takes a
+    `FOR UPDATE` row lock on the association row itself — for a caller
+    that must keep "this party still belongs to this campaign" true not
+    just at check time but all the way through a later canonical mutation
+    in the same transaction (`dnd_ai.commands.ai_proposals._revalidate_
+    advance_quest_objective`), so a concurrent removal of the association
+    genuinely blocks (and is then correctly observed) rather than racing
+    past an earlier, already-stale unlocked read."""
     if party_id is None:
         return
 
     exists = connection.execute(
         text(
             "SELECT 1 FROM campaign.campaign_parties "
-            "WHERE campaign_id = :campaign AND party_id = :party"
+            "WHERE campaign_id = :campaign AND party_id = :party" + (" FOR UPDATE" if lock else "")
         ),
         {"campaign": campaign_id, "party": party_id},
     ).scalar()

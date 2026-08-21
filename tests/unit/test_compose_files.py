@@ -205,3 +205,87 @@ def test_api_oidc_settings_use_three_distinct_host_side_variables() -> None:
         api["environment"]["DND_AI_OIDC_JWKS_URL"],
     ]
     assert len(set(values)) == 3, "each OIDC setting must interpolate its own host-side variable"
+
+
+# ---------------------------------------------------------------------------
+# api's AI provider configuration (Phase 12 deployment-gap fix) — regression
+# guard for the defect where compose.yaml never forwarded
+# DND_AI_FEATURE_AI_NPC_DIALOGUE/DND_AI_AI_PROVIDER_*, so the documented
+# Compose deployment could never configure hosted OpenAI or a local
+# OpenAI-compatible endpoint at all; every request resolved to HTTP 503.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("container_var", "host_var"),
+    [
+        ("DND_AI_FEATURE_AI_NPC_DIALOGUE", "API_FEATURE_AI_NPC_DIALOGUE"),
+        ("DND_AI_AI_PROVIDER_BASE_URL", "API_AI_PROVIDER_BASE_URL"),
+        ("DND_AI_AI_PROVIDER_MODEL", "API_AI_PROVIDER_MODEL"),
+        ("DND_AI_AI_PROVIDER_API_KEY", "API_AI_PROVIDER_API_KEY"),
+    ],
+)
+def test_api_ai_provider_settings_are_forwarded_from_distinct_host_variables(
+    container_var: str, host_var: str
+) -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert container_var in api["environment"], f"api service must set {container_var}"
+    value = api["environment"][container_var]
+    assert host_var in value, f"{container_var} must interpolate {host_var}"
+
+
+def test_api_ai_provider_settings_have_safe_soft_defaults_not_hard_requirements() -> None:
+    # Unlike API_DATABASE_URL/API_OIDC_* (`:?`, hard-required), the AI
+    # provider settings must stay optional — mirrors
+    # API_FEATURE_FOUNDRY_INTEGRATION/API_FOUNDRY_ALLOWED_ORIGINS above: a
+    # self-hosted deployment that never turns AI on must still start `api`
+    # with no configuration at all.
+    api = _load("compose.yaml")["services"]["api"]
+    for container_var in (
+        "DND_AI_FEATURE_AI_NPC_DIALOGUE",
+        "DND_AI_AI_PROVIDER_BASE_URL",
+        "DND_AI_AI_PROVIDER_MODEL",
+        "DND_AI_AI_PROVIDER_API_KEY",
+    ):
+        value = api["environment"][container_var]
+        assert ":-" in value, f"{container_var} must have a soft (`:-`) fallback default"
+        assert ":?" not in value, f"{container_var} must not be a hard requirement"
+
+
+def test_api_ai_provider_feature_flag_defaults_to_disabled() -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert (
+        api["environment"]["DND_AI_FEATURE_AI_NPC_DIALOGUE"]
+        == "${API_FEATURE_AI_NPC_DIALOGUE:-false}"
+    )
+
+
+def test_api_ai_provider_key_defaults_to_blank_not_a_placeholder_secret() -> None:
+    # Compose cannot omit an unset variable's key entirely — the safe
+    # fallback is a blank string, which dnd_ai.config.Settings then
+    # normalizes to None (see _normalize_ai_provider_api_key), never a
+    # committed placeholder value that could be mistaken for a real key.
+    api = _load("compose.yaml")["services"]["api"]
+    assert api["environment"]["DND_AI_AI_PROVIDER_API_KEY"] == "${API_AI_PROVIDER_API_KEY:-}"
+
+
+def test_api_ai_provider_base_url_defaults_to_real_hosted_openai() -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert api["environment"]["DND_AI_AI_PROVIDER_BASE_URL"] == (
+        "${API_AI_PROVIDER_BASE_URL:-https://api.openai.com/v1}"
+    )
+
+
+def test_env_example_documents_the_ai_provider_host_side_variables() -> None:
+    content = (REPO_ROOT / ".env.example").read_text()
+    for host_var in (
+        "API_FEATURE_AI_NPC_DIALOGUE",
+        "API_AI_PROVIDER_API_KEY",
+        "API_AI_PROVIDER_MODEL",
+        "API_AI_PROVIDER_BASE_URL",
+    ):
+        assert host_var in content, f".env.example must document {host_var}"
+    # Never a real, usable-looking secret committed as a default value.
+    assert "API_AI_PROVIDER_API_KEY=sk-" not in content
+    assert "sk-proj-" not in content
+    assert "sk-test-" not in content
