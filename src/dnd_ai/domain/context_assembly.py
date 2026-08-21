@@ -26,6 +26,15 @@ keeps "AI output cannot directly mutate canonical state" true even for an
 auto-approved proposal: the *candidate set* itself is deterministic,
 already-authored, database-computed, and audience-filtered before the model
 ever sees it, not something the model's own text output could expand.
+
+`advanceable_objectives` is the identical mechanism for the second proposal
+kind, `advance_quest_objective`: the closed, pre-computed set of `narrative.
+quest_objectives` this NPC's own related quests (`related_quests`) make
+visible to `requesting_party_id`, whose current status is not already
+terminal — see `AdvanceableObjective`'s own docstring for the full
+membership rule. `dnd_ai.commands.ai_npc` only ever accepts a `quest_
+objective_id` from this set, the same never-trust-the-model's-own-id
+posture `reveal_knowledge_item_id` already established.
 """
 
 import uuid
@@ -35,7 +44,21 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.quest import get_quest_view
 from dnd_ai.queries.summary import get_campaign_summary_view
+
+# Mirrors dnd_ai.commands.quests._TERMINAL_OBJECTIVE_STATUSES — that module
+# is the actual enforcement (_advance_objective_impl re-checks this itself
+# at apply time, regardless of what candidate set produced the proposal);
+# this copy only decides which objectives are even *offered* as candidates
+# here, so an NPC is never offered something the command would reject
+# anyway. Duplicated rather than imported to keep this domain-layer module
+# from depending on the application/command layer (SYSTEM_ARCHITECTURE.md
+# §5's domain-below-application layering) for one small, stable, closed
+# vocabulary — the seven campaign.objective_statuses codes are a fixed
+# lookup set, not something expected to change independently in one copy
+# and not the other.
+_TERMINAL_OBJECTIVE_STATUSES = frozenset({"completed", "failed", "skipped", "superseded"})
 
 
 @dataclass(frozen=True)
@@ -54,6 +77,27 @@ class RelatedQuest:
 
 
 @dataclass(frozen=True)
+class AdvanceableObjective:
+    """One objective this NPC's conversation may propose completing or
+    failing — the closed candidate set `advance_quest_objective` proposals
+    draw from, the same role `RevealableKnowledge` plays for
+    `reveal_knowledge`. Membership already proves every safety property the
+    exit criteria require: it belongs to a quest this NPC participates in
+    (`related_quests`' own scope), it is the requesting party's own
+    effective view (`dnd_ai.queries.quest.get_quest_view`, party-scoped,
+    `include_hidden=False` — so a `'gm_only'` objective, or one this party
+    has no visibility into yet, can never appear here), and its current
+    status is not already terminal — `dnd_ai.commands.ai_npc` only ever
+    accepts a `quest_objective_id` from this set, never an arbitrary one the
+    model names."""
+
+    quest_objective_id: uuid.UUID
+    quest_id: uuid.UUID
+    name: str
+    current_status_code: str | None
+
+
+@dataclass(frozen=True)
 class NpcConversationContext:
     npc_entity_id: uuid.UUID
     npc_name: str
@@ -66,6 +110,7 @@ class NpcConversationContext:
     known_facts_about_npc: tuple[str, ...]
     revealable_knowledge: tuple[RevealableKnowledge, ...]
     related_quests: tuple[RelatedQuest, ...]
+    advanceable_objectives: tuple[AdvanceableObjective, ...]
 
     def as_prompt_payload(self) -> dict[str, Any]:
         """The exact structure persisted to `ai.context_snapshots.
@@ -99,6 +144,15 @@ class NpcConversationContext:
                     "status": q.status_code,
                 }
                 for q in self.related_quests
+            ],
+            "advanceable_objectives": [
+                {
+                    "quest_objective_id": str(o.quest_objective_id),
+                    "quest_id": str(o.quest_id),
+                    "name": o.name,
+                    "current_status": o.current_status_code,
+                }
+                for o in self.advanceable_objectives
             ],
         }
 
@@ -235,6 +289,51 @@ def _related_quests(
     )
 
 
+def _advanceable_objectives(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    expected_world_id: uuid.UUID,
+    party_id: uuid.UUID,
+    related_quests: tuple[RelatedQuest, ...],
+) -> tuple[AdvanceableObjective, ...]:
+    """Objectives eligible for an `advance_quest_objective` proposal, drawn
+    only from quests this NPC already participates in (`related_quests`) —
+    never a campaign-wide objective scan. For each such quest, reuses
+    `dnd_ai.queries.quest.get_quest_view` (`include_hidden=False`, the same
+    party-scoped, non-GM audience filter every other player-facing query in
+    this codebase applies) rather than re-deriving visibility/status
+    resolution here, so this candidate set can never drift from what that
+    query already treats as "this party can see." An objective whose
+    current effective status is already terminal (or would be excluded
+    entirely by that query's own audience filter — `'gm_only'`, or a
+    `'hidden_until_active'`/`'hidden_until_discovered'` objective with no
+    state row yet) is never included."""
+    candidates: list[AdvanceableObjective] = []
+    for related in related_quests:
+        quest_view = get_quest_view(
+            connection,
+            quest_id=related.quest_id,
+            timeline_id=timeline_id,
+            expected_world_id=expected_world_id,
+            party_id=party_id,
+            include_hidden=False,
+        )
+        for stage in quest_view.stages:
+            for objective in stage.objectives:
+                if objective.status_code in _TERMINAL_OBJECTIVE_STATUSES:
+                    continue
+                candidates.append(
+                    AdvanceableObjective(
+                        quest_objective_id=objective.quest_objective_id,
+                        quest_id=related.quest_id,
+                        name=objective.name,
+                        current_status_code=objective.status_code,
+                    )
+                )
+    return tuple(candidates)
+
+
 def assemble_npc_conversation_context(
     connection: Connection,
     *,
@@ -270,6 +369,12 @@ def assemble_npc_conversation_context(
         npc_entity_id=npc_entity_id,
         other_entity_id=requesting_character_id,
     )
+    related_quests = _related_quests(
+        connection,
+        timeline_id=timeline_id,
+        party_id=requesting_party_id,
+        npc_entity_id=npc_entity_id,
+    )
     return NpcConversationContext(
         npc_entity_id=npc_entity_id,
         npc_name=npc.name,
@@ -291,11 +396,13 @@ def assemble_npc_conversation_context(
             party_id=requesting_party_id,
             npc_entity_id=npc_entity_id,
         ),
-        related_quests=_related_quests(
+        related_quests=related_quests,
+        advanceable_objectives=_advanceable_objectives(
             connection,
             timeline_id=timeline_id,
+            expected_world_id=expected_world_id,
             party_id=requesting_party_id,
-            npc_entity_id=npc_entity_id,
+            related_quests=related_quests,
         ),
     )
 

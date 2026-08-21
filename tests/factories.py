@@ -3030,3 +3030,76 @@ def make_reference_source_campaign_grant(
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
+
+
+def make_context_request(
+    connection: Connection,
+    agent_assignment_id: uuid.UUID,
+    *,
+    request_kind: str = "npc_conversation",
+    input_text: str = "Test input",
+    requesting_character_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.context_requests
+                (agent_assignment_id, requesting_character_id, request_kind, input_text)
+            VALUES (:assignment, :character, :kind, :input_text)
+            RETURNING context_request_id
+        """),
+        {
+            "assignment": agent_assignment_id,
+            "character": requesting_character_id,
+            "kind": request_kind,
+            "input_text": input_text,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_generated_output(
+    connection: Connection,
+    context_request_id: uuid.UUID,
+    *,
+    provider: str = "fake",
+    model_identifier: str = "fake-model",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.generated_outputs (context_request_id, provider, model_identifier)
+            VALUES (:request, :provider, :model)
+            RETURNING generated_output_id
+        """),
+        {"request": context_request_id, "provider": provider, "model": model_identifier},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_proposed_change(
+    connection: Connection,
+    generated_output_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    *,
+    proposal_kind: str,
+    proposed_arguments: dict[str, object],
+    risk_tier: str = "requires_approval",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO ai.proposed_changes
+                (generated_output_id, campaign_id, proposal_kind, proposed_arguments, risk_tier)
+            VALUES (:output, :campaign, :kind, :arguments, :risk_tier)
+            RETURNING ai_proposed_change_id
+        """),
+        {
+            "output": generated_output_id,
+            "campaign": campaign_id,
+            "kind": proposal_kind,
+            "arguments": json.dumps(proposed_arguments),
+            "risk_tier": risk_tier,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value

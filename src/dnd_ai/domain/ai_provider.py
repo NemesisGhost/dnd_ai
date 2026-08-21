@@ -42,9 +42,9 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from .context_assembly import NpcConversationContext
 
@@ -55,17 +55,61 @@ _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _RECORD_NPC_TURN_FUNCTION_NAME = "record_npc_turn"
 _RECORD_SYNTHESIS_ANSWER_FUNCTION_NAME = "record_synthesis_answer"
 
+# The only two campaign.objective_statuses codes _advance_objective_impl
+# ever accepts as a target (dnd_ai.commands.quests._ADVANCEABLE_STATUSES) —
+# duplicated here, not imported, for the same domain-layer-doesn't-depend-
+# on-the-application-layer reason context_assembly.py's own
+# _TERMINAL_OBJECTIVE_STATUSES comment gives. Used both as the Pydantic
+# Literal below (so any other value is a schema-validation failure at parse
+# time, never a value that reaches _advance_objective_impl's own runtime
+# check at all) and as the function-calling tool schema's own enum.
+_ADVANCE_OBJECTIVE_STATUSES = ("completed", "failed")
+
 
 class NpcTurnOutput(BaseModel):
     """The one structured-output shape this phase's NPC-portrayal use case
-    produces. `reveal_knowledge_item_id`, when set, must be a member of the
-    context's own `revealable_knowledge` — `dnd_ai.commands.ai_npc`
-    validates this independently of whatever the model claims; this type
-    only proves the *shape* of the response, never that the id is safe to
-    act on."""
+    produces: dialogue, plus at most one optional canonical-change proposal.
+    `extra="forbid"` (rather than Pydantic v2's default `"ignore"`) means an
+    unrecognized field in the model's function-call arguments — e.g. some
+    other command name or shape the model invented — fails schema
+    validation outright instead of being silently dropped; `dnd_ai.domain.
+    ai_provider._extract_tool_call`'s caller then reports an ordinary
+    `error_message`, never a proposal built from an unrecognized shape.
+
+    `reveal_knowledge_item_id`, when set, must be a member of the context's
+    own `revealable_knowledge`; `advance_quest_objective_id`, when set, must
+    be a member of `advanceable_objectives`. `dnd_ai.commands.ai_npc`
+    validates both independently of whatever the model claims — this type
+    only proves the *shape* of the response (including, via `_at_most_one_
+    proposal` below, that the two proposal kinds are never both present at
+    once — "not ambiguous or conflicting canonical proposals in one output"),
+    never that either id is safe to act on."""
+
+    model_config = ConfigDict(extra="forbid")
 
     dialogue: str
     reveal_knowledge_item_id: uuid.UUID | None = None
+    advance_quest_objective_id: uuid.UUID | None = None
+    advance_quest_objective_new_status: Literal["completed", "failed"] | None = None
+
+    @model_validator(mode="after")
+    def _at_most_one_proposal(self) -> "NpcTurnOutput":
+        if (
+            self.reveal_knowledge_item_id is not None
+            and self.advance_quest_objective_id is not None
+        ):
+            raise ValueError(
+                "a single turn may propose at most one canonical change — "
+                "reveal_knowledge_item_id and advance_quest_objective_id are mutually exclusive"
+            )
+        if (self.advance_quest_objective_id is None) != (
+            self.advance_quest_objective_new_status is None
+        ):
+            raise ValueError(
+                "advance_quest_objective_id and advance_quest_objective_new_status "
+                "must be set together, or not at all"
+            )
+        return self
 
 
 class SynthesisOutput(BaseModel):
@@ -109,14 +153,32 @@ class FakeAiProvider:
     (`tests/unit`, `tests/database`) — never used outside test code.
     Returns a fixed `dialogue` and, when `reveal_first_candidate` is set
     and the context has at least one revealable knowledge item, proposes
-    revealing it — enough to exercise `dnd_ai.commands.ai_npc`'s proposal
-    pipeline without any live call."""
+    revealing it; or, when `advance_first_candidate` (with `advance_new_
+    status`) is set and the context has at least one advanceable objective,
+    proposes advancing it instead — enough to exercise `dnd_ai.commands.
+    ai_npc`'s proposal pipeline for either kind without any live call.
+    Setting both flags at once is a test-author error (mirrors
+    `NpcTurnOutput`'s own mutual-exclusion rule) and raises immediately in
+    `__init__`, rather than silently picking one — a test that wants to
+    verify the ambiguous-output rejection path exercises `NpcTurnOutput`
+    directly instead (see `tests/unit/test_ai_provider.py`)."""
 
     def __init__(
-        self, *, dialogue: str = "Hello there.", reveal_first_candidate: bool = False
+        self,
+        *,
+        dialogue: str = "Hello there.",
+        reveal_first_candidate: bool = False,
+        advance_first_candidate: bool = False,
+        advance_new_status: Literal["completed", "failed"] = "completed",
     ) -> None:
+        if reveal_first_candidate and advance_first_candidate:
+            raise ValueError(
+                "reveal_first_candidate and advance_first_candidate are mutually exclusive"
+            )
         self._dialogue = dialogue
         self._reveal_first_candidate = reveal_first_candidate
+        self._advance_first_candidate = advance_first_candidate
+        self._advance_new_status = advance_new_status
 
     def generate_npc_turn(
         self,
@@ -129,10 +191,20 @@ class FakeAiProvider:
             if self._reveal_first_candidate and context.revealable_knowledge
             else None
         )
+        advance_id = (
+            context.advanceable_objectives[0].quest_objective_id
+            if self._advance_first_candidate and context.advanceable_objectives
+            else None
+        )
         return ProviderResult(
             raw_response=self._dialogue,
             structured_output=NpcTurnOutput(
-                dialogue=self._dialogue, reveal_knowledge_item_id=reveal_id
+                dialogue=self._dialogue,
+                reveal_knowledge_item_id=reveal_id,
+                advance_quest_objective_id=advance_id,
+                advance_quest_objective_new_status=(
+                    self._advance_new_status if advance_id is not None else None
+                ),
             ),
             finish_reason="end_turn",
             latency_ms=0,
@@ -161,12 +233,21 @@ def _npc_turn_function_schema() -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": _RECORD_NPC_TURN_FUNCTION_NAME,
-            "description": "Record this NPC's spoken reply and, optionally, one fact to reveal.",
+            "description": (
+                "Record this NPC's spoken reply and, optionally, exactly one proposed "
+                "canonical change: either revealing one fact, or advancing one quest "
+                "objective to completed or failed — never both in the same reply."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "dialogue": {"type": "string"},
                     "reveal_knowledge_item_id": {"type": ["string", "null"]},
+                    "advance_quest_objective_id": {"type": ["string", "null"]},
+                    "advance_quest_objective_new_status": {
+                        "type": ["string", "null"],
+                        "enum": [*_ADVANCE_OBJECTIVE_STATUSES, None],
+                    },
                 },
                 "required": ["dialogue"],
             },
@@ -187,6 +268,13 @@ def _build_system_prompt(context: NpcConversationContext) -> str:
         )
         or "none"
     )
+    objectives = (
+        "; ".join(
+            f"{o.quest_objective_id}: {o.name} (currently {o.current_status_code or 'not yet started'})"
+            for o in context.advanceable_objectives
+        )
+        or "none"
+    )
     return (
         f"You are {context.npc_name}, an NPC in a tabletop RPG, speaking with "
         f"{context.requesting_character_name}. Relationship status: "
@@ -196,6 +284,10 @@ def _build_system_prompt(context: NpcConversationContext) -> str:
         f"You may optionally reveal exactly one of these facts, by id, if it fits the "
         f"conversation naturally — never invent a fact or an id not in this list: {candidates}. "
         f"Quests you are involved in: {quests}. "
+        f"You may instead optionally propose completing or failing exactly one of these "
+        f"quest objectives, by id, if the conversation makes that outcome clear — never "
+        f"invent an objective or an id not in this list, and never propose a fact reveal "
+        f"and an objective change in the same reply: {objectives}. "
         "Reply only through the record_npc_turn function."
     )
 

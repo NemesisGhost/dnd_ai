@@ -2,16 +2,26 @@
 the Generated -> Proposed -> Validated -> Approved -> Applied lifecycle
 (docs/ENTITY_LIFECYCLE.md §10). `dnd_ai.commands.ai_npc` handles the
 auto-approve path inline (a proposal never sits `pending` at all when
-policy already cleared it); this module is only ever reached for a
-`requires_approval` proposal.
+policy already cleared it); this module is reached for every
+`requires_approval` proposal, plus the auto-approve path's own apply step
+(both call `_apply_proposal` directly, on the same open transaction).
 
-`apply_approved_proposal()` deliberately dispatches on `proposal_kind` by an
-explicit `if`, never a generic "call a function named by this string"
-registry — the set of proposal kinds is small, closed, and owned entirely
-by this codebase (docs/architecture/DATABASE_MODEL.md §18's own "policy
-engine determines whether a proposal may be applied automatically" reads
-naturally as a small, explicit decision table, not indirection over
-arbitrary caller-supplied strings).
+`_apply_proposal()` deliberately dispatches on `proposal_kind` by an
+explicit `if`/`elif` chain, never a generic "call a function named by this
+string" registry — the set of proposal kinds is small, closed, and owned
+entirely by this codebase (docs/architecture/DATABASE_MODEL.md §18's own
+"policy engine determines whether a proposal may be applied automatically"
+reads naturally as a small, explicit decision table, not indirection over
+arbitrary caller-supplied strings). Two kinds are wired today:
+`reveal_knowledge` (`dnd_ai.commands.knowledge.reveal_knowledge_to_party`)
+and `advance_quest_objective` (`dnd_ai.commands.quests._advance_objective_
+impl`) — both existing canonical commands, never a duplicate mutation path
+written for this module. Each branch re-parses `proposed_arguments` (a
+`Mapping[str, object]` read back from JSONB) into that command's own typed
+keyword arguments, raising `ValueError` for a missing or malformed key
+(`_apply_proposal` runs inside the caller's own transaction — see
+`review_proposed_change` below — so that `ValueError` rolls the whole
+review-and-apply transaction back, never leaving a proposal half-applied).
 """
 
 import uuid
@@ -23,6 +33,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from .knowledge import _reveal_knowledge_to_party_impl
+from .quests import _advance_objective_impl
 
 
 class ProposedChangeNotFoundError(DomainAuthorizationError):
@@ -121,10 +132,46 @@ def _apply_proposal(
             assert isinstance(existing_event_id, uuid.UUID)
             return existing_event_id
         return result.event_id
-    # pragma: no cover — proposal_kind is a closed database CHECK set; unreachable in practice.
+    if proposal_kind == "advance_quest_objective":
+        objective_result = _advance_objective_impl(
+            connection,
+            quest_objective_id=uuid.UUID(
+                str(_require_argument(proposed_arguments, "quest_objective_id"))
+            ),
+            timeline_id=uuid.UUID(str(_require_argument(proposed_arguments, "timeline_id"))),
+            world_time_id=uuid.UUID(str(_require_argument(proposed_arguments, "world_time_id"))),
+            new_status_code=str(_require_argument(proposed_arguments, "new_status_code")),
+            party_id=_optional_uuid_argument(proposed_arguments, "party_id"),
+            actor_entity_id=_optional_uuid_argument(proposed_arguments, "actor_entity_id"),
+            campaign_id=campaign_id,
+        )
+        return objective_result.event_id
+    # The database CHECK constraint on ai.proposed_changes.proposal_kind
+    # closes this vocabulary — this is defense in depth, not a path any
+    # currently-committed row can reach, since every value the constraint
+    # allows has a branch above.
     raise ValueError(
         f"unknown proposal_kind {proposal_kind!r} for proposal {ai_proposed_change_id}"
     )
+
+
+def _require_argument(proposed_arguments: Mapping[str, object], key: str) -> object:
+    """A `proposed_arguments` value that must be present — raises
+    `ValueError` (not `KeyError`) for a missing key, so a malformed or
+    tampered-with proposal row fails the same "unclassified domain
+    ValueError -> 400, transaction rolled back" way every other invalid
+    request does (`dnd_ai.api.errors.handle_value_error`), rather than an
+    unclassified `KeyError` falling through to the generic 500 handler."""
+    if key not in proposed_arguments:
+        raise ValueError(f"proposed_arguments is missing required key {key!r}")
+    return proposed_arguments[key]
+
+
+def _optional_uuid_argument(proposed_arguments: Mapping[str, object], key: str) -> uuid.UUID | None:
+    value = proposed_arguments.get(key)
+    if value is None:
+        return None
+    return uuid.UUID(str(value))
 
 
 def review_proposed_change(
