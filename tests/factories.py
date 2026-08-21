@@ -2944,6 +2944,131 @@ def make_agent_assignment(
     return value
 
 
+def cleanup_committed_ai_world(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    agent_id: uuid.UUID | None = None,
+) -> None:
+    """Fully tears down a genuinely committed (not rolled-back)
+    world+campaign fixture built via `make_world`/`make_campaign`/
+    `make_party`/`make_agent_assignment` — the shared counterpart every
+    `postgres_engine`-based `committed` fixture in the ai_* test files
+    (`test_ai_npc.py`, `test_ai_synthesis.py`,
+    `test_ai_advance_objective_proposal.py`, `test_api_ai_and_corpus.py`)
+    needs, factored out once duplicating it four times (each getting the
+    dependency order slightly wrong in a different way, in practice)
+    proved worse than one shared, carefully-ordered implementation.
+
+    The caller must run this under `session_replication_role = replica`
+    (`connection.execute(text("SET LOCAL session_replication_role =
+    replica"))` first) and every statement here is a fully explicit
+    delete, in dependency order, never relying on FK CASCADE — replica
+    mode suppresses *every* trigger for the rest of the transaction, not
+    a chosen few, including the ordinary FK CASCADE/RESTRICT enforcement
+    that would otherwise handle most of this automatically. It also
+    suppresses two protective triggers whose job is to stop this exact
+    class of physical deletion outside of a test:
+    `narrative.enforce_recorded_event_not_deletable()` (revision 069 —
+    "a recorded event is history and may only be voided or corrected,
+    not removed") and `core.enforce_entity_subtype()`. Bypassing both is
+    correct here specifically, not a workaround: docs/ENTITY_LIFECYCLE.md
+    §14 explicitly reserves physical deletion for "unreferenced drafts/
+    test fixtures," and that is exactly what everything this function
+    deletes is — never a played campaign's real recorded history.
+
+    One inherent limitation, not a bug: `narrative.events.timeline_id` is
+    `NOT NULL` and cannot be repointed at nothing, so a test that actually
+    caused a real event to be recorded (approving an `advance_quest_
+    objective`/`reveal_knowledge` proposal) leaves that one event row
+    behind with a now-dangling `timeline_id` — the event itself can never
+    be deleted (by the same revision-069 rule, correctly not bypassed
+    for the row itself, only for what points *at* it), and this function
+    still deletes the timeline it was recorded on. `campaign_id` is
+    nulled out explicitly below first, so at least that reference never
+    dangles. No test in this suite queries `narrative.events` by a
+    since-deleted `timeline_id`/`world_id`, so this is inert rather than
+    a functional leak — unlike the alternative (never deleting the
+    timeline at all), which is what silently reintroduced the campaign.
+    campaigns/.timelines/.parties/.party_memberships leak this function
+    exists to close (see git history for the original bug report: extra
+    committed campaign.campaigns rows collided with a deferred
+    constraint trigger campaign.campaigns itself carries, breaking
+    tests/database/test_seed_idempotency.py, and extra campaign.
+    party_memberships rows broke tests/database/test_party_memberships.py's
+    own assertions, which read that table with no WHERE clause on the
+    assumption that exactly one row — each test's own — exists)."""
+    connection.execute(
+        text("UPDATE narrative.events SET campaign_id = NULL WHERE campaign_id = :c"),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.change_reviews WHERE ai_proposed_change_id IN (
+                SELECT ai_proposed_change_id FROM ai.proposed_changes WHERE campaign_id = :c
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("DELETE FROM ai.proposed_changes WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.generated_outputs WHERE context_request_id IN (
+                SELECT context_request_id FROM ai.context_requests
+                WHERE agent_assignment_id IN (
+                    SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+                )
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.context_snapshots WHERE context_request_id IN (
+                SELECT context_request_id FROM ai.context_requests
+                WHERE agent_assignment_id IN (
+                    SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+                )
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("""
+            DELETE FROM ai.context_requests WHERE agent_assignment_id IN (
+                SELECT agent_assignment_id FROM ai.agent_assignments WHERE campaign_id = :c
+            )
+        """),
+        {"c": campaign_id},
+    )
+    connection.execute(
+        text("DELETE FROM ai.agent_assignments WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("DELETE FROM campaign.campaign_parties WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(
+        text("""
+            DELETE FROM campaign.party_memberships WHERE timeline_id IN (
+                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+            )
+        """),
+        {"w": world_id},
+    )
+    connection.execute(
+        text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"), {"c": campaign_id}
+    )
+    connection.execute(text("DELETE FROM campaign.parties WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM campaign.timelines WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
+    connection.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world_id})
+    if agent_id is not None:
+        connection.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": agent_id})
+
+
 def make_source_document(
     connection: Connection,
     ruleset_version_id: uuid.UUID,

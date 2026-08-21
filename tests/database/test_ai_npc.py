@@ -24,6 +24,7 @@ from dnd_ai.commands.ai_proposals import ProposedChangeNotFoundError, review_pro
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from dnd_ai.domain.context_assembly import assemble_npc_conversation_context
 from tests.factories import (
+    cleanup_committed_ai_world,
     make_agent,
     make_agent_assignment,
     make_campaign,
@@ -164,22 +165,13 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
         )
     yield fixture
     with postgres_engine.begin() as cleanup:
-        # core.entities.world_id is ON DELETE RESTRICT (not CASCADE) — every
-        # entity this fixture created must go before the world itself can.
-        # session_replication_role = replica suppresses core.enforce_entity_
-        # subtype() (and similar triggers) for this bulk delete, the same
-        # shape tests/database/test_api_integration.py's own fixture
-        # cleanup already established — a single-statement DELETE across
-        # many CTI subtype rows otherwise fires that trigger mid-cascade,
-        # before every sibling row is gone.
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
-        cleanup.execute(
-            text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
+        cleanup_committed_ai_world(
+            cleanup,
+            world_id=fixture.world_id,
+            campaign_id=fixture.campaign_id,
+            agent_id=fixture.agent_id,
         )
-        cleanup.execute(
-            text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
-        )
-        cleanup.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": fixture.agent_id})
 
 
 def test_public_reveal_is_auto_approved_and_applied(

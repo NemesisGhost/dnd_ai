@@ -34,6 +34,7 @@ from dnd_ai.commands.quests import advance_objective
 from dnd_ai.domain.ai_provider import FakeAiProvider, NpcTurnOutput, ProviderResult
 from dnd_ai.domain.context_assembly import NpcConversationContext, assemble_npc_conversation_context
 from tests.factories import (
+    cleanup_committed_ai_world,
     make_agent,
     make_agent_assignment,
     make_campaign,
@@ -184,19 +185,19 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
         # Bounded so a worker thread left genuinely stuck by this file's
         # own concurrency tests (test_concurrent_reviews_serialize_and_
         # apply_exactly_once, test_a_concurrent_visibility_change_during_
-        # approval_is_serialized_and_rejected) can never turn a single
-        # failing test into an indefinitely hung test session — a lock
-        # this cleanup can't acquire within 30s raises a clear,
-        # immediately diagnosable timeout instead of hanging forever.
+        # approval_is_always_safe, and the other deterministic races) can
+        # never turn a single failing test into an indefinitely hung test
+        # session — a lock this cleanup can't acquire within 30s raises a
+        # clear, immediately diagnosable timeout instead of hanging
+        # forever.
         cleanup.execute(text("SET LOCAL statement_timeout = '30s'"))
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
-        cleanup.execute(
-            text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
+        cleanup_committed_ai_world(
+            cleanup,
+            world_id=fixture.world_id,
+            campaign_id=fixture.campaign_id,
+            agent_id=fixture.agent_id,
         )
-        cleanup.execute(
-            text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
-        )
-        cleanup.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": fixture.agent_id})
 
 
 def _objective_status(

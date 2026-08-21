@@ -24,6 +24,7 @@ from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from tests.factories import (
+    cleanup_committed_ai_world,
     lookup_id,
     make_agent,
     make_agent_assignment,
@@ -150,13 +151,20 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 ]
             },
         )
-        cleanup.execute(
-            text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
+        # The rest — core.entities, campaign.campaigns/.timelines/.
+        # parties/.party_memberships/.campaign_parties, ai.*, core.worlds
+        # — is the shared teardown every committed ai.* fixture needs;
+        # see cleanup_committed_ai_world's own docstring for the full
+        # explanation (still under the replica mode set above — this
+        # fixture's own security.* rows deleted above are already
+        # explicit, since cleanup_committed_ai_world doesn't touch that
+        # schema at all).
+        cleanup_committed_ai_world(
+            cleanup,
+            world_id=fixture.world_id,
+            campaign_id=fixture.campaign_id,
+            agent_id=fixture.agent_id,
         )
-        cleanup.execute(
-            text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
-        )
-        cleanup.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": fixture.agent_id})
 
 
 @pytest.fixture

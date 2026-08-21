@@ -18,6 +18,7 @@ from dnd_ai.domain.context_assembly import (
     assemble_campaign_synthesis_context,
 )
 from tests.factories import (
+    cleanup_committed_ai_world,
     make_agent,
     make_agent_assignment,
     make_campaign,
@@ -130,13 +131,12 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
-        cleanup.execute(
-            text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
+        cleanup_committed_ai_world(
+            cleanup,
+            world_id=fixture.world_id,
+            campaign_id=fixture.campaign_id,
+            agent_id=fixture.agent_id,
         )
-        cleanup.execute(
-            text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
-        )
-        cleanup.execute(text("DELETE FROM ai.agents WHERE agent_id = :a"), {"a": fixture.agent_id})
 
 
 def test_request_campaign_synthesis_records_output(
