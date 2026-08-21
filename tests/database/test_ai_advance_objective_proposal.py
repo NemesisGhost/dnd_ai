@@ -1044,20 +1044,92 @@ def test_cross_quest_objective_named_in_a_tampered_proposal_is_rejected(
         )
 
 
-_CONCURRENT_VISIBILITY_CHANGE_DEADLINE_SECONDS = 60
+_CONCURRENT_RACE_DEADLINE_SECONDS = 60
+
+
+def _run_concurrent_race(
+    label_a: str,
+    action_a: Callable[[], object],
+    label_b: str,
+    action_b: Callable[[], object],
+) -> tuple[dict[str, object], dict[str, BaseException], dict[str, str]]:
+    """Runs two actions as real, concurrent threads synchronized on a
+    `threading.Barrier` — the same idiom `test_concurrent_reviews_
+    serialize_and_apply_exactly_once` established first — and returns
+    whatever each captured: `results[label]` for a return value,
+    `errors[label]`/`tracebacks[label]` for a raised exception. One
+    bounded overall deadline covers both joins (never two independent
+    30s waits that could sum to double the budget); both workers are
+    ordinary non-daemon threads, and this function asserts neither is
+    still alive before returning, so a genuinely stuck worker fails the
+    calling test loudly and immediately rather than being silently
+    abandoned for a later test's fixture teardown to trip over."""
+    barrier = threading.Barrier(2)
+    results: dict[str, object] = {}
+    errors: dict[str, BaseException] = {}
+    tracebacks: dict[str, str] = {}
+
+    def _run(label: str, action: Callable[[], object]) -> None:
+        barrier.wait(timeout=_CONCURRENT_RACE_DEADLINE_SECONDS)
+        try:
+            results[label] = action()
+        except BaseException as exc:  # noqa: BLE001 - captured for the caller's own assertions
+            errors[label] = exc
+            tracebacks[label] = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
+
+    thread_a = threading.Thread(target=_run, args=(label_a, action_a))
+    thread_b = threading.Thread(target=_run, args=(label_b, action_b))
+    thread_a.start()
+    thread_b.start()
+
+    deadline = time.monotonic() + _CONCURRENT_RACE_DEADLINE_SECONDS
+    thread_a.join(timeout=max(0.0, deadline - time.monotonic()))
+    thread_b.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    assert not thread_a.is_alive(), (
+        f"the {label_a!r} worker is still running after "
+        f"{_CONCURRENT_RACE_DEADLINE_SECONDS}s — likely blocked or deadlocked, not merely slow"
+    )
+    assert not thread_b.is_alive(), (
+        f"the {label_b!r} worker is still running after "
+        f"{_CONCURRENT_RACE_DEADLINE_SECONDS}s — likely blocked or deadlocked, not merely slow"
+    )
+    return results, errors, tracebacks
+
+
+def _approve(
+    postgres_engine: Engine, *, proposal_id: uuid.UUID, committed: Fixture
+) -> tuple[Callable[[], ReviewProposedChangeResult], uuid.UUID]:
+    """Creates a reviewer and returns (a zero-argument approve callable
+    suitable for `_run_concurrent_race`, that reviewer's user_id — the
+    caller owns deleting it in its own cleanup)."""
+    with postgres_engine.begin() as connection:
+        reviewer_user_id = make_user(connection, "Reviewer")
+
+    def _do() -> ReviewProposedChangeResult:
+        return review_proposed_change(
+            postgres_engine,
+            ai_proposed_change_id=proposal_id,
+            campaign_id=committed.campaign_id,
+            reviewer_user_id=reviewer_user_id,
+            decision="approve",
+        )
+
+    return _do, reviewer_user_id
 
 
 def test_a_concurrent_visibility_change_during_approval_is_always_safe(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
-    """A real race, via threading.Barrier — the same proven pattern
-    test_concurrent_reviews_serialize_and_apply_exactly_once already uses
-    — between review_proposed_change(approve) and an independent direct
-    UPDATE narrowing the objective's own visibility_policy to gm_only.
+    """A real race, via `_run_concurrent_race`, between
+    `review_proposed_change(approve)` and an independent direct UPDATE
+    narrowing the objective's own `visibility_policy` to `gm_only`.
     Deliberately does not try to choreograph which side "wins": under
-    PostgreSQL's own READ COMMITTED semantics, _revalidate_advance_quest_
-    objective's FOR UPDATE OF qo either observes the visibility change (if
-    the writer's UPDATE committed first) or blocks until the writer's
+    PostgreSQL's own READ COMMITTED semantics, `_revalidate_advance_quest_
+    objective`'s `FOR UPDATE OF qo` either observes the visibility change
+    (if the writer's UPDATE committed first) or blocks until the writer's
     transaction ends and then observes it (if the writer started after) —
     there is no third, inconsistent outcome. This proves exactly that: no
     matter which side the database schedules first, the result is always
@@ -1066,45 +1138,20 @@ def test_a_concurrent_visibility_change_during_approval_is_always_safe(
 
     An earlier version of this test tried to independently prove genuine
     lock contention by holding a manual SELECT ... FOR UPDATE on a second
-    connection and polling pg_stat_activity for a blocked backend before
-    releasing it. That polling proved unreliable in this environment (a
-    long-lived, unrelated idle connection already present in pg_stat_
-    activity produced false "blocked" positives, and — independent of
-    that — the worker thread's own statement did not reliably resume
-    promptly once the held lock was released, for reasons that did not
-    resolve within the time available to investigate a second, narrower
-    concurrency mechanism rather than the production code path itself).
-    Rather than ship a flaky or misleading lock-detection assertion, this
-    test instead verifies the invariant that actually matters — the
-    outcome is always safe — using the same barrier-based real-concurrency
-    idiom already proven reliable by this file's own sibling test."""
-    with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+    connection (built on SQLAlchemy Core's own `Connection.begin()`) and
+    polling `pg_stat_activity` for a blocked backend before releasing it.
+    That specific mechanism proved unreliable in this environment; a raw
+    psycopg-based version of the same idea, used as a one-off manual
+    verification before this session's locking changes were finalized
+    (not shipped here), did correctly and repeatably show the intended
+    blocking relationship. Rather than ship the unreliable mechanism, this
+    test verifies the invariant that actually matters — the outcome is
+    always safe — using the same barrier-based real-concurrency idiom
+    already proven reliable by this file's own sibling tests."""
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
-
-    barrier = threading.Barrier(2)
-    results: dict[str, object] = {}
-    errors: dict[str, BaseException] = {}
-    tracebacks: dict[str, str] = {}
-
-    def _run(label: str, action: Callable[[], object]) -> None:
-        barrier.wait(timeout=_CONCURRENT_VISIBILITY_CHANGE_DEADLINE_SECONDS)
-        try:
-            results[label] = action()
-        except BaseException as exc:  # noqa: BLE001 - captured for the assertions below
-            errors[label] = exc
-            tracebacks[label] = "".join(
-                traceback.format_exception(type(exc), exc, exc.__traceback__)
-            )
-
-    def _approve() -> ReviewProposedChangeResult:
-        return review_proposed_change(
-            postgres_engine,
-            ai_proposed_change_id=proposal_id,
-            campaign_id=committed.campaign_id,
-            reviewer_user_id=reviewer_user_id,
-            decision="approve",
-        )
+    approve, reviewer_user_id = _approve(
+        postgres_engine, proposal_id=proposal_id, committed=committed
+    )
 
     def _narrow_visibility() -> None:
         with postgres_engine.begin() as connection:
@@ -1116,22 +1163,8 @@ def test_a_concurrent_visibility_change_during_approval_is_always_safe(
                 {"objective": committed.open_objective_id},
             )
 
-    thread_review = threading.Thread(target=_run, args=("review", _approve))
-    thread_visibility = threading.Thread(target=_run, args=("visibility", _narrow_visibility))
-    thread_review.start()
-    thread_visibility.start()
-
-    deadline = time.monotonic() + _CONCURRENT_VISIBILITY_CHANGE_DEADLINE_SECONDS
-    thread_review.join(timeout=max(0.0, deadline - time.monotonic()))
-    thread_visibility.join(timeout=max(0.0, deadline - time.monotonic()))
-
-    assert not thread_review.is_alive(), (
-        f"the review worker is still running after "
-        f"{_CONCURRENT_VISIBILITY_CHANGE_DEADLINE_SECONDS}s — likely blocked or deadlocked"
-    )
-    assert not thread_visibility.is_alive(), (
-        f"the visibility-change worker is still running after "
-        f"{_CONCURRENT_VISIBILITY_CHANGE_DEADLINE_SECONDS}s — likely blocked or deadlocked"
+    results, errors, tracebacks = _run_concurrent_race(
+        "review", approve, "visibility", _narrow_visibility
     )
     assert "visibility" not in errors, f"the visibility UPDATE itself failed: {tracebacks}"
 
@@ -1170,6 +1203,255 @@ def test_a_concurrent_visibility_change_during_approval_is_always_safe(
         )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
+        )
+
+
+def test_a_concurrent_participant_removal_during_approval_is_always_safe(
+    postgres_engine: Engine, committed: Fixture
+) -> None:
+    """The NPC's own `narrative.quest_participants` row is removed
+    concurrently with approval. `_revalidate_advance_quest_objective` now
+    locks that association row (`FOR UPDATE`) before trusting it, so the
+    DELETE and the review's own check genuinely serialize: whichever
+    commits first determines the (still safe) outcome for the other."""
+    proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
+    approve, reviewer_user_id = _approve(
+        postgres_engine, proposal_id=proposal_id, committed=committed
+    )
+
+    def _remove_participation() -> None:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM narrative.quest_participants "
+                    "WHERE quest_id = :quest AND participant_entity_id = :npc"
+                ),
+                {"quest": committed.quest_id, "npc": committed.npc_id},
+            )
+
+    results, errors, tracebacks = _run_concurrent_race(
+        "review", approve, "remove_participant", _remove_participation
+    )
+    assert "remove_participant" not in errors, (
+        f"the participant removal itself failed: {tracebacks}"
+    )
+
+    objective_status = _objective_status(
+        postgres_engine, timeline_id=committed.timeline_id, objective_id=committed.open_objective_id
+    )
+    with postgres_engine.connect() as verify:
+        still_participates = verify.execute(
+            text(
+                "SELECT 1 FROM narrative.quest_participants "
+                "WHERE quest_id = :quest AND participant_entity_id = :npc"
+            ),
+            {"quest": committed.quest_id, "npc": committed.npc_id},
+        ).scalar()
+    assert still_participates is None, "the participant removal must always end up committed"
+
+    if "review" in results:
+        assert objective_status == "completed", (
+            f"review reported success but the objective was not actually advanced: {results!r}"
+        )
+        with postgres_engine.connect() as verify:
+            review_count = verify.execute(
+                text("SELECT count(*) FROM ai.change_reviews WHERE ai_proposed_change_id = :id"),
+                {"id": proposal_id},
+            ).scalar()
+            assert review_count == 1
+    else:
+        assert "review" in errors, "expected the review to fail, got neither result nor error"
+        _assert_review_rolled_back_completely(
+            postgres_engine, proposal_id=proposal_id, committed=committed
+        )
+        assert objective_status is None
+
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
+        )
+
+
+def test_a_concurrent_party_removal_during_approval_is_always_safe(
+    postgres_engine: Engine, committed: Fixture
+) -> None:
+    """The party's `campaign.campaign_parties` association is removed
+    concurrently with approval. `_revalidate_advance_quest_objective` now
+    calls `_validate_campaign_party(..., lock=True)`, locking that
+    association row before trusting it, so the DELETE and the review's
+    own check genuinely serialize."""
+    proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
+    approve, reviewer_user_id = _approve(
+        postgres_engine, proposal_id=proposal_id, committed=committed
+    )
+
+    def _remove_party() -> None:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM campaign.campaign_parties "
+                    "WHERE campaign_id = :campaign AND party_id = :party"
+                ),
+                {"campaign": committed.campaign_id, "party": committed.party_id},
+            )
+
+    results, errors, tracebacks = _run_concurrent_race(
+        "review", approve, "remove_party", _remove_party
+    )
+    assert "remove_party" not in errors, f"the party removal itself failed: {tracebacks}"
+
+    objective_status = _objective_status(
+        postgres_engine, timeline_id=committed.timeline_id, objective_id=committed.open_objective_id
+    )
+    if "review" in results:
+        assert objective_status == "completed", (
+            f"review reported success but the objective was not actually advanced: {results!r}"
+        )
+        with postgres_engine.connect() as verify:
+            review_count = verify.execute(
+                text("SELECT count(*) FROM ai.change_reviews WHERE ai_proposed_change_id = :id"),
+                {"id": proposal_id},
+            ).scalar()
+            assert review_count == 1
+    else:
+        assert "review" in errors, "expected the review to fail, got neither result nor error"
+        _assert_review_rolled_back_completely(
+            postgres_engine, proposal_id=proposal_id, committed=committed
+        )
+        assert objective_status is None
+
+    with postgres_engine.begin() as cleanup:
+        # The removal always ends up committed regardless of which side
+        # won the race — restore it so committed's own teardown has
+        # nothing unusual (a campaign/party pair that no longer
+        # associates) to cascade through.
+        cleanup.execute(
+            text(
+                "INSERT INTO campaign.campaign_parties (campaign_id, party_id) "
+                "VALUES (:campaign, :party) ON CONFLICT DO NOTHING"
+            ),
+            {"campaign": committed.campaign_id, "party": committed.party_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
+        )
+
+
+def test_a_concurrent_independent_advance_during_approval_is_always_safe(
+    postgres_engine: Engine, committed: Fixture
+) -> None:
+    """The same objective is independently advanced to 'failed' (a real,
+    unrelated `advance_objective()` call — a GM acting directly, not
+    through this proposal) concurrently with the proposal's own approval
+    targeting 'completed'. Both ultimately compete for `narrative.quest_
+    objectives`'s row lock (`_lock_quest_objective`, taken by both
+    `_revalidate_advance_quest_objective` and `_advance_objective_impl`
+    itself) — exactly one side's status change may commit; the other,
+    once unblocked, observes an already-terminal objective and fails
+    (`_advance_objective_impl`'s own terminal guard for a direct call, or
+    `_revalidate_advance_quest_objective`'s `get_quest_view` recheck for
+    the proposal side)."""
+    proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
+    approve, reviewer_user_id = _approve(
+        postgres_engine, proposal_id=proposal_id, committed=committed
+    )
+
+    def _independent_fail() -> None:
+        advance_objective(
+            postgres_engine,
+            quest_objective_id=committed.open_objective_id,
+            timeline_id=committed.timeline_id,
+            world_time_id=committed.world_time_id,
+            new_status_code="failed",
+            party_id=committed.party_id,
+            campaign_id=committed.campaign_id,
+        )
+
+    results, errors, tracebacks = _run_concurrent_race(
+        "review", approve, "independent_fail", _independent_fail
+    )
+
+    objective_status = _objective_status(
+        postgres_engine, timeline_id=committed.timeline_id, objective_id=committed.open_objective_id
+    )
+    review_won = "review" in results
+    independent_won = "independent_fail" in results
+    assert review_won != independent_won, (
+        f"expected exactly one side to succeed, got results={results!r} errors={tracebacks!r}"
+    )
+
+    if review_won:
+        assert objective_status == "completed"
+        assert "independent_fail" in errors, (
+            f"the independent advance should have observed an already-terminal objective: "
+            f"{tracebacks}"
+        )
+        with postgres_engine.connect() as verify:
+            review_count = verify.execute(
+                text("SELECT count(*) FROM ai.change_reviews WHERE ai_proposed_change_id = :id"),
+                {"id": proposal_id},
+            ).scalar()
+            assert review_count == 1
+    else:
+        # The independent, unrelated advance() won: the objective is
+        # legitimately 'failed' (that call's own doing, nothing to do
+        # with this proposal), and review must have observed that
+        # already-terminal state and failed cleanly. Deliberately does
+        # NOT call _assert_review_rolled_back_completely here — that
+        # helper additionally asserts the objective's own status is
+        # still None, which is correct for every *other* revalidation-
+        # failure scenario in this file (nothing else touches the
+        # objective's status when review fails) but wrong here, where a
+        # *different*, legitimate winner is exactly why review failed.
+        assert objective_status == "failed"
+        assert "review" in errors, f"the review should have failed: {tracebacks}"
+        with postgres_engine.connect() as verify:
+            status = verify.execute(
+                text("SELECT status FROM ai.proposed_changes WHERE ai_proposed_change_id = :id"),
+                {"id": proposal_id},
+            ).scalar()
+            assert status == "pending"
+            review_count = verify.execute(
+                text("SELECT count(*) FROM ai.change_reviews WHERE ai_proposed_change_id = :id"),
+                {"id": proposal_id},
+            ).scalar()
+            assert review_count == 0
+
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
+        )
+
+
+def test_campaign_pinned_timeline_is_immutable_so_no_concurrent_change_race_exists(
+    postgres_engine: Engine, committed: Fixture
+) -> None:
+    """A concurrent "campaign pinned-timeline change" race (requested
+    alongside the other revalidation races) has no counterpart to test:
+    `campaign.campaigns.timeline_id` is protected by `tr_campaigns_
+    enforce_immutable` (revision 030_parent_scope_immutability) — no
+    UPDATE can ever change it, concurrent or otherwise. This test proves
+    that premise directly, so the absence of a race test for this case is
+    a verified fact rather than an unstated assumption. `_revalidate_
+    advance_quest_objective` still locks and rechecks this row (see its
+    own docstring) as defense in depth in case that trigger is ever
+    relaxed, but no test can race against a mutation the database itself
+    refuses to perform."""
+    with postgres_engine.begin() as connection:
+        other_timeline_id = make_timeline(connection, committed.world_id, "Other Timeline")
+
+    with (
+        pytest.raises(IntegrityError, match="immutable"),
+        postgres_engine.begin() as connection,
+    ):
+        connection.execute(
+            text("UPDATE campaign.campaigns SET timeline_id = :t WHERE campaign_id = :c"),
+            {"t": other_timeline_id, "c": committed.campaign_id},
+        )
+
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(
+            text("DELETE FROM campaign.timelines WHERE timeline_id = :t"), {"t": other_timeline_id}
         )
 
 

@@ -30,15 +30,17 @@ was originally built from — never trusting `proposed_arguments` as
 authoritative for anything current relational state can instead answer.
 Between a proposal's creation and its review, arbitrary time can pass: the
 NPC may stop participating in the quest, the objective's visibility may
-narrow to `gm_only`, the party may leave the campaign, or (in a branching-
-timeline world) the campaign's own pinned timeline may change. None of
-those are caught by `_advance_objective_impl`'s own guards, which only
-re-check the objective's terminal/non-terminal status — so
-`_revalidate_advance_quest_objective` below reapplies the campaign/
-timeline/party/quest-participation/visibility chain itself, failing the
-whole review transaction closed (never partially) if anything no longer
-holds. See that function's own docstring for the exact chain and why the
-objective row is locked before any of it is read.
+narrow to `gm_only`, or the party may leave the campaign. None of those are
+caught by `_advance_objective_impl`'s own guards, which only re-check the
+objective's terminal/non-terminal status — so `_revalidate_advance_quest_
+objective` below reapplies the party/quest-participation/visibility chain
+itself (plus the campaign's pinned timeline, structurally immutable but
+still checked as defense in depth), failing the whole review transaction
+closed (never partially) if anything no longer holds. Every row this
+depends on that can actually change is locked, in a fixed, documented
+order, before being trusted — see that function's own docstring for the
+exact chain, the order, and a real deadlock that order was revised to
+avoid.
 """
 
 import uuid
@@ -320,6 +322,69 @@ def _revalidate_advance_quest_objective(
     insert included — exactly like `_advance_objective_impl`'s own
     "already terminal" guard already does.
 
+    Locking: checking a fact once and then re-mutating based on it several
+    statements later (`_advance_objective_impl` runs after this returns,
+    still in the same transaction) is only safe if nothing else can
+    change that fact in between. A bare `SELECT` under READ COMMITTED
+    only proves "this was true a moment ago," not "this stays true
+    through commit" — so every *mutable* row this function's own
+    conclusion actually depends on is locked (`FOR UPDATE`) before it is
+    trusted, not merely read; an immutable one is read unlocked instead
+    (see the campaign row below) — a lock only protects against a change
+    that can actually happen. The lock order below is a fixed, top-down
+    sequence (campaign-party association -> quest-objective structural
+    row -> objective-state row(s) -> quest-participant association) that
+    every call to this function follows identically, so two concurrent
+    calls — for the same or different proposals — can never deadlock
+    against each other on rows this function itself locks (the standard
+    "consistent global lock order prevents deadlock" argument).
+
+    An earlier version of this function also took `FOR UPDATE` on the
+    `campaign.campaigns` row itself, first in the order, before checking
+    the pinned timeline. That reintroduced exactly the deadlock a
+    consistent order is meant to prevent — caught empirically by this
+    file's own `test_a_concurrent_independent_advance_during_approval_is_
+    always_safe`, which raced this function against a plain, unrelated
+    `advance_objective()` call and got back a genuine PostgreSQL
+    `DeadlockDetected`, not a clean serialization. Root cause:
+    `narrative.events.campaign_id` has a foreign key to `campaign.
+    campaigns`, so *every* event insert — including `_advance_objective_
+    impl`'s own, on both sides of that race — takes an implicit `FOR KEY
+    SHARE` lock on the referenced campaign row. Locking `campaign.
+    campaigns` early here, before the objective row, let one transaction
+    hold the campaign row while waiting on the objective row that the
+    other transaction already held while waiting (via its own event
+    insert) on the campaign row this transaction held — a textbook AB-BA
+    cycle, just formed through an FK-driven lock neither side's code
+    mentions explicitly. Since `campaign.campaigns.timeline_id` is
+    additionally immutable (`tr_campaigns_enforce_immutable`, revision
+    030 — confirmed directly by this file's own `test_campaign_pinned_
+    timeline_is_immutable_so_no_concurrent_change_race_exists`), the
+    correct fix is not a different lock order but no lock at all: an
+    unlocked read is already stable through commit, because the value
+    literally cannot change underneath it. This is the "weakest lock mode
+    that still guarantees the checked fact holds through commit" the
+    remaining locks below were also chosen by — for this one row, that
+    weakest sufficient mode is no lock whatsoever, and taking a stronger
+    one than necessary is what caused the cycle. No other command in this
+    codebase locks `campaign.campaign_parties` or `narrative.quest_
+    participants` at all today (confirmed by inspection: nothing else
+    inserts, updates, or deletes either table), so locking those two
+    carries no equivalent risk.
+    `narrative.quest_objectives`/`campaign.objective_state` are the one
+    pair with an existing convention to respect (`dnd_ai.commands.quests.
+    _lock_quest_objective`'s own docstring: lock the always-present
+    structural row before the possibly-absent state row) — preserved
+    here unchanged, and it is *because* `_advance_objective_impl` is the
+    only writer of `campaign.objective_state` and always takes that same
+    structural-row lock first that holding it continuously from here
+    through `_advance_objective_impl`'s own call already prevents any
+    concurrent write to this objective's state from slipping in, even
+    before this function's own explicit `campaign.objective_state` lock
+    below (kept anyway, both as literal defense in depth and so this
+    function's own safety doesn't require a reader to trace into
+    `_advance_objective_impl` to see why it holds).
+
     Checks, in order:
     1. The proposal's own audit chain (`ai.proposed_changes ->
        .generated_outputs -> .context_requests -> .agent_assignments`)
@@ -327,18 +392,21 @@ def _revalidate_advance_quest_objective(
        entity — the source of truth for "who is speaking," never
        `proposed_arguments['actor_entity_id']` (still required and
        UUID-validated above, but its *value* is never used for the
-       actual call below).
-    2. `args.timeline_id` still matches the campaign's own currently
-       pinned timeline (`campaign.campaigns.timeline_id`) — a campaign's
-       pinned timeline can change (e.g. a branch becomes the new active
-       play timeline); a proposal created against a timeline the
-       campaign has since moved off of must not silently apply against
-       stale timeline-scoped state.
-    3. `args.party_id` still belongs to `campaign_id`
-       (`_validate_campaign_party` — the same check `_advance_objective_
-       impl` itself applies, run here too so a failure here never even
-       reaches locking the objective row for a party that has already
-       left).
+       actual call below). Read unlocked: no command in this codebase
+       ever mutates `ai.agent_assignments` after creation (no `ended_at`
+       writer exists today), so there is nothing here for a lock to
+       protect against yet.
+    2. The campaign's pinned timeline (`campaign.campaigns.timeline_id`)
+       is compared against `args.timeline_id`, read unlocked — see the
+       locking note above for why no lock is both correct and necessary
+       here specifically (trigger-enforced immutability, plus the
+       deadlock a lock on this specific row was empirically shown to
+       cause).
+    3. `args.party_id` still belongs to `campaign_id`, locked
+       (`_validate_campaign_party(..., lock=True)` — the same check
+       `_advance_objective_impl` itself applies unlocked, run here too,
+       locked, so a concurrent removal of the association blocks rather
+       than racing past an already-stale read).
     4. The objective row is locked (`FOR UPDATE`) before anything about
        it is read — the same row `_advance_objective_impl`'s own
        `_lock_quest_objective` locks before touching `campaign.
@@ -349,11 +417,17 @@ def _revalidate_advance_quest_objective(
        impl`'s later re-acquisition of the identical lock cannot leave a
        window where this function's own read is already stale by the
        time the objective is actually advanced.
-    5. The NPC (from the audit chain, not the JSON) still participates
-       in the locked objective's owning quest
-       (`narrative.quest_participants`) — participation can be revoked
+    5. Any existing `campaign.objective_state` row(s) for this objective
+       — the party-scoped row and/or the campaign-wide row, whichever
+       exist — are locked (`FOR UPDATE`) before `get_quest_view` reads
+       the effective status they determine. See the locking note above
+       for why this is not the only thing preventing a concurrent status
+       change, but it is checked and locked here directly regardless.
+    6. The NPC (from the audit chain, not the JSON) still participates
+       in the locked objective's owning quest (`narrative.
+       quest_participants`, locked) — participation can be revoked
        independently of anything else checked here.
-    6. `get_quest_view(..., party_id=args.party_id, include_hidden=False)`
+    7. `get_quest_view(..., party_id=args.party_id, include_hidden=False)`
        — the exact same party-scoped, non-GM query `dnd_ai.domain.
        context_assembly._advanceable_objectives` used to build the
        original candidate set — still lists this objective, with a
@@ -362,7 +436,9 @@ def _revalidate_advance_quest_objective(
        never drift from what the original candidate set itself meant by
        "eligible": a `'gm_only'` objective, one hidden from this party,
        or one that has gone terminal are all excluded identically,
-       whether checked at proposal-creation time or here.
+       whether checked at proposal-creation time or here. Safe to read
+       unlocked at this point: every row its own result depends on
+       (objective, objective-state) is already locked above.
 
     Returns the audit-chain-derived NPC `entity_id` — the actor
     `_advance_objective_impl` records for the resulting event.
@@ -396,7 +472,7 @@ def _revalidate_advance_quest_objective(
             f"{campaign_id}'s current pinned timeline"
         )
 
-    _validate_campaign_party(connection, campaign_id=campaign_id, party_id=args.party_id)
+    _validate_campaign_party(connection, campaign_id=campaign_id, party_id=args.party_id, lock=True)
 
     quest_row = connection.execute(
         text("""
@@ -415,10 +491,25 @@ def _revalidate_advance_quest_objective(
     quest_id = quest_row.quest_id
     assert isinstance(quest_id, uuid.UUID)
 
+    connection.execute(
+        text("""
+            SELECT objective_state_id FROM campaign.objective_state
+            WHERE timeline_id = :timeline AND quest_objective_id = :objective
+              AND (party_id = :party OR party_id IS NULL)
+            FOR UPDATE
+        """),
+        {
+            "timeline": args.timeline_id,
+            "objective": args.quest_objective_id,
+            "party": args.party_id,
+        },
+    ).all()
+
     still_participates = connection.execute(
         text("""
             SELECT 1 FROM narrative.quest_participants
             WHERE quest_id = :quest AND participant_entity_id = :npc
+            FOR UPDATE
         """),
         {"quest": quest_id, "npc": npc_entity_id},
     ).scalar()
