@@ -67,7 +67,19 @@ adapter must never be able to perform merely because the linked user
 happens to hold `access.manage` — the literal restriction docs/PLAN.md
 Phase 11's own "do not let a Foundry credential invoke identity-linking,
 system-key issuance/rotation, or campaign-access administration" exit
-criterion states.
+criterion states, and the identical restriction Phase 11R workstream F
+(below) leaves untouched — `allow_foundry_access` is not added to these
+three either.
+
+Phase 11R workstream F: `map_external_identifier_endpoint`, `apply_
+foundry_combat_sync_endpoint`, and `sync_state_endpoint` now also pass
+`allow_foundry_access=True`, alongside the still-unchanged `allow_foundry_
+system=True` — both a still-valid legacy `FoundrySystem` credential and a
+paired `FoundryAccess` one can reach these three, side by side, until
+Workstream 11R item 7's forward-only transition eventually retires the
+legacy path. `assert_foundry_system_matches` already covers both auth
+methods uniformly (Phase 11R workstream C) — no call-site change was
+needed there.
 
 Cross-world integrity: `map_external_identifier_endpoint`,
 `link_foundry_identity_endpoint`, and `issue_foundry_system_key_endpoint`
@@ -468,7 +480,9 @@ def map_external_identifier_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
         ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
@@ -668,7 +682,9 @@ def apply_foundry_combat_sync_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
         ),
     ],
     engine: Annotated[Engine, Depends(get_engine)],
@@ -757,7 +773,9 @@ def sync_state_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_VIEW_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_VIEW_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
         ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],

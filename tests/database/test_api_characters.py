@@ -24,7 +24,11 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.domain.access import (
+    FOUNDRY_ACCESS_AUTH_METHOD,
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    AuthenticatedPrincipal,
+)
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -743,6 +747,64 @@ def test_a_foundrysystem_credential_cannot_read_inventory(
         foundry_world_id=f.world_id,
     )
 
+    with foundry_client_factory(principal) as client:
+        response = client.get(_inventory_url(f))
+    assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# FoundryAccess credential scope (Phase 11R workstream F) — the paired-
+# device replacement, exact-campaign-scoped rather than world-scoped.
+# ---------------------------------------------------------------------------
+
+
+def _foundry_access_principal(
+    *, user_id: uuid.UUID, world_id: uuid.UUID, campaign_id: uuid.UUID
+) -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=user_id,
+        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=world_id,
+        campaign_id=campaign_id,
+        foundry_connection_id=uuid.uuid4(),
+        foundry_device_id=uuid.uuid4(),
+    )
+
+
+def test_a_foundryaccess_credential_for_its_own_paired_campaign_can_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
+    )
+    with foundry_client_factory(principal) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["character_id"] == str(f.character_id)
+
+
+def test_a_foundryaccess_credential_for_a_different_campaign_cannot_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    # Exact-campaign scoping is strictly narrower than FoundrySystem's
+    # world-only check above: a credential paired for any other campaign —
+    # even a nonexistent one, since the comparison never needs to resolve
+    # it — must not reach f.campaign_id.
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.other_world_id, campaign_id=uuid.uuid4()
+    )
+    with foundry_client_factory(principal) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 404
+
+
+def test_a_foundryaccess_credential_cannot_read_inventory(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
+    )
     with foundry_client_factory(principal) as client:
         response = client.get(_inventory_url(f))
     assert response.status_code == 403

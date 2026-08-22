@@ -25,7 +25,12 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.foundry_pairing import (
+    consume_foundry_pairing_code,
+    create_foundry_pairing_code,
+)
 from dnd_ai.commands.integration import issue_foundry_system_key, link_foundry_identity
+from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -1405,6 +1410,90 @@ def test_a_foundrysystem_credential_for_a_different_system_cannot_map_an_externa
             _identifiers_url(f.campaign_id, system_b_id),
             json={"entity_id": str(f.actor_id), "external_kind": "actor", "external_id": "actor-1"},
             headers=_foundry_headers(system_a_id, raw_key, "foundry-map-mismatch"),
+        )
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# FoundryAccess credential scope (Phase 11R workstream F) — the paired-
+# device replacement, exact-campaign-scoped rather than world-scoped.
+# Representative coverage for one of the three routes converted in this
+# module (map_external_identifier_endpoint); apply_foundry_combat_sync_
+# endpoint/sync_state_endpoint share the identical require_campaign_
+# capability(allow_foundry_access=True) wiring, already proven generically
+# by tests/database/test_api_auth.py's own allow_foundry_access gate tests
+# and tests/unit/test_authenticated_principal.py's field-validation tests.
+# ---------------------------------------------------------------------------
+
+
+def _pair_foundry_device(
+    postgres_engine: Engine,
+    *,
+    campaign_id: uuid.UUID,
+    external_system_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> str:
+    """Mints a real, valid FoundryAccess token bound to campaign_id via the
+    actual pairing-code create/consume commands (not HTTP) — the minimal
+    real-credential setup this module's own `_issue_and_link` establishes
+    for the legacy FoundrySystem path, applied to the Workstream D/E
+    pairing commands instead."""
+    issued = create_foundry_pairing_code(
+        postgres_engine,
+        requesting_user_id=user_id,
+        campaign_id=campaign_id,
+        external_system_id=external_system_id,
+        requested_scopes=FOUNDRY_SCOPES,
+    )
+    consumed = consume_foundry_pairing_code(
+        postgres_engine,
+        raw_code=issued.raw_code,
+        foundry_user_id=f"foundry-user-{uuid.uuid4().hex[:8]}",
+        foundry_origin="https://foundry.example.test",
+        device_label="integration-test-device",
+    )
+    return consumed.raw_access_token
+
+
+def test_a_foundryaccess_credential_for_this_campaigns_own_connection_can_map_an_external_identifier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    external_system_id = _register_system_as_gm(client_factory, f, f.campaign_id)
+    raw_access_token = _pair_foundry_device(
+        postgres_engine,
+        campaign_id=f.campaign_id,
+        external_system_id=external_system_id,
+        user_id=f.gm_user_id,
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _identifiers_url(f.campaign_id, external_system_id),
+            json={"entity_id": str(f.actor_id), "external_kind": "actor", "external_id": "actor-1"},
+            headers={"Authorization": f"FoundryAccess {raw_access_token}"},
+        )
+    assert response.status_code == 200, response.text
+
+
+def test_a_foundryaccess_credential_for_a_different_campaign_cannot_map_an_external_identifier(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # f.gm_user_id genuinely holds canon.edit in both f.campaign_id and
+    # f.other_campaign_id — but a connection paired for f.other_campaign_id
+    # must not reach f.campaign_id merely because the linked user is also a
+    # GM there. Exact-campaign scoping, strictly narrower than
+    # FoundrySystem's world-only check.
+    external_system_id = _register_system_as_gm(client_factory, f, f.other_campaign_id)
+    raw_access_token = _pair_foundry_device(
+        postgres_engine,
+        campaign_id=f.other_campaign_id,
+        external_system_id=external_system_id,
+        user_id=f.gm_user_id,
+    )
+    with _foundry_client(postgres_engine) as client:
+        response = client.post(
+            _identifiers_url(f.campaign_id, external_system_id),
+            json={"entity_id": str(f.actor_id), "external_kind": "actor", "external_id": "actor-1"},
+            headers={"Authorization": f"FoundryAccess {raw_access_token}"},
         )
     assert response.status_code == 404
 

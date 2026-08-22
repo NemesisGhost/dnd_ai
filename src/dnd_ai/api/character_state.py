@@ -27,6 +27,16 @@ AuthenticatedPrincipal`'s docstring for the defect this correction closes
 and why every route accepting a Foundry credential must opt in
 explicitly rather than being reachable by default.
 
+All four also now pass `allow_foundry_access=True` (Phase 11R workstream
+F) — the paired-device credential's exact-campaign scope (`dnd_ai.api.
+access`'s own docstring, "`allow_foundry_access`") supersedes the world
+check above for a `FOUNDRY_ACCESS_AUTH_METHOD` principal without
+replacing it; both gates are opted into together, side by side, so a
+route reachable today by a still-valid legacy `FoundrySystem` credential
+stays reachable exactly as before while also becoming reachable by a
+paired one. Workstream 11R item 7's forward-only transition removes the
+legacy gate only once every client has repaired, not in this workstream.
+
 Idempotency: every route here wires the durable `security.
 idempotent_requests` mechanism (`dnd_ai.api.idempotency`) every other
 create/mutate endpoint uses, protecting a dropped-response retry from
@@ -179,7 +189,11 @@ def adjust_hit_points_endpoint(
     body: AdjustHitPointsRequest,
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
@@ -262,7 +276,11 @@ def apply_character_condition_endpoint(
     body: ApplyCharacterConditionRequest,
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
@@ -342,7 +360,11 @@ def remove_character_condition_endpoint(
     body: RemoveCharacterConditionRequest,
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
@@ -421,7 +443,11 @@ def adjust_character_resource_endpoint(
     body: AdjustCharacterResourceRequest,
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CANON_EDIT_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],

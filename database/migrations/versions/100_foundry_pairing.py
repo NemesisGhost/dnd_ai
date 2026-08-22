@@ -161,6 +161,10 @@ def upgrade() -> None:
         "ON security.foundry_connections (external_system_id);"
     )
     op.execute(
+        "CREATE INDEX ix_foundry_connections_revoked_by_user_id ON security.foundry_connections "
+        "(revoked_by_user_id) WHERE revoked_by_user_id IS NOT NULL;"
+    )
+    op.execute(
         "CREATE UNIQUE INDEX ux_foundry_connections_active ON security.foundry_connections "
         "(campaign_id, external_system_id, foundry_user_id) WHERE revoked_at IS NULL;"
     )
@@ -232,6 +236,10 @@ def upgrade() -> None:
         "ON security.foundry_devices (replaced_by_foundry_device_id) "
         "WHERE replaced_by_foundry_device_id IS NOT NULL;"
     )
+    op.execute(
+        "CREATE INDEX ix_foundry_devices_revoked_by_user_id ON security.foundry_devices "
+        "(revoked_by_user_id) WHERE revoked_by_user_id IS NOT NULL;"
+    )
 
     # ==========================================================================
     # 3. security.foundry_pairing_codes
@@ -297,8 +305,7 @@ def upgrade() -> None:
         'The device this code minted, set atomically with consumption.';
     """)
     op.execute(
-        "CREATE INDEX ix_foundry_pairing_codes_user_id "
-        "ON security.foundry_pairing_codes (user_id);"
+        "CREATE INDEX ix_foundry_pairing_codes_user_id ON security.foundry_pairing_codes (user_id);"
     )
     op.execute(
         "CREATE INDEX ix_foundry_pairing_codes_campaign_id "
@@ -312,6 +319,11 @@ def upgrade() -> None:
         "CREATE INDEX ix_foundry_pairing_codes_created_by_browser_session_id "
         "ON security.foundry_pairing_codes (created_by_browser_session_id) "
         "WHERE created_by_browser_session_id IS NOT NULL;"
+    )
+    op.execute(
+        "CREATE INDEX ix_foundry_pairing_codes_consumed_by_foundry_device_id "
+        "ON security.foundry_pairing_codes (consumed_by_foundry_device_id) "
+        "WHERE consumed_by_foundry_device_id IS NOT NULL;"
     )
 
     # ==========================================================================

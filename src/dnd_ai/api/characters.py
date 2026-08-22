@@ -167,10 +167,16 @@ def get_character_endpoint(
     # route accepting a Foundry credential must opt in explicitly.
     # get_character_inventory_endpoint below deliberately does not opt in —
     # it is not part of the bounded adapter-facing surface any Phase 11
-    # workstream built.
+    # workstream built. allow_foundry_access=True (Phase 11R workstream F)
+    # adds the paired-device credential alongside the legacy one, per
+    # dnd_ai.api.character_state's identical "both gates together" note.
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CHARACTER_VIEW_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterResponse:

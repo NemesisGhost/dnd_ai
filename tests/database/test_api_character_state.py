@@ -17,7 +17,11 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.domain.access import (
+    FOUNDRY_ACCESS_AUTH_METHOD,
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    AuthenticatedPrincipal,
+)
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -717,6 +721,76 @@ def test_a_foundrysystem_credential_for_a_different_world_cannot_adjust_hit_poin
     # there. Rejected identically to "no membership" (404), before this
     # route's own record_change_log call is ever reached.
     principal = _foundry_principal(postgres_engine, user_id=f.gm_user_id, world_id=f.other_world_id)
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _hp_url(f.campaign_id, f.character_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 6},
+        )
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# FoundryAccess credential scope (Phase 11R workstream F) — the paired-
+# device replacement, exact-campaign-scoped rather than world-scoped.
+# ---------------------------------------------------------------------------
+
+
+def _foundry_access_principal(
+    postgres_engine: Engine, *, user_id: uuid.UUID, world_id: uuid.UUID, campaign_id: uuid.UUID
+) -> AuthenticatedPrincipal:
+    """Same real-external_system-row reasoning as `_foundry_principal`
+    above — `record_change_log`'s `acting_external_system_id` is a real
+    foreign key. `foundry_connection_id`/`foundry_device_id` are not yet
+    referenced by any FK this route's own write touches (Phase 11R
+    workstream G adds audit columns for them), so arbitrary UUIDs are
+    sufficient here."""
+    with postgres_engine.begin() as connection:
+        external_system_id = make_external_system(connection, world_id)
+    return AuthenticatedPrincipal(
+        user_id=user_id,
+        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+        foundry_external_system_id=external_system_id,
+        foundry_world_id=world_id,
+        campaign_id=campaign_id,
+        foundry_connection_id=uuid.uuid4(),
+        foundry_device_id=uuid.uuid4(),
+    )
+
+
+def test_a_foundryaccess_credential_for_its_own_paired_campaign_can_adjust_hit_points(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    principal = _foundry_access_principal(
+        postgres_engine, user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
+    )
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _hp_url(f.campaign_id, f.character_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 6},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["new_hit_points"] == 16
+
+
+def test_a_foundryaccess_credential_for_a_different_campaign_cannot_adjust_hit_points(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    # f.gm_user_id genuinely holds canon.edit in both f.campaign_id and
+    # f.other_campaign_id — but a FoundryAccess credential paired for
+    # f.other_campaign_id must not reach f.campaign_id merely because the
+    # linked user also happens to be a GM there. Exact-campaign scoping is
+    # strictly narrower than FoundrySystem's world-only check above: this
+    # would still be rejected even if both campaigns shared one world.
+    principal = _foundry_access_principal(
+        postgres_engine,
+        user_id=f.gm_user_id,
+        world_id=f.other_world_id,
+        campaign_id=f.other_campaign_id,
+    )
     with foundry_client_factory(principal) as client:
         response = client.post(
             _hp_url(f.campaign_id, f.character_id),

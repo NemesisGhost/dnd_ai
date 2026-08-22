@@ -128,6 +128,11 @@ Index("ix_foundry_connections_user_id", foundry_connections.c.user_id)
 Index("ix_foundry_connections_campaign_id", foundry_connections.c.campaign_id)
 Index("ix_foundry_connections_external_system_id", foundry_connections.c.external_system_id)
 Index(
+    "ix_foundry_connections_revoked_by_user_id",
+    foundry_connections.c.revoked_by_user_id,
+    postgresql_where=foundry_connections.c.revoked_by_user_id.isnot(None),
+)
+Index(
     "ux_foundry_connections_active",
     foundry_connections.c.campaign_id,
     foundry_connections.c.external_system_id,
@@ -212,6 +217,11 @@ Index(
     foundry_pairing_codes.c.created_by_browser_session_id,
     postgresql_where=foundry_pairing_codes.c.created_by_browser_session_id.isnot(None),
 )
+Index(
+    "ix_foundry_pairing_codes_consumed_by_foundry_device_id",
+    foundry_pairing_codes.c.consumed_by_foundry_device_id,
+    postgresql_where=foundry_pairing_codes.c.consumed_by_foundry_device_id.isnot(None),
+)
 
 foundry_devices = Table(
     "foundry_devices",
@@ -284,6 +294,11 @@ Index(
     "ix_foundry_devices_replaced_by_foundry_device_id",
     foundry_devices.c.replaced_by_foundry_device_id,
     postgresql_where=foundry_devices.c.replaced_by_foundry_device_id.isnot(None),
+)
+Index(
+    "ix_foundry_devices_revoked_by_user_id",
+    foundry_devices.c.revoked_by_user_id,
+    postgresql_where=foundry_devices.c.revoked_by_user_id.isnot(None),
 )
 
 foundry_access_tokens = Table(
