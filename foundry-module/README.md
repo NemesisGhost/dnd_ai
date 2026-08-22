@@ -58,11 +58,15 @@ full.
 
 ## Pairing a device
 
-The platform has no portal UI yet (that's Phase 13) to drive pairing-code
-creation, so a pairing code is currently obtained with a direct API call
-against a local-account session — this will move to the portal's own "Pair
-a Foundry device" screen once it exists, with no change to the Foundry
-module's own side of the flow.
+The platform has no portal UI yet (that's Phase 13) to drive registration and
+pairing-code creation, so both are currently done with a direct API call
+against a local-account session — this will move to the portal's own "Pair a
+Foundry device" screen once it exists, with no change to the Foundry
+module's own side of the flow. `scripts/foundry_provision.py` (at the
+repository root) wraps the same two calls as a small CLI, if you'd rather not
+hand-write curl (`register`/`pairing-code` subcommands — see that script's
+own module docstring; it accepts either an OIDC bearer token or a
+local-account session token via `--token`).
 
 1. **Create a local account session**, if you don't already have one
    (`docs/DEVELOPMENT.md`'s local-auth section covers account creation):
@@ -73,29 +77,41 @@ module's own side of the flow.
        -d '{"email": "you@example.com", "password": "<your password>"}'
    ```
 
-2. **Create a pairing code**, scoped to the campaign and the Foundry
-   external system this world was registered as (any active campaign member
-   with `campaign.view` can do this for themselves — not only the GM):
+2. **Register this Foundry world as an external system**, once per world
+   (needs `canon.edit` in the target campaign — skip if it's already
+   registered):
+
+   ```sh
+   curl -b cookies.txt -X POST \
+       https://dnd-ai.example.com/campaigns/<campaign-uuid>/integration/external-systems \
+       -H "Content-Type: application/json" \
+       -d '{"system_type": "foundry", "display_name": "My Foundry World"}'
+   # -> {"external_system_id": "...", ...}
+   ```
+
+3. **Create a pairing code**, scoped to the campaign and the external system
+   from step 2 (any active campaign member with `campaign.view` can do this
+   for themselves — not only the GM):
 
    ```sh
    curl -b cookies.txt -X POST \
        https://dnd-ai.example.com/campaigns/<campaign-uuid>/foundry/pairing-codes \
        -H "Content-Type: application/json" \
-       -d '{"external_system_id": "<external-system-uuid>", "requested_scopes": ["combat.write"]}'
+       -d '{"external_system_id": "<external-system-uuid>", "requested_scopes": ["combat_sync", "character_state_sync"]}'
    # -> {"raw_code": "...", "expires_at": "...", ...} — the code is single-use
    #    and short-lived (5-10 minutes); note it down, it is not shown again.
    ```
 
-3. **In Foundry, on the device being paired**, open **Settings → D&D AI
-   Pairing** and enter: the API base URL and the pairing code from step 2.
+4. **In Foundry, on the device being paired**, open **Settings → D&D AI
+   Pairing** and enter: the API base URL and the pairing code from step 3.
    Submitting the form exchanges the code for this device's own credential
    (stored `scope: "client"`, this browser profile only — see "Trust
    boundary" below) and reloads the world. A device with no complete
    pairing is also prompted for this automatically on `ready`.
 
 Every other campaign member who wants their own client to drive sync (or,
-for a GM, every additional browser/machine they use) repeats steps 2-3 for
-themselves — pairing is per-device, not shared.
+for a GM, every additional browser/machine they use) repeats steps 3-4 for
+themselves (step 2 is once per world) — pairing is per-device, not shared.
 
 If the stored device credential is wrong, rotated, or revoked, or the
 paired user lacks the needed capability in this campaign, the module
