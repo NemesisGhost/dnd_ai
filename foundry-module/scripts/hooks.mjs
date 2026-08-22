@@ -1,20 +1,22 @@
 import { DndAiApiClient } from "./api-client.mjs";
 import { DndAiApiError } from "./errors.mjs";
-import { getConnectionSettings, registerSettings, validateConnectionSettings } from "./settings.mjs";
+import { FoundryAccessTokenCache, getConnectionMetadata, isPaired, registerPairingSettings } from "./pairing.mjs";
+import { getApiBaseUrl, registerSettings, validateApiBaseUrl } from "./settings.mjs";
 import { SyncEngine } from "./sync-engine.mjs";
 
 /**
  * Foundry hook wiring — the only file in this module that talks to
  * Foundry's global `Hooks`/`game`/`ui` objects directly. Everything it
  * decides ("should this update trigger a sync," "is this our own
- * write-back") is delegated to `SyncEngine`/`settings.mjs`, which are
- * unit-tested without Foundry at all; this file is intentionally thin so
- * the harness tests (`test/loop-suppression.test.mjs`,
+ * write-back") is delegated to `SyncEngine`/`settings.mjs`/`pairing.mjs`,
+ * which are unit-tested without Foundry at all; this file is
+ * intentionally thin so the harness tests (`test/loop-suppression.test.mjs`,
  * `test/reconnect.test.mjs`) can exercise the same registration
  * functions against fake `Hooks`/`game`/`ui` objects.
  */
 
 let syncEngine = null;
+let accessTokenCache = null;
 
 export function getSyncEngine() {
   return syncEngine;
@@ -30,15 +32,24 @@ function handleSyncError(error, { uiApi, gameApi }) {
 }
 
 /** Registers `init`/`ready` — settings registration and initial
- * connection + restoration. Call once from `main.mjs`. */
+ * connection + restoration. Call once from `main.mjs`.
+ *
+ * `pairingAppClass`, when supplied, is rendered when the GM's own client
+ * has no complete pairing yet (docs/PLAN.md §23.5: "require pairing on
+ * every new browser/device") — a new browser, a cleared client-scoped
+ * setting, or a revoked/expired device credential (surfaced as a
+ * `getAccessToken()` failure once an actual request is attempted) all
+ * land here identically, since none of them can be told apart from "not
+ * paired" without first trying to use whatever credential is stored. */
 export function registerLifecycleHooks({
   hooksApi = Hooks,
   gameApi = game,
   uiApi = ui,
-  connectionSetupAppClass = null,
+  pairingAppClass = null,
 } = {}) {
   hooksApi.once("init", () => {
-    registerSettings({ connectionSetupAppClass });
+    registerSettings();
+    registerPairingSettings({ pairingAppClass });
   });
 
   hooksApi.once("ready", async () => {
@@ -49,23 +60,40 @@ export function registerLifecycleHooks({
     if (!gameApi.user?.isGM) {
       return;
     }
-    const settings = getConnectionSettings({ settingsApi: gameApi.settings });
-    const problems = validateConnectionSettings(settings);
-    if (problems.length > 0) {
+
+    const apiBaseUrl = getApiBaseUrl({ settingsApi: gameApi.settings });
+    if (validateApiBaseUrl(apiBaseUrl).length > 0) {
       uiApi.notifications.warn(
         gameApi.i18n?.localize?.("DNDAI.Notifications.NotConfigured") ??
-          "D&D AI adapter is not fully configured — open its connection settings.",
+          "D&D AI adapter is not configured — set its API base URL in Settings.",
       );
       return;
     }
 
+    if (!isPaired({ settingsApi: gameApi.settings })) {
+      uiApi.notifications.warn(
+        gameApi.i18n?.localize?.("DNDAI.Notifications.NotPaired") ??
+          "D&D AI adapter is not paired on this device — open D&D AI Pairing to enter a pairing code.",
+      );
+      if (pairingAppClass) {
+        new pairingAppClass().render(true);
+      }
+      return;
+    }
+
+    accessTokenCache = new FoundryAccessTokenCache();
     const client = new DndAiApiClient({
-      getSettings: () => getConnectionSettings({ settingsApi: gameApi.settings }),
-      getFoundryActorId: () => gameApi.user.id,
+      getApiBaseUrl: () => getApiBaseUrl({ settingsApi: gameApi.settings }),
+      getConnection: () => getConnectionMetadata({ settingsApi: gameApi.settings }),
+      getAccessToken: () =>
+        accessTokenCache.getAccessToken({
+          apiBaseUrl: getApiBaseUrl({ settingsApi: gameApi.settings }),
+          settingsApi: gameApi.settings,
+        }),
     });
     syncEngine = new SyncEngine({
       client,
-      getSettings: () => getConnectionSettings({ settingsApi: gameApi.settings }),
+      getSettings: () => getConnectionMetadata({ settingsApi: gameApi.settings }),
     });
 
     try {

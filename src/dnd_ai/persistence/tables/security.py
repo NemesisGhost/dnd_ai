@@ -97,6 +97,23 @@ users = Table(
             "who has never logged in."
         ),
     ),
+    Column(
+        "is_platform_administrator",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "A minimal, campaign-independent authorization primitive (revision "
+            "099_local_authentication, Phase 11R workstream A) for account-management "
+            "operations that have no campaign_id to scope a security.resource_grants/"
+            "security.roles check against — creating a local account, issuing a "
+            "password-reset token, and the one-time initial-admin bootstrap. Deliberately "
+            "not a security.roles row: campaign roles grant capabilities within one "
+            "campaign membership (docs/architecture/DATABASE_MODEL.md §19.3), and this is "
+            "the opposite scope entirely (docs/architecture/DATABASE_MODEL.md §19.7's "
+            "authentication-identity/campaign-responsibility separation, principle 13)."
+        ),
+    ),
     *_timestamps(),
     schema="security",
     comment=(
@@ -1063,4 +1080,255 @@ Index(
     "ix_campaign_creation_reservations_created_campaign_id",
     campaign_creation_reservations.c.created_campaign_id,
     postgresql_where=campaign_creation_reservations.c.created_campaign_id.isnot(None),
+)
+
+# ---------------------------------------------------------------------------
+# Local authentication (revision 099, Phase 11R workstream A/B)
+# ---------------------------------------------------------------------------
+#
+# Login-name identity itself is not a new table: dnd_ai.commands.local_auth
+# reuses security.external_identities with issuer='local' (dnd_ai.domain.
+# access.LOCAL_AUTH_ISSUER), subject=<normalized login name> — the same
+# synthetic-issuer pattern Phase 11 workstream 1 already established for
+# Foundry identity mapping (foundry_issuer()). That table's existing
+# ux_external_identities_issuer_subject unique-while-active index already
+# gives login names the exact single-owner-while-active guarantee a
+# dedicated table would otherwise have to duplicate.
+
+local_credentials = Table(
+    "local_credentials",
+    metadata,
+    _uuid_pk("local_credential_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "password_hash",
+        Text(),
+        nullable=False,
+        comment=(
+            "An Argon2id-encoded hash string (dnd_ai.domain.passwords.hash_password) — "
+            "algorithm, version, and every hashing parameter are embedded in the encoded "
+            "string itself, so there is no separate parameters column to keep in sync; "
+            "dnd_ai.domain.passwords.password_needs_rehash detects a stale parameter set "
+            "at verification time. Never the raw password."
+        ),
+    ),
+    Column(
+        "password_updated_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    ),
+    *_timestamps(),
+    UniqueConstraint("user_id", name="ux_local_credentials_user_id"),
+    schema="security",
+    comment=(
+        "A user's local password credential, separated from security.users itself "
+        "(docs/PLAN.md §23.1: 'local password credentials and credential-history/security "
+        "metadata separated from the user profile'). Row created only when "
+        "dnd_ai.commands.local_auth.activate_local_account consumes a "
+        "security.user_activation_tokens row — before that, the user exists but cannot "
+        "log in locally at all (e.g. an OIDC-only or not-yet-activated account)."
+    ),
+)
+
+Index("ix_local_credentials_user_id", local_credentials.c.user_id)
+
+user_activation_tokens = Table(
+    "user_activation_tokens",
+    metadata,
+    _uuid_pk("user_activation_token_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "login_name",
+        Text(),
+        nullable=False,
+        comment=(
+            "The normalized local login name this token, once consumed, binds to the "
+            "user as security.external_identities(issuer='local', subject=login_name) — "
+            "chosen by the administrator at account-creation time "
+            "(dnd_ai.commands.local_auth.create_local_account), not secret. Reserved only "
+            "at consumption, not at issuance, so two outstanding tokens may name the same "
+            "login_name; the first to activate wins and the second fails with a clear, "
+            "non-disclosing conflict."
+        ),
+    ),
+    Column(
+        "token_hash",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of a server-generated activation token "
+            "(dnd_ai.domain.credentials.hash_opaque_secret). The raw token is returned to "
+            "the issuing administrator exactly once and never stored or logged."
+        ),
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment="NULL only for the one-time initial-admin bootstrap token, which has no issuer.",
+    ),
+    Column("expires_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("consumed_at", TIMESTAMP(timezone=True)),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("token_hash", name="ux_user_activation_tokens_token_hash"),
+    schema="security",
+    comment=(
+        "A hashed, expiring, single-use token authorizing one user to choose their local "
+        "password and claim login_name (docs/PLAN.md §23.1). Consumed atomically by "
+        "dnd_ai.commands.local_auth.activate_local_account via a single "
+        "UPDATE ... WHERE consumed_at IS NULL ... RETURNING — concurrent consumption "
+        "attempts race on that row's own lock, so exactly one ever succeeds."
+    ),
+)
+
+Index("ix_user_activation_tokens_user_id", user_activation_tokens.c.user_id)
+Index(
+    "ix_user_activation_tokens_created_by_user_id",
+    user_activation_tokens.c.created_by_user_id,
+    postgresql_where=user_activation_tokens.c.created_by_user_id.isnot(None),
+)
+Index(
+    "ux_user_activation_tokens_unconsumed",
+    user_activation_tokens.c.user_id,
+    unique=True,
+    postgresql_where=user_activation_tokens.c.consumed_at.is_(None),
+)
+
+password_reset_tokens = Table(
+    "password_reset_tokens",
+    metadata,
+    _uuid_pk("password_reset_token_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "token_hash",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of a server-generated reset token "
+            "(dnd_ai.domain.credentials.hash_opaque_secret). The raw token is returned to "
+            "the issuing administrator exactly once and never stored or logged."
+        ),
+    ),
+    Column(
+        "requested_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        nullable=False,
+        comment="The administrator (is_platform_administrator) who issued this reset token.",
+    ),
+    Column(
+        "revoke_sessions",
+        Boolean(),
+        nullable=False,
+        server_default=text("true"),
+        comment=(
+            "Whether consuming this token revokes the user's existing browser sessions and "
+            "Foundry device credentials (docs/PLAN.md §23.1's 'full sign-out' reset policy) "
+            "— dnd_ai.commands.local_auth.reset_password_with_token reads this at "
+            "consumption time, never re-derives it."
+        ),
+    ),
+    Column("expires_at", TIMESTAMP(timezone=True), nullable=False),
+    Column("consumed_at", TIMESTAMP(timezone=True)),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("token_hash", name="ux_password_reset_tokens_token_hash"),
+    schema="security",
+    comment=(
+        "A hashed, expiring, single-use, administrator-issued password-reset token "
+        "(docs/PLAN.md §23.1). Consumed atomically the same "
+        "UPDATE ... WHERE consumed_at IS NULL ... RETURNING way "
+        "security.user_activation_tokens is."
+    ),
+)
+
+Index("ix_password_reset_tokens_user_id", password_reset_tokens.c.user_id)
+Index("ix_password_reset_tokens_requested_by_user_id", password_reset_tokens.c.requested_by_user_id)
+
+browser_sessions = Table(
+    "browser_sessions",
+    metadata,
+    _uuid_pk("browser_session_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "session_token_hash",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of the opaque value the __Host-dnd_ai_session cookie "
+            "carries (docs/PLAN.md §23.4). The raw value never leaves "
+            "dnd_ai.commands.local_auth and the Set-Cookie response header that carries "
+            "it once, at login — never stored, logged, or returned in a JSON body."
+        ),
+    ),
+    Column(
+        "csrf_token",
+        Text(),
+        nullable=False,
+        comment=(
+            "A server-generated CSRF secret, stored in the clear (unlike every other "
+            "credential in this table/module): unlike session_token_hash, this value alone "
+            "grants nothing — the double-submit contract (docs/PLAN.md §23.4) requires the "
+            "matching HttpOnly cookie too, and the session-bootstrap endpoint already "
+            "returns this same value to the browser in its JSON body on every call, so "
+            "hashing it server-side would not reduce what an attacker with database access "
+            "already learns from a live response."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("last_used_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column(
+        "idle_expires_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment="Sliding window, extended on each authenticated request up to absolute_expires_at.",
+    ),
+    Column(
+        "absolute_expires_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment="A hard ceiling idle_expires_at can never be extended past.",
+    ),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column("created_ip", Text()),
+    Column("last_used_ip", Text()),
+    Column("user_agent", Text()),
+    UniqueConstraint("session_token_hash", name="ux_browser_sessions_token_hash"),
+    schema="security",
+    comment=(
+        "An opaque, server-side browser session (docs/PLAN.md §23.4) — named "
+        "browser_sessions, not sessions, to avoid colliding with the unrelated "
+        "campaign.sessions (game-session) concept docs/architecture/DATABASE_MODEL.md §6.4 "
+        "already owns that name for. Revoked or expired rows are never physically deleted "
+        "by ordinary application commands — only by an administrative pruning job, which "
+        "this revision does not itself add (see this table's own migration docstring)."
+    ),
+)
+
+Index("ix_browser_sessions_user_id", browser_sessions.c.user_id)
+Index(
+    "ix_browser_sessions_active",
+    browser_sessions.c.user_id,
+    browser_sessions.c.idle_expires_at,
+    postgresql_where=browser_sessions.c.revoked_at.is_(None),
 )

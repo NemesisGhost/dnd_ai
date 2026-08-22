@@ -4,39 +4,37 @@ workstream 4) endpoints.
 
 Exposes
 `register_external_system`, `map_external_identifier`, (Phase 11
-workstream 1) `link_foundry_identity`, (Phase 11 workstream 2)
-`issue_foundry_system_key`, (Phase 11 workstream 3)
+workstream 1) `link_foundry_identity`, (Phase 11 workstream 3)
 `apply_foundry_combat_sync`, and (Phase 11 workstream 4)
 `dnd_ai.queries.integration.get_sync_state_view`, over HTTP, on the same
 already-delivered OIDC authentication (`dnd_ai.api.auth`), transaction
 management (`dnd_ai.api.deps`), and access resolution
 (`dnd_ai.api.access`, `dnd_ai.domain.access`) every other command router
-uses.
+uses. (Phase 11 workstream 2's `issue_foundry_system_key` HTTP endpoint,
+formerly here too, is retired — see "Legacy FoundrySystem key issuance
+retired" below.)
 
-The first four routes (all writes) and `sync_state_endpoint` (a read) run
-on the request's own `get_connection` transaction and call the
-connection-taking `_..._impl` form of their command, or a plain query
-function for the read, on that same connection — never the public
-engine-based command wrapper, which would open a second, nested
-transaction — identical to every route in `dnd_ai.api.encounters`/
-`.items`/`.quests`/`.relationships`/`.events`/`.interactions`.
-`apply_foundry_combat_sync_endpoint` is the one deliberate exception — see
-its own section below and `dnd_ai.commands.integration`'s own module
-docstring ("HTTP exposure") for why.
+The remaining three writes and `sync_state_endpoint` (a read) run on the
+request's own `get_connection` transaction and call the connection-taking
+`_..._impl` form of their command, or a plain query function for the read,
+on that same connection — never the public engine-based command wrapper,
+which would open a second, nested transaction — identical to every route
+in `dnd_ai.api.encounters`/`.items`/`.quests`/`.relationships`/`.events`/
+`.interactions`. `apply_foundry_combat_sync_endpoint` is the one
+deliberate exception — see its own section below and `dnd_ai.commands.
+integration`'s own module docstring ("HTTP exposure") for why.
 
 Authorization: `register_external_system_endpoint` and
 `map_external_identifier_endpoint` require the `canon.edit` role
 capability in the target campaign (`dnd_ai.api.access.
 require_campaign_capability`), the same first-cut GM/adapter-level scoping
-every other command router uses. `link_foundry_identity_endpoint` and
-`issue_foundry_system_key_endpoint` instead require `access.manage` —
-deliberately narrower in kind, not degree: both mint or reassign
-identity/credential material (who a Foundry user *is*; what a Foundry
-system can authenticate *as*), the same "who can act" class of decision
-`dnd_ai.commands.memberships`/`.campaign_invitations` already gate on
-`access.manage` for, distinct from `canon.edit`'s "what is canonically
-true" scope the other two routes here administer. None of
-`integration.external_systems`/`.external_identifiers`/
+every other command router uses. `link_foundry_identity_endpoint` instead
+requires `access.manage` — deliberately narrower in kind, not degree: it
+mints or reassigns identity material (who a Foundry user *is*), the same
+"who can act" class of decision `dnd_ai.commands.memberships`/
+`.campaign_invitations` already gate on `access.manage` for, distinct from
+`canon.edit`'s "what is canonically true" scope the other two routes here
+administer. None of `integration.external_systems`/`.external_identifiers`/
 `security.external_identities` carries a `campaign_id` — the first two are
 world-scoped (`dnd_ai.commands.integration`'s own module docstring) and the
 third is not scoped to a campaign or world at all — so, exactly like
@@ -46,48 +44,66 @@ server-side from the campaign's own pinned timeline
 (`dnd_ai.api._shared.timeline_world_id`), never accepted from the request
 body.
 
-Foundry-adapter scope (Phase 11 workstream 2 correction — see `dnd_ai.
-domain.access.AuthenticatedPrincipal`'s own docstring for the defect this
-closes): `map_external_identifier_endpoint`, `apply_foundry_combat_sync_
-endpoint`, and `sync_state_endpoint` are this module's bounded
-adapter-facing surface — each passes `allow_foundry_system=True` to
-`require_campaign_capability`, and each also names an `external_system_id`
-of its own (a path parameter for the first and third, a body field for the
-second), so each also calls `dnd_ai.domain.access.
-assert_foundry_system_matches(access.principal, external_system_id)`
-immediately after resolving `access` — a `FoundrySystem` credential for
-system A must not be able to name system B's `external_system_id` in the
-request merely because both happen to belong to campaigns the same linked
-user can reach. `register_external_system_endpoint`, `link_foundry_
-identity_endpoint`, and `issue_foundry_system_key_endpoint` deliberately do
-*not* opt in (`allow_foundry_system` defaults to `False`): registering a
-new external system, linking a Foundry identity, and minting/rotating a
-system credential are all identity/access-administration actions a Foundry
-adapter must never be able to perform merely because the linked user
-happens to hold `access.manage` — the literal restriction docs/PLAN.md
-Phase 11's own "do not let a Foundry credential invoke identity-linking,
-system-key issuance/rotation, or campaign-access administration" exit
-criterion states.
+Foundry-adapter scope: `map_external_identifier_endpoint`, `apply_foundry_
+combat_sync_endpoint`, and `sync_state_endpoint` are this module's bounded
+adapter-facing surface — each passes `allow_foundry_access=True` to
+`require_campaign_capability`, paired with a `foundry_scope` declaration
+from `dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES`'s closed vocabulary
+(`_COMBAT_SYNC_SCOPE` for the first two, `_SYNC_STATUS_READ_SCOPE` for the
+third — Workstream 11R High-severity finding: scope was persisted at
+pairing time but never actually enforced until this correction), and each
+also names an `external_system_id` of its own (a path parameter for the
+first and third, a body field for the second), so each also calls
+`dnd_ai.domain.access.assert_foundry_system_matches(access.principal,
+external_system_id)` immediately after resolving `access` — a paired
+device for system A must not be able to name system B's `external_
+system_id` in the request merely because both happen to belong to
+campaigns the same linked user can reach. `register_external_system_
+endpoint` and `link_foundry_identity_endpoint` deliberately do *not* opt
+in: registering a new external system and linking a Foundry identity are
+both identity/access-administration actions a Foundry adapter must never
+be able to perform merely because the linked user happens to hold
+`access.manage` — the literal restriction docs/PLAN.md Phase 11's own "do
+not let a Foundry credential invoke identity-linking, system-key
+issuance/rotation, or campaign-access administration" exit criterion
+states.
 
-Cross-world integrity: `map_external_identifier_endpoint`,
-`link_foundry_identity_endpoint`, and `issue_foundry_system_key_endpoint`
-all pass the URL's own (already-authorized) campaign's resolved `world_id`
-as their command's `expected_world_id` argument, which asserts the path's
-`external_system_id` actually belongs to that world before writing
-anything (`dnd_ai.commands.integration._external_system_world`), raising
-`ExternalSystemNotFoundError` (a fixed, non-disclosing 404) otherwise.
-Without this, a caller authorized only for one campaign/world could target
-an `external_system_id` belonging to a different world entirely:
-`integration.enforce_external_identifier_world()` (revision 079) only
-guarantees `external_system_id` and the mapped `entity_id` agree with
-*each other*, never with the caller's own authorized world — and neither
-`security.external_identities` nor `integration.external_systems.
-system_key_hash` carries any world scoping of its own beyond
-`external_systems.world_id` itself, so `link_foundry_identity_endpoint`/
-`issue_foundry_system_key_endpoint` rely entirely on this same
-`external_system_id` check to keep one campaign's GM from linking
-identities or minting credentials under a different world's Foundry
-registration.
+Legacy FoundrySystem key issuance retired (Workstream 11R High-severity
+finding): `issue_foundry_system_key_endpoint` (`POST .../foundry-system-
+key`) is removed from this module's HTTP surface entirely — not merely
+un-opted-into `allow_foundry_access`, the way `register_external_system_
+endpoint`/`link_foundry_identity_endpoint` above are. The `FoundrySystem`
+credential it issued is now rejected unconditionally at the authentication
+boundary (`dnd_ai.api.auth`), so an endpoint that could only ever mint a
+credential nothing accepts any more served no purpose; removing it also
+closes the possibility of ever accidentally re-enabling legacy issuance by
+re-wiring the route without separately reconsidering the retired auth
+path. The underlying `dnd_ai.commands.integration.issue_foundry_system_
+key`/`_issue_foundry_system_key_impl` command and the `integration.
+external_systems.system_key_hash`/`.system_key_principal_user_id` columns
+it writes are left in place (see migration `102_revoke_legacy_foundry_
+system_keys` for why every existing key was revoked at the data level
+regardless) — this repository found no evidence of a real deployed client
+still depending on the scheme, so a compatibility-window HTTP surface was
+deliberately not built; see the Workstream 11R verification record for
+the full determination.
+
+Cross-world integrity: `map_external_identifier_endpoint` and
+`link_foundry_identity_endpoint` both pass the URL's own
+(already-authorized) campaign's resolved `world_id` as their command's
+`expected_world_id` argument, which asserts the path's `external_system_
+id` actually belongs to that world before writing anything (`dnd_ai.
+commands.integration._external_system_world`), raising `ExternalSystem
+NotFoundError` (a fixed, non-disclosing 404) otherwise. Without this, a
+caller authorized only for one campaign/world could target an `external_
+system_id` belonging to a different world entirely: `integration.
+enforce_external_identifier_world()` (revision 079) only guarantees
+`external_system_id` and the mapped `entity_id` agree with *each other*,
+never with the caller's own authorized world — and `security.external_
+identities` carries no world scoping of its own beyond `external_systems.
+world_id` itself, so `link_foundry_identity_endpoint` relies entirely on
+this same `external_system_id` check to keep one campaign's GM from
+linking identities under a different world's Foundry registration.
 
 Idempotency: `register_external_system` has no natural dedup key of its
 own — each call always inserts a new row, so a naive retry (a dropped
@@ -96,38 +112,29 @@ response, a proxy timeout) would create a duplicate `external_systems` row
 PostgreSQL-backed `Idempotency-Key` mechanism
 (`dnd_ai.api.idempotency`/`security.idempotent_requests`, migration 082)
 every other command router uses; see `dnd_ai.api.items`'s module docstring
-for the full concurrency argument. `issue_foundry_system_key_endpoint`
-wires the identical mechanism for the same reason, in the opposite
-direction from `register_external_system`'s "would create a duplicate
-row": every call mints a genuinely new random key and overwrites
-`system_key_hash` in place, so a naive retry after a dropped response
-would silently rotate the credential a second time and return a
-*different* raw key than the one the (never-received) first response
-actually issued — `Idempotency-Key` makes a retry replay the exact same
-response, including the same raw key, instead. `map_external_identifier`
-and `link_foundry_identity` need no such wiring: both already upsert — on
-`ux_external_identifiers_system_kind_external` and on `security.
-external_identities`' own `(issuer, subject) WHERE revoked_at IS NULL`
-partial unique index respectively (each command's own docstring —
-"re-registering ... is idempotent") — the same reasoning
-`dnd_ai.api.encounters` used to skip a bespoke idempotency store for its
-own naturally-deduplicated routes.
+for the full concurrency argument. `map_external_identifier` and `link_
+foundry_identity` need no such wiring: both already upsert — on `ux_
+external_identifiers_system_kind_external` and on `security.external_
+identities`' own `(issuer, subject) WHERE revoked_at IS NULL` partial
+unique index respectively (each command's own docstring — "re-registering
+... is idempotent") — the same reasoning `dnd_ai.api.encounters` used to
+skip a bespoke idempotency store for its own naturally-deduplicated
+routes.
 
 Auditing: `integration.external_systems` rows are not `core.entities` rows
 (no class-table inheritance — this is adapter-facing infrastructure, not a
-world entity), so `register_external_system_endpoint` and
-`issue_foundry_system_key_endpoint` (which updates a column on that same
-row) both record `entity_id=None`. `integration.external_identifiers` rows
-are also not entities themselves, but the `entity_id` they map to *is* a
-real `core.entities` row the change genuinely concerns, so
-`map_external_identifier_endpoint` records `entity_id=body.entity_id`
-directly — unlike the owning-entity indirection
-`dnd_ai.commands.quests`'/`.interactions`' own workstreams needed, this one
-requires no extra lookup since the caller already supplies the entity
-being mapped. `security.external_identities` rows are not `core.entities`
-rows either, and the `user_id` they map to is a `security.users` row, not
-one — so `link_foundry_identity_endpoint` also records `entity_id=None`,
-the same as `register_external_system_endpoint`.
+world entity), so `register_external_system_endpoint` records `entity_
+id=None`. `integration.external_identifiers` rows are also not entities
+themselves, but the `entity_id` they map to *is* a real `core.entities`
+row the change genuinely concerns, so `map_external_identifier_endpoint`
+records `entity_id=body.entity_id` directly — unlike the owning-entity
+indirection `dnd_ai.commands.quests`'/`.interactions`' own workstreams
+needed, this one requires no extra lookup since the caller already
+supplies the entity being mapped. `security.external_identities` rows are
+not `core.entities` rows either, and the `user_id` they map to is a
+`security.users` row, not one — so `link_foundry_identity_endpoint` also
+records `entity_id=None`, the same as `register_external_system_
+endpoint`.
 
 `apply_foundry_combat_sync_endpoint` (Phase 11 workstream 3): unlike the
 four routes above, this one takes `Depends(get_engine)`, not
@@ -191,7 +198,6 @@ from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.commands.integration import (
     ApplyFoundryCombatSyncResult,
-    _issue_foundry_system_key_impl,
     _link_foundry_identity_impl,
     _map_external_identifier_impl,
     _register_external_system_impl,
@@ -220,11 +226,13 @@ router = APIRouter(tags=["integration"])
 # inventing a distinct value that happens to be identical.
 _INTEGRATION_MANAGE_CAPABILITY = "canon.edit"
 
-# Linking a Foundry user id to a platform user, or minting the system-level
-# credential a Foundry adapter authenticates with, are both identity/access
-# decisions, not canon-editing ones — see this module's docstring
-# ("Authorization") for why these deliberately differ from
-# _INTEGRATION_MANAGE_CAPABILITY above.
+# Linking a Foundry user id to a platform user is an identity/access
+# decision, not a canon-editing one — see this module's docstring
+# ("Authorization") for why this deliberately differs from
+# _INTEGRATION_MANAGE_CAPABILITY above. (issue_foundry_system_key_endpoint,
+# the legacy credential-issuance route that used to share this capability,
+# is retired — see this module's docstring, "Legacy FoundrySystem key
+# issuance retired.")
 _FOUNDRY_IDENTITY_MANAGE_CAPABILITY = "access.manage"
 
 # The read-only counterpart to _INTEGRATION_MANAGE_CAPABILITY, for
@@ -232,12 +240,18 @@ _FOUNDRY_IDENTITY_MANAGE_CAPABILITY = "access.manage"
 # for why this mirrors dnd_ai.api.encounters._ENCOUNTER_VIEW_CAPABILITY.
 _INTEGRATION_VIEW_CAPABILITY = "campaign.view"
 
+# Foundry scopes (dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES) this
+# module's three bounded adapter-facing routes each require from a paired
+# device — see this module's docstring ("Foundry-adapter scope") for the
+# route-to-scope reasoning.
+_COMBAT_SYNC_SCOPE = "combat_sync"
+_SYNC_STATUS_READ_SCOPE = "sync_status_read"
+
 # audit.change_log.command_name / the idempotency store's fingerprinted
 # command_name — one literal per route, never derived from request data.
 _REGISTER_EXTERNAL_SYSTEM_COMMAND_NAME = "register_external_system"
 _MAP_EXTERNAL_IDENTIFIER_COMMAND_NAME = "map_external_identifier"
 _LINK_FOUNDRY_IDENTITY_COMMAND_NAME = "link_foundry_identity"
-_ISSUE_FOUNDRY_SYSTEM_KEY_COMMAND_NAME = "issue_foundry_system_key"
 
 # audit.change_actions.code (revision 007 seed): register_external_system
 # always creates a brand-new row; map_external_identifier and
@@ -284,36 +298,6 @@ class LinkFoundryIdentityRequest(BaseModel):
 
 class LinkFoundryIdentityResponse(BaseModel):
     external_identity_id: uuid.UUID
-
-
-class IssueFoundrySystemKeyRequest(BaseModel):
-    # The Foundry-side user id this key will authenticate as — must
-    # already be linked via link_foundry_identity_endpoint for this same
-    # external_system_id (UnlinkedFoundryPrincipalError otherwise). Second
-    # Phase 11 workstream 2 correction: binding the credential to exactly
-    # one platform principal at issuance time, rather than letting a
-    # caller select one per-request via a header, is what closes the
-    # Critical defect this module's own docstring and dnd_ai.domain.access.
-    # resolve_foundry_system_principal's describe in full. Same bounds as
-    # LinkFoundryIdentityRequest.foundry_user_id, for the same reason
-    # (matches security.external_identities.subject's own CHECK).
-    foundry_user_id: str = Field(min_length=1, max_length=255)
-
-
-class IssueFoundrySystemKeyResponse(BaseModel):
-    external_system_id: uuid.UUID
-    # The platform user this key now authenticates as — echoed back so the
-    # caller (dnd_ai.foundry_provision) can confirm the binding it
-    # requested actually took, without a second round trip.
-    principal_user_id: uuid.UUID
-    # Returned exactly once — see this module's docstring ("Idempotency")
-    # for why a dropped-response retry still returns this same value
-    # rather than a newly rotated one. Never persisted anywhere in plain
-    # text by this codebase outside security.idempotent_requests.
-    # response_body, the same durable-replay store
-    # dnd_ai.api.campaign_invitations already accepts storing its own raw
-    # invitation token in.
-    raw_key: str
 
 
 class ApplyFoundryCombatSyncRequest(BaseModel):
@@ -468,7 +452,11 @@ def map_external_identifier_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_MANAGE_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_COMBAT_SYNC_SCOPE,
+            )
         ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
@@ -505,6 +493,8 @@ def map_external_identifier_endpoint(
         event_id=None,
         acting_external_system_id=access.principal.foundry_external_system_id,
         acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
+        acting_foundry_connection_id=access.principal.foundry_connection_id,
+        acting_foundry_device_id=access.principal.foundry_device_id,
     )
 
     return MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)
@@ -560,97 +550,6 @@ def link_foundry_identity_endpoint(
 
 
 @router.post(
-    "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-system-key",
-    response_model=IssueFoundrySystemKeyResponse,
-    status_code=201,
-)
-def issue_foundry_system_key_endpoint(
-    campaign_id: uuid.UUID,
-    external_system_id: uuid.UUID,
-    body: IssueFoundrySystemKeyRequest,
-    access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_FOUNDRY_IDENTITY_MANAGE_CAPABILITY))
-    ],
-    connection: Annotated[Connection, Depends(get_connection)],
-    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
-    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> IssueFoundrySystemKeyResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        # external_system_id (the URL path parameter) plus body.foundry_user_id
-        # (the second Phase 11 workstream 2 correction's new required input)
-        # together determine what this call does, so both are the
-        # fingerprint payload — the same "include every input that isn't
-        # already part of the reservation's own scope" shape
-        # dnd_ai.api.interactions.resolve_check_endpoint uses for
-        # check_request_id. security.idempotent_requests' own uniqueness
-        # scope is (actor_user_id, campaign_id, idempotency_key) — it does
-        # NOT include either of these — so an empty/partial payload here
-        # would let the same Idempotency-Key reused against a *different*
-        # external_system_id or foundry_user_id in the same campaign
-        # incorrectly replay the first call's response instead of being
-        # rejected as a fingerprint mismatch.
-        fingerprint_payload: dict[str, Any] = {
-            "external_system_id": str(external_system_id),
-            "foundry_user_id": body.foundry_user_id,
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_ISSUE_FOUNDRY_SYSTEM_KEY_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return IssueFoundrySystemKeyResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    world_id = timeline_world_id(connection, access.timeline_id)
-
-    result = _issue_foundry_system_key_impl(
-        connection,
-        external_system_id=external_system_id,
-        principal_foundry_user_id=body.foundry_user_id,
-        expected_world_id=world_id,
-    )
-
-    record_change_log(
-        connection,
-        change_action_code=_UPDATED_CHANGE_ACTION,
-        schema_name="integration",
-        table_name="external_systems",
-        record_id=result.external_system_id,
-        # integration.external_systems rows have no core.entities identity
-        # of their own — the same reasoning register_external_system_endpoint
-        # applies.
-        entity_id=None,
-        world_id=result.world_id,
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_ISSUE_FOUNDRY_SYSTEM_KEY_COMMAND_NAME,
-        event_id=None,
-    )
-
-    response = IssueFoundrySystemKeyResponse(
-        external_system_id=result.external_system_id,
-        principal_user_id=result.principal_user_id,
-        raw_key=result.raw_key,
-    )
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
-    return response
-
-
-@router.post(
     "/campaigns/{campaign_id}/integration/foundry/combat-sync",
     response_model=ApplyFoundryCombatSyncResponse,
     status_code=201,
@@ -668,7 +567,11 @@ def apply_foundry_combat_sync_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_MANAGE_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_MANAGE_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_COMBAT_SYNC_SCOPE,
+            )
         ),
     ],
     engine: Annotated[Engine, Depends(get_engine)],
@@ -757,7 +660,11 @@ def sync_state_endpoint(
     access: Annotated[
         AccessContext,
         Depends(
-            require_campaign_capability(_INTEGRATION_VIEW_CAPABILITY, allow_foundry_system=True)
+            require_campaign_capability(
+                _INTEGRATION_VIEW_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_SYNC_STATUS_READ_SCOPE,
+            )
         ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],

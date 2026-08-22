@@ -1,0 +1,22 @@
+<div class="dnd-ai-adapter-form">
+  <fieldset>
+    <legend>{{localize "DNDAI.Settings.Pairing.Name"}}</legend>
+    <p class="hint">{{localize "DNDAI.Settings.Pairing.Hint"}}</p>
+
+    <div class="form-group">
+      <label>{{localize "DNDAI.Settings.ApiBaseUrl.Name"}}</label>
+      <input type="text" name="apiBaseUrl" value="{{apiBaseUrl}}" placeholder="https://dnd-ai.example.com" />
+      <p class="hint">{{localize "DNDAI.Settings.ApiBaseUrl.Hint"}}</p>
+    </div>
+
+    <div class="form-group">
+      <label>{{localize "DNDAI.Settings.PairingCode.Name"}}</label>
+      <input type="text" name="pairingCode" autocomplete="off" placeholder="{{localize 'DNDAI.Settings.PairingCode.Placeholder'}}" />
+      <p class="hint">{{localize "DNDAI.Settings.PairingCode.Hint"}}</p>
+    </div>
+  </fieldset>
+
+  <footer class="form-footer">
+    <button type="submit"><i class="fa-solid fa-check"></i> {{localize "DNDAI.Settings.Save"}}</button>
+  </footer>
+</div>

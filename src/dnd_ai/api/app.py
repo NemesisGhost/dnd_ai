@@ -61,10 +61,12 @@ from .dungeon import router as dungeon_router
 from .encounters import router as encounters_router
 from .errors import install_error_handlers
 from .events import router as events_router
+from .foundry_pairing import router as foundry_pairing_router
 from .integration import router as integration_router
 from .interactions import router as interactions_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
+from .local_auth import router as local_auth_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
 from .quests import router as quests_router
@@ -139,10 +141,12 @@ def create_app() -> FastAPI:
     app.include_router(dungeon_router)
     app.include_router(encounters_router)
     app.include_router(events_router)
+    app.include_router(foundry_pairing_router)
     app.include_router(integration_router)
     app.include_router(interactions_router)
     app.include_router(items_router)
     app.include_router(knowledge_router)
+    app.include_router(local_auth_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)
     app.include_router(quests_router)

@@ -1,4 +1,4 @@
-import { ConnectionSetupApp } from "./ui/connection-setup-app.mjs";
+import { PairingApp } from "./ui/pairing-app.mjs";
 import { SyncDialogApp } from "./ui/sync-dialog-app.mjs";
 import { registerHpSyncHooks, registerLifecycleHooks } from "./hooks.mjs";
 
@@ -11,7 +11,7 @@ import { registerHpSyncHooks, registerLifecycleHooks } from "./hooks.mjs";
  * README.md`'s "Manual live-Foundry verification" section), which is
  * why it stays this small.
  */
-registerLifecycleHooks({ connectionSetupAppClass: ConnectionSetupApp });
+registerLifecycleHooks({ pairingAppClass: PairingApp });
 registerHpSyncHooks();
 
 Hooks.on("getSceneControlButtons", (controls) => {
