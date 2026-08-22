@@ -203,6 +203,13 @@ _DATABASE_URL_SECRET_FILENAME = "dnd_ai_database_url"
 OIDC_PRODUCTION_URL_SCHEMES = frozenset({"https"})
 OIDC_LOCAL_URL_SCHEMES = frozenset({"http", "https"})
 
+# docs/PLAN.md §23.4's own documented local dev topology: Vite at :5173
+# proxying /api and /auth to FastAPI at :8000 (the browser's Origin stays
+# :5173 through that proxy), plus FastAPI's own bare origin for direct
+# clients (tests/database, tests/scenario, curl). The zero-configuration
+# default for local_session_allowed_origins outside production.
+_LOCAL_DEV_SESSION_ORIGINS = ("http://localhost:5173", "http://localhost:8000")
+
 # Variables dnd_ai.config.Settings itself declares (kept in sync with the
 # fields below by tests/unit/test_config.py's metadata-completeness check,
 # docs/DEVELOPMENT.md §2.1's established pattern, rather than derived at
@@ -222,6 +229,7 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_AUDIENCE",
         "DND_AI_OIDC_JWKS_URL",
         "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
+        "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS",
         "DND_AI_AI_PROVIDER_API_KEY",
         "DND_AI_AI_PROVIDER_MODEL",
         "DND_AI_AI_PROVIDER_BASE_URL",
@@ -319,72 +327,66 @@ def _validate_oidc_audience(value: str) -> None:
 _FOUNDRY_ORIGIN_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def _validate_and_normalize_foundry_origin(value: str, *, require_https: bool) -> str:
-    """One entry of `DND_AI_FOUNDRY_ALLOWED_ORIGINS` — validated and
-    returned in a canonical form (lowercased scheme/host, default port
+def _validate_and_normalize_origin(value: str, *, field_name: str, require_https: bool) -> str:
+    """One entry of an exact-origin allowlist setting (`DND_AI_FOUNDRY_
+    ALLOWED_ORIGINS` or `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`) — validated
+    and returned in a canonical form (lowercased scheme/host, default port
     stripped) so `dnd_ai.api.app` can pass the result straight to
-    `CORSMiddleware(allow_origins=...)` without repeating this parsing.
-    Rejects, rather than silently repairs: a wildcard anywhere in the
+    `CORSMiddleware(allow_origins=...)`, or `dnd_ai.api.auth` can compare
+    a request's `Origin` header against it, without repeating this
+    parsing. Shared by both settings — `field_name` is only for error
+    messages, the validation rules are identical either way. Rejects,
+    rather than silently repairs: a wildcard anywhere in the
     value (an allowlist entry meant to be exact, never a subdomain
     pattern), a scheme outside the allowed set for this environment, a
     missing host, embedded credentials, a path/query/fragment (an Origin
     is scheme+host+port only — CLAUDE.md rule "no unsafe fallback
     values"), or an unparseable/invalid-port URL."""
     if not value or value != value.strip():
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS contains an empty or whitespace-padded entry: {value!r}"
-        )
+        raise ValueError(f"{field_name} contains an empty or whitespace-padded entry: {value!r}")
     if "*" in value:
         raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS must not contain a wildcard origin: {value!r} — "
+            f"{field_name} must not contain a wildcard origin: {value!r} — "
             "every entry must be one exact scheme://host[:port], never a pattern"
         )
     try:
         parsed = urlsplit(value)
     except ValueError as exc:
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS contains a malformed origin {value!r}: {exc}"
-        ) from exc
+        raise ValueError(f"{field_name} contains a malformed origin {value!r}: {exc}") from exc
     allowed_schemes = {"https"} if require_https else {"http", "https"}
     scheme = parsed.scheme.lower()
     if scheme not in allowed_schemes:
         allowed = " or ".join(sorted(allowed_schemes))
-        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must use {allowed}")
+        raise ValueError(f"{field_name} origin {value!r} must use {allowed}")
     if not parsed.hostname:
-        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must include a host")
+        raise ValueError(f"{field_name} origin {value!r} must include a host")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain embedded credentials"
-        )
+        raise ValueError(f"{field_name} origin {value!r} must not contain embedded credentials")
     if parsed.path not in ("", "/"):
-        raise ValueError(f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a path")
+        raise ValueError(f"{field_name} origin {value!r} must not contain a path")
     if parsed.query:
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a query string"
-        )
+        raise ValueError(f"{field_name} origin {value!r} must not contain a query string")
     if parsed.fragment:
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} must not contain a URL fragment"
-        )
+        raise ValueError(f"{field_name} origin {value!r} must not contain a URL fragment")
     try:
         port = parsed.port
     except ValueError as exc:
-        raise ValueError(
-            f"DND_AI_FOUNDRY_ALLOWED_ORIGINS origin {value!r} has an invalid port"
-        ) from exc
+        raise ValueError(f"{field_name} origin {value!r} has an invalid port") from exc
     host = parsed.hostname.lower()
     if port is not None and port != _FOUNDRY_ORIGIN_DEFAULT_PORTS[scheme]:
         return f"{scheme}://{host}:{port}"
     return f"{scheme}://{host}"
 
 
-def _parse_foundry_allowed_origins(raw: str, *, require_https: bool) -> tuple[str, ...]:
+def _parse_allowed_origins(raw: str, *, field_name: str, require_https: bool) -> tuple[str, ...]:
     """Splits, validates, normalizes, and order-preserving-deduplicates a
-    raw `DND_AI_FOUNDRY_ALLOWED_ORIGINS` value."""
+    raw comma-separated exact-origin allowlist value."""
     normalized: list[str] = []
     seen: set[str] = set()
     for entry in raw.split(","):
-        origin = _validate_and_normalize_foundry_origin(entry.strip(), require_https=require_https)
+        origin = _validate_and_normalize_origin(
+            entry.strip(), field_name=field_name, require_https=require_https
+        )
         if origin not in seen:
             seen.add(origin)
             normalized.append(origin)
@@ -400,6 +402,22 @@ def foundry_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
     if not settings_obj.foundry_allowed_origins:
         return ()
     return tuple(settings_obj.foundry_allowed_origins.split(","))
+
+
+def local_session_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
+    """The parsed, already-validated `Origin` allowlist `dnd_ai.api.auth`
+    checks a cookie-authenticated state-changing request's `Origin` header
+    against (docs/PLAN.md §23.4's "an allowed Origin" requirement) — mirrors
+    `foundry_allowed_origins_tuple` exactly, over the separate `local_
+    session_allowed_origins` setting. Unlike the Foundry allowlist this is
+    not passed to `CORSMiddleware`: a same-origin browser session is not a
+    CORS request at all in production (docs/PLAN.md §23.4 — portal and API
+    share one origin there); it exists only for the local dev topology
+    (Vite at :5173 proxying to FastAPI at :8000) and as an explicit,
+    server-owned comparison set for the CSRF Origin check either way."""
+    if not settings_obj.local_session_allowed_origins:
+        return ()
+    return tuple(settings_obj.local_session_allowed_origins.split(","))
 
 
 class Settings(BaseSettings):
@@ -440,6 +458,13 @@ class Settings(BaseSettings):
     # flag are both on; see _validate_foundry_allowed_origins and this
     # module's own docstring.
     foundry_allowed_origins: str | None = None
+
+    # Explicit Origin allowlist checked against a cookie-authenticated
+    # state-changing request's Origin header (docs/PLAN.md §23.4's CSRF
+    # requirement) — required in production (no feature flag gates local
+    # authentication; see _validate_local_session_allowed_origins), and
+    # defaulting to the documented dev topology outside it.
+    local_session_allowed_origins: str | None = None
 
     # Phase 12 AI provider credential/model/endpoint pin (dnd_ai.domain.
     # ai_provider.OpenAiCompatibleProvider). ai_provider_base_url defaults
@@ -613,8 +638,47 @@ class Settings(BaseSettings):
             self.foundry_allowed_origins = None
             return self
         require_https = self.environment == "production"
-        origins = _parse_foundry_allowed_origins(raw, require_https=require_https)
+        origins = _parse_allowed_origins(
+            raw, field_name="DND_AI_FOUNDRY_ALLOWED_ORIGINS", require_https=require_https
+        )
         self.foundry_allowed_origins = ",".join(origins)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_local_session_allowed_origins(self) -> "Settings":
+        """The `Origin` allowlist `dnd_ai.api.auth` checks a cookie-
+        authenticated state-changing request's `Origin` header against
+        (docs/PLAN.md §23.4). Unlike `foundry_allowed_origins`, local
+        authentication is not behind a feature flag — it is the platform's
+        primary authentication mechanism (docs/PLAN.md §23.1: "local
+        authentication must work with OIDC entirely unconfigured") — so
+        this is required, unconditionally, in production: a same-origin
+        production deployment still needs to state what that one origin
+        *is*, since nothing in this module can derive "the app's own
+        public origin" from any other setting. Local/test defaults to the
+        two origins docs/PLAN.md §23.4 itself documents for the dev
+        topology (Vite at :5173 proxying `/api`/`/auth` to FastAPI at
+        :8000, plus FastAPI's own bare origin for direct/test clients) so
+        local development and tests/database/tests/scenario work with zero
+        extra configuration. Scheme policy and normalization otherwise
+        mirror `_validate_foundry_allowed_origins` exactly."""
+        raw = self.local_session_allowed_origins
+        if raw is not None and raw.strip() == "":
+            raw = None
+        if raw is None:
+            if self.environment == "production":
+                raise ValueError(
+                    "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS is required when "
+                    "DND_AI_ENVIRONMENT=production — a browser session's CSRF check needs an "
+                    "explicit Origin allowlist; there is no safe wildcard or default origin."
+                )
+            self.local_session_allowed_origins = ",".join(_LOCAL_DEV_SESSION_ORIGINS)
+            return self
+        require_https = self.environment == "production"
+        origins = _parse_allowed_origins(
+            raw, field_name="DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", require_https=require_https
+        )
+        self.local_session_allowed_origins = ",".join(origins)
         return self
 
     @model_validator(mode="after")

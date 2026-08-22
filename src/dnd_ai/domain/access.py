@@ -196,6 +196,7 @@ class AccessContext:
 
 OIDC_AUTH_METHOD = "oidc"
 FOUNDRY_SYSTEM_AUTH_METHOD = "foundry_system"
+LOCAL_SESSION_AUTH_METHOD = "local_session"
 
 
 @dataclass(frozen=True)
@@ -264,13 +265,26 @@ class AuthenticatedPrincipal:
     Foundry credential at all), and a `FOUNDRY_SYSTEM_AUTH_METHOD`
     principal may or may not (a Foundry client that sends no claimed actor
     is authenticated exactly the same as one that does — the field changes
-    nothing about who `user_id` resolves to either way)."""
+    nothing about who `user_id` resolves to either way).
+
+    `local_session_id` (Phase 11R workstream A/B) is the authenticating
+    `security.browser_sessions.browser_session_id` row for a
+    `LOCAL_SESSION_AUTH_METHOD` principal — set if, and only if,
+    `auth_method == LOCAL_SESSION_AUTH_METHOD`, enforced by
+    `__post_init__` the same way the Foundry pair above is. Carried through
+    to `audit.change_log` (workstream G) and to the session-revocation
+    check every downstream command performs — a session that is revoked or
+    expires between issuance and use is rejected at resolution time
+    (`dnd_ai.commands.local_auth.resolve_local_session_principal`), before
+    this dataclass is even constructed, so its mere presence here already
+    means "this specific session was valid as of this request." """
 
     user_id: uuid.UUID
     auth_method: str
     foundry_external_system_id: uuid.UUID | None = None
     foundry_world_id: uuid.UUID | None = None
     foundry_claimed_actor_id: str | None = None
+    local_session_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         is_foundry = self.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
@@ -291,6 +305,15 @@ class AuthenticatedPrincipal:
                 f"auth_method == {FOUNDRY_SYSTEM_AUTH_METHOD!r} "
                 f"(got auth_method={self.auth_method!r}, "
                 f"foundry_claimed_actor_id={self.foundry_claimed_actor_id!r})"
+            )
+        is_local_session = self.auth_method == LOCAL_SESSION_AUTH_METHOD
+        has_local_session_id = self.local_session_id is not None
+        if is_local_session != has_local_session_id:
+            raise ValueError(
+                "local_session_id must be set if, and only if, "
+                f"auth_method == {LOCAL_SESSION_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, "
+                f"local_session_id={self.local_session_id!r})"
             )
 
 
@@ -375,6 +398,32 @@ def resolve_user_by_external_identity(
     return _as_uuid(value) if value is not None else None
 
 
+def is_platform_administrator(connection: Connection, *, user_id: uuid.UUID) -> bool:
+    """True iff `user_id` names an active user with `security.users.
+    is_platform_administrator` set (Phase 11R workstream A). This is a
+    deliberately minimal, campaign-independent authorization primitive —
+    `AccessContext`/`resolve_access_context` above resolve capabilities
+    *within one campaign membership*, but account-management operations
+    (creating a local account, issuing a password-reset token, bootstrap)
+    have no campaign to scope against at all (docs/PLAN.md §23.1:
+    "possessing an active login account does not grant access to any
+    campaign" — the reverse is equally true, campaign roles grant no
+    platform-account authority). A deactivated administrator's own
+    lifecycle status already gates this the same way it gates every other
+    login path — there is no separate "revoke admin" step beyond
+    deactivating the account."""
+    value = connection.execute(
+        text("""
+            SELECT u.is_platform_administrator
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user_id AND ls.code = 'active'
+        """),
+        {"user_id": user_id},
+    ).scalar()
+    return bool(value)
+
+
 def foundry_issuer(external_system_id: uuid.UUID) -> str:
     """The synthetic `security.external_identities.issuer` value that scopes
     a Foundry-side user id to one registered `integration.external_systems`
@@ -385,6 +434,17 @@ def foundry_issuer(external_system_id: uuid.UUID) -> str:
     authentication) both call this rather than each formatting their own
     copy of the string, so the two can never drift apart."""
     return f"foundry:{external_system_id}"
+
+
+# The synthetic security.external_identities.issuer value for a local
+# username/password login — the identical "reuse the generic identity-
+# mapping table with a synthetic issuer" pattern foundry_issuer()
+# established above, applied to (issuer="local", subject=<normalized
+# login name>) instead of (issuer=f"foundry:{system}", subject=<Foundry
+# user id>). dnd_ai.commands.local_auth is the only writer/reader of rows
+# with this issuer; resolve_user_by_external_identity (already generic)
+# resolves a login name to a user_id with no new lookup code needed.
+LOCAL_AUTH_ISSUER = "local"
 
 
 def hash_foundry_system_key(raw_key: str) -> str:

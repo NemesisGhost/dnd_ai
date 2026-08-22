@@ -178,6 +178,7 @@ fixture — since a plain function call would bypass FastAPI's override
 mechanism entirely.
 """
 
+import hmac
 import json
 import threading
 import time
@@ -193,8 +194,18 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import Depends, Header, Request
 from sqlalchemy import Connection
 
-from dnd_ai.config import OIDC_LOCAL_URL_SCHEMES, OIDC_PRODUCTION_URL_SCHEMES, settings
+from dnd_ai.commands.local_auth import (
+    resolve_browser_session_csrf_token,
+    resolve_local_session_principal,
+)
+from dnd_ai.config import (
+    OIDC_LOCAL_URL_SCHEMES,
+    OIDC_PRODUCTION_URL_SCHEMES,
+    local_session_allowed_origins_tuple,
+    settings,
+)
 from dnd_ai.domain.access import (
+    LOCAL_SESSION_AUTH_METHOD,
     OIDC_AUTH_METHOD,
     AuthenticatedPrincipal,
     resolve_foundry_system_principal,
@@ -202,6 +213,7 @@ from dnd_ai.domain.access import (
 )
 from dnd_ai.domain.tokens import VerifiedTokenClaims, verify_bearer_token
 
+from .cookies import session_cookie_name
 from .deps import get_connection
 from .errors import ForbiddenError, UnauthorizedError
 
@@ -210,6 +222,13 @@ from .errors import ForbiddenError, UnauthorizedError
 # docstring ("Foundry-adapter authentication"). Compared case-insensitively,
 # the same way the existing "bearer" scheme check already is.
 _FOUNDRY_SYSTEM_AUTH_SCHEME = "foundrysystem"
+
+# HTTP methods docs/PLAN.md §23.4 calls "state-changing" — a cookie-
+# authenticated request using one of these must also carry a matching
+# X-CSRF-Token and an allowed Origin (see _enforce_csrf_and_origin below).
+# GET/HEAD/OPTIONS never mutate state in this API and are exempt, matching
+# every other command endpoint's own read/write split.
+_CSRF_PROTECTED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Tier-1 (JWKS-set) cache TTL — long enough that routine per-request traffic
 # never refetches the document, short enough that a rotated signing key is
@@ -696,6 +715,47 @@ def _resolve_foundry_system_principal(
     return principal
 
 
+def _enforce_csrf_and_origin(
+    request: Request, connection: Connection, principal: AuthenticatedPrincipal
+) -> None:
+    """docs/PLAN.md §23.4: "Cookie-authenticated state-changing requests
+    also require X-CSRF-Token, validation against the current server-side
+    session, an allowed Origin, and the existing command idempotency
+    contract." Enforced centrally, inside `get_authenticated_user_id`
+    itself, for every `LOCAL_SESSION_AUTH_METHOD` principal on every
+    state-changing request — not per-route — so a future POST/PUT/PATCH/
+    DELETE endpoint gets this protection automatically merely by depending
+    on `get_authenticated_user_id` (directly or via `require_campaign_
+    capability`/`require_oidc_user_id`), the same "centralize, don't rely
+    on every route remembering" reasoning `require_campaign_capability`'s
+    own `allow_foundry_system` gate already established for Foundry scope.
+
+    Raises `ForbiddenError` (403 — the caller *is* authenticated; the
+    request just isn't accepted this way) for a missing/disallowed Origin,
+    or a missing/mismatched `X-CSRF-Token`. `hmac.compare_digest` for the
+    token comparison — a session's CSRF token is long-lived, unlike a
+    per-request nonce, so a naive `==` comparison's early-exit timing leak
+    is worth closing even though this isn't a password-strength secret."""
+    if request.method not in _CSRF_PROTECTED_METHODS:
+        return
+    assert principal.local_session_id is not None
+
+    origin = request.headers.get("origin")
+    if origin is None or origin not in local_session_allowed_origins_tuple(settings):
+        raise ForbiddenError()
+
+    submitted_csrf_token = request.headers.get("x-csrf-token")
+    stored_csrf_token = resolve_browser_session_csrf_token(
+        connection, browser_session_id=principal.local_session_id
+    )
+    if (
+        submitted_csrf_token is None
+        or stored_csrf_token is None
+        or not hmac.compare_digest(submitted_csrf_token, stored_csrf_token)
+    ):
+        raise ForbiddenError()
+
+
 def get_authenticated_user_id(
     request: Request,
     connection: Annotated[Connection, Depends(get_connection)],
@@ -741,6 +801,35 @@ def get_authenticated_user_id(
             connection, credential=credential, claimed_foundry_actor_id=claimed_foundry_actor_id
         )
 
+    if authorization is None:
+        # No Authorization header at all — try the local browser-session
+        # cookie (docs/PLAN.md §23.4) before falling through to the OIDC
+        # path, which would otherwise unconditionally raise UnauthorizedError
+        # for a missing header. A *present* cookie that fails to resolve
+        # (expired, revoked, unknown) raises immediately rather than
+        # silently falling through to OIDC — a stale/invalid session is a
+        # definite authentication failure, not "try something else."
+        raw_session_token = request.cookies.get(session_cookie_name())
+        if raw_session_token is not None:
+            session_principal = resolve_local_session_principal(
+                connection, raw_session_token=raw_session_token
+            )
+            if session_principal is None:
+                raise UnauthorizedError()
+            _enforce_csrf_and_origin(request, connection, session_principal)
+            return session_principal
+        # Truly no credential of any kind was offered (no Authorization
+        # header, no session cookie) — fail here with the ordinary 401,
+        # never falling through to the OIDC path below. Without this, a
+        # bare unauthenticated request would still reach get_jwks_client()
+        # and hit its own `assert settings.oidc_jwks_url is not None` (a
+        # legitimate, fully supported state per docs/PLAN.md §23.1: "local
+        # authentication must work with OIDC entirely unconfigured") —
+        # an unrelated AssertionError surfacing as a 500, not the 401 an
+        # unauthenticated caller must always see regardless of which
+        # optional credential schemes this deployment has configured.
+        raise UnauthorizedError()
+
     jwks_client = request.app.dependency_overrides.get(get_jwks_client, get_jwks_client)()
     claims = get_verified_token_claims(jwks_client, authorization)
     user_id = resolve_user_by_external_identity(
@@ -751,6 +840,9 @@ def get_authenticated_user_id(
     return AuthenticatedPrincipal(user_id=user_id, auth_method=OIDC_AUTH_METHOD)
 
 
+_HUMAN_AUTH_METHODS = frozenset({OIDC_AUTH_METHOD, LOCAL_SESSION_AUTH_METHOD})
+
+
 def require_oidc_user_id(
     principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
 ) -> uuid.UUID:
@@ -758,13 +850,23 @@ def require_oidc_user_id(
     delegated Foundry-adapter credential — campaign creation, invitation
     acceptance, and any other "portal/human" action with no `campaign_id`
     (and therefore no `require_campaign_capability` gate) to scope a
-    Foundry principal's own world against. Raises `ForbiddenError` for any
-    `principal.auth_method` other than `OIDC_AUTH_METHOD`, otherwise
-    returns `principal.user_id` directly. `dnd_ai.api.access.
+    Foundry principal's own world against. Raises `ForbiddenError` unless
+    `principal.auth_method` is `OIDC_AUTH_METHOD` or `LOCAL_SESSION_
+    AUTH_METHOD` (Phase 11R workstream A/B — a browser-session-authenticated
+    human must reach the same "portal/human" routes an OIDC-authenticated
+    one already could; only a Foundry-adapter credential is excluded here),
+    otherwise returns `principal.user_id` directly. `dnd_ai.api.access.
     require_campaign_capability`'s own `allow_foundry_system` gate is the
     analogous restriction for campaign-scoped routes; this is its
     counterpart for the handful of authenticated routes that have no
-    campaign at all to gate on."""
-    if principal.auth_method != OIDC_AUTH_METHOD:
+    campaign at all to gate on.
+
+    Name kept as `require_oidc_user_id` for this workstream despite now
+    accepting a second auth method — Phase 11R workstream C's own
+    `AuthenticatedPrincipal`/authorization-dependency rename is the planned
+    place to give this (and every "human vs. adapter" gate in this module)
+    a name that no longer implies OIDC-only; renaming here first would
+    touch call sites that workstream is going to touch again regardless."""
+    if principal.auth_method not in _HUMAN_AUTH_METHODS:
         raise ForbiddenError()
     return principal.user_id

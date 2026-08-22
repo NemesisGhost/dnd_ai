@@ -135,6 +135,32 @@ def make_user(
     return value
 
 
+def make_platform_administrator(
+    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+) -> uuid.UUID:
+    """A `security.users` row with `is_platform_administrator = true`
+    (revision 099_local_authentication, Phase 11R workstream A) — for
+    tests exercising `dnd_ai.commands.local_auth.create_local_account`/
+    `issue_password_reset_token`, both gated on this flag rather than any
+    campaign-scoped capability. A direct raw insert (this module's own
+    docstring's established "production commands don't exist yet"
+    exception applies loosely here too: `dnd_ai.commands.local_auth.
+    bootstrap_initial_admin` is the real production path, but it only
+    succeeds against a completely empty `security.users` table — never
+    true in this shared session database once any other fixture has run —
+    so ordinary tests need this shortcut instead)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.users (display_name, lifecycle_status_id, is_platform_administrator)
+            VALUES (:name, :status, true)
+            RETURNING user_id
+        """),
+        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_external_identity(
     connection: Connection,
     user_id: uuid.UUID,
