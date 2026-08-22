@@ -105,12 +105,11 @@ class _CampaignSetup:
 
 
 def _make_campaign(postgres_engine: Engine, *, slug_prefix: str) -> _CampaignSetup:
-    with postgres_engine.connect() as connection:
+    with postgres_engine.begin() as connection:
         world_id = make_world(connection, slug=f"{slug_prefix}-{uuid.uuid4().hex[:8]}")
         timeline_id = make_timeline(connection, world_id)
         campaign_id = make_campaign(connection, timeline_id, lifecycle_status_code="pending")
         external_system_id = make_external_system(connection, world_id)
-        connection.commit()
     return _CampaignSetup(
         world_id=world_id, campaign_id=campaign_id, external_system_id=external_system_id
     )

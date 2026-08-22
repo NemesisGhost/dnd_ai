@@ -56,8 +56,8 @@ def test_validate_password_policy_accepts_a_long_random_passphrase() -> None:
     validate_password_policy("correct thunderhorse velvet mansion 7")
 
 
-def test_validate_password_policy_accepts_unicode_and_spaces_up_to_64_chars() -> None:
-    validate_password_policy("réservé mañana 日本語のパスフレーズ ok テスト12" * 1)
+def test_validate_password_policy_accepts_unicode_and_spaces() -> None:
+    validate_password_policy("réservé mañana 日本語のパスフレーズ ok テスト12")
 
 
 @pytest.mark.parametrize(
