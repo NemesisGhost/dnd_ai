@@ -3,12 +3,12 @@
 
 Every route here is either public (rate-limited, token- or credential-
 authenticated: login, activation, password-reset consumption) or requires
-an already-authenticated human (`require_oidc_user_id` — despite the name,
-accepts `LOCAL_SESSION_AUTH_METHOD` too, see that dependency's own
-docstring). CSRF/Origin enforcement for cookie-authenticated state-changing
+an already-authenticated human (`require_human_user_id` — accepts both
+`OIDC_AUTH_METHOD` and `LOCAL_SESSION_AUTH_METHOD`, see that dependency's
+own docstring). CSRF/Origin enforcement for cookie-authenticated state-changing
 requests happens centrally inside `dnd_ai.api.auth.get_authenticated_user_id`
 itself — nothing route-specific is needed here beyond depending on that
-dependency (directly or via `require_oidc_user_id`), matching this
+dependency (directly or via `require_human_user_id`), matching this
 router's login/logout/session-cookie plumbing to the same "centralize,
 don't rely on every route remembering" shape `require_campaign_capability`'s
 `allow_foundry_system` gate already established.
@@ -66,7 +66,7 @@ from dnd_ai.commands.local_auth import (
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.rate_limit import RateLimiter
 
-from .auth import get_authenticated_user_id, require_oidc_user_id
+from .auth import get_authenticated_user_id, require_human_user_id
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
@@ -173,7 +173,7 @@ def login_endpoint(
 
 @router.post("/auth/logout", status_code=204)
 def logout_endpoint(
-    _principal: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    _principal: Annotated[uuid.UUID, Depends(require_human_user_id)],
     request: Request,
     response: Response,
     connection: Annotated[Connection, Depends(get_connection)],
@@ -213,7 +213,7 @@ def session_bootstrap_endpoint(
     needs it; building that listing here would be new query-layer work
     beyond this workstream's authentication/session scope, and the portal
     itself is explicitly out of scope for this change. Reachable by any
-    human auth method (`require_oidc_user_id`'s accepted set), not only a
+    human auth method (`require_human_user_id`'s accepted set), not only a
     browser session — an OIDC caller hitting this (a non-browser bearer-
     token client checking who it's authenticated as) gets an empty
     `csrf_token` and a `null` `browser_session_id` instead of an error."""
@@ -244,7 +244,7 @@ class ChangePasswordRequest(BaseModel):
 @router.post("/auth/change-password", status_code=204)
 def change_password_endpoint(
     body: ChangePasswordRequest,
-    user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> Response:
     change_password(
@@ -271,7 +271,7 @@ class BrowserSessionSummaryResponse(BaseModel):
 @router.get("/auth/sessions", response_model=list[BrowserSessionSummaryResponse], status_code=200)
 def list_sessions_endpoint(
     principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
-    user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> list[BrowserSessionSummaryResponse]:
     summaries = list_browser_sessions(
@@ -296,7 +296,7 @@ def list_sessions_endpoint(
 @router.delete("/auth/sessions/{browser_session_id}", status_code=204)
 def revoke_session_endpoint(
     browser_session_id: uuid.UUID,
-    user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> Response:
     revoke_browser_session(connection, user_id=user_id, browser_session_id=browser_session_id)
@@ -324,7 +324,7 @@ class CreateAccountResponse(BaseModel):
 @router.post("/admin/accounts", response_model=CreateAccountResponse, status_code=201)
 def create_account_endpoint(
     body: CreateAccountRequest,
-    admin_user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CreateAccountResponse:
     """`_create_local_account_impl` itself checks `admin_user_id` is a
@@ -365,7 +365,7 @@ class IssuePasswordResetResponse(BaseModel):
 def issue_password_reset_endpoint(
     target_user_id: uuid.UUID,
     body: IssuePasswordResetRequest,
-    admin_user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> IssuePasswordResetResponse:
     result = _issue_password_reset_token_impl(

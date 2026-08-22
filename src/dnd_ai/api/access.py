@@ -45,6 +45,24 @@ resolved `AccessContext.principal` in hand — that is a per-request check
 this module cannot perform generically, since which request field carries
 `external_system_id` varies by route.
 
+`allow_foundry_access` (Phase 11R workstream C) is `allow_foundry_system`'s
+sibling gate for `FOUNDRY_ACCESS_AUTH_METHOD` — the paired-device
+credential's runtime principal. It is *simpler* than the world-comparison
+check above, not merely a renamed copy of it: a `security.foundry_
+connections` row is paired for exactly one campaign (never "one world,
+any campaign in it"), so the resolved principal already carries the
+authoritative `campaign_id` itself — this gate compares it directly to
+the route's own path `campaign_id` rather than deriving and comparing a
+world. A mismatch is rejected identically (`NotFoundError`, non-
+disclosing). No route opts into this yet — Phase 11R workstream F
+converts the existing bounded Foundry-adapter surface (`dnd_ai.api.
+integration`, `.character_state`, `.characters`) from `allow_foundry_
+system` to `allow_foundry_access` once paired-device clients exist to
+authenticate that way; both parameters may be `True` together on the same
+route during that transition, since neither excludes the other and a
+route reachable by *either* legacy or paired credentials is exactly the
+forward-compatibility Workstream 11R item 7 describes.
+
 `resolve_party_perspective()` and `resolve_character_view_tier()` below
 are this module's resource-scoped resolvers: not "does this caller have a
 campaign-wide capability" but "is this caller authorized to view fictional
@@ -72,6 +90,7 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands._shared import validate_campaign_party
 from dnd_ai.domain.access import (
+    FOUNDRY_ACCESS_AUTH_METHOD,
     FOUNDRY_SYSTEM_AUTH_METHOD,
     AccessContext,
     AuthenticatedPrincipal,
@@ -86,7 +105,7 @@ from .errors import ForbiddenError, NotFoundError
 
 
 def require_campaign_capability(
-    capability_code: str, *, allow_foundry_system: bool = False
+    capability_code: str, *, allow_foundry_system: bool = False, allow_foundry_access: bool = False
 ) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
@@ -102,18 +121,26 @@ def require_campaign_capability(
     when `True`, additionally binds the authorization to the credential's
     own world — see this module's docstring ("`require_campaign_
     capability`'s `allow_foundry_system` parameter") for the full design
-    and the defect it closes. The returned `AccessContext` always carries
-    the resolved `principal` (`dataclasses.replace`, since `resolve_access_
-    context` itself only ever takes a bare `user_id`) so route code can
-    still recover how the caller authenticated afterward."""
+    and the defect it closes. `allow_foundry_access` (Phase 11R workstream
+    C) is its sibling for `FOUNDRY_ACCESS_AUTH_METHOD` — see this module's
+    docstring ("`allow_foundry_access`") for why its own scope check is a
+    direct `campaign_id` comparison rather than a world lookup. The two are
+    independent: a route may set either, both, or neither. The returned
+    `AccessContext` always carries the resolved `principal` (`dataclasses.
+    replace`, since `resolve_access_context` itself only ever takes a bare
+    `user_id`) so route code can still recover how the caller
+    authenticated afterward."""
 
     def _dependency(
         campaign_id: uuid.UUID,
         principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         connection: Annotated[Connection, Depends(get_connection)],
     ) -> AccessContext:
-        is_foundry = principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
-        if is_foundry and not allow_foundry_system:
+        is_foundry_system = principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        is_foundry_access = principal.auth_method == FOUNDRY_ACCESS_AUTH_METHOD
+        if is_foundry_system and not allow_foundry_system:
+            raise ForbiddenError()
+        if is_foundry_access and not allow_foundry_access:
             raise ForbiddenError()
 
         access = resolve_access_context(
@@ -122,7 +149,15 @@ def require_campaign_capability(
         if access is None:
             raise NotFoundError()
 
-        if is_foundry:
+        if is_foundry_access and campaign_id != principal.campaign_id:
+            # Indistinguishable from "no active membership" — a paired
+            # connection for one campaign must not be able to learn that a
+            # different campaign exists at all. Simpler than the world
+            # lookup below: the principal already carries the exact
+            # campaign it was paired for, so no world derivation is needed.
+            raise NotFoundError()
+
+        if is_foundry_system:
             campaign_world_id = timeline_world_id(connection, access.timeline_id)
             if campaign_world_id != principal.foundry_world_id:
                 # Indistinguishable from "no active membership" — a

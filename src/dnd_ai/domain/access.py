@@ -197,6 +197,17 @@ class AccessContext:
 OIDC_AUTH_METHOD = "oidc"
 FOUNDRY_SYSTEM_AUTH_METHOD = "foundry_system"
 LOCAL_SESSION_AUTH_METHOD = "local_session"
+FOUNDRY_ACCESS_AUTH_METHOD = "foundry_access"
+
+# auth_methods that carry a foundry_external_system_id/foundry_world_id
+# scope — both the legacy shared-secret credential and its Phase 11R
+# paired-device replacement authenticate as one specific Foundry world,
+# never a bare user_id alone. FOUNDRY_ACCESS_AUTH_METHOD additionally
+# carries its own campaign_id (see AuthenticatedPrincipal's docstring) —
+# a narrower, per-connection scope FOUNDRY_SYSTEM_AUTH_METHOD never had.
+_FOUNDRY_SYSTEM_WORLD_AUTH_METHODS = frozenset(
+    {FOUNDRY_SYSTEM_AUTH_METHOD, FOUNDRY_ACCESS_AUTH_METHOD}
+)
 
 
 @dataclass(frozen=True)
@@ -277,7 +288,37 @@ class AuthenticatedPrincipal:
     expires between issuance and use is rejected at resolution time
     (`dnd_ai.commands.local_auth.resolve_local_session_principal`), before
     this dataclass is even constructed, so its mere presence here already
-    means "this specific session was valid as of this request." """
+    means "this specific session was valid as of this request."
+
+    `FOUNDRY_ACCESS_AUTH_METHOD` (Phase 11R workstream C) is the paired-
+    device replacement for `FOUNDRY_SYSTEM_AUTH_METHOD`, resolved by
+    `dnd_ai.domain.foundry_pairing.resolve_foundry_access_principal` from
+    an `Authorization: FoundryAccess <token>` header — see that function's
+    own docstring for the full resolution/revalidation contract. It
+    carries the same `foundry_external_system_id`/`foundry_world_id` pair
+    `FOUNDRY_SYSTEM_AUTH_METHOD` does (both are Foundry-world-scoped
+    credentials), plus three fields that credential never had:
+    `campaign_id` (the *one* campaign this connection was paired for —
+    `security.foundry_connections.campaign_id`, required, non-`None`, and
+    the only field of its kind on any principal type; every other method
+    resolves campaign scope per-request from the URL instead), and
+    `foundry_connection_id`/`foundry_device_id` identifying exactly which
+    paired connection and device authenticated. Where `FOUNDRY_SYSTEM_
+    AUTH_METHOD` could authorize against *any* campaign in its bound
+    world (checked by comparing `foundry_world_id` to the requested
+    campaign's own world — see `dnd_ai.api.access.require_campaign_
+    capability`'s `allow_foundry_system` gate), `FOUNDRY_ACCESS_AUTH_
+    METHOD` is exact-campaign-scoped from the moment it was paired — a
+    strictly narrower authorization surface, enforced by that same
+    function's sibling `allow_foundry_access` gate comparing `campaign_id`
+    directly rather than deriving a world and comparing that. There is no
+    Foundry-device counterpart on this dataclass: a device credential's
+    only valid action (obtaining a fresh access token, docs/PLAN.md §23.5
+    step 6) is handled directly by `dnd_ai.commands.foundry_pairing.
+    exchange_foundry_device_credential`, never through `get_authenticated_
+    user_id`/this dataclass — introducing a principal type with exactly
+    one single-purpose caller would be exactly the kind of speculative
+    abstraction this codebase avoids; see that command's own docstring."""
 
     user_id: uuid.UUID
     auth_method: str
@@ -285,21 +326,27 @@ class AuthenticatedPrincipal:
     foundry_world_id: uuid.UUID | None = None
     foundry_claimed_actor_id: str | None = None
     local_session_id: uuid.UUID | None = None
+    campaign_id: uuid.UUID | None = None
+    foundry_connection_id: uuid.UUID | None = None
+    foundry_device_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
-        is_foundry = self.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        has_system_world_scope = self.auth_method in _FOUNDRY_SYSTEM_WORLD_AUTH_METHODS
         has_foundry_fields = (
             self.foundry_external_system_id is not None and self.foundry_world_id is not None
         )
-        if is_foundry != has_foundry_fields:
+        if has_system_world_scope != has_foundry_fields:
             raise ValueError(
                 "foundry_external_system_id/foundry_world_id must be set if, and only if, "
-                f"auth_method == {FOUNDRY_SYSTEM_AUTH_METHOD!r} "
+                f"auth_method is one of {sorted(_FOUNDRY_SYSTEM_WORLD_AUTH_METHODS)!r} "
                 f"(got auth_method={self.auth_method!r}, "
                 f"foundry_external_system_id={self.foundry_external_system_id!r}, "
                 f"foundry_world_id={self.foundry_world_id!r})"
             )
-        if not is_foundry and self.foundry_claimed_actor_id is not None:
+        if (
+            self.auth_method != FOUNDRY_SYSTEM_AUTH_METHOD
+            and self.foundry_claimed_actor_id is not None
+        ):
             raise ValueError(
                 "foundry_claimed_actor_id must be None unless "
                 f"auth_method == {FOUNDRY_SYSTEM_AUTH_METHOD!r} "
@@ -314,6 +361,24 @@ class AuthenticatedPrincipal:
                 f"auth_method == {LOCAL_SESSION_AUTH_METHOD!r} "
                 f"(got auth_method={self.auth_method!r}, "
                 f"local_session_id={self.local_session_id!r})"
+            )
+        is_foundry_access = self.auth_method == FOUNDRY_ACCESS_AUTH_METHOD
+        has_connection_device = (
+            self.foundry_connection_id is not None and self.foundry_device_id is not None
+        )
+        if is_foundry_access != has_connection_device:
+            raise ValueError(
+                "foundry_connection_id/foundry_device_id must be set if, and only if, "
+                f"auth_method == {FOUNDRY_ACCESS_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, "
+                f"foundry_connection_id={self.foundry_connection_id!r}, "
+                f"foundry_device_id={self.foundry_device_id!r})"
+            )
+        if is_foundry_access != (self.campaign_id is not None):
+            raise ValueError(
+                "campaign_id must be set if, and only if, "
+                f"auth_method == {FOUNDRY_ACCESS_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, campaign_id={self.campaign_id!r})"
             )
 
 
@@ -337,22 +402,27 @@ def assert_foundry_system_matches(
     principal: AuthenticatedPrincipal, external_system_id: uuid.UUID
 ) -> None:
     """Raises `ForeignExternalSystemError` if `principal` authenticated as a
-    Foundry system other than `external_system_id` — a no-op for an OIDC
-    principal (which has no system of its own to compare against) and for
-    a Foundry principal whose own `foundry_external_system_id` already
-    matches. Every adapter-facing route that accepts an `external_system_id`
-    from the request itself (a path parameter or, for `apply_foundry_
-    combat_sync_endpoint`, a body field) must call this once `principal` is
-    known — without it, a valid credential for system A could name system
-    B's `external_system_id` in the request and act as system B merely
-    because both happen to resolve to campaigns the same linked user can
-    reach."""
+    Foundry system other than `external_system_id` — a no-op for an OIDC or
+    local-session principal (neither has a system of its own to compare
+    against) and for a Foundry principal whose own `foundry_external_
+    system_id` already matches. Applies identically to both `FOUNDRY_
+    SYSTEM_AUTH_METHOD` (the legacy shared credential) and `FOUNDRY_
+    ACCESS_AUTH_METHOD` (Phase 11R workstream C's paired-device
+    replacement) — both carry the same `foundry_external_system_id` field,
+    and both are exactly as able to name a foreign system in a request
+    body/path without this check. Every adapter-facing route that accepts
+    an `external_system_id` from the request itself (a path parameter or,
+    for `apply_foundry_combat_sync_endpoint`, a body field) must call this
+    once `principal` is known — without it, a valid credential for system A
+    could name system B's `external_system_id` in the request and act as
+    system B merely because both happen to resolve to campaigns the same
+    linked user can reach."""
     if (
-        principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
+        principal.auth_method in _FOUNDRY_SYSTEM_WORLD_AUTH_METHODS
         and principal.foundry_external_system_id != external_system_id
     ):
         raise ForeignExternalSystemError(
-            f"FoundrySystem credential authenticated as external system "
+            f"{principal.auth_method} credential authenticated as external system "
             f"{principal.foundry_external_system_id}, not {external_system_id}"
         )
 

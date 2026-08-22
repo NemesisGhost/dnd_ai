@@ -314,7 +314,7 @@ def test_a_foundrysystem_credential_cannot_create_a_campaign(
     # dnd_ai.api.campaigns' own module docstring: campaign creation has no
     # campaign_id for require_campaign_capability's own allow_foundry_system
     # gate to scope a Foundry principal's world against, and is not part of
-    # the bounded adapter-facing surface — require_oidc_user_id rejects a
+    # the bounded adapter-facing surface — require_human_user_id rejects a
     # Foundry credential outright, regardless of whether the linked user
     # (f.creator_user_id) otherwise holds a valid bootstrap grant.
     principal = AuthenticatedPrincipal(

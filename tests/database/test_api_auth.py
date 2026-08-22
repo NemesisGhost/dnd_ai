@@ -23,14 +23,22 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.api.access import AccessContext, require_campaign_capability
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import (
     get_authenticated_user_id,
     get_jwks_client,
     get_verified_token_claims,
-    require_oidc_user_id,
+    require_human_user_id,
 )
 from dnd_ai.api.deps import get_connection, get_engine
+from dnd_ai.commands._shared import lookup_id
+from dnd_ai.commands.foundry_pairing import (
+    consume_foundry_pairing_code,
+    create_foundry_pairing_code,
+    revoke_foundry_connection,
+    revoke_foundry_device,
+)
 from dnd_ai.commands.integration import (
     UnlinkedFoundryPrincipalError,
     issue_foundry_system_key,
@@ -38,13 +46,26 @@ from dnd_ai.commands.integration import (
 )
 from dnd_ai.config import settings
 from dnd_ai.domain.access import (
+    FOUNDRY_ACCESS_AUTH_METHOD,
     FOUNDRY_SYSTEM_AUTH_METHOD,
     OIDC_AUTH_METHOD,
     AuthenticatedPrincipal,
     hash_foundry_system_key,
 )
+from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 from dnd_ai.domain.tokens import VerifiedTokenClaims
-from tests.factories import make_external_identity, make_external_system, make_user, make_world
+from tests.factories import (
+    make_campaign,
+    make_campaign_membership,
+    make_external_identity,
+    make_external_system,
+    make_membership_role,
+    make_role,
+    make_role_capability,
+    make_timeline,
+    make_user,
+    make_world,
+)
 from tests.jwt_helpers import RSAKeypair, generate_test_rsa_keypair, make_signed_jwt
 
 pytestmark = pytest.mark.database
@@ -106,23 +127,38 @@ def client_factory(
         principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         _connection: Annotated[Connection, Depends(get_connection)],
     ) -> dict[str, str | None]:
+        def _opt(value: uuid.UUID | None) -> str | None:
+            return str(value) if value is not None else None
+
         return {
             "user_id": str(principal.user_id),
             "auth_method": principal.auth_method,
-            "foundry_external_system_id": (
-                str(principal.foundry_external_system_id)
-                if principal.foundry_external_system_id is not None
-                else None
-            ),
-            "foundry_world_id": (
-                str(principal.foundry_world_id) if principal.foundry_world_id is not None else None
-            ),
+            "foundry_external_system_id": _opt(principal.foundry_external_system_id),
+            "foundry_world_id": _opt(principal.foundry_world_id),
             "foundry_claimed_actor_id": principal.foundry_claimed_actor_id,
+            "campaign_id": _opt(principal.campaign_id),
+            "foundry_connection_id": _opt(principal.foundry_connection_id),
+            "foundry_device_id": _opt(principal.foundry_device_id),
         }
+
+    @app.get("/test-campaigns/{campaign_id}/foundry-access-gate")
+    def _foundry_access_gate(
+        access: Annotated[
+            AccessContext,
+            Depends(require_campaign_capability("canon.edit", allow_foundry_access=True)),
+        ],
+    ) -> dict[str, str]:
+        return {"campaign_id": str(access.campaign_id)}
+
+    @app.get("/test-campaigns/{campaign_id}/foundry-access-not-opted-in")
+    def _foundry_access_not_opted_in(
+        access: Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))],
+    ) -> dict[str, str]:
+        return {"campaign_id": str(access.campaign_id)}
 
     @app.get("/test-oidc-only-user")
     def _oidc_only_user(
-        user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+        user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     ) -> dict[str, str]:
         return {"user_id": str(user_id)}
 
@@ -755,6 +791,9 @@ def test_a_valid_foundrysystem_credential_carries_its_own_system_world_and_claim
         "foundry_external_system_id": str(external_system_id),
         "foundry_world_id": str(world_id),
         "foundry_claimed_actor_id": "gm-foundry-id",
+        "campaign_id": None,
+        "foundry_connection_id": None,
+        "foundry_device_id": None,
     }
 
 
@@ -777,16 +816,19 @@ def test_an_oidc_token_carries_no_foundry_system_world_or_claimed_actor(
         "foundry_external_system_id": None,
         "foundry_world_id": None,
         "foundry_claimed_actor_id": None,
+        "campaign_id": None,
+        "foundry_connection_id": None,
+        "foundry_device_id": None,
     }
 
 
 # ---------------------------------------------------------------------------
-# require_oidc_user_id — rejects a FoundrySystem credential outright
+# require_human_user_id — rejects a FoundrySystem credential outright
 # (dnd_ai.api.campaigns/.campaign_invitations' own routes)
 # ---------------------------------------------------------------------------
 
 
-def test_require_oidc_user_id_rejects_a_foundrysystem_credential(
+def test_require_human_user_id_rejects_a_foundrysystem_credential(
     client_factory: Callable[[], TestClient], postgres_engine: Engine
 ) -> None:
     with postgres_engine.connect() as setup_connection:
@@ -808,7 +850,7 @@ def test_require_oidc_user_id_rejects_a_foundrysystem_credential(
     assert response.status_code == 403
 
 
-def test_require_oidc_user_id_accepts_an_oidc_token(
+def test_require_human_user_id_accepts_an_oidc_token(
     keypair: RSAKeypair, client_factory: Callable[[], TestClient], postgres_engine: Engine
 ) -> None:
     subject = f"subject-{uuid.uuid4().hex[:8]}"
@@ -822,3 +864,222 @@ def test_require_oidc_user_id_accepts_an_oidc_token(
         response = client.get("/test-oidc-only-user", headers=_bearer(token))
     assert response.status_code == 200
     assert response.json() == {"user_id": str(user_id)}
+
+
+# ---------------------------------------------------------------------------
+# FoundryAccess — the paired-device credential (Phase 11R workstream C,
+# docs/PLAN.md §23.5). Mirrors the FoundrySystem section above; the two
+# schemes are accepted side by side (see dnd_ai.api.auth's own docstring
+# for why neither workstream removes the other).
+# ---------------------------------------------------------------------------
+
+
+def _grant_canon_edit(
+    connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Grants user_id a role holding canon.edit in campaign_id — the same
+    pre-seeded capability (migration 080) and make_role/.../make_membership_
+    role setup tests/database/test_api_integration.py's own Foundry-adapter
+    fixture already establishes for the legacy FoundrySystem credential."""
+    membership_id = make_campaign_membership(connection, campaign_id, user_id)
+    role_id = make_role(connection, campaign_id=campaign_id)
+    canon_edit_id = lookup_id(connection, "security", "capabilities", "capability_id", "canon.edit")
+    make_role_capability(connection, role_id, canon_edit_id)
+    make_membership_role(connection, membership_id, role_id)
+
+
+def _bind_foundry_access(
+    postgres_engine: Engine, *, principal_user_name: str = "Paired GM"
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, str]:
+    """Sets up one full pairing: a world, external system, campaign, and a
+    canon.edit-holding membership (see _grant_canon_edit), then issues and
+    consumes a pairing code. Returns (user_id, campaign_id,
+    external_system_id, world_id, raw_access_token)."""
+    with postgres_engine.connect() as setup_connection:
+        world_id = make_world(setup_connection, slug=f"foundry-access-{uuid.uuid4().hex[:8]}")
+        timeline_id = make_timeline(setup_connection, world_id)
+        campaign_id = make_campaign(setup_connection, timeline_id, lifecycle_status_code="pending")
+        external_system_id = make_external_system(setup_connection, world_id)
+        user_id = make_user(setup_connection, principal_user_name)
+        _grant_canon_edit(setup_connection, campaign_id=campaign_id, user_id=user_id)
+        setup_connection.commit()
+
+    issued = create_foundry_pairing_code(
+        postgres_engine,
+        requesting_user_id=user_id,
+        campaign_id=campaign_id,
+        external_system_id=external_system_id,
+        requested_scopes=FOUNDRY_SCOPES,
+    )
+    consumed = consume_foundry_pairing_code(
+        postgres_engine,
+        raw_code=issued.raw_code,
+        foundry_user_id=f"foundry-user-{uuid.uuid4().hex[:8]}",
+        foundry_origin="https://foundry.example.test",
+        device_label="test-device",
+    )
+    return user_id, campaign_id, external_system_id, world_id, consumed.raw_access_token
+
+
+def _foundry_access_headers(raw_access_token: str) -> dict[str, str]:
+    return {"Authorization": f"FoundryAccess {raw_access_token}"}
+
+
+def test_a_valid_foundryaccess_credential_resolves_the_bound_principal_and_scope(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    user_id, campaign_id, external_system_id, world_id, raw_access_token = _bind_foundry_access(
+        postgres_engine
+    )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-principal", headers=_foundry_access_headers(raw_access_token)
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user_id"] == str(user_id)
+    assert body["auth_method"] == FOUNDRY_ACCESS_AUTH_METHOD
+    assert body["foundry_external_system_id"] == str(external_system_id)
+    assert body["foundry_world_id"] == str(world_id)
+    assert body["campaign_id"] == str(campaign_id)
+    assert body["foundry_connection_id"] is not None
+    assert body["foundry_device_id"] is not None
+    assert body["foundry_claimed_actor_id"] is None
+
+
+def test_an_unknown_foundryaccess_token_is_rejected(
+    client_factory: Callable[[], TestClient],
+) -> None:
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user", headers=_foundry_access_headers("not-a-real-token")
+        )
+    assert response.status_code == 401
+
+
+def test_an_empty_foundryaccess_credential_is_rejected(
+    client_factory: Callable[[], TestClient],
+) -> None:
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user", headers={"Authorization": "FoundryAccess "}
+        )
+    assert response.status_code == 401
+
+
+def test_a_revoked_foundryaccess_device_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    user_id, _campaign_id, _system, _world, raw_access_token = _bind_foundry_access(postgres_engine)
+    with client_factory() as client:
+        ok_response = client.get(
+            "/test-authenticated-user", headers=_foundry_access_headers(raw_access_token)
+        )
+    assert ok_response.status_code == 200
+
+    with postgres_engine.begin() as connection:
+        device_id = connection.execute(
+            text(
+                "SELECT fd.foundry_device_id FROM security.foundry_devices fd "
+                "JOIN security.foundry_connections fc "
+                "  ON fc.foundry_connection_id = fd.foundry_connection_id "
+                "WHERE fc.user_id = :user"
+            ),
+            {"user": user_id},
+        ).scalar()
+        revoke_foundry_device(connection, foundry_device_id=device_id, revoked_by_user_id=user_id)
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user", headers=_foundry_access_headers(raw_access_token)
+        )
+    assert response.status_code == 401
+
+
+def test_a_revoked_foundryaccess_connection_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    user_id, _campaign_id, _system, _world, raw_access_token = _bind_foundry_access(postgres_engine)
+    with postgres_engine.begin() as connection:
+        connection_id = connection.execute(
+            text(
+                "SELECT foundry_connection_id FROM security.foundry_connections WHERE user_id = :user"
+            ),
+            {"user": user_id},
+        ).scalar()
+        revoke_foundry_connection(
+            connection, foundry_connection_id=connection_id, revoked_by_user_id=user_id
+        )
+
+    with client_factory() as client:
+        response = client.get(
+            "/test-authenticated-user", headers=_foundry_access_headers(raw_access_token)
+        )
+    assert response.status_code == 401
+
+
+def test_require_human_user_id_rejects_a_foundryaccess_credential(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    _, _, _, _, raw_access_token = _bind_foundry_access(postgres_engine)
+    with client_factory() as client:
+        response = client.get(
+            "/test-oidc-only-user", headers=_foundry_access_headers(raw_access_token)
+        )
+    assert response.status_code == 403
+
+
+def test_foundry_access_gate_rejects_when_not_opted_in(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    _, campaign_id, _, _, raw_access_token = _bind_foundry_access(postgres_engine)
+    with client_factory() as client:
+        response = client.get(
+            f"/test-campaigns/{campaign_id}/foundry-access-not-opted-in",
+            headers=_foundry_access_headers(raw_access_token),
+        )
+    assert response.status_code == 403
+
+
+def test_foundry_access_gate_accepts_its_own_paired_campaign(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    _, campaign_id, _, _, raw_access_token = _bind_foundry_access(postgres_engine)
+    with client_factory() as client:
+        response = client.get(
+            f"/test-campaigns/{campaign_id}/foundry-access-gate",
+            headers=_foundry_access_headers(raw_access_token),
+        )
+    assert response.status_code == 200
+    assert response.json() == {"campaign_id": str(campaign_id)}
+
+
+def test_foundry_access_gate_rejects_a_different_campaign(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    # The bound user also holds canon.edit in the *other* campaign — proving
+    # the exact-campaign_id check itself blocks this, not merely the
+    # ordinary membership/capability check every principal type already
+    # goes through (which would trivially also reject a campaign this user
+    # has no membership in at all).
+    user_id, _own_campaign_id, _, _, raw_access_token = _bind_foundry_access(postgres_engine)
+    with postgres_engine.connect() as setup_connection:
+        other_world_id = make_world(
+            setup_connection, slug=f"foundry-access-other-{uuid.uuid4().hex[:8]}"
+        )
+        other_timeline_id = make_timeline(setup_connection, other_world_id)
+        other_campaign_id = make_campaign(
+            setup_connection, other_timeline_id, lifecycle_status_code="pending"
+        )
+        _grant_canon_edit(setup_connection, campaign_id=other_campaign_id, user_id=user_id)
+        setup_connection.commit()
+
+    with client_factory() as client:
+        response = client.get(
+            f"/test-campaigns/{other_campaign_id}/foundry-access-gate",
+            headers=_foundry_access_headers(raw_access_token),
+        )
+    # Indistinguishable from "no membership" — see dnd_ai.api.access's own
+    # docstring for the non-disclosing reasoning this mirrors.
+    assert response.status_code == 404
