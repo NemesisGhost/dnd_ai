@@ -208,9 +208,7 @@ def upgrade() -> None:
         'dnd_ai.domain.passwords.password_needs_rehash detects a stale parameter set '
         'at verification time. Never the raw password.';
     """)
-    op.execute(
-        "CREATE INDEX ix_local_credentials_user_id ON security.local_credentials (user_id);"
-    )
+    op.execute("CREATE INDEX ix_local_credentials_user_id ON security.local_credentials (user_id);")
 
     # ==========================================================================
     # 3. security.user_activation_tokens
@@ -325,8 +323,7 @@ def upgrade() -> None:
         'consumption time, never re-derives it.';
     """)
     op.execute(
-        "CREATE INDEX ix_password_reset_tokens_user_id "
-        "ON security.password_reset_tokens (user_id);"
+        "CREATE INDEX ix_password_reset_tokens_user_id ON security.password_reset_tokens (user_id);"
     )
     op.execute(
         "CREATE INDEX ix_password_reset_tokens_requested_by_user_id "

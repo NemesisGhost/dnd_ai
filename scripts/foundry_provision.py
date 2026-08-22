@@ -325,7 +325,7 @@ def _run_command(args: argparse.Namespace, ctx: ProvisioningContext) -> int:
                 ctx, external_system_id=args.external_system_id, requested_scopes=args.scopes
             )
             print(
-                "raw_code (shown ONCE - enter it into the Foundry module's \"D&D AI Pairing\" "
+                'raw_code (shown ONCE - enter it into the Foundry module\'s "D&D AI Pairing" '
                 f"settings menu before it expires, it cannot be retrieved again): {raw_code}"
             )
             print(f"scopes: {', '.join(granted_scopes)}")
