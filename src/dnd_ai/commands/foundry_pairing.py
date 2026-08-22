@@ -3,14 +3,22 @@ workstream D): hashed single-use pairing codes, portable Foundry-user
 connections, per-device hash-stored credentials, and short-lived opaque
 access tokens.
 
-Schema-only for now: nothing in this module is wired into `dnd_ai.api.auth.
-get_authenticated_user_id` yet, and `integration.external_systems.
-system_key_hash` (the shared `FoundrySystem` credential) is untouched —
-that wiring, and the `foundry_device`/`foundry_access` principal types on
-`dnd_ai.domain.access.AuthenticatedPrincipal`, are Phase 11R workstream F's
-job (Workstream 11R item 3), kept separate so this workstream's own schema
-and command-layer invariants can be reviewed and tested before any HTTP
-surface depends on them.
+`integration.external_systems.system_key_hash` (the shared legacy
+`FoundrySystem` credential) is untouched by this module — Workstream 11R
+item 7's forward-only transition removes it only once every client has
+repaired. `dnd_ai.domain.access.AuthenticatedPrincipal`'s `FOUNDRY_ACCESS_
+AUTH_METHOD` type and `dnd_ai.api.auth.get_authenticated_user_id`'s
+`Authorization: FoundryAccess <token>` scheme (Phase 11R workstream C) sit
+on top of this module's `exchange_foundry_device_credential` — see `dnd_ai.
+domain.foundry_pairing.resolve_foundry_access_principal` for the read-only
+authentication resolver built on this schema. No HTTP endpoint in this
+codebase calls any command in this module yet, nor has any existing
+bounded adapter route (`dnd_ai.api.integration`, `.character_state`,
+`.characters`) opted into the sibling `allow_foundry_access` authorization
+gate — the management/pairing API surface and the route conversion are
+later Phase 11R workstreams (E and F respectively), kept separate so this
+workstream's own schema and command-layer invariants could be reviewed and
+tested independently first.
 
 Every command here follows the same `_impl(connection, ...)` composable
 + `Engine`-based public-wrapper split `dnd_ai.commands.local_auth` and
@@ -28,10 +36,13 @@ and that user's active campaign membership *every time it is called* —
 none of that is frozen onto the access token it issues, and the token
 itself carries no scope/campaign snapshot of its own (`security.
 foundry_access_tokens` has no such column — see that table's own
-comment). A future access-token-authenticated request (workstream F) must
-apply the identical live-membership check `resolve_access_context` already
-performs for every other principal type, not merely trust that a token
-exists and is unexpired.
+comment). `dnd_ai.domain.foundry_pairing.resolve_foundry_access_principal`
+(Phase 11R workstream C) is deliberately *not* the place that repeats the
+active-campaign-membership check this function performs at issuance —
+`dnd_ai.api.access.require_campaign_capability`'s own `resolve_access_
+context` call already performs the identical live-membership check for
+every principal type uniformly (OIDC, local-session, and Foundry alike),
+once a route actually opts into `allow_foundry_access` (Workstream F).
 
 Ownership vs. capability-gated calls: `revoke_foundry_device`/
 `revoke_foundry_connection` accept an `expected_owner_user_id` parameter —
@@ -51,6 +62,7 @@ situation.
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
@@ -443,8 +455,12 @@ def exchange_foundry_device_credential(
     `Engine`-based public wrapper): this is an authentication check, the
     same "always takes the caller's own connection" shape `dnd_ai.domain.
     access.resolve_foundry_system_principal` uses, not a caller-facing
-    management command — the future workstream F HTTP endpoint calls this
-    directly on its own per-request connection.
+    management command — the Phase 11R workstream E `POST /foundry/token`
+    endpoint calls this directly on its own per-request connection, parsing
+    the `Authorization: FoundryDevice <device_id>.<raw_secret>` header
+    itself rather than going through `get_authenticated_user_id`/
+    `AuthenticatedPrincipal` — see this module's own docstring for why no
+    Foundry-device principal type exists at all.
 
     Returns `None`, uniformly, for every failure mode — unknown device id,
     wrong secret, revoked or expired device, revoked connection, an
@@ -543,13 +559,15 @@ def exchange_foundry_device_credential(
 class ForeignFoundryDeviceError(DomainAuthorizationError):
     """Raised by `revoke_foundry_device()`/`rotate_foundry_device()` when
     `foundry_device_id` does not belong (via its connection) to the caller's
-    own `expected_owner_user_id` — mirrors `dnd_ai.commands.local_auth.
+    own `expected_owner_user_id`, or is not part of the caller's own
+    `expected_campaign_id` — mirrors `dnd_ai.commands.local_auth.
     ForeignBrowserSessionError` exactly."""
 
 
 class ForeignFoundryConnectionError(DomainAuthorizationError):
     """Raised by `revoke_foundry_connection()` when `foundry_connection_id`
-    does not belong to the caller's own `expected_owner_user_id`."""
+    does not belong to the caller's own `expected_owner_user_id`, or is not
+    part of the caller's own `expected_campaign_id`."""
 
 
 def revoke_foundry_device(
@@ -558,6 +576,7 @@ def revoke_foundry_device(
     foundry_device_id: uuid.UUID,
     revoked_by_user_id: uuid.UUID,
     expected_owner_user_id: uuid.UUID | None = None,
+    expected_campaign_id: uuid.UUID | None = None,
 ) -> None:
     """Revoke one device (docs/PLAN.md §23.5: "Users can revoke their own
     devices; authorized GMs can revoke campaign devices"). Leaves the
@@ -565,49 +584,80 @@ def revoke_foundry_device(
     `revoke_foundry_connection` for the broader operation. A no-op for an
     already-revoked or nonexistent device, matching `revoke_browser_
     session`'s identical "already the caller's desired end state" reasoning
-    — except when `expected_owner_user_id` is supplied and the device
-    belongs to a *different* user, which raises `ForeignFoundryDeviceError`
-    rather than silently doing nothing."""
+    — except when `expected_owner_user_id`/`expected_campaign_id` is
+    supplied and the device belongs to a *different* user/campaign, which
+    raises `ForeignFoundryDeviceError` rather than silently doing nothing.
+
+    `expected_owner_user_id` is the self-service case (a user revoking
+    their own device); `expected_campaign_id` is the GM case (`access.
+    manage`-authorized revocation of *any* device in one campaign,
+    regardless of which user it belongs to). The two are never combined by
+    any caller in this codebase, but nothing here forbids supplying both —
+    a device must then satisfy both to be revoked. Without `expected_
+    campaign_id`, a GM authorized only for campaign A could otherwise
+    revoke an arbitrary device belonging to campaign B merely by guessing
+    or observing its id — the identical cross-campaign leak class `dnd_ai.
+    commands._shared.SessionNotInCampaignError`'s own docstring documents
+    for an unrelated resource."""
     params: dict[str, object] = {"device": foundry_device_id, "revoked_by": revoked_by_user_id}
-    owner_clause = ""
+    scope_clause = ""
     if expected_owner_user_id is not None:
-        owner_clause = (
+        scope_clause += (
             " AND foundry_connection_id IN ("
             "SELECT foundry_connection_id FROM security.foundry_connections WHERE user_id = :owner"
             ")"
         )
         params["owner"] = expected_owner_user_id
+    if expected_campaign_id is not None:
+        scope_clause += (
+            " AND foundry_connection_id IN ("
+            "SELECT foundry_connection_id FROM security.foundry_connections "
+            "WHERE campaign_id = :campaign)"
+        )
+        params["campaign"] = expected_campaign_id
 
     result = connection.execute(
         text(f"""
             UPDATE security.foundry_devices
             SET revoked_at = now(), revoked_by_user_id = :revoked_by
-            WHERE foundry_device_id = :device AND revoked_at IS NULL{owner_clause}
+            WHERE foundry_device_id = :device AND revoked_at IS NULL{scope_clause}
         """),
         params,
     )
-    if result.rowcount == 0 and expected_owner_user_id is not None:
+    if result.rowcount == 0 and (
+        expected_owner_user_id is not None or expected_campaign_id is not None
+    ):
         # rowcount == 0 here means either the device doesn't exist, it's
-        # already revoked (both a no-op), or it belongs to someone else
-        # (an error) — this second query distinguishes the last case from
-        # the first two by checking ownership alone, without the earlier
+        # already revoked (both a no-op), or it fails the owner/campaign
+        # scope (an error) — this second query distinguishes the last case
+        # from the first two by checking scope alone, without the earlier
         # UPDATE's own "AND revoked_at IS NULL" narrowing it away: an
-        # already-revoked device owned by expected_owner_user_id must stay
-        # a no-op, not be misreported as foreign merely because it no
-        # longer matched the UPDATE's row-selection predicate.
-        exists_for_other_user = connection.execute(
+        # already-revoked, still-in-scope device must stay a no-op, not be
+        # misreported as foreign merely because it no longer matched the
+        # UPDATE's row-selection predicate.
+        exists_out_of_scope_clauses = []
+        exists_params: dict[str, object] = {"device": foundry_device_id}
+        if expected_owner_user_id is not None:
+            exists_out_of_scope_clauses.append("fc.user_id != :owner")
+            exists_params["owner"] = expected_owner_user_id
+        if expected_campaign_id is not None:
+            exists_out_of_scope_clauses.append("fc.campaign_id != :campaign")
+            exists_params["campaign"] = expected_campaign_id
+        exists_for_other_scope = connection.execute(
             text(
                 "SELECT 1 FROM security.foundry_devices fd "
                 "JOIN security.foundry_connections fc "
                 "  ON fc.foundry_connection_id = fd.foundry_connection_id "
-                "WHERE fd.foundry_device_id = :device AND fc.user_id != :owner"
+                "WHERE fd.foundry_device_id = :device AND ("
+                + " OR ".join(exists_out_of_scope_clauses)
+                + ")"
             ),
-            {"device": foundry_device_id, "owner": expected_owner_user_id},
+            exists_params,
         ).scalar()
-        if exists_for_other_user is not None:
+        if exists_for_other_scope is not None:
             raise ForeignFoundryDeviceError(
-                f"foundry device {foundry_device_id} does not belong to user "
-                f"{expected_owner_user_id}"
+                f"foundry device {foundry_device_id} does not match the expected "
+                f"owner/campaign scope"
             )
 
 
@@ -746,6 +796,7 @@ def revoke_foundry_connection(
     foundry_connection_id: uuid.UUID,
     revoked_by_user_id: uuid.UUID,
     expected_owner_user_id: uuid.UUID | None = None,
+    expected_campaign_id: uuid.UUID | None = None,
 ) -> None:
     """Revoke an entire connection and cascade to every device under it
     (docs/PLAN.md §23.5: "authorized GMs can revoke campaign devices or the
@@ -755,43 +806,56 @@ def revoke_foundry_connection(
     this cascade is defense in depth plus giving the portal's device list an
     accurate per-device revoked state to display, not a correctness
     requirement by itself. A no-op for an already-revoked or nonexistent
-    connection; `ForeignFoundryConnectionError` if `expected_owner_user_id`
-    is supplied and does not match — same shape as `revoke_foundry_
-    device`."""
+    connection; `ForeignFoundryConnectionError` if `expected_owner_user_id`/
+    `expected_campaign_id` is supplied and does not match — same shape (and
+    same GM-cross-campaign-leak rationale) as `revoke_foundry_device`."""
     params: dict[str, object] = {
         "connection": foundry_connection_id,
         "revoked_by": revoked_by_user_id,
     }
-    owner_clause = ""
+    scope_clause = ""
     if expected_owner_user_id is not None:
-        owner_clause = " AND user_id = :owner"
+        scope_clause += " AND user_id = :owner"
         params["owner"] = expected_owner_user_id
+    if expected_campaign_id is not None:
+        scope_clause += " AND campaign_id = :campaign"
+        params["campaign"] = expected_campaign_id
 
     result = connection.execute(
         text(f"""
             UPDATE security.foundry_connections
             SET revoked_at = now(), revoked_by_user_id = :revoked_by
-            WHERE foundry_connection_id = :connection AND revoked_at IS NULL{owner_clause}
+            WHERE foundry_connection_id = :connection AND revoked_at IS NULL{scope_clause}
         """),
         params,
     )
     if result.rowcount == 0:
-        if expected_owner_user_id is not None:
+        if expected_owner_user_id is not None or expected_campaign_id is not None:
             # See revoke_foundry_device's identical comment: this must check
-            # ownership alone, not "does the row exist at all" — an
-            # already-revoked connection owned by expected_owner_user_id is
-            # still a no-op, not a foreign-owner error.
-            exists_for_other_user = connection.execute(
+            # scope alone, not "does the row exist at all" — an already-
+            # revoked, still-in-scope connection is still a no-op, not a
+            # foreign-scope error.
+            exists_out_of_scope_clauses = []
+            exists_params: dict[str, object] = {"connection": foundry_connection_id}
+            if expected_owner_user_id is not None:
+                exists_out_of_scope_clauses.append("user_id != :owner")
+                exists_params["owner"] = expected_owner_user_id
+            if expected_campaign_id is not None:
+                exists_out_of_scope_clauses.append("campaign_id != :campaign")
+                exists_params["campaign"] = expected_campaign_id
+            exists_for_other_scope = connection.execute(
                 text(
                     "SELECT 1 FROM security.foundry_connections "
-                    "WHERE foundry_connection_id = :connection AND user_id != :owner"
+                    "WHERE foundry_connection_id = :connection AND ("
+                    + " OR ".join(exists_out_of_scope_clauses)
+                    + ")"
                 ),
-                {"connection": foundry_connection_id, "owner": expected_owner_user_id},
+                exists_params,
             ).scalar()
-            if exists_for_other_user is not None:
+            if exists_for_other_scope is not None:
                 raise ForeignFoundryConnectionError(
-                    f"foundry connection {foundry_connection_id} does not belong to user "
-                    f"{expected_owner_user_id}"
+                    f"foundry connection {foundry_connection_id} does not match the expected "
+                    f"owner/campaign scope"
                 )
         return
 
@@ -834,6 +898,7 @@ def revoke_all_foundry_connections(connection: Connection, *, user_id: uuid.UUID
 class FoundryDeviceSummary:
     foundry_device_id: uuid.UUID
     foundry_connection_id: uuid.UUID
+    user_id: uuid.UUID
     campaign_id: uuid.UUID
     external_system_id: uuid.UUID
     foundry_user_id: str
@@ -843,6 +908,34 @@ class FoundryDeviceSummary:
     last_used_at: datetime | None
     expires_at: datetime
     is_revoked: bool
+
+
+_FOUNDRY_DEVICE_SUMMARY_SELECT = """
+    SELECT fd.foundry_device_id, fd.foundry_connection_id, fc.user_id, fc.campaign_id,
+           fc.external_system_id, fc.foundry_user_id, fd.device_label,
+           fc.granted_scopes, fd.created_at, fd.last_used_at, fd.expires_at,
+           (fd.revoked_at IS NOT NULL OR fc.revoked_at IS NOT NULL) AS is_revoked
+    FROM security.foundry_devices fd
+    JOIN security.foundry_connections fc
+      ON fc.foundry_connection_id = fd.foundry_connection_id
+"""
+
+
+def _foundry_device_summary(row: Any) -> FoundryDeviceSummary:
+    return FoundryDeviceSummary(
+        foundry_device_id=row["foundry_device_id"],
+        foundry_connection_id=row["foundry_connection_id"],
+        user_id=row["user_id"],
+        campaign_id=row["campaign_id"],
+        external_system_id=row["external_system_id"],
+        foundry_user_id=row["foundry_user_id"],
+        device_label=row["device_label"],
+        granted_scopes=tuple(row["granted_scopes"]),
+        created_at=row["created_at"],
+        last_used_at=row["last_used_at"],
+        expires_at=row["expires_at"],
+        is_revoked=row["is_revoked"],
+    )
 
 
 def list_foundry_devices(
@@ -856,32 +949,32 @@ def list_foundry_devices(
     cascade already keeps these in sync going forward, but this listing
     does not rely on that alone)."""
     rows = connection.execute(
-        text("""
-            SELECT fd.foundry_device_id, fd.foundry_connection_id, fc.campaign_id,
-                   fc.external_system_id, fc.foundry_user_id, fd.device_label,
-                   fc.granted_scopes, fd.created_at, fd.last_used_at, fd.expires_at,
-                   (fd.revoked_at IS NOT NULL OR fc.revoked_at IS NOT NULL) AS is_revoked
-            FROM security.foundry_devices fd
-            JOIN security.foundry_connections fc
-              ON fc.foundry_connection_id = fd.foundry_connection_id
-            WHERE fc.user_id = :user_id
-            ORDER BY fd.created_at DESC
-        """),
+        text(
+            f"{_FOUNDRY_DEVICE_SUMMARY_SELECT} WHERE fc.user_id = :user_id ORDER BY fd.created_at DESC"
+        ),
         {"user_id": user_id},
     ).mappings()
-    return [
-        FoundryDeviceSummary(
-            foundry_device_id=row["foundry_device_id"],
-            foundry_connection_id=row["foundry_connection_id"],
-            campaign_id=row["campaign_id"],
-            external_system_id=row["external_system_id"],
-            foundry_user_id=row["foundry_user_id"],
-            device_label=row["device_label"],
-            granted_scopes=tuple(row["granted_scopes"]),
-            created_at=row["created_at"],
-            last_used_at=row["last_used_at"],
-            expires_at=row["expires_at"],
-            is_revoked=row["is_revoked"],
-        )
-        for row in rows
-    ]
+    return [_foundry_device_summary(row) for row in rows]
+
+
+def list_foundry_devices_for_campaign(
+    connection: Connection, *, campaign_id: uuid.UUID
+) -> list[FoundryDeviceSummary]:
+    """Every device across every connection paired for `campaign_id`,
+    most-recently-created first — the GM-facing counterpart to `list_
+    foundry_devices` (docs/PLAN.md §23.5: "Portal connection management
+    shows... for authorized GMs, campaign connection health"), scoped by
+    campaign rather than by the caller's own `user_id`. The caller
+    authorizing this as a GM action (`access.manage`) is the future API
+    endpoint's responsibility, not this function's — it returns every
+    device in the campaign unconditionally, the same "authorization
+    happens one layer up" split every other command in this module
+    follows."""
+    rows = connection.execute(
+        text(
+            f"{_FOUNDRY_DEVICE_SUMMARY_SELECT} WHERE fc.campaign_id = :campaign_id "
+            "ORDER BY fd.created_at DESC"
+        ),
+        {"campaign_id": campaign_id},
+    ).mappings()
+    return [_foundry_device_summary(row) for row in rows]
