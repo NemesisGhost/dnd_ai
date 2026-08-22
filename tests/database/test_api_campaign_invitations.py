@@ -171,7 +171,7 @@ def test_a_foundrysystem_credential_cannot_accept_an_invitation(
     # dnd_ai.api.campaign_invitations' own module docstring:
     # accept_campaign_invitation_endpoint has no campaign_id to scope a
     # Foundry principal's world against, and is not part of the bounded
-    # adapter-facing surface — require_oidc_user_id rejects a Foundry
+    # adapter-facing surface — require_human_user_id rejects a Foundry
     # credential outright, regardless of whether the linked user
     # (f.fresh_invitee_user_id) otherwise holds a valid token.
     token = _issue_token(postgres_engine, f)

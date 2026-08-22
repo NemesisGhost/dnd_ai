@@ -1,4 +1,4 @@
-import { DndAiApiError } from "./errors.mjs";
+import { sendJsonRequest, stripTrailingSlash } from "./http.mjs";
 
 /** Redacts a headers object for anything that might ever be logged —
  * used defensively even though no call site in this module currently
@@ -7,60 +7,59 @@ import { DndAiApiError } from "./errors.mjs";
 export function redactHeaders(headers) {
   const redacted = { ...headers };
   if (redacted.Authorization) {
-    redacted.Authorization = "FoundrySystem <redacted>";
+    redacted.Authorization = "FoundryAccess <redacted>";
   }
   return redacted;
 }
 
-function stripTrailingSlash(url) {
-  return url.endsWith("/") ? url.slice(0, -1) : url;
-}
-
 /**
- * The one place every HTTP request to the D&D AI platform is built —
- * every route method below funnels through `_request`, so
- * `Authorization`/`X-Foundry-Actor-Id` construction, JSON encoding, and
- * error-envelope parsing happen exactly once, never duplicated per
- * call site. This is also what "preserve the world/system authorization
+ * The one place every ordinary, campaign-scoped HTTP request to the D&D
+ * AI platform is built — every route method below funnels through
+ * `_request`, so `Authorization` construction, JSON encoding, and
+ * error-envelope parsing happen exactly once, never duplicated per call
+ * site. This is also what "preserve the campaign/system authorization
  * protections" means on the client side: nothing here can accidentally
  * omit a header or hit an unscoped path, because there is only one place
  * that builds a request at all. The actual enforcement is, and remains,
- * entirely server-side (`dnd_ai.api.access.require_campaign_capability`,
- * `assert_foundry_system_matches`) — this client cannot weaken or
- * substitute for that; it only has to not accidentally defeat its own
- * purpose by sending the wrong campaign/system.
+ * entirely server-side (`dnd_ai.api.access.require_campaign_capability`'s
+ * `allow_foundry_access` gate, `assert_foundry_system_matches`) — this
+ * client cannot weaken or substitute for that; it only has to not
+ * accidentally defeat its own purpose by sending the wrong campaign/system.
  *
- * `X-Foundry-Actor-Id` (Phase 11 workstream 2's second security
- * correction; previously `X-Foundry-User-Id`) is sent purely as
- * descriptive audit metadata — the server never uses it to decide who is
- * authenticated. Who this client authenticates as is determined entirely
- * server-side, by which platform principal `systemCredential` was bound
- * to when it was issued (`dnd_ai.commands.integration.
- * issue_foundry_system_key`) — changing, omitting, or spoofing this
- * header cannot change that. See `foundry-module/README.md`'s "Trust
- * boundary" section for the full account of the defect this closed.
+ * `Authorization: FoundryAccess <token>` (Phase 11R workstream H) replaces
+ * the legacy `FoundrySystem <externalSystemId>.<systemCredential>` scheme
+ * this client used to send. `getAccessToken` (typically `pairing.mjs`'s
+ * `FoundryAccessTokenCache.getAccessToken`) resolves a fresh, valid token
+ * on every request rather than this client ever holding or caching one
+ * itself — the cache's own in-memory-only contract, and its own refresh-
+ * on-expiry logic, live entirely in `pairing.mjs`. There is no
+ * `X-Foundry-Actor-Id`-equivalent header for this credential type: a
+ * paired connection already names its one Foundry user directly
+ * (`security.foundry_connections.foundry_user_id`), so there is no
+ * claimed-but-unverified actor to record the way the legacy shared
+ * credential needed (see `dnd_ai.domain.access.AuthenticatedPrincipal`'s
+ * own docstring for that credential's now-closed impersonation defect).
  */
 export class DndAiApiClient {
   /**
    * @param {object} deps
-   * @param {() => {apiBaseUrl: string, externalSystemId: string,
-   *   campaignId: string, systemCredential: string}} deps.getSettings
+   * @param {() => string} deps.getApiBaseUrl
+   * @param {() => {campaignId: string, externalSystemId: string}}
+   *   deps.getConnection - the paired connection's own campaign/system,
+   *   from `pairing.mjs`'s `getConnectionMetadata()`.
+   * @param {() => Promise<string>} deps.getAccessToken - resolves a fresh,
+   *   valid opaque access token (never the raw device credential).
    * @param {typeof fetch} [deps.fetchImpl] - injectable for tests.
-   * @param {() => string} deps.getFoundryActorId - returns the current
-   *   Foundry user's own persistent id (`game.user.id` in production),
-   *   sent as untrusted `X-Foundry-Actor-Id` audit metadata only — never
-   *   an identity this client can authenticate as merely by returning a
-   *   different value.
    */
-  constructor({ getSettings, fetchImpl = fetch, getFoundryActorId }) {
-    this._getSettings = getSettings;
+  constructor({ getApiBaseUrl, getConnection, getAccessToken, fetchImpl = fetch }) {
+    this._getApiBaseUrl = getApiBaseUrl;
+    this._getConnection = getConnection;
+    this._getAccessToken = getAccessToken;
     this._fetch = fetchImpl;
-    this._getFoundryActorId = getFoundryActorId;
   }
 
   _buildUrl(path, query) {
-    const { apiBaseUrl } = this._getSettings();
-    const url = new URL(stripTrailingSlash(apiBaseUrl) + path);
+    const url = new URL(stripTrailingSlash(this._getApiBaseUrl()) + path);
     if (query) {
       for (const [key, value] of Object.entries(query)) {
         if (value !== undefined && value !== null) {
@@ -71,12 +70,11 @@ export class DndAiApiClient {
     return url.toString();
   }
 
-  _buildHeaders({ idempotencyKey } = {}) {
-    const { externalSystemId, systemCredential } = this._getSettings();
+  async _buildHeaders({ idempotencyKey } = {}) {
+    const token = await this._getAccessToken();
     const headers = {
       "Content-Type": "application/json",
-      Authorization: `FoundrySystem ${externalSystemId}.${systemCredential}`,
-      "X-Foundry-Actor-Id": this._getFoundryActorId(),
+      Authorization: `FoundryAccess ${token}`,
     };
     if (idempotencyKey) {
       headers["Idempotency-Key"] = idempotencyKey;
@@ -86,54 +84,14 @@ export class DndAiApiClient {
 
   async _request(method, path, { body, idempotencyKey, query } = {}) {
     const url = this._buildUrl(path, query);
-    const headers = this._buildHeaders({ idempotencyKey });
-
-    let response;
-    try {
-      response = await this._fetch(url, {
-        method,
-        headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-    } catch {
-      // fetch() itself throws for a network-level failure (DNS, TLS,
-      // connection refused, ...) before any HTTP response exists at
-      // all — status 0 distinguishes this from a real 5xx, though both
-      // are equally retryable (DndAiApiError's own constructor).
-      throw new DndAiApiError({
-        status: 0,
-        code: "network_error",
-        message: "Could not reach the D&D AI API.",
-      });
-    }
-
-    let payload = null;
-    try {
-      payload = await response.json();
-    } catch {
-      // No body, or a non-JSON body (e.g. a proxy's own HTML error
-      // page) — payload stays null; the branches below already handle
-      // that (envelope fields default to a generic message).
-    }
-
-    if (!response.ok) {
-      const envelope = payload && typeof payload === "object" ? payload.error || {} : {};
-      throw new DndAiApiError({
-        status: response.status,
-        code: envelope.code ?? "unknown_error",
-        message: envelope.message ?? `Request failed with status ${response.status}.`,
-        correlationId: envelope.correlation_id ?? null,
-        errorCodes: envelope.error_codes ?? null,
-      });
-    }
-
-    return payload;
+    const headers = await this._buildHeaders({ idempotencyKey });
+    return sendJsonRequest(this._fetch, url, { method, headers, body });
   }
 
   // -- integration routes ---------------------------------------------
 
   mapExternalIdentifier({ entityId, externalKind, externalId }) {
-    const { campaignId, externalSystemId } = this._getSettings();
+    const { campaignId, externalSystemId } = this._getConnection();
     return this._request(
       "POST",
       `/campaigns/${campaignId}/integration/external-systems/${externalSystemId}/identifiers`,
@@ -142,14 +100,14 @@ export class DndAiApiClient {
   }
 
   applyCombatSync(payload) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request("POST", `/campaigns/${campaignId}/integration/foundry/combat-sync`, {
       body: payload,
     });
   }
 
   getSyncState({ targetEntityId, targetEncounterId }) {
-    const { campaignId, externalSystemId } = this._getSettings();
+    const { campaignId, externalSystemId } = this._getConnection();
     return this._request(
       "GET",
       `/campaigns/${campaignId}/integration/external-systems/${externalSystemId}/sync-state`,
@@ -160,12 +118,12 @@ export class DndAiApiClient {
   // -- character-state routes ------------------------------------------
 
   getCharacter(characterId) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request("GET", `/campaigns/${campaignId}/characters/${characterId}`);
   }
 
   adjustHitPoints(characterId, body, idempotencyKey) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request("POST", `/campaigns/${campaignId}/characters/${characterId}/hit-points`, {
       body,
       idempotencyKey,
@@ -173,7 +131,7 @@ export class DndAiApiClient {
   }
 
   applyCondition(characterId, body, idempotencyKey) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request("POST", `/campaigns/${campaignId}/characters/${characterId}/conditions`, {
       body,
       idempotencyKey,
@@ -181,7 +139,7 @@ export class DndAiApiClient {
   }
 
   removeCondition(characterId, conditionId, body, idempotencyKey) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request(
       "POST",
       `/campaigns/${campaignId}/characters/${characterId}/conditions/${conditionId}/remove`,
@@ -190,7 +148,7 @@ export class DndAiApiClient {
   }
 
   adjustResource(characterId, body, idempotencyKey) {
-    const { campaignId } = this._getSettings();
+    const { campaignId } = this._getConnection();
     return this._request("POST", `/campaigns/${campaignId}/characters/${characterId}/resources`, {
       body,
       idempotencyKey,

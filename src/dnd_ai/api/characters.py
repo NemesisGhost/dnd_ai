@@ -83,6 +83,13 @@ router = APIRouter(tags=["characters"])
 # dnd_ai.api.dungeon requires for its own read endpoint.
 _CHARACTER_VIEW_CAPABILITY = "campaign.view"
 
+# The Foundry scope (dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES) get_
+# character_endpoint requires from a paired-device credential — the
+# "current location or encounter" read this route closes the exit
+# criterion for (see its own comment below), matching FOUNDRY_SCOPES'
+# documented "encounter/current-state reads" bundling.
+_ENCOUNTER_READ_SCOPE = "encounter_read"
+
 # canon.edit also unlocks every item's hidden properties regardless of the
 # holder's own identification state — see this module's docstring.
 _CHARACTER_MANAGE_CAPABILITY = "canon.edit"
@@ -160,17 +167,24 @@ def get_character_endpoint(
     # itself and binds it from the URL path independently, the same way
     # every other capability-gated route's path parameter resolves.
     #
-    # allow_foundry_system=True (Phase 11 workstream 5/2 correction): this
-    # route is what closes the "current location or encounter" exit
-    # criterion for a Foundry adapter (active_encounter_id below) — see
-    # dnd_ai.domain.access.AuthenticatedPrincipal's docstring for why every
-    # route accepting a Foundry credential must opt in explicitly.
-    # get_character_inventory_endpoint below deliberately does not opt in —
-    # it is not part of the bounded adapter-facing surface any Phase 11
-    # workstream built.
+    # allow_foundry_access=True, foundry_scope=encounter_read (Phase 11R
+    # workstream F, scope-enforced by the Workstream 11R High-severity
+    # correction): this route is what closes the "current location or
+    # encounter" exit criterion for a paired Foundry device
+    # (active_encounter_id below). get_character_inventory_endpoint below
+    # deliberately does not opt in — it is not part of the bounded
+    # adapter-facing surface any Phase 11 workstream built. The legacy
+    # FoundrySystem credential is retired (dnd_ai.api.auth) and can never
+    # reach this route at all.
     access: Annotated[
         AccessContext,
-        Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY, allow_foundry_system=True)),
+        Depends(
+            require_campaign_capability(
+                _CHARACTER_VIEW_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_ENCOUNTER_READ_SCOPE,
+            )
+        ),
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterResponse:

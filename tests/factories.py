@@ -12,6 +12,7 @@ exception §32.3 allows. Replace these with command calls once the command layer
 lands, rather than growing them into a parallel write path.
 """
 
+import hashlib
 import json
 import uuid
 from datetime import datetime
@@ -127,6 +128,32 @@ def make_user(
         text("""
             INSERT INTO security.users (display_name, lifecycle_status_id)
             VALUES (:name, :status)
+            RETURNING user_id
+        """),
+        {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_platform_administrator(
+    connection: Connection, display_name: str = "Admin", *, status_code: str = "active"
+) -> uuid.UUID:
+    """A `security.users` row with `is_platform_administrator = true`
+    (revision 099_local_authentication, Phase 11R workstream A) — for
+    tests exercising `dnd_ai.commands.local_auth.create_local_account`/
+    `issue_password_reset_token`, both gated on this flag rather than any
+    campaign-scoped capability. A direct raw insert (this module's own
+    docstring's established "production commands don't exist yet"
+    exception applies loosely here too: `dnd_ai.commands.local_auth.
+    bootstrap_initial_admin` is the real production path, but it only
+    succeeds against a completely empty `security.users` table — never
+    true in this shared session database once any other fixture has run —
+    so ordinary tests need this shortcut instead)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.users (display_name, lifecycle_status_id, is_platform_administrator)
+            VALUES (:name, :status, true)
             RETURNING user_id
         """),
         {"name": display_name, "status": status_id(connection, "lifecycle_statuses", status_code)},
@@ -3197,6 +3224,71 @@ def make_generated_output(
             RETURNING generated_output_id
         """),
         {"request": context_request_id, "provider": provider, "model": model_identifier},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_foundry_connection(
+    connection: Connection,
+    *,
+    user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    external_system_id: uuid.UUID,
+    foundry_user_id: str | None = None,
+    foundry_origin: str = "https://foundry.example.test",
+    granted_scopes: list[str] | None = None,
+) -> uuid.UUID:
+    """A real `security.foundry_connections` row (Phase 11R workstream D) —
+    for tests that need a genuine, FK-satisfying connection rather than
+    going through the full pairing-code create/consume command flow (e.g.
+    `dnd_ai.domain.access.AuthenticatedPrincipal.foundry_connection_id`,
+    which `audit.change_log.acting_foundry_connection_id` — migration 101 —
+    now enforces as a real foreign key)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.foundry_connections
+                (user_id, campaign_id, external_system_id, foundry_user_id, foundry_origin,
+                 granted_scopes)
+            VALUES (:user, :campaign, :system, :foundry_user, :origin, :scopes)
+            RETURNING foundry_connection_id
+        """),
+        {
+            "user": user_id,
+            "campaign": campaign_id,
+            "system": external_system_id,
+            "foundry_user": foundry_user_id or f"foundry-user-{uuid.uuid4().hex[:8]}",
+            "origin": foundry_origin,
+            "scopes": granted_scopes or ["encounter_read"],
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_foundry_device(
+    connection: Connection,
+    foundry_connection_id: uuid.UUID,
+    *,
+    device_label: str = "test-device",
+) -> uuid.UUID:
+    """A real `security.foundry_devices` row (Phase 11R workstream D) — the
+    device-secret_hash value is a syntactically valid (64 hex char),
+    unique-but-unusable placeholder, since these tests need only a real
+    foreign-key target, never to authenticate with the device's own
+    credential."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.foundry_devices
+                (foundry_connection_id, device_label, device_secret_hash, expires_at)
+            VALUES (:connection, :label, :hash, now() + interval '60 days')
+            RETURNING foundry_device_id
+        """),
+        {
+            "connection": foundry_connection_id,
+            "label": device_label,
+            "hash": hashlib.sha256(uuid.uuid4().bytes).hexdigest(),
+        },
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value

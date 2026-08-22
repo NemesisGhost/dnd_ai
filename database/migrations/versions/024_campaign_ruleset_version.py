@@ -179,6 +179,13 @@ def downgrade() -> None:
         )
         WHERE c.ruleset_id IS NULL;
     """)
+    # The UPDATE above fires tr_campaigns_retain_access_manager (added by
+    # revision 080, DEFERRABLE INITIALLY DEFERRED) for any matched rows.
+    # Drain those queued firings now so that the ALTER TABLE statement that
+    # follows does not fail with "cannot ALTER TABLE because it has pending
+    # trigger events" — the same fix applied in revisions 085 and 086 for
+    # the identical problem on security.role_capabilities.
+    op.execute("SET CONSTRAINTS campaign.tr_campaigns_retain_access_manager IMMEDIATE;")
     op.execute("ALTER TABLE campaign.campaigns ALTER COLUMN ruleset_id SET NOT NULL;")
     op.execute("CREATE INDEX ix_campaigns_ruleset_id ON campaign.campaigns (ruleset_id);")
 

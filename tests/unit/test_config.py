@@ -116,6 +116,7 @@ def test_production_with_prefixed_database_url_succeeds(monkeypatch: pytest.Monk
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
     settings = Settings()
     assert settings.environment == "production"
     assert settings.database_url == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
@@ -196,6 +197,7 @@ def test_production_accepts_the_app_read_write_identity(monkeypatch: pytest.Monk
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
     settings = Settings()
     assert settings.database_url == "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
 
@@ -291,6 +293,7 @@ def test_production_with_all_oidc_settings_succeeds(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/.well-known/jwks.json")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
     settings = Settings()
     assert settings.oidc_issuer == "https://idp.example"
     assert settings.oidc_audience == "dnd-ai-api"
@@ -308,6 +311,11 @@ def test_production_with_all_oidc_settings_succeeds(monkeypatch: pytest.MonkeyPa
 _PRODUCTION_ENV = {
     "DND_AI_ENVIRONMENT": "production",
     "DND_AI_DATABASE_URL": "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai",
+    # Required unconditionally in production (Phase 11R workstream B —
+    # local authentication is not behind a feature flag, unlike the
+    # Foundry allowlist below it) — see
+    # _validate_local_session_allowed_origins in dnd_ai/config.py.
+    "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
 }
 
 
@@ -667,6 +675,7 @@ def test_production_succeeds_with_mounted_secret_file(tmp_path: Path) -> None:
             "DND_AI_OIDC_ISSUER": "https://idp.example",
             "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
             "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
         },
         cwd=tmp_path,
     )
@@ -698,6 +707,7 @@ def test_process_environment_selects_production_env_file_is_ignored(tmp_path: Pa
             "DND_AI_OIDC_ISSUER": "https://idp.example",
             "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
             "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
         },
         cwd=tmp_path,
     )
@@ -749,6 +759,7 @@ def test_production_with_real_environment_plus_mounted_secret_is_accepted(
             "DND_AI_OIDC_ISSUER": "https://idp.example",
             "DND_AI_OIDC_AUDIENCE": "dnd-ai-api",
             "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
         },
         cwd=tmp_path,
     )
@@ -885,6 +896,100 @@ def test_foundry_allowed_origins_normalizes_default_port_and_deduplicates(
     )
 
 
+# ---------------------------------------------------------------------------
+# local_session_allowed_origins — the Origin allowlist for CSRF checks on
+# cookie-authenticated state-changing requests (docs/PLAN.md §23.4, Phase
+# 11R workstream B). Unlike foundry_allowed_origins, not gated behind a
+# feature flag (local authentication is the platform's primary auth
+# mechanism) and defaults to the documented dev topology outside
+# production rather than to None.
+# ---------------------------------------------------------------------------
+
+
+def test_local_session_allowed_origins_defaults_to_dev_topology_outside_production() -> None:
+    settings = Settings()
+    assert settings.local_session_allowed_origins == ("http://localhost:5173,http://localhost:8000")
+
+
+def test_production_requires_local_session_allowed_origins_unconditionally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    # No DND_AI_FEATURE_FOUNDRY_INTEGRATION set at all — unlike the Foundry
+    # allowlist, this must still be required.
+    with pytest.raises(ValidationError, match="DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS"):
+        Settings()
+
+
+def test_production_accepts_a_configured_local_session_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    settings = Settings()
+    assert settings.local_session_allowed_origins == "https://world.example.com"
+
+
+def test_a_blank_local_session_allowed_origins_value_is_treated_as_unset_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "")
+    settings = Settings()
+    assert settings.local_session_allowed_origins == "http://localhost:5173,http://localhost:8000"
+
+
+def test_local_session_allowed_origins_rejects_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "*")
+    with pytest.raises(ValidationError, match="wildcard"):
+        Settings()
+
+
+def test_local_session_allowed_origins_rejects_http_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "http://world.example.com")
+    with pytest.raises(ValidationError, match="https"):
+        Settings()
+
+
+def test_local_session_allowed_origins_permits_http_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "http://localhost:9999")
+    settings = Settings()
+    assert settings.local_session_allowed_origins == "http://localhost:9999"
+
+
+def test_local_session_allowed_origins_normalizes_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS",
+        "HTTP://Localhost:5173, http://localhost:5173, http://localhost:8000",
+    )
+    settings = Settings()
+    assert settings.local_session_allowed_origins == ("http://localhost:5173,http://localhost:8000")
+
+
 def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) -> None:
     result = _run_config_import(
         {
@@ -912,6 +1017,7 @@ def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DND_AI_OIDC_ISSUER", "https://idp.example")
     monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
     monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/.well-known/jwks.json")
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
 
 
 def test_ai_provider_defaults_to_real_openai_with_no_key_required_outside_production() -> None:
@@ -1018,6 +1124,7 @@ def test_production_with_local_model_server_and_mounted_secret_file(
             "DND_AI_OIDC_JWKS_URL": "https://idp.example/jwks",
             "DND_AI_FEATURE_AI_NPC_DIALOGUE": "true",
             "DND_AI_SECRETS_DIR": str(secrets_dir),
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
         },
         cwd=tmp_path,
     )
