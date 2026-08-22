@@ -68,7 +68,10 @@ The tree below describes the repository layout. `database/` holds migrations and
 │   ├── scripts/               # native ES modules, no build step
 │   ├── test/                  # node --test
 │   └── packaging/package.mjs      # zips scripts/styles/templates/lang/module.json into dist/
-├── scripts/                   # one-off CI/ops/provisioning scripts (incl. foundry_provision.py)
+├── scripts/                   # one-off CI/ops/provisioning scripts (incl. foundry_provision.py,
+│                              # bootstrap_admin.py — the DB-direct, never-over-HTTP CLI that
+│                              # creates the very first platform administrator, Phase 11R
+│                              # workstream A; run it once against a freshly migrated database)
 ├── database/
 │   ├── alembic.ini
 │   ├── migrations/
@@ -223,8 +226,9 @@ Leaving that rule open is the failure mode to watch for; close it in the same se
 cp .env.example .env
 # edit .env: uncomment POSTGRES_PASSWORD and set a real value, then set
 # MIGRATION_DATABASE_URL, APP_READ_WRITE_PASSWORD, API_DATABASE_URL,
-# API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL, and DATABASE_URL's
-# password segments to match it
+# API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL,
+# API_LOCAL_SESSION_ALLOWED_ORIGINS, and DATABASE_URL's password segments
+# to match it
 ```
 
 There is deliberately **no fallback password or configuration value** anywhere in `compose.yaml` — not even for local development — so nothing in this repository ships a working default credential, and nothing lets the `api` service silently boot with authentication unconfigured (or, per the correction below, running as a database superuser). `docker compose up` fails immediately with a clear message if `POSTGRES_PASSWORD` isn't set, rather than silently starting with a guessable one; `docker compose --profile tools run --rm migrate` and `docker compose up -d api` likewise refuse to run without `MIGRATION_DATABASE_URL`/(`API_DATABASE_URL` and all three `API_OIDC_*` variables) respectively. Settings must be kept in sync by hand — nothing derives one from another:
@@ -233,6 +237,7 @@ There is deliberately **no fallback password or configuration value** anywhere i
 - `MIGRATION_DATABASE_URL` — the complete SQLAlchemy URL the `migrate` service connects with, addressing `db` (the compose service name) over the compose-internal network.
 - `APP_READ_WRITE_PASSWORD`/`API_DATABASE_URL` — `api` connects to PostgreSQL as **`app_read_write`**, the DML-only login role `001_bootstrap` creates (`docs/DATABASE_CONVENTIONS.md` §27.1, ADR 0009) — never `postgres`, `migration_runner`, or `migration_owner`. This is a production security boundary, not an interim convenience: `app_read_write` holds `SELECT`/`INSERT`/`UPDATE`/`DELETE` on application tables only — no schema DDL, no role management, no membership in `migration_owner`, not a superuser, not a schema owner, no `CREATEDB`/`CREATEROLE`/`BYPASSRLS`. `001_bootstrap` creates the role with no password, so it cannot authenticate until you provision one — see "Provisioning the `app_read_write` credential" below — then build `API_DATABASE_URL` from that password yourself, the same percent-encoding rule as `MIGRATION_DATABASE_URL`.
 - `API_OIDC_ISSUER`/`API_OIDC_AUDIENCE`/`API_OIDC_JWKS_URL` — the `api` service's OIDC provider settings, required together with no fallback. `compose.yaml` runs `api` with `DND_AI_ENVIRONMENT=production` unconditionally (a fixed value in `compose.yaml` itself — this file is the self-hosted/production deployment topology, not a "local" convenience default), so `dnd_ai.config.Settings` additionally requires the issuer and JWKS URL to be absolute, credential-free, fragment-free **HTTPS** URLs with a host, and the audience to be non-empty with no leading/trailing whitespace — see `.env.example`'s OIDC section for the full rule and why running the API directly on the host (outside Docker) is different.
+- `API_LOCAL_SESSION_ALLOWED_ORIGINS` (Phase 11R workstream A/B) — required with no fallback, same as `API_OIDC_*` above, but for local username/password login rather than OIDC: the exact-origin allowlist a cookie-authenticated, state-changing request's `Origin` header is checked against (docs/PLAN.md §23.4). Local authentication is not an opt-in feature the way Foundry integration is, so there is no feature flag gating this requirement — see `.env.example`'s "Local authentication" section.
 - `DATABASE_URL` — read by the application/tests running on the host, addressing `localhost` (reachable only via `compose.override.yaml`'s port — see below). This one still authenticates as `postgres` — it is the admin/test connection developers and CI use directly, unrelated to what the containerized `api` service connects as.
 - `API_FEATURE_FOUNDRY_INTEGRATION`/`API_FOUNDRY_ALLOWED_ORIGINS` — optional, with safe (off/empty) defaults if left unset, unlike the settings above. Only needed if this deployment serves the FoundryVTT module from a separate browser origin (`docs/LOCAL_DEPLOYMENT.md`); see `.env.example`'s "Foundry CORS" section for the full rule, including why turning the feature flag on then requires the allowlist too.
 
@@ -263,6 +268,7 @@ Plain `docker compose` commands with no `-f` flags auto-load `compose.override.y
 | `API_OIDC_ISSUER` | *(none — required for `api`)* | The `api` service's OIDC issuer URL — must be absolute HTTPS with a host, no embedded credentials, no fragment (`api` always runs with `DND_AI_ENVIRONMENT=production`) |
 | `API_OIDC_AUDIENCE` | *(none — required for `api`)* | The `api` service's expected token audience — non-empty, no leading/trailing whitespace |
 | `API_OIDC_JWKS_URL` | *(none — required for `api`)* | The `api` service's JWKS endpoint — same HTTPS/host/no-credentials/no-fragment rule as `API_OIDC_ISSUER` |
+| `API_LOCAL_SESSION_ALLOWED_ORIGINS` | *(none — required for `api`)* | The exact-origin allowlist for cookie-authenticated local-session requests (Phase 11R workstream A/B) — HTTPS required, same shape as `API_FOUNDRY_ALLOWED_ORIGINS` below but with no feature flag and no safe unset default |
 | `API_PORT` | `8000` | Host port the API is published on — only takes effect via `compose.override.yaml` (local development); the base topology publishes nothing |
 
 **Running migrations** against the composed database:

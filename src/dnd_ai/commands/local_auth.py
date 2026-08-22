@@ -53,6 +53,7 @@ from dnd_ai.domain.passwords import (
 )
 
 from ._shared import lookup_id
+from .foundry_pairing import revoke_all_foundry_connections
 
 _ACTIVATION_TOKEN_TTL = timedelta(hours=48)
 _PASSWORD_RESET_TOKEN_TTL = timedelta(hours=2)
@@ -864,12 +865,10 @@ def _reset_password_with_token_impl(
     `_create_local_account_impl`'s docstring for the pattern. Consumes
     `raw_reset_token`, setting a new password for the user it names, and —
     when the token's own `revoke_sessions` flag is set — revoking every one
-    of that user's active browser sessions in the same transaction
-    (docs/PLAN.md §23.1's "full sign-out" policy). Foundry device-
-    credential revocation on the same event is Phase 11R workstream D's
-    responsibility once that schema exists; this function's own scope is
-    the browser-session half only, tracked here rather than silently
-    assumed complete."""
+    of that user's active browser sessions *and* Foundry connections
+    (`dnd_ai.commands.foundry_pairing.revoke_all_foundry_connections`,
+    Phase 11R workstream D) in the same transaction (docs/PLAN.md §23.1's
+    "full sign-out" policy)."""
     validate_password_policy(new_raw_password)
     token_hash = hash_opaque_secret(raw_reset_token)
     token_row = (
@@ -910,6 +909,7 @@ def _reset_password_with_token_impl(
     )
     if token_row["revoke_sessions"]:
         revoke_all_browser_sessions(connection, user_id=user_id)
+        revoke_all_foundry_connections(connection, user_id=user_id)
     return ResetPasswordResult(user_id=user_id, sessions_revoked=token_row["revoke_sessions"])
 
 

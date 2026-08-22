@@ -565,10 +565,12 @@ def test_revoke_all_browser_sessions_revokes_every_active_session(
     b = create_browser_session(db_connection, user_id=user_id)
     revoke_all_browser_sessions(db_connection, user_id=user_id)
     assert (
-        resolve_local_session_principal(db_connection, raw_session_token=a.raw_session_token) is None
+        resolve_local_session_principal(db_connection, raw_session_token=a.raw_session_token)
+        is None
     )
     assert (
-        resolve_local_session_principal(db_connection, raw_session_token=b.raw_session_token) is None
+        resolve_local_session_principal(db_connection, raw_session_token=b.raw_session_token)
+        is None
     )
 
 

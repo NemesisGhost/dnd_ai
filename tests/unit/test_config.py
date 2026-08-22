@@ -908,9 +908,7 @@ def test_foundry_allowed_origins_normalizes_default_port_and_deduplicates(
 
 def test_local_session_allowed_origins_defaults_to_dev_topology_outside_production() -> None:
     settings = Settings()
-    assert settings.local_session_allowed_origins == (
-        "http://localhost:5173,http://localhost:8000"
-    )
+    assert settings.local_session_allowed_origins == ("http://localhost:5173,http://localhost:8000")
 
 
 def test_production_requires_local_session_allowed_origins_unconditionally(
@@ -989,9 +987,7 @@ def test_local_session_allowed_origins_normalizes_and_deduplicates(
         "HTTP://Localhost:5173, http://localhost:5173, http://localhost:8000",
     )
     settings = Settings()
-    assert settings.local_session_allowed_origins == (
-        "http://localhost:5173,http://localhost:8000"
-    )
+    assert settings.local_session_allowed_origins == ("http://localhost:5173,http://localhost:8000")
 
 
 def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) -> None:

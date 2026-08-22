@@ -124,6 +124,12 @@ from .encounters import (
     encounter_turns,
     encounters,
 )
+from .foundry_pairing import (
+    foundry_access_tokens,
+    foundry_connections,
+    foundry_devices,
+    foundry_pairing_codes,
+)
 from .integration import (
     delivery_attempts,
     external_identifiers,
@@ -357,6 +363,10 @@ __all__ = [
     "feats",
     "features",
     "expertise_domains",
+    "foundry_access_tokens",
+    "foundry_connections",
+    "foundry_devices",
+    "foundry_pairing_codes",
     "generated_outputs",
     "governments",
     "hazard_state",

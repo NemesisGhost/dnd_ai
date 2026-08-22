@@ -40,14 +40,16 @@ Do not expose Uvicorn or PostgreSQL directly. Route all inbound HTTP/HTTPS throu
 
 - Prefer the same `world` origin for UI and API.
 - FoundryVTT (`https://foundry.<domain>/`) is a genuinely separate browser origin from the API (`https://world.<domain>/api/*`), so its module needs an explicit CORS allowlist (`DND_AI_FOUNDRY_ALLOWED_ORIGINS`/`API_FOUNDRY_ALLOWED_ORIGINS` — see `.env.example`) naming that exact origin; the API never falls back to a wildcard, and unset means no cross-origin browser access at all rather than an open one.
-- Use `Secure`, `HttpOnly` authentication cookies with the narrowest practical `Path`, `Domain`, and `SameSite` scope.
-- Protect every cookie-authenticated state-changing request with a CSRF token and origin checks.
+- Use `Secure`, `HttpOnly` authentication cookies with the narrowest practical `Path`, `Domain`, and `SameSite` scope. Implemented as of Phase 11R workstream A/B: the `__Host-dnd_ai_session` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`).
+- Protect every cookie-authenticated state-changing request with a CSRF token and origin checks. Implemented via `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS`/`API_LOCAL_SESSION_ALLOWED_ORIGINS` (see `.env.example`) — required unconditionally in production, unlike the Foundry allowlist above, since local authentication has no feature flag to gate the requirement behind — plus a double-submit `X-CSRF-Token` header checked against the session's own server-stored value.
 - Enforce authentication and player/GM/observer authorization in FastAPI, including user-to-detail many-to-many access; UI visibility is never authorization.
 - Rate-limit login attempts and costly AI endpoints at the proxy and/or application boundary without trusting client-supplied identity headers.
 - Terminate HTTPS at the proxy, automate certificate issuance and renewal, and alert on renewal failure.
 - Do not log tokens, passwords, secret content, or unauthorized resource details.
 
 ## Operations
+
+After the first `migrate` run against a genuinely empty database, create the first platform administrator with `scripts/bootstrap_admin.py` (DB-direct, never over HTTP, and never exposed as an API endpoint — it fails closed once any `security.users` row already exists) before anyone can create further local accounts or issue activation tokens.
 
 Before production, define CPU and memory limits/reservations so D&D AI workers or AI requests cannot starve FoundryVTT. Monitor container health, restart counts, CPU, memory, database connections, filesystem capacity, backup age, certificate renewal, and No-IP update success. Configure Docker log rotation and disk-space alerts.
 

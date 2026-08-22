@@ -31,7 +31,11 @@ ai.reference_* rules-corpus retrieval tables (4 tables), and
 core.source_documents (1 table) — a same-phase correction pass, since the
 original delivery never added them to this package's own metadata mirror at
 all (caught only once alembic check was actually run against these
-revisions).
+revisions). Revision 099 (Phase 11R workstream A/B) added the security.*
+local-authentication domain (4 tables) plus security.users.
+is_platform_administrator. Revision 100 (Phase 11R workstream D) added a
+new foundry_pairing domain module (4 security.foundry_* tables) for hashed
+pairing codes, per-device credentials, and access tokens.
 """
 
 import importlib
@@ -136,6 +140,12 @@ EXPECTED_TABLES = {
         "narrative.encounter_rounds",
         "narrative.encounter_turns",
         "narrative.encounters",
+    ],
+    "foundry_pairing": [
+        "security.foundry_access_tokens",
+        "security.foundry_connections",
+        "security.foundry_devices",
+        "security.foundry_pairing_codes",
     ],
     "integration": [
         "integration.delivery_attempts",
