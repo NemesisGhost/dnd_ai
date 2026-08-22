@@ -112,13 +112,26 @@ def resolve_foundry_access_principal(
     rotation's bounded overlap window must keep authenticating), revoked
     connection, or an inactive bound user — deliberately without
     distinguishing which, the same fail-closed, non-disclosing contract
-    every other principal resolver in this codebase already establishes."""
+    every other principal resolver in this codebase already establishes.
+
+    Also selects `fc.granted_scopes` and carries it onto the returned
+    principal's own `foundry_scopes` — the High-severity fix for scopes
+    being persisted at pairing time but never actually enforced. Selected
+    fresh on every call, from the connection row itself, never from any
+    snapshot the access token or device might carry — a scope revoked from
+    the connection (e.g. by re-pairing with a narrower `requested_scopes`
+    set, which upserts `granted_scopes` in place) therefore takes effect
+    starting with this credential's very next request, even though the
+    presented access token itself is untouched and still unexpired. This is
+    the same "revalidation, not caching" principle this function's own
+    docstring already establishes for every other field — scope is not
+    special-cased or weakened relative to them."""
     token_hash = hash_opaque_secret(raw_access_token)
     row = (
         connection.execute(
             text("""
                 SELECT fc.user_id, fc.campaign_id, fc.external_system_id, es.world_id,
-                       fc.foundry_connection_id, fd.foundry_device_id
+                       fc.foundry_connection_id, fd.foundry_device_id, fc.granted_scopes
                 FROM security.foundry_access_tokens fat
                 JOIN security.foundry_devices fd ON fd.foundry_device_id = fat.foundry_device_id
                 JOIN security.foundry_connections fc
@@ -150,4 +163,5 @@ def resolve_foundry_access_principal(
         campaign_id=row["campaign_id"],
         foundry_connection_id=row["foundry_connection_id"],
         foundry_device_id=row["foundry_device_id"],
+        foundry_scopes=frozenset(row["granted_scopes"]),
     )

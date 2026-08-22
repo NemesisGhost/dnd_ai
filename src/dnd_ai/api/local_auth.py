@@ -11,7 +11,7 @@ itself — nothing route-specific is needed here beyond depending on that
 dependency (directly or via `require_human_user_id`), matching this
 router's login/logout/session-cookie plumbing to the same "centralize,
 don't rely on every route remembering" shape `require_campaign_capability`'s
-`allow_foundry_system` gate already established.
+`allow_foundry_access` gate already established.
 
 Every write here calls a command's `_..._impl(connection, ...)` composable
 form directly on the request's own `get_connection`-provided transaction —

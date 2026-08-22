@@ -179,6 +179,24 @@ client-side checks:
   the one campaign its connection was paired against
   (`require_campaign_capability`'s `allow_foundry_access` gate) — narrower
   than the legacy credential's world-wide scope.
+- **Per-route scope enforcement.** Every adapter route additionally
+  requires one specific scope from the closed vocabulary the pairing-code
+  request named (`encounter_read`/`sync_status_read`/`combat_sync`/
+  `character_state_sync`/`location_read`) — a connection paired with only
+  `sync_status_read`, for example, cannot call the combat-sync or
+  character-state-sync routes even though it authenticates as a real user
+  with real capabilities in the campaign. The scope check re-reads the
+  connection's *current* `granted_scopes` on every request, never a
+  snapshot taken at pairing time, so narrowing a connection's scopes (by
+  re-pairing with a smaller `requested_scopes` set) takes effect on its
+  very next request even if an already-issued access token has not yet
+  expired.
+- **The legacy `FoundrySystem` credential is rejected outright**, not
+  merely deprioritized — every request bearing that scheme's `Authorization`
+  header is bounced with 401 before any per-route authorization, database
+  lookup, or JWKS resolution is ever reached, regardless of whether the
+  presented credential would have been genuinely valid under the retired
+  design.
 
 Revoke a device (`DELETE /foundry/devices/{id}`, or a GM's `DELETE
 /campaigns/{id}/foundry/devices/{id}`) if you suspect it has been exposed;
@@ -265,21 +283,41 @@ instance available should run this procedure once and record the result in
    external-systems` (register) directly. **Expect:** 403 — the bounded
    adapter-facing route set rejects it regardless of the paired user's own
    capabilities.
-8. **Trust-boundary correction, specific to this pass.** In a second
-   browser profile (a different player's actual client, or Foundry's own
-   "log in as a different user" flow) that has never paired, open the
-   Settings sheet for this module. **Expect:** no device credential is
-   present and the pairing form is shown — a `scope: "client"` setting is
-   never delivered to a browser that didn't set it, unlike the world-scoped
-   setting this replaced.
-9. From a raw HTTP client, attempt `POST /foundry/token` using one paired
-   device's `Authorization: FoundryDevice <id>.<secret>` header but with the
-   device id from a *different* paired device appended instead. **Expect:**
-   401 — the exchange only succeeds for the exact device/secret pair issued
-   together; check `audit.change_log.acting_foundry_device_id` on any
-   resulting write to confirm it is always the device that actually
-   authenticated, never one merely named in a header.
-10. **Transport-security correction, specific to this pass.** With
+8. **Scope enforcement, specific to this pass.** Create a pairing code
+   requesting only `sync_status_read` (omit `combat_sync`/`character_
+   state_sync`), pair a device with it, and attempt to submit a combat
+   turn or non-combat HP change from the "D&D AI Sync" panel. **Expect:**
+   a clear "sync failed" notification (the server rejects with 403) even
+   though the paired user genuinely holds `canon.edit` in the campaign —
+   the connection's own granted scopes are what gate the request, not the
+   user's application capabilities alone. Then re-pair the *same*
+   connection with a code additionally granting `combat_sync`, without
+   restarting the Foundry client or waiting for the existing access token
+   to expire, and retry. **Expect:** the retry succeeds on its very next
+   request — scope is read fresh from the connection on every request,
+   never cached on the token.
+9. **Legacy-credential retirement, specific to this pass.** From a raw
+   HTTP client, send a request to any adapter route using an `Authorization:
+   FoundrySystem <id>.<key>` header — a syntactically well-formed value is
+   enough; no real legacy credential can be issued any more to test with a
+   genuinely valid one (`issue_foundry_system_key_endpoint` no longer
+   exists). **Expect:** 401 on every route, including the three that used
+   to accept this scheme before this correction.
+10. **Trust-boundary correction, specific to this pass.** In a second
+    browser profile (a different player's actual client, or Foundry's own
+    "log in as a different user" flow) that has never paired, open the
+    Settings sheet for this module. **Expect:** no device credential is
+    present and the pairing form is shown — a `scope: "client"` setting is
+    never delivered to a browser that didn't set it, unlike the world-scoped
+    setting this replaced.
+11. From a raw HTTP client, attempt `POST /foundry/token` using one paired
+    device's `Authorization: FoundryDevice <id>.<secret>` header but with the
+    device id from a *different* paired device appended instead. **Expect:**
+    401 — the exchange only succeeds for the exact device/secret pair issued
+    together; check `audit.change_log.acting_foundry_device_id` on any
+    resulting write to confirm it is always the device that actually
+    authenticated, never one merely named in a header.
+12. **Transport-security correction, specific to this pass.** With
     FoundryVTT and the platform API served from two different real origins
     (not `localhost` for either), open this module's pairing form in a real
     browser, pair a device, and submit a sync action from the "D&D AI Sync"
@@ -291,7 +329,7 @@ instance available should run this procedure once and record the result in
     `DND_AI_FOUNDRY_ALLOWED_ORIGINS` and repeat. **Expect:** the browser
     console reports a CORS error and the request never reaches the
     server's own authentication check.
-11. In the pairing form, attempt to save a plain `http://` API base URL
+13. In the pairing form, attempt to save a plain `http://` API base URL
     pointed at the real (non-loopback) deployment host. **Expect:** the
     form rejects it (`DNDAI.Errors.InsecureApiBaseUrl`) without saving or
     submitting the pairing code.

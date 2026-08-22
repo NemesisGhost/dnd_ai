@@ -23,11 +23,18 @@ identity header, combined with a credential Foundry distributes to every
 connected client regardless of `config: false`, could authenticate as any
 linked user merely by naming them. See `AuthenticatedPrincipal`'s and
 `resolve_foundry_system_principal`'s own docstrings for the full account of
-both defects and their fixes, `dnd_ai.api.access.
-require_campaign_capability`'s `allow_foundry_system` gate and world check
-for where the campaign/world scope is enforced per campaign, and
-`assert_foundry_system_matches` for the sibling per-request check a route
-performs when its own path/body names an `external_system_id` directly.
+both defects and their fixes. `FOUNDRY_SYSTEM_AUTH_METHOD` itself is
+retired as of a subsequent Workstream 11R High-severity correction —
+`resolve_foundry_system_principal` is never called from `dnd_ai.api.auth.
+get_authenticated_user_id` any more, so no principal of this type can
+reach `dnd_ai.api.access.require_campaign_capability` from a real request
+(that function's own `allow_foundry_system` gate and world check, which
+used to enforce the campaign/world scope described above, were removed
+along with it — its sibling `allow_foundry_access`/`foundry_scope` gate
+now serves the equivalent role for `FOUNDRY_ACCESS_AUTH_METHOD`).
+`assert_foundry_system_matches` remains, and still handles both auth
+methods uniformly, for the sibling per-request check a route performs
+when its own path/body names an `external_system_id` directly.
 
 Deferred to later Phase 10 workstreams, per §19.7's own step list:
 
@@ -236,11 +243,11 @@ class AuthenticatedPrincipal:
     it. `resolve_access_context`'s campaign-membership/role/capability
     resolution is unaffected by this record's addition — it continues to
     resolve purely from `user_id` — but every caller that authorizes a
-    *Foundry* principal specifically (`dnd_ai.api.access.
-    require_campaign_capability`'s `allow_foundry_system` gate, and this
-    module's own `assert_foundry_system_matches`) now has the fields it
-    needs to bind that authorization to the credential's own system/world,
-    not merely the linked user's overall membership graph.
+    *Foundry* principal specifically (originally `dnd_ai.api.access.
+    require_campaign_capability`'s now-removed `allow_foundry_system` gate,
+    still this module's own `assert_foundry_system_matches`) now has the
+    fields it needs to bind that authorization to the credential's own
+    system/world, not merely the linked user's overall membership graph.
 
     `user_id` is always the resolved `security.users` row — for OIDC, the
     identity itself; for `FOUNDRY_SYSTEM_AUTH_METHOD`, the *one* platform
@@ -297,20 +304,21 @@ class AuthenticatedPrincipal:
     own docstring for the full resolution/revalidation contract. It
     carries the same `foundry_external_system_id`/`foundry_world_id` pair
     `FOUNDRY_SYSTEM_AUTH_METHOD` does (both are Foundry-world-scoped
-    credentials), plus three fields that credential never had:
-    `campaign_id` (the *one* campaign this connection was paired for —
-    `security.foundry_connections.campaign_id`, required, non-`None`, and
-    the only field of its kind on any principal type; every other method
-    resolves campaign scope per-request from the URL instead), and
-    `foundry_connection_id`/`foundry_device_id` identifying exactly which
-    paired connection and device authenticated. Where `FOUNDRY_SYSTEM_
-    AUTH_METHOD` could authorize against *any* campaign in its bound
-    world (checked by comparing `foundry_world_id` to the requested
-    campaign's own world — see `dnd_ai.api.access.require_campaign_
-    capability`'s `allow_foundry_system` gate), `FOUNDRY_ACCESS_AUTH_
+    credentials), plus fields that credential never had: `campaign_id`
+    (the *one* campaign this connection was paired for — `security.
+    foundry_connections.campaign_id`, required, non-`None`, and the only
+    field of its kind on any principal type; every other method resolves
+    campaign scope per-request from the URL instead), `foundry_connection_
+    id`/`foundry_device_id` identifying exactly which paired connection and
+    device authenticated, and `foundry_scopes` (below) naming what that
+    connection may actually do. Where `FOUNDRY_SYSTEM_AUTH_METHOD` could
+    authorize against *any* campaign in its bound world (checked by
+    comparing `foundry_world_id` to the requested campaign's own world —
+    a check `dnd_ai.api.access.require_campaign_capability`'s now-removed
+    `allow_foundry_system` gate used to perform), `FOUNDRY_ACCESS_AUTH_
     METHOD` is exact-campaign-scoped from the moment it was paired — a
     strictly narrower authorization surface, enforced by that same
-    function's sibling `allow_foundry_access` gate comparing `campaign_id`
+    function's `allow_foundry_access` gate comparing `campaign_id`
     directly rather than deriving a world and comparing that. There is no
     Foundry-device counterpart on this dataclass: a device credential's
     only valid action (obtaining a fresh access token, docs/PLAN.md §23.5
@@ -318,7 +326,29 @@ class AuthenticatedPrincipal:
     exchange_foundry_device_credential`, never through `get_authenticated_
     user_id`/this dataclass — introducing a principal type with exactly
     one single-purpose caller would be exactly the kind of speculative
-    abstraction this codebase avoids; see that command's own docstring."""
+    abstraction this codebase avoids; see that command's own docstring.
+
+    `foundry_scopes` (High-severity finding: Foundry scopes were persisted
+    on `security.foundry_connections.granted_scopes` but never read back
+    onto the principal, so `dnd_ai.api.access.require_campaign_capability`
+    had no way to enforce them — every `allow_foundry_access=True` route
+    was reachable by any paired connection regardless of what scopes it was
+    actually granted at pairing time) is populated if, and only if,
+    `auth_method == FOUNDRY_ACCESS_AUTH_METHOD`, enforced by `__post_init__`
+    exactly like the `campaign_id`/`foundry_connection_id`/`foundry_
+    device_id` trio above — deliberately narrower than that trio's shared
+    `_FOUNDRY_SYSTEM_WORLD_AUTH_METHODS` gate: a `FOUNDRY_SYSTEM_AUTH_
+    METHOD` principal must never carry a scope set, so the legacy credential
+    can never accidentally acquire scope-gated behavior merely by this
+    field existing on the same dataclass. A frozenset, matching `role_
+    capabilities`' own immutability — nothing downstream may mutate a
+    resolved principal's own authorization. `dnd_ai.domain.foundry_pairing.
+    resolve_foundry_access_principal` populates this from the connection's
+    *current* `granted_scopes` on every single call (never cached, never
+    frozen onto the access-token row itself) — see that function's own
+    docstring for why this means revoking a scope from a connection takes
+    effect on the very next request, even one presenting an access token
+    that has not itself expired."""
 
     user_id: uuid.UUID
     auth_method: str
@@ -329,6 +359,7 @@ class AuthenticatedPrincipal:
     campaign_id: uuid.UUID | None = None
     foundry_connection_id: uuid.UUID | None = None
     foundry_device_id: uuid.UUID | None = None
+    foundry_scopes: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         has_system_world_scope = self.auth_method in _FOUNDRY_SYSTEM_WORLD_AUTH_METHODS
@@ -379,6 +410,19 @@ class AuthenticatedPrincipal:
                 "campaign_id must be set if, and only if, "
                 f"auth_method == {FOUNDRY_ACCESS_AUTH_METHOD!r} "
                 f"(got auth_method={self.auth_method!r}, campaign_id={self.campaign_id!r})"
+            )
+        if is_foundry_access != (self.foundry_scopes is not None):
+            raise ValueError(
+                "foundry_scopes must be set if, and only if, "
+                f"auth_method == {FOUNDRY_ACCESS_AUTH_METHOD!r} "
+                f"(got auth_method={self.auth_method!r}, foundry_scopes={self.foundry_scopes!r}) "
+                "— a FOUNDRY_SYSTEM_AUTH_METHOD principal must never carry a scope set, so the "
+                "legacy credential can never acquire scope-gated behavior by accident"
+            )
+        if is_foundry_access and not self.foundry_scopes:
+            raise ValueError(
+                "foundry_scopes must be non-empty for a FOUNDRY_ACCESS_AUTH_METHOD principal "
+                f"(got foundry_scopes={self.foundry_scopes!r})"
             )
 
 

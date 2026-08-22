@@ -16,52 +16,63 @@ exist" from "you have no access to it"), while an authenticated member who
 simply lacks the required capability — membership itself is already not in
 question — gets `ForbiddenError`.
 
-`require_campaign_capability`'s `allow_foundry_system` parameter (Phase 11
-workstream 2 correction) is a fail-closed gate on top of the ordinary
-membership/capability check: by default (`allow_foundry_system=False`,
-every route built before this correction and every route with no reason
-to accept adapter-delegated traffic), a request authenticated via a
-`FoundrySystem` credential (`dnd_ai.api.auth.get_authenticated_user_id`'s
-Foundry branch) is rejected with `ForbiddenError` before `resolve_access_
-context` ever runs — reachability through `get_authenticated_user_id` is
-not the same thing as authorization here. A route that *is* part of the
-bounded Foundry-adapter surface passes `allow_foundry_system=True`
-explicitly (see `dnd_ai.api.integration`, `.character_state`, and the one
-read route in `.characters` for the current, deliberately narrow set) and
-additionally gets a second check this module performs on its behalf: the
-resolved campaign's own world (via `dnd_ai.api._shared.timeline_world_id`)
-must equal the authenticated principal's own `foundry_world_id`, or the
-request is rejected exactly like a missing membership (`NotFoundError` —
-non-disclosing, the same reasoning already documented below for a bare
-membership). Without this, a valid credential for one Foundry world could
-authorize against *any* campaign the same linked platform user happens to
-hold membership in, including ones in a completely different world — see
-`dnd_ai.domain.access.AuthenticatedPrincipal`'s own docstring for the full
-defect this closes. A route whose own path or body additionally names an
-`external_system_id` (`map_external_identifier_endpoint`, `sync_state_
-endpoint`, `apply_foundry_combat_sync_endpoint`) must also call
-`dnd_ai.domain.access.assert_foundry_system_matches` once it has the
-resolved `AccessContext.principal` in hand — that is a per-request check
-this module cannot perform generically, since which request field carries
-`external_system_id` varies by route.
+`FOUNDRY_SYSTEM_AUTH_METHOD` (the legacy shared credential) is rejected
+outright at the authentication boundary as of the Workstream 11R High-
+severity correction below (`dnd_ai.api.auth.get_authenticated_user_id`
+never resolves a principal for the `FoundrySystem` scheme any more) — no
+principal of this `auth_method` can reach this module at all in practice.
+This module carries no `allow_foundry_system` gate of its own any more
+either (removed, not merely defaulted off, per the same correction): the
+world-comparison check that gate used to additionally perform for an
+opted-in route is retired along with it. `dnd_ai.domain.access.
+FOUNDRY_SYSTEM_AUTH_METHOD`/`resolve_foundry_system_principal`/`hash_
+foundry_system_key` remain defined in the domain layer (deliberately not
+deleted, matching the historical schema columns they read — see the
+Workstream 11R Finding-2 verification record for the full account of why
+this legacy path is retired rather than kept operable behind a
+compatibility window), but nothing in this API layer ever calls them.
 
-`allow_foundry_access` (Phase 11R workstream C) is `allow_foundry_system`'s
-sibling gate for `FOUNDRY_ACCESS_AUTH_METHOD` — the paired-device
-credential's runtime principal. It is *simpler* than the world-comparison
-check above, not merely a renamed copy of it: a `security.foundry_
-connections` row is paired for exactly one campaign (never "one world,
-any campaign in it"), so the resolved principal already carries the
-authoritative `campaign_id` itself — this gate compares it directly to
-the route's own path `campaign_id` rather than deriving and comparing a
-world. A mismatch is rejected identically (`NotFoundError`, non-
-disclosing). No route opts into this yet — Phase 11R workstream F
-converts the existing bounded Foundry-adapter surface (`dnd_ai.api.
-integration`, `.character_state`, `.characters`) from `allow_foundry_
-system` to `allow_foundry_access` once paired-device clients exist to
-authenticate that way; both parameters may be `True` together on the same
-route during that transition, since neither excludes the other and a
-route reachable by *either* legacy or paired credentials is exactly the
-forward-compatibility Workstream 11R item 7 describes.
+`allow_foundry_access` (Phase 11R workstream C) gates `FOUNDRY_ACCESS_
+AUTH_METHOD` — the paired-device credential's runtime principal, and,
+after `FOUNDRY_SYSTEM_AUTH_METHOD`'s retirement, the *only* Foundry-
+adapter credential this module recognizes at all. A `security.foundry_
+connections` row is paired for exactly one campaign (never "one world, any
+campaign in it"), so the resolved principal already carries the
+authoritative `campaign_id` itself — this gate compares it directly to the
+route's own path `campaign_id` rather than deriving and comparing a world.
+A mismatch is rejected identically (`NotFoundError`, non-disclosing). A
+route whose own path or body additionally names an `external_system_id`
+(`map_external_identifier_endpoint`, `sync_state_endpoint`, `apply_
+foundry_combat_sync_endpoint`) must also call `dnd_ai.domain.access.
+assert_foundry_system_matches` once it has the resolved `AccessContext.
+principal` in hand — that is a per-request check this module cannot
+perform generically, since which request field carries `external_system_
+id` varies by route; the function itself still handles both Foundry
+auth methods uniformly, even though only one is reachable in practice now.
+
+`foundry_scope` (Workstream 11R High-severity finding: Foundry scopes were
+persisted on `granted_scopes` at pairing time but never enforced — every
+`allow_foundry_access=True` route was reachable by any paired connection
+regardless of what scopes it actually held) is `allow_foundry_access`'s
+required companion: a route that sets `allow_foundry_access=True` must
+also name exactly one scope from `dnd_ai.domain.foundry_pairing.
+FOUNDRY_SCOPES` — enforced by a `ValueError` raised the moment `require_
+campaign_capability(...)` itself is called (at module-import/route-
+registration time, not per-request), so a route added with `allow_foundry_
+access=True` and no `foundry_scope` fails the application's own startup
+rather than silently granting unscoped access the first time a Foundry
+request happens to hit it. Symmetrically, supplying `foundry_scope`
+without `allow_foundry_access=True`, or naming a scope outside the closed
+`FOUNDRY_SCOPES` vocabulary, is also a startup-time `ValueError` — there is
+no code path where a scope declaration can exist without being both valid
+and actually enforced. At request time, a `FOUNDRY_ACCESS_AUTH_METHOD`
+principal whose own `foundry_scopes` (resolved fresh on every request by
+`dnd_ai.domain.foundry_pairing.resolve_foundry_access_principal` — never
+cached) does not contain the route's declared `foundry_scope` is rejected
+with the identical `ForbiddenError` an insufficient application capability
+already produces below — scope is an *additional* restriction layered on
+top of the ordinary campaign-capability check, never a substitute for it;
+both must pass.
 
 `resolve_party_perspective()` and `resolve_character_view_tier()` below
 are this module's resource-scoped resolvers: not "does this caller have a
@@ -91,21 +102,23 @@ from sqlalchemy import Connection, text
 from dnd_ai.commands._shared import validate_campaign_party
 from dnd_ai.domain.access import (
     FOUNDRY_ACCESS_AUTH_METHOD,
-    FOUNDRY_SYSTEM_AUTH_METHOD,
     AccessContext,
     AuthenticatedPrincipal,
     resolve_access_context,
 )
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 
-from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
 
 
 def require_campaign_capability(
-    capability_code: str, *, allow_foundry_system: bool = False, allow_foundry_access: bool = False
+    capability_code: str,
+    *,
+    allow_foundry_access: bool = False,
+    foundry_scope: str | None = None,
 ) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
@@ -116,30 +129,45 @@ def require_campaign_capability(
     scope rule; no route built on this dependency accepts a `timeline_id`
     from the request.
 
-    `allow_foundry_system` (default `False`, fail-closed) gates whether a
-    `FoundrySystem`-authenticated request may use this route at all, and,
-    when `True`, additionally binds the authorization to the credential's
-    own world — see this module's docstring ("`require_campaign_
-    capability`'s `allow_foundry_system` parameter") for the full design
-    and the defect it closes. `allow_foundry_access` (Phase 11R workstream
-    C) is its sibling for `FOUNDRY_ACCESS_AUTH_METHOD` — see this module's
-    docstring ("`allow_foundry_access`") for why its own scope check is a
-    direct `campaign_id` comparison rather than a world lookup. The two are
-    independent: a route may set either, both, or neither. The returned
+    `allow_foundry_access` (Phase 11R workstream C) gates whether a
+    `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated request may use this route at
+    all, and, when `True`, additionally binds the authorization to the
+    credential's own paired campaign — see this module's docstring
+    ("`allow_foundry_access`") for the full design. `foundry_scope`
+    (Workstream 11R High-severity finding) is required whenever
+    `allow_foundry_access=True` — raises `ValueError` immediately, at call
+    time, otherwise (see this module's docstring, "`foundry_scope`", for
+    why this is a startup-time failure rather than a per-request one) — and
+    must name a value from `dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES`;
+    supplying it without `allow_foundry_access=True` is equally a
+    `ValueError`, since a scope declaration with nothing to scope is as
+    much a configuration mistake as a missing one. The returned
     `AccessContext` always carries the resolved `principal` (`dataclasses.
     replace`, since `resolve_access_context` itself only ever takes a bare
     `user_id`) so route code can still recover how the caller
     authenticated afterward."""
+    if allow_foundry_access and foundry_scope is None:
+        raise ValueError(
+            "require_campaign_capability(allow_foundry_access=True) requires foundry_scope "
+            "to be set — see dnd_ai.api.access's own docstring ('foundry_scope')"
+        )
+    if foundry_scope is not None and not allow_foundry_access:
+        raise ValueError(
+            f"foundry_scope={foundry_scope!r} was supplied without allow_foundry_access=True — "
+            "a scope declaration with nothing to scope is a configuration mistake"
+        )
+    if foundry_scope is not None and foundry_scope not in FOUNDRY_SCOPES:
+        raise ValueError(
+            f"foundry_scope={foundry_scope!r} is not in the closed FOUNDRY_SCOPES vocabulary "
+            f"{sorted(FOUNDRY_SCOPES)!r}"
+        )
 
     def _dependency(
         campaign_id: uuid.UUID,
         principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         connection: Annotated[Connection, Depends(get_connection)],
     ) -> AccessContext:
-        is_foundry_system = principal.auth_method == FOUNDRY_SYSTEM_AUTH_METHOD
         is_foundry_access = principal.auth_method == FOUNDRY_ACCESS_AUTH_METHOD
-        if is_foundry_system and not allow_foundry_system:
-            raise ForbiddenError()
         if is_foundry_access and not allow_foundry_access:
             raise ForbiddenError()
 
@@ -152,25 +180,27 @@ def require_campaign_capability(
         if is_foundry_access and campaign_id != principal.campaign_id:
             # Indistinguishable from "no active membership" — a paired
             # connection for one campaign must not be able to learn that a
-            # different campaign exists at all. Simpler than the world
-            # lookup below: the principal already carries the exact
-            # campaign it was paired for, so no world derivation is needed.
+            # different campaign exists at all. Simpler than a world
+            # lookup: the principal already carries the exact campaign it
+            # was paired for, so no world derivation is needed.
             raise NotFoundError()
 
-        if is_foundry_system:
-            campaign_world_id = timeline_world_id(connection, access.timeline_id)
-            if campaign_world_id != principal.foundry_world_id:
-                # Indistinguishable from "no active membership" — a
-                # FoundrySystem credential for a different world must not be
-                # able to learn that this campaign exists at all, any more
-                # than a non-member OIDC caller can. See this module's
-                # docstring for the full reasoning.
-                raise NotFoundError()
+        if is_foundry_access:
+            assert foundry_scope is not None  # guaranteed by the call-time validation above
+            assert principal.foundry_scopes is not None  # guaranteed by AuthenticatedPrincipal
+            if foundry_scope not in principal.foundry_scopes:
+                # Same fixed, non-disclosing ForbiddenError an insufficient
+                # application capability produces below — insufficient
+                # scope and insufficient capability are indistinguishable
+                # to the caller, exactly as intended.
+                raise ForbiddenError()
 
         if not access.has_capability(capability_code):
             raise ForbiddenError()
         return dataclasses.replace(access, principal=principal)
 
+    _dependency.allow_foundry_access = allow_foundry_access  # type: ignore[attr-defined]
+    _dependency.foundry_scope = foundry_scope  # type: ignore[attr-defined]
     return _dependency
 
 

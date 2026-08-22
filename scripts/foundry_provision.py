@@ -27,13 +27,16 @@ long-lived secret for this CLI to ever hold or print.
 The superseded `FoundrySystem` shared-credential subcommands
 (`issue-key`/`link-identity`/`provision`) that used to live here are
 removed, not merely deprecated — Workstream 11R item 6 requires the retained
-CLI to "not... issue the superseded credential." A deployment still
-operating a pre-Workstream-11R `FoundrySystem` integration administers it,
-for the remainder of its short compatibility window, with a direct
-authenticated call against `dnd_ai.api.integration`'s existing
-`issue_foundry_system_key`/`link_foundry_identity` endpoints (unchanged by
-this workstream) rather than through this script — see "Legacy transition"
-below.
+CLI to "not... issue the superseded credential." As of a subsequent
+Workstream 11R High-severity correction, this is now moot for a different
+reason too: `issue_foundry_system_key_endpoint` itself no longer exists
+(see `dnd_ai.api.integration`'s own docstring, "Legacy FoundrySystem key
+issuance retired"), and the `FoundrySystem` scheme is rejected
+unconditionally at the authentication boundary (`dnd_ai.api.auth`) — there
+is no remaining way to issue or use this credential at all, through this
+script or otherwise. See "Legacy transition" below for what that
+correction actually did, in place of the phased rollout this docstring
+originally described prospectively.
 
 Usage:
   uv run python scripts/foundry_provision.py register \\
@@ -63,35 +66,42 @@ warning.
 
 ## Legacy transition
 
-For a deployment still using the superseded `FoundrySystem` shared
-credential, move it to per-device pairing without downtime, in this order
-(docs/PLAN.md Workstream 11R item 7):
+This docstring originally described a four-step, deploy-then-pair-then-
+revoke-then-remove rollout plan (docs/PLAN.md Workstream 11R item 7),
+under the assumption that some deployment might still depend on the
+`FoundrySystem` scheme during a compatibility window. A subsequent review
+found no evidence of any real deployed client still depending on it — the
+sole first-party client, `foundry-module/`, was already fully converted to
+per-device pairing by Workstream 11R workstream H before this review — so
+step 4 (removal) was applied immediately instead of being deferred behind
+a window nothing needed:
 
-1. **Deploy** the Phase 11R-updated `foundry-module/` (minimum FoundryVTT
-   13) to every client that will need it, alongside the backend's Phase 11R
-   migrations — the backend accepts both `FoundrySystem` and `FoundryAccess`
-   credentials simultaneously throughout this transition
-   (`allow_foundry_system`/`allow_foundry_access` on every affected route),
-   so nothing breaks mid-rollout.
-2. **Pair** every user who needs Foundry access: `register` (if the world
-   isn't already registered) + `pairing-code` per user, then each user
-   redeems their own code from inside the Foundry module. Multiple devices
-   per user just means running `pairing-code` again and pairing again.
-3. **Revoke** the old `FoundrySystem` credential once every client that used
-   it has successfully paired and the sync panel is confirmed working end to
-   end from the new credential — the deployment operator retires it by no
-   longer configuring any client with it (rotating it via a direct API call
-   is not itself a revocation; see the module docstring above for why this
-   script no longer offers that call at all).
-4. **Remove** the backend's `FoundrySystem` verification path
-   (`allow_foundry_system`, `resolve_foundry_system_principal`, and the
-   `integration.issue_foundry_system_key`/`.link_foundry_identity` endpoints)
-   in a future phase once every deployment has completed step 3 — not yet
-   done here, since CLAUDE.md rule 2 requires every AI-suggested world
-   change to go through validation, and removing a still-relied-upon
-   authentication path is exactly the kind of forward-only, no-silent-
-   breakage decision this repository's Phase 11R boundaries leave to an
-   explicit follow-up rather than making it unilaterally now.
+1. `get_authenticated_user_id` (`dnd_ai.api.auth`) now rejects the
+   `FoundrySystem` scheme keyword unconditionally, before any database
+   lookup — no principal is ever resolved for it, regardless of whether the
+   presented credential would have been genuinely valid under the retired
+   design.
+2. `require_campaign_capability`'s `allow_foundry_system` parameter, and
+   every route's `allow_foundry_system=True` argument, are removed
+   entirely (not merely defaulted off).
+3. `issue_foundry_system_key_endpoint` is removed from `dnd_ai.api.
+   integration` — there is no HTTP route left that issues this credential.
+4. Migration `102_revoke_foundry_system_keys` cleared `system_key_hash`/
+   `system_key_principal_user_id` to `NULL` for every existing `integration.
+   external_systems` row, revoking every already-issued legacy key at the
+   data level — defense in depth, independent of the code-level rejection
+   above.
+
+`resolve_foundry_system_principal`/`hash_foundry_system_key`/
+`issue_foundry_system_key`/`link_foundry_identity` and the schema columns
+they read remain defined (expand-and-contract: no schema change, no
+command deletion — a deployment that genuinely still needs to administer a
+pre-existing registration's identity mappings can still call `link_
+foundry_identity_endpoint` directly), but nothing reaches the credential-
+issuance path any more. If a future deployment genuinely needs a
+compatibility window this decision didn't anticipate, that is a new,
+explicit, separately-justified change — not a reason to treat this
+retirement as provisional.
 """
 
 from __future__ import annotations

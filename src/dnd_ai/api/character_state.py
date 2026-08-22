@@ -15,27 +15,21 @@ scope once a caller actually needs it — the same "don't invent it
 speculatively" deferral `dnd_ai.api.movement`'s own docstring already
 states for its identical first cut.
 
-All four routes pass `allow_foundry_system=True` to `require_campaign_
-capability` (Phase 11 workstream 2 correction) — this module is squarely
-the "synchronize non-combat HP/condition/resource state" surface a Foundry
-adapter exists to drive, and none of the four names an `external_system_id`
-of its own for `dnd_ai.domain.access.assert_foundry_system_matches` to
-check (contrast `dnd_ai.api.integration`), so `require_campaign_
-capability`'s own world-binding check is the only additional gate a
-Foundry principal needs here. See `dnd_ai.domain.access.
-AuthenticatedPrincipal`'s docstring for the defect this correction closes
-and why every route accepting a Foundry credential must opt in
-explicitly rather than being reachable by default.
-
-All four also now pass `allow_foundry_access=True` (Phase 11R workstream
-F) — the paired-device credential's exact-campaign scope (`dnd_ai.api.
-access`'s own docstring, "`allow_foundry_access`") supersedes the world
-check above for a `FOUNDRY_ACCESS_AUTH_METHOD` principal without
-replacing it; both gates are opted into together, side by side, so a
-route reachable today by a still-valid legacy `FoundrySystem` credential
-stays reachable exactly as before while also becoming reachable by a
-paired one. Workstream 11R item 7's forward-only transition removes the
-legacy gate only once every client has repaired, not in this workstream.
+All four routes pass `allow_foundry_access=True` to `require_campaign_
+capability`, scoped to `character_state_sync` (`_CHARACTER_STATE_SYNC_
+SCOPE`) — this module is squarely the "synchronize non-combat HP/
+condition/resource state" surface a paired Foundry device exists to
+drive, and none of the four names an `external_system_id` of its own for
+`dnd_ai.domain.access.assert_foundry_system_matches` to check (contrast
+`dnd_ai.api.integration`), so `require_campaign_capability`'s own exact-
+campaign check plus this scope requirement are the only additional gates
+a Foundry principal needs here (Workstream 11R High-severity finding: a
+connection paired without `character_state_sync` in its granted scopes
+can no longer reach any of these four routes, closing the gap where scope
+was persisted at pairing time but never actually enforced). The legacy
+`FoundrySystem` credential (`allow_foundry_system`) is retired — see
+`dnd_ai.api.auth`'s own docstring — and is rejected before it can ever
+reach this module's own authorization at all.
 
 Idempotency: every route here wires the durable `security.
 idempotent_requests` mechanism (`dnd_ai.api.idempotency`) every other
@@ -99,6 +93,11 @@ router = APIRouter(tags=["character-state"])
 # Canon-affecting mutation, same first-cut scoping dnd_ai.api.movement/
 # .encounters already chose — see this module's own docstring.
 _CANON_EDIT_CAPABILITY = "canon.edit"
+
+# The one Foundry scope (of dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES'
+# closed vocabulary) every route in this module requires — see this
+# module's own docstring for why all four share it.
+_CHARACTER_STATE_SYNC_SCOPE = "character_state_sync"
 
 _ADJUST_HIT_POINTS_COMMAND_NAME = "adjust_hit_points"
 _APPLY_CONDITION_COMMAND_NAME = "apply_character_condition"
@@ -191,7 +190,9 @@ def adjust_hit_points_endpoint(
         AccessContext,
         Depends(
             require_campaign_capability(
-                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+                _CANON_EDIT_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_CHARACTER_STATE_SYNC_SCOPE,
             )
         ),
     ],
@@ -280,7 +281,9 @@ def apply_character_condition_endpoint(
         AccessContext,
         Depends(
             require_campaign_capability(
-                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+                _CANON_EDIT_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_CHARACTER_STATE_SYNC_SCOPE,
             )
         ),
     ],
@@ -366,7 +369,9 @@ def remove_character_condition_endpoint(
         AccessContext,
         Depends(
             require_campaign_capability(
-                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+                _CANON_EDIT_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_CHARACTER_STATE_SYNC_SCOPE,
             )
         ),
     ],
@@ -451,7 +456,9 @@ def adjust_character_resource_endpoint(
         AccessContext,
         Depends(
             require_campaign_capability(
-                _CANON_EDIT_CAPABILITY, allow_foundry_system=True, allow_foundry_access=True
+                _CANON_EDIT_CAPABILITY,
+                allow_foundry_access=True,
+                foundry_scope=_CHARACTER_STATE_SYNC_SCOPE,
             )
         ),
     ],

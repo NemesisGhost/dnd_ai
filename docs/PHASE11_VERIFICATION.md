@@ -26,7 +26,7 @@ Workstream ordering deviated from the letter sequence: D (pairing schema) was im
 ## Non-negotiable boundaries preserved
 
 - **PostgreSQL remains the only source of truth**; no new cache/derived-authority store was introduced.
-- **Forward-only migrations.** `099`→`100`→`101` are pure additions; no already-merged migration was edited. `alembic check` reports a single clean head at `101_change_log_foundry_pairing` with no drift from the SQLAlchemy models.
+- **Forward-only migrations.** `099`→`100`→`101`→`102` are pure additions (`102` is data-only — an `UPDATE`, no `ALTER TABLE`); no already-merged migration was edited. `alembic check` reports a single clean head at `102_revoke_foundry_system_keys` with no drift from the SQLAlchemy models.
 - **No new client bypasses the application API.** FoundryVTT's pairing/token/adapter calls all go through `dnd_ai.api.foundry_pairing`/the existing adapter routers.
 - **OIDC remains optional; local authentication works with every OIDC setting absent** — unchanged by this workstream, and exercised throughout `tests/database/test_api_auth.py`.
 - **No Pocket ID/Cognito/OAuth server/OIDC provider was introduced.**
@@ -45,43 +45,76 @@ Recorded here because each was a real security- or correctness-relevant defect c
 - **Immediate-revocation logic bug**: `exchange_foundry_device_credential` checked `revoked_at IS NULL`, which is wrong once `revoked_at` is used as an effective-revocation-*time* (as an in-overlap rotation sets it to a future instant) rather than a boolean flag — fixed to `revoked_at IS NULL OR revoked_at > now()`.
 - **Three missing FK-supporting indexes** and **eight tables missing from `test_role_grants.py`'s `MANAGED_TABLES` completeness list** (four from workstream A/B, four from workstream D) — both caught only by a genuine full-suite run, not the faster targeted runs used between workstreams.
 
+## High-severity findings closed after initial delivery
+
+A follow-up review of the delivered 11R code found two High-severity gaps between what was documented/intended and what was actually enforced. Both are now closed; this section is the record of what was found and how.
+
+### Finding 1: Foundry scopes were persisted but never enforced
+
+`security.foundry_connections.granted_scopes` was written correctly at pairing time, but `resolve_foundry_access_principal` never selected it, `AuthenticatedPrincipal` had no field to carry it, and `require_campaign_capability` never checked it — every `allow_foundry_access=True` route was reachable by any paired connection regardless of what scopes it actually held, silently defeating the entire point of `docs/PLAN.md §23.5`'s "closed and narrow" initial scope set.
+
+Fixed:
+
+- `AuthenticatedPrincipal.foundry_scopes: frozenset[str] | None` (`src/dnd_ai/domain/access.py`) — present if, and only if, `auth_method == FOUNDRY_ACCESS_AUTH_METHOD`, enforced by `__post_init__` as its own independent invariant (deliberately *not* folded into the existing `campaign_id`/`foundry_connection_id`/`foundry_device_id` trio's shared `_FOUNDRY_SYSTEM_WORLD_AUTH_METHODS` gate, so the legacy `FOUNDRY_SYSTEM_AUTH_METHOD` principal can never carry a scope set even by accident).
+- `resolve_foundry_access_principal` (`src/dnd_ai/domain/foundry_pairing.py`) now selects `fc.granted_scopes` and populates it fresh on every call — never cached, never frozen onto the access-token row, so narrowing a connection's granted scopes takes effect on its very next request even if the presented access token has not itself expired.
+- `require_campaign_capability` (`src/dnd_ai/api/access.py`) gained a `foundry_scope: str | None` parameter, required whenever `allow_foundry_access=True` — enforced by a `ValueError` raised the moment the dependency is constructed (application-startup time, not per-request), so a route added with `allow_foundry_access=True` and no declared scope fails the app's own startup rather than silently granting unscoped access. At request time, a principal whose `foundry_scopes` does not contain the declared `foundry_scope` gets the identical `ForbiddenError` an insufficient application capability already produces — scope is an additional restriction, never a replacement for the ordinary campaign-capability check.
+- Every existing `allow_foundry_access=True` route now also declares its scope: `get_character_endpoint` → `encounter_read`; the four `character_state.py` routes → `character_state_sync`; `map_external_identifier_endpoint`/`apply_foundry_combat_sync_endpoint` → `combat_sync`; `sync_state_endpoint` → `sync_status_read`. `location_read` is defined in the closed vocabulary but not yet mapped to any route (no dedicated location-detail Foundry route exists).
+- `tests/unit/test_foundry_scope_route_mapping.py` (new): walks the real `create_app()` route tree and asserts the discovered `{(method, path): scope}` set matches a hand-maintained table exactly, in both directions — the explicit, human-reviewed mapping requirement 10 of this correction asked for, independent of the startup-time `ValueError` guardrail.
+
+### Finding 2: FoundrySystem remained permanently accepted and issuable
+
+The legacy `FoundrySystem` credential — meant to be fully superseded by paired-device `FoundryAccess` — was still unconditionally accepted at `get_authenticated_user_id`, every bounded-adapter route still passed `allow_foundry_system=True` alongside the new `allow_foundry_access=True`, and `issue_foundry_system_key_endpoint` remained reachable over HTTP, with no deployment-configurable disabled-by-default switch or deadline anywhere. A still-valid legacy key could bypass every per-device protection (listing, expiry, exact-campaign binding, individual revocation) the pairing model exists to provide, indefinitely.
+
+This repository found no evidence of a real deployed client still depending on `FoundrySystem` — the sole first-party client, `foundry-module/`, was already fully converted to pairing by workstream H before this correction, and this is a pre-release, single-developer project with no evidence of a production tenant. A compatibility window was therefore deliberately not built; the preferred, full-rejection correction was applied instead:
+
+- `get_authenticated_user_id` (`src/dnd_ai/api/auth.py`) now rejects the `FoundrySystem` scheme keyword with `UnauthorizedError()` immediately — before any database lookup, and before the OIDC path's own `get_jwks_client()` is ever reached (which matters: a naive "just fall through to OIDC" fix would reintroduce an unrelated 500 in an OIDC-unconfigured, local-auth-only deployment, instead of the plain 401 a retired scheme must always produce).
+- `require_campaign_capability`'s `allow_foundry_system` parameter is removed entirely (not merely defaulted off), along with its world-comparison branch; every route's `allow_foundry_system=True` argument is removed.
+- `issue_foundry_system_key_endpoint` (`POST .../foundry-system-key`) is removed from `src/dnd_ai/api/integration.py` entirely — not merely left un-opted-into `allow_foundry_access`. The underlying `dnd_ai.commands.integration.issue_foundry_system_key`/`resolve_foundry_system_principal`/`hash_foundry_system_key` and the `system_key_hash`/`system_key_principal_user_id` columns they read remain defined (expand-and-contract: no schema change, no command deletion), but nothing in the API layer calls any of them any more.
+- Migration `102_revoke_foundry_system_keys` (new, forward-only, no schema change): `UPDATE integration.external_systems SET system_key_hash = NULL, system_key_principal_user_id = NULL WHERE system_key_hash IS NOT NULL` — revokes every already-issued legacy key at the data level, defense in depth independent of the code-level rejection above. Downgrade is a deliberate no-op (a cleared key is never restored — see the migration's own docstring).
+- `tests/database/test_api_auth.py`, `test_api_integration.py`, `test_api_character_state.py`, `test_api_characters.py`, and `tests/scenario/test_foundry_adapter_e2e.py` all updated: every test that used to prove `FoundrySystem` *succeeded* somewhere is replaced by one proving it is rejected — including with a genuinely valid, fully-bound legacy credential minted through the still-present domain commands directly, and including with OIDC entirely unconfigured (the specific regression a partial fix could reintroduce).
+
 ## Verification commands and results
 
 Run against the project's local PostgreSQL 18 (`localhost:5433`, per `.env`'s `DATABASE_URL`):
 
 ```bash
-alembic -c database/alembic.ini current --verbose   # 101_change_log_foundry_pairing (head)
+alembic -c database/alembic.ini current --verbose   # 102_revoke_foundry_system_keys (head)
 alembic -c database/alembic.ini check                # No new upgrade operations detected.
-alembic -c database/alembic.ini heads                 # 101_change_log_foundry_pairing (head) — single head
-ruff format --check .                                 # 361 files already formatted
+alembic -c database/alembic.ini heads                 # 102_revoke_foundry_system_keys (head) — single head
+alembic -c database/alembic.ini downgrade -1          # round-trips 102 -> 101 cleanly (data-only, no schema change)
+alembic -c database/alembic.ini upgrade head          # round-trips 101 -> 102 cleanly
+ruff format --check .                                 # all files already formatted
 ruff check .                                           # All checks passed!
-mypy src                                                # Success: no issues found in 101 source files
+mypy src                                                # Success: no issues found
 pytest -q                                               # full tree, ephemeral from-empty database (no DND_AI_TEST_DATABASE_URL override)
 ```
 
-**Migration chain:** `099_local_authentication` → `100_foundry_pairing` → `101_change_log_foundry_pairing`, each added this session, none editing an already-merged migration. `alembic check` against the local dev database (already at head) reports no drift. The full-suite run below builds its own database from empty and runs `alembic upgrade head` as part of every test session's setup, which is the from-empty replay verification for the complete chain (`094`→`101` inclusive) — a genuinely separate database each time, not the persistent dev instance.
+**Migration chain:** `099_local_authentication` → `100_foundry_pairing` → `101_change_log_foundry_pairing` → `102_revoke_foundry_system_keys`, none editing an already-merged migration. `102` is the High-severity-finding-2 correction (data-only: clears every existing legacy key). `alembic check` against the local dev database (already at head) reports no drift; the downgrade/upgrade round trip for `102` was run explicitly (in addition to the from-empty replay every ephemeral test database performs via `alembic upgrade head` in its own setup, covering the complete chain `094`→`102`).
 
-**Quality gates:** `ruff format --check .`, `ruff check .`, and `mypy src` all clean across the whole source tree (one formatting-only drift found and fixed in `099_local_authentication.py`/`scripts/foundry_provision.py`, committed separately — no semantic change).
+**Quality gates:** `ruff format --check .`, `ruff check .`, and `mypy src` all clean across the whole source tree.
 
-**Full Python suite result:** `pytest -q` (whole `tests/` tree, fresh ephemeral database, no `DND_AI_TEST_DATABASE_URL` override) — **3755 passed, 2 failed, in 1:27:49**. Both failures are pre-existing and unrelated to this branch, confirmed by reproducing each in isolation against unmodified `main` (via a throwaway `git worktree`, deleted after use):
+**Focused Foundry/auth regression suite** (`tests/unit/test_authenticated_principal.py`, `test_foundry_scope_route_mapping.py`; `tests/database/test_api_auth.py`, `test_api_character_state.py`, `test_api_characters.py`, `test_api_integration.py`, `test_foundry_pairing_commands.py`, `test_api_foundry_pairing.py`, `test_foundry_provision.py`; `tests/unit/test_foundry_provision.py`; `tests/scenario/test_foundry_adapter_e2e.py`, `test_foundry_sync_commands.py`) — **219 passed, 1 failed** (the pre-existing pool-starvation flake below; every test touching the two findings' own code passed).
+
+**Full Python suite result:** `pytest -q` (whole `tests/` tree, fresh ephemeral database, no `DND_AI_TEST_DATABASE_URL` override) — **3738 passed, 2 failed, in 1:27:50**. Both failures are the identical pre-existing, unrelated ones recorded at 11R's initial delivery, confirmed by reproducing each in isolation against unmodified `main` (via a throwaway `git worktree`, deleted after use):
 
 - `tests/database/test_seed_idempotency.py::test_rerunning_the_seed_migration_does_not_duplicate_rows` — fails on `main` identically; migration `024_campaign_ruleset_version`'s downgrade path (`ALTER TABLE campaign.campaigns ALTER COLUMN ruleset_id SET NOT NULL`) fails when re-run against already-seeded data, predating this branch entirely.
 - `tests/scenario/test_foundry_sync_commands.py::test_two_operations_on_the_same_target_do_not_starve_a_small_pool` — fails on `main` identically, in isolation, independent of system load (`QueuePool limit of size 1 overflow 0 reached, connection timed out, timeout 15.00`); a pre-existing timing-sensitive concurrency test unrelated to any Workstream 11R change (last touched in Phase 9, commit `b743181`, and not modified since).
 
-Neither failure touches any file this branch changed. No workstream's own regression suite (run individually, between each commit, per the working method) showed any failure at the time it was delivered.
+Neither failure touches any file this branch (including the High-severity findings correction) changed.
 
-**FoundryVTT module suite:** `cd foundry-module && node --test` — **77/77 passing**, including new coverage for `pairing.mjs` (pairing-code consumption, device-credential exchange, `FoundryAccessTokenCache` refresh/expiry/clear behavior) and `pairing-logic.mjs` (form validation, successful pairing persisting connection metadata + device credential, server-rejection handling without partial persistence).
+**FoundryVTT module suite:** `cd foundry-module && node --test` — **77/77 passing**, unaffected by the High-severity findings correction (backend-only change; no `foundry-module/` source touched).
 
-**CI status:** Not checked for this head — this environment has no `gh` CLI available, and the branch's last 9 commits (workstreams C through the formatting fix) have not been pushed to `origin/phase11r/auth-retrofit`. Verification above is entirely local. Push and CI confirmation are left to the repository owner.
+**CI status:** Not checked for this head — this environment has no `gh` CLI available. Verification above is entirely local. Push and CI confirmation are left to the repository owner.
 
 ## What remains before Phase 11 can close
 
 Per [PLAN.md §1902](PLAN.md#phase-11-foundry-mvp): *"Phase 11 remains 'Partially implemented' until 11R is delivered, its focused regression suite is green, and `docs/PHASE11_VERIFICATION.md` records a real Foundry v13 run covering same-device restart, second-device pairing, independent revocation, cross-origin transport, and canonical synchronization without duplicate events."*
 
-11R's own code and automated-test delivery is complete (this file's evidence above). **Not performed, and not possible from this environment:** the real Foundry v13 client run itself. This requires a licensed FoundryVTT installation, which this session had no access to. `foundry-module/README.md`'s "Manual live-Foundry verification" section lists the exact eleven-step procedure (module install, pairing, duplicate-turn replay, reload-restores-without-write, cross-campaign device rejection, direct-route rejection, cross-device-credential rejection, CORS preflight success/failure, plain-HTTP rejection) that must be run and recorded here before this checkbox can close. Until that run happens, Phase 11 stays "Partially implemented" per the plan's own exit condition — this is a deliberate, accurate status, not an oversight.
+11R's own code and automated-test delivery is complete (this file's evidence above), including the two High-severity findings' corrections. **Not performed, and not possible from this environment:** the real Foundry v13 client run itself. This requires a licensed FoundryVTT installation, which this session had no access to. `foundry-module/README.md`'s "Manual live-Foundry verification" section lists the exact thirteen-step procedure (module install, pairing, duplicate-turn replay, reload-restores-without-write, cross-campaign device rejection, direct-route rejection, Foundry-scope enforcement, legacy-credential rejection, cross-device-credential rejection, CORS preflight success/failure, plain-HTTP rejection) that must be run and recorded here before this checkbox can close. Until that run happens, Phase 11 stays "Partially implemented" per the plan's own exit condition — this is a deliberate, accurate status, not an oversight.
 
 ## Deviations from the literal workstream text, with justification
 
 - **Workstream ordering (D before C):** D's schema is a hard prerequisite for C's `resolve_foundry_access_principal` wiring; implementing them in specification order was not possible. No scope changed.
 - **`FOUNDRY_DEVICE_AUTH_METHOD` was not built as a general `AuthenticatedPrincipal` type.** The device-credential-to-access-token exchange (`POST /foundry/token`) has exactly one caller and parses its own `Authorization: FoundryDevice <id>.<secret>` header directly rather than going through `get_authenticated_user_id`, since a device credential's only valid action is this one exchange — a principal type would exist to serve a second caller that doesn't exist.
-- **`scripts/foundry_provision.py`'s legacy subcommands were removed, not merely deprecated**, per Workstream I item 6's literal "must not... issue the superseded credential." The backend commands they drove (`issue_foundry_system_key`/`link_foundry_identity`) are untouched and still reachable by a direct authenticated API call during any deployment's compatibility window — only this one CLI's surface changed.
+- **`scripts/foundry_provision.py`'s legacy subcommands were removed, not merely deprecated**, per Workstream I item 6's literal "must not... issue the superseded credential." At the time of Workstream I, the backend commands they drove (`issue_foundry_system_key`/`link_foundry_identity`) remained reachable by a direct authenticated API call. The subsequent High-severity findings correction went further: `issue_foundry_system_key_endpoint`'s HTTP route is now removed entirely (not merely un-opted-into `allow_foundry_access`), and every existing legacy key was revoked at the data level (migration `102`) — `link_foundry_identity_endpoint` remains reachable, since identity linking is not itself a credential-issuance action.
+- **No compatibility-window setting was added for the legacy `FoundrySystem` scheme**, even though the original task framing offered that as an alternative to full rejection. This repository found no evidence of a real deployed client depending on it (the only first-party client was already converted before this correction), so the "no active deployment requires compatibility" branch was taken deliberately, per the explicit instruction not to assume a window is needed merely because tests covered the legacy scheme.

@@ -147,10 +147,76 @@ def test_foundry_access_principal_accepts_the_full_field_set() -> None:
         campaign_id=_CAMPAIGN,
         foundry_connection_id=_CONNECTION,
         foundry_device_id=_DEVICE,
+        foundry_scopes=frozenset({"combat_sync"}),
     )
     assert principal.campaign_id == _CAMPAIGN
     assert principal.foundry_connection_id == _CONNECTION
     assert principal.foundry_device_id == _DEVICE
+    assert principal.foundry_scopes == frozenset({"combat_sync"})
+
+
+# ---------------------------------------------------------------------------
+# foundry_scopes (Workstream 11R High-severity finding: scopes were
+# persisted on security.foundry_connections.granted_scopes but never
+# enforced) — present if, and only if, auth_method == FOUNDRY_ACCESS_
+# AUTH_METHOD, mirroring the campaign_id/foundry_connection_id/foundry_
+# device_id trio's own __post_init__ pattern above, but deliberately its
+# own separate check: FOUNDRY_SYSTEM_AUTH_METHOD shares that trio's world
+# gate but must NEVER carry a scope set, so the legacy credential can
+# never accidentally acquire scope-gated behavior merely by this field
+# existing on the same dataclass.
+# ---------------------------------------------------------------------------
+
+
+def test_foundry_access_principal_requires_foundry_scopes() -> None:
+    with pytest.raises(ValueError, match="foundry_scopes"):
+        AuthenticatedPrincipal(
+            user_id=_USER,
+            auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+            foundry_external_system_id=_SYSTEM,
+            foundry_world_id=_WORLD,
+            campaign_id=_CAMPAIGN,
+            foundry_connection_id=_CONNECTION,
+            foundry_device_id=_DEVICE,
+        )
+
+
+def test_foundry_access_principal_rejects_empty_foundry_scopes() -> None:
+    with pytest.raises(ValueError, match="foundry_scopes"):
+        AuthenticatedPrincipal(
+            user_id=_USER,
+            auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+            foundry_external_system_id=_SYSTEM,
+            foundry_world_id=_WORLD,
+            campaign_id=_CAMPAIGN,
+            foundry_connection_id=_CONNECTION,
+            foundry_device_id=_DEVICE,
+            foundry_scopes=frozenset(),
+        )
+
+
+def test_foundry_system_principal_rejects_a_stray_foundry_scopes() -> None:
+    # The regression this correction exists to prevent: FOUNDRY_SYSTEM_
+    # AUTH_METHOD must never be constructible with a scope set, even
+    # though it shares every other Foundry-world field with FOUNDRY_
+    # ACCESS_AUTH_METHOD — a scope-gated route must never be reachable by
+    # the legacy credential merely because both auth methods happen to
+    # populate the same dataclass.
+    with pytest.raises(ValueError, match="foundry_scopes"):
+        AuthenticatedPrincipal(
+            user_id=_USER,
+            auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+            foundry_external_system_id=_SYSTEM,
+            foundry_world_id=_WORLD,
+            foundry_scopes=frozenset({"combat_sync"}),
+        )
+
+
+def test_oidc_principal_rejects_a_stray_foundry_scopes() -> None:
+    with pytest.raises(ValueError, match="foundry_scopes"):
+        AuthenticatedPrincipal(
+            user_id=_USER, auth_method=OIDC_AUTH_METHOD, foundry_scopes=frozenset({"combat_sync"})
+        )
 
 
 def _foundry_system_principal(system_id: uuid.UUID) -> AuthenticatedPrincipal:
@@ -171,6 +237,7 @@ def _foundry_access_principal(system_id: uuid.UUID) -> AuthenticatedPrincipal:
         campaign_id=_CAMPAIGN,
         foundry_connection_id=_CONNECTION,
         foundry_device_id=_DEVICE,
+        foundry_scopes=frozenset({"combat_sync"}),
     )
 
 
