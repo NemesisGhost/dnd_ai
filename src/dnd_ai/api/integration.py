@@ -519,6 +519,8 @@ def map_external_identifier_endpoint(
         event_id=None,
         acting_external_system_id=access.principal.foundry_external_system_id,
         acting_foundry_actor_id=access.principal.foundry_claimed_actor_id,
+        acting_foundry_connection_id=access.principal.foundry_connection_id,
+        acting_foundry_device_id=access.principal.foundry_device_id,
     )
 
     return MapExternalIdentifierResponse(external_identifier_id=result.external_identifier_id)

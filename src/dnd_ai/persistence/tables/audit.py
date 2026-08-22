@@ -118,6 +118,33 @@ change_log = Table(
             "no claimed actor."
         ),
     ),
+    Column(
+        "acting_foundry_connection_id",
+        UUID(),
+        ForeignKey("security.foundry_connections.foundry_connection_id", ondelete="SET NULL"),
+        comment=(
+            "The security.foundry_connections row that authenticated this change via "
+            "a paired FoundryAccess credential (dnd_ai.domain.access."
+            "AuthenticatedPrincipal.foundry_connection_id, Phase 11R workstream G) — "
+            "the connection already names the one Foundry user bound to actor_user_id, "
+            "so there is no claimed-actor-id concept for this credential type the way "
+            "acting_foundry_actor_id is for the legacy one. NULL for every OIDC-, "
+            "local-session-, or legacy-FoundrySystem-authenticated change."
+        ),
+    ),
+    Column(
+        "acting_foundry_device_id",
+        UUID(),
+        ForeignKey("security.foundry_devices.foundry_device_id", ondelete="SET NULL"),
+        comment=(
+            "The security.foundry_devices row whose access token authenticated this "
+            "change (dnd_ai.domain.access.AuthenticatedPrincipal.foundry_device_id, "
+            "Phase 11R workstream G) — set alongside acting_foundry_connection_id, "
+            "identifying which of the connection's possibly-several paired devices "
+            "made this specific request. NULL for every change not authenticated via "
+            "a paired FoundryAccess credential."
+        ),
+    ),
     Column("reason", Text()),
     Column("correlation_id", UUID()),
     Column("causation_id", UUID()),
@@ -155,6 +182,16 @@ Index(
     "ix_change_log_acting_external_system_id",
     change_log.c.acting_external_system_id,
     postgresql_where=change_log.c.acting_external_system_id.isnot(None),
+)
+Index(
+    "ix_change_log_acting_foundry_connection_id",
+    change_log.c.acting_foundry_connection_id,
+    postgresql_where=change_log.c.acting_foundry_connection_id.isnot(None),
+)
+Index(
+    "ix_change_log_acting_foundry_device_id",
+    change_log.c.acting_foundry_device_id,
+    postgresql_where=change_log.c.acting_foundry_device_id.isnot(None),
 )
 Index("ix_change_log_correlation_id", change_log.c.correlation_id)
 Index(

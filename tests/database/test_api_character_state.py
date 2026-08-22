@@ -32,6 +32,8 @@ from tests.factories import (
     make_character_state,
     make_condition,
     make_external_system,
+    make_foundry_connection,
+    make_foundry_device,
     make_membership_role,
     make_resource_definition,
     make_role,
@@ -740,20 +742,30 @@ def _foundry_access_principal(
 ) -> AuthenticatedPrincipal:
     """Same real-external_system-row reasoning as `_foundry_principal`
     above — `record_change_log`'s `acting_external_system_id` is a real
-    foreign key. `foundry_connection_id`/`foundry_device_id` are not yet
-    referenced by any FK this route's own write touches (Phase 11R
-    workstream G adds audit columns for them), so arbitrary UUIDs are
-    sufficient here."""
+    foreign key. `foundry_connection_id`/`foundry_device_id` are real rows
+    too (Phase 11R workstream G's `audit.change_log.acting_foundry_
+    connection_id`/`.acting_foundry_device_id` are real foreign keys as of
+    migration 101), created directly via `make_foundry_connection`/`.
+    make_foundry_device` rather than the full pairing-code create/consume
+    command flow, since this test only needs a real FK target, never to
+    authenticate with the connection/device's own credential."""
     with postgres_engine.begin() as connection:
         external_system_id = make_external_system(connection, world_id)
+        foundry_connection_id = make_foundry_connection(
+            connection,
+            user_id=user_id,
+            campaign_id=campaign_id,
+            external_system_id=external_system_id,
+        )
+        foundry_device_id = make_foundry_device(connection, foundry_connection_id)
     return AuthenticatedPrincipal(
         user_id=user_id,
         auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
         foundry_external_system_id=external_system_id,
         foundry_world_id=world_id,
         campaign_id=campaign_id,
-        foundry_connection_id=uuid.uuid4(),
-        foundry_device_id=uuid.uuid4(),
+        foundry_connection_id=foundry_connection_id,
+        foundry_device_id=foundry_device_id,
     )
 
 
@@ -772,6 +784,38 @@ def test_a_foundryaccess_credential_for_its_own_paired_campaign_can_adjust_hit_p
         )
     assert response.status_code == 200, response.text
     assert response.json()["new_hit_points"] == 16
+
+
+def test_a_foundryaccess_credential_records_its_connection_and_device_on_the_audit_row(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    # Phase 11R workstream G: proves acting_foundry_connection_id/
+    # acting_foundry_device_id actually land in audit.change_log, not just
+    # that the route doesn't crash carrying them.
+    principal = _foundry_access_principal(
+        postgres_engine, user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
+    )
+    with foundry_client_factory(principal) as client:
+        response = client.post(
+            _hp_url(f.campaign_id, f.character_id),
+            json={"world_time_id": str(f.world_time_id), "delta": 1},
+        )
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT acting_external_system_id, acting_foundry_connection_id, "
+                "acting_foundry_device_id FROM audit.change_log "
+                "WHERE entity_id = :entity ORDER BY change_log_id DESC LIMIT 1"
+            ),
+            {"entity": f.character_id},
+        ).one()
+    assert row.acting_external_system_id == principal.foundry_external_system_id
+    assert row.acting_foundry_connection_id == principal.foundry_connection_id
+    assert row.acting_foundry_device_id == principal.foundry_device_id
 
 
 def test_a_foundryaccess_credential_for_a_different_campaign_cannot_adjust_hit_points(

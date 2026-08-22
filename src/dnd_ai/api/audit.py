@@ -54,7 +54,21 @@ Foundry client *claimed* about who triggered the action, clearly
 distinguished from who the platform actually authenticated. See `dnd_ai.
 domain.access.AuthenticatedPrincipal.foundry_claimed_actor_id`'s own
 docstring for why this is untrusted metadata, never an authorization
-input."""
+input.
+
+`acting_foundry_connection_id`/`acting_foundry_device_id` (Phase 11R
+workstream G, migration 101): pass `access.principal.
+foundry_connection_id`/`.foundry_device_id` for a call authenticated via
+the paired `FoundryAccess` credential — `None` for every other auth
+method, including the legacy `FoundrySystem` one, which has no connection/
+device of its own. `acting_external_system_id` is still populated for
+this credential type too (`AuthenticatedPrincipal.
+foundry_external_system_id` is set for both Foundry auth methods since
+workstream C); these two columns add the finer-grained "which paired
+connection, which specific device" identity the legacy credential could
+never carry. No `acting_foundry_actor_id` equivalent exists for this
+credential type — see that column's own comment (`src/dnd_ai/persistence/
+tables/audit.py`) for why."""
 
 import uuid
 
@@ -78,6 +92,8 @@ def record_change_log(
     event_id: uuid.UUID | None,
     acting_external_system_id: uuid.UUID | None = None,
     acting_foundry_actor_id: str | None = None,
+    acting_foundry_connection_id: uuid.UUID | None = None,
+    acting_foundry_device_id: uuid.UUID | None = None,
     ai_proposal_id: uuid.UUID | None = None,
 ) -> None:
     """Insert one `audit.change_log` row. Call once, after the command's
@@ -102,11 +118,13 @@ def record_change_log(
             INSERT INTO audit.change_log
                 (change_action_id, schema_name, table_name, record_id, entity_id, world_id,
                  actor_user_id, correlation_id, command_name, event_id,
-                 acting_external_system_id, acting_foundry_actor_id, ai_proposal_id)
+                 acting_external_system_id, acting_foundry_actor_id,
+                 acting_foundry_connection_id, acting_foundry_device_id, ai_proposal_id)
             VALUES
                 (:action, :schema, :table, :record, :entity, :world,
                  :actor, :correlation, :command, :event, :acting_external_system,
-                 :acting_foundry_actor, :ai_proposal)
+                 :acting_foundry_actor, :acting_foundry_connection, :acting_foundry_device,
+                 :ai_proposal)
         """),
         {
             "action": change_action_id,
@@ -121,6 +139,8 @@ def record_change_log(
             "event": event_id,
             "acting_external_system": acting_external_system_id,
             "acting_foundry_actor": acting_foundry_actor_id,
+            "acting_foundry_connection": acting_foundry_connection_id,
+            "acting_foundry_device": acting_foundry_device_id,
             "ai_proposal": ai_proposal_id,
         },
     )
