@@ -2,9 +2,9 @@
   "id": "dnd-ai-adapter",
   "title": "D&D AI Adapter",
   "description": "Connects a FoundryVTT dnd5e world to a D&D AI platform campaign: submits combat turns and non-combat HP/condition/resource changes through the platform's application API, and restores synchronized state on reconnect. All canonical state lives in the platform's PostgreSQL database; this module never writes to it directly.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "compatibility": {
-    "minimum": "12",
+    "minimum": "13",
     "verified": "13.351"
   },
   "relationships": {

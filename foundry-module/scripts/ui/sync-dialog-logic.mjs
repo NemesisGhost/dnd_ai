@@ -1,7 +1,7 @@
 /**
  * The pure dispatch logic behind the "D&D AI Sync" manual action panel —
  * split from `sync-dialog-app.mjs` for the same reason
- * `connection-setup-logic.mjs` is split from `connection-setup-app.mjs`:
+ * `pairing-logic.mjs` is split from `pairing-app.mjs`:
  * importable and testable under Node without a real Foundry
  * `Application` runtime.
  *
