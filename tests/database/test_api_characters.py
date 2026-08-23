@@ -24,7 +24,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -677,72 +677,87 @@ def test_a_nonexistent_character_is_rejected(
 
 
 # ---------------------------------------------------------------------------
-# FoundrySystem credential scope (Phase 11 workstream 2 security correction)
+# FoundryAccess credential scope (Phase 11R workstream F, scope-enforced by
+# the Workstream 11R High-severity correction) — the paired-device
+# credential, exact-campaign- and exact-scope-scoped. The legacy
+# FoundrySystem credential is retired (dnd_ai.api.auth) and rejected before
+# it can ever reach a real HTTP request at all — see tests/database/
+# test_api_auth.py's own "FoundrySystem credential is retired" section for
+# that end-to-end proof; there is no principal shape left for this module
+# to exercise via a directly-injected dependency override.
 # ---------------------------------------------------------------------------
 
 
-def test_a_foundrysystem_credential_for_this_campaigns_own_world_can_read_the_character(
-    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
-) -> None:
-    # get_character_endpoint is part of the bounded adapter-facing surface
-    # (allow_foundry_system=True) — a credential for the campaign's own
-    # world, linked to a user who already holds full character-view access,
-    # must succeed exactly as the equivalent OIDC caller would. Constructing
-    # the AuthenticatedPrincipal directly (rather than issuing a real key and
-    # authenticating over HTTP) isolates what this test actually exercises —
-    # require_campaign_capability's own allow_foundry_system/world-binding
-    # enforcement — from header/credential parsing, already covered
-    # end-to-end by tests/database/test_api_auth.py.
-    principal = AuthenticatedPrincipal(
-        user_id=f.gm_user_id,
-        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
+def _foundry_access_principal(
+    *,
+    user_id: uuid.UUID,
+    world_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    foundry_scopes: frozenset[str] = frozenset({"encounter_read"}),
+) -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=user_id,
+        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
         foundry_external_system_id=uuid.uuid4(),
-        foundry_world_id=f.world_id,
+        foundry_world_id=world_id,
+        campaign_id=campaign_id,
+        foundry_connection_id=uuid.uuid4(),
+        foundry_device_id=uuid.uuid4(),
+        foundry_scopes=foundry_scopes,
     )
 
+
+def test_a_foundryaccess_credential_for_its_own_paired_campaign_can_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
+    )
     with foundry_client_factory(principal) as client:
         response = client.get(_character_url(f))
     assert response.status_code == 200, response.text
     assert response.json()["character_id"] == str(f.character_id)
 
 
-def test_a_foundrysystem_credential_for_a_different_world_cannot_read_the_character(
+def test_a_foundryaccess_credential_for_a_different_campaign_cannot_read_the_character(
     foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
 ) -> None:
-    # The defect this correction closes: f.gm_user_id genuinely holds
-    # canon.edit/full character-view in f.campaign_id (f.world_id) — but a
-    # credential that authenticated as a system registered under a
-    # *different* world (f.other_world_id) must not be able to ride that
-    # membership. Rejected identically to "no membership" (404), never a
-    # 200 or a disclosing 403.
-    principal = AuthenticatedPrincipal(
-        user_id=f.gm_user_id,
-        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
-        foundry_external_system_id=uuid.uuid4(),
-        foundry_world_id=f.other_world_id,
+    # Exact-campaign scoping: a credential paired for any other campaign —
+    # even a nonexistent one, since the comparison never needs to resolve
+    # it — must not reach f.campaign_id.
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.other_world_id, campaign_id=uuid.uuid4()
     )
-
     with foundry_client_factory(principal) as client:
         response = client.get(_character_url(f))
     assert response.status_code == 404
 
 
-def test_a_foundrysystem_credential_cannot_read_inventory(
+def test_a_foundryaccess_credential_cannot_read_inventory(
     foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
 ) -> None:
-    # get_character_inventory_endpoint deliberately does not opt in to
-    # allow_foundry_system — it is not part of the bounded adapter-facing
-    # surface any Phase 11 workstream built, so a Foundry credential is
-    # rejected outright here even though it is accepted on the sibling
-    # get_character_endpoint above, and even though the linked user
-    # (f.gm_user_id) genuinely holds full view access.
-    principal = AuthenticatedPrincipal(
-        user_id=f.gm_user_id,
-        auth_method=FOUNDRY_SYSTEM_AUTH_METHOD,
-        foundry_external_system_id=uuid.uuid4(),
-        foundry_world_id=f.world_id,
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id, world_id=f.world_id, campaign_id=f.campaign_id
     )
-
     with foundry_client_factory(principal) as client:
         response = client.get(_inventory_url(f))
+    assert response.status_code == 403
+
+
+def test_a_foundryaccess_credential_missing_encounter_read_scope_cannot_read_the_character(
+    foundry_client_factory: Callable[[AuthenticatedPrincipal], TestClient], f: Fixture
+) -> None:
+    # Workstream 11R High-severity finding 1: get_character_endpoint
+    # requires encounter_read specifically — a connection paired only with
+    # a different scope (combat_sync here) must not reach it, even though
+    # the bound user genuinely holds full character-view access and the
+    # connection is paired for exactly this campaign.
+    principal = _foundry_access_principal(
+        user_id=f.gm_user_id,
+        world_id=f.world_id,
+        campaign_id=f.campaign_id,
+        foundry_scopes=frozenset({"combat_sync"}),
+    )
+    with foundry_client_factory(principal) as client:
+        response = client.get(_character_url(f))
     assert response.status_code == 403

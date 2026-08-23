@@ -29,7 +29,7 @@ def test_401_mentions_the_token() -> None:
 
 
 def test_403_mentions_the_required_capability() -> None:
-    with pytest.raises(ProvisioningError, match=r"403.*(canon\.edit|access\.manage)"):
+    with pytest.raises(ProvisioningError, match=r"403.*(canon\.edit|campaign\.view)"):
         _raise_for_envelope(
             _response(403, "forbidden", "You do not have permission to perform this action.")
         )

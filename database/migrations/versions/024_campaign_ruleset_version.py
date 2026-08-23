@@ -179,6 +179,36 @@ def downgrade() -> None:
         )
         WHERE c.ruleset_id IS NULL;
     """)
+    # The UPDATE above fires tr_campaigns_retain_access_manager (added by
+    # revision 080, DEFERRABLE INITIALLY DEFERRED) for any matched rows.
+    # Drain those queued firings now so that the ALTER TABLE statement that
+    # follows does not fail with "cannot ALTER TABLE because it has pending
+    # trigger events" — the same fix applied in revisions 085 and 086 for
+    # the identical problem on security.role_capabilities. Unlike 085/086
+    # (both > 080, so their downgrade always runs before 080's own
+    # downgrade removes the trigger), revision 024 is < 080: in a real
+    # sequential `alembic downgrade base`, 080's downgrade already dropped
+    # this trigger by the time 024's downgrade runs, so SET CONSTRAINTS
+    # would fail with "constraint ... does not exist". Guard on the
+    # trigger's actual presence so this is correct both there and when a
+    # HEAD-migrated connection invokes 024's downgrade() directly (the
+    # trigger still exists then — see tests/database/test_seed_idempotency.py).
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_trigger t
+                JOIN pg_class c ON c.oid = t.tgrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'campaign'
+                  AND c.relname = 'campaigns'
+                  AND t.tgname = 'tr_campaigns_retain_access_manager'
+            ) THEN
+                EXECUTE 'SET CONSTRAINTS campaign.tr_campaigns_retain_access_manager IMMEDIATE';
+            END IF;
+        END;
+        $$;
+    """)
     op.execute("ALTER TABLE campaign.campaigns ALTER COLUMN ruleset_id SET NOT NULL;")
     op.execute("CREATE INDEX ix_campaigns_ruleset_id ON campaign.campaigns (ruleset_id);")
 

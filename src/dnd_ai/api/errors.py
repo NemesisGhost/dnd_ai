@@ -347,6 +347,23 @@ class ConflictError(ApiError):
     safe_message = "The request could not be completed due to a conflicting change."
 
 
+class RateLimitedError(UnauthorizedError):
+    """Too many attempts for one IP/account combination within the current
+    window (docs/PLAN.md §23.4/§23.5, Phase 11R workstream B —
+    `dnd_ai.domain.rate_limit.RateLimiter`) — used by `dnd_ai.api.
+    local_auth`'s login/activation/password-reset endpoints. HTTP 429, not
+    401: this is a pacing signal, not a claim about the submitted
+    credential itself. Defined here, not in `dnd_ai.api.local_auth`
+    itself, so it can be registered in `_API_ERROR_CONTRACTS` below
+    without an import cycle (`dnd_ai.api.local_auth` already imports
+    `UnauthorizedError` from this module) — every recognized `ApiError`
+    subclass lives in this one module for exactly that reason."""
+
+    status_code = 429
+    error_code = "rate_limited"
+    safe_message = "Too many attempts. Try again later."
+
+
 # The complete, fixed public contract for every ApiError type this module
 # recognizes (finding 1) — keyed by *exact* exception type, not by
 # independently checking whether a status "looks like" it could pair with
@@ -360,6 +377,7 @@ _API_ERROR_CONTRACTS: dict[type[ApiError], _ErrorContract] = {
     ForbiddenError: _ErrorContract(403, "forbidden", ForbiddenError.safe_message),
     NotFoundError: _ErrorContract(404, "not_found", NotFoundError.safe_message),
     ConflictError: _ErrorContract(409, "conflict", ConflictError.safe_message),
+    RateLimitedError: _ErrorContract(429, "rate_limited", RateLimitedError.safe_message),
 }
 
 

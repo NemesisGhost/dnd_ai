@@ -6,11 +6,11 @@ real, licensed Foundry client instance (`foundry-module/README.md`'s
 manual procedure for whoever has one).
 
 Drives the exact HTTP request sequence `foundry-module/scripts/
-api-client.mjs`/`sync-engine.mjs` issue — real `Authorization:
-FoundrySystem <id>.<key>` + `X-Foundry-Actor-Id` headers (the latter
-renamed from `X-Foundry-User-Id`, and now purely descriptive metadata —
-see `dnd_ai.domain.access.resolve_foundry_system_principal`'s docstring
-for the second Phase 11 workstream 2 security correction this reflects),
+api-client.mjs`/`sync-engine.mjs`/`pairing.mjs` issue — real
+`Authorization: FoundryAccess <token>` headers (Phase 11R workstream C/H:
+the paired-device credential, the sole Foundry-adapter credential this
+application accepts as of the Workstream 11R High-severity retirement of
+the legacy `FoundrySystem` scheme — see `dnd_ai.api.auth`'s own docstring),
 real JSON bodies matching `foundry-module`'s own request-construction,
 real `external_operation_id` reuse for the duplicate-delivery proof —
 against the real FastAPI application and a real, disposable PostgreSQL 18
@@ -18,7 +18,7 @@ database (never the database directly, never a shortcut dependency
 override for the parts under test), via `httpx`/`TestClient` standing in
 for the browser `fetch()` a real Foundry client would use.
 
-Proves the five claims docs/PLAN.md Phase 11's exit criterion and this
+Proves the six claims docs/PLAN.md Phase 11's exit criterion and this
 workstream's own request require:
 
 1. A real encounter (combat-sync) and non-combat HP change update
@@ -27,13 +27,23 @@ workstream's own request require:
    duplicate `narrative.events` row.
 3. Reopening/reconnecting (`sync-state` + character reads, with no
    client-side state carried over) restores the updated state.
-4. A credential authenticated for a different world's external system is
-   rejected against this campaign (`ae80a29`'s world-binding correction,
-   re-proven through the literal request shapes a real module sends).
+4. A connection paired for a different campaign is rejected against this
+   one (Workstream 11R's exact-campaign scoping, strictly narrower than
+   the legacy credential's world-binding, re-proven through the literal
+   request shapes a real module sends).
 5. The identical real credential cannot call the management-only routes
-   (`register_external_system`/`link_foundry_identity`/`issue_foundry_
-   system_key`) — the bounded adapter-facing surface `ae80a29` also
-   established.
+   (`register_external_system`/`link_foundry_identity`) — the bounded
+   adapter-facing surface `ae80a29` established, still enforced under the
+   paired-device credential (`issue_foundry_system_key`, the third
+   management route this claim originally covered, is retired along with
+   the credential it used to issue — see `dnd_ai.api.integration`'s own
+   docstring, "Legacy FoundrySystem key issuance retired" — so there is no
+   longer a route there to prove rejects anything).
+6. A genuine, fully-valid *legacy* `FoundrySystem` credential (Workstream
+   11R High-severity finding 2) is rejected outright, unconditionally,
+   before any per-route authorization is ever reached — the retirement
+   this workstream's own correction delivers, re-proven end to end through
+   the same real request shapes as every other claim here.
 """
 
 import uuid
@@ -47,7 +57,12 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.foundry_pairing import (
+    consume_foundry_pairing_code,
+    create_foundry_pairing_code,
+)
 from dnd_ai.commands.integration import issue_foundry_system_key, link_foundry_identity
+from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -204,41 +219,47 @@ def _oidc_client(postgres_engine: Engine, user_id: uuid.UUID) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _foundry_headers(
-    external_system_id: uuid.UUID, raw_key: str, claimed_actor_id: str | None = None
-) -> dict[str, str]:
-    headers = {"Authorization": f"FoundrySystem {external_system_id}.{raw_key}"}
-    if claimed_actor_id is not None:
-        headers["X-Foundry-Actor-Id"] = claimed_actor_id
-    return headers
+def _foundry_access_headers(raw_access_token: str) -> dict[str, str]:
+    return {"Authorization": f"FoundryAccess {raw_access_token}"}
 
 
-def _provision(
-    postgres_engine: Engine, *, world_id: uuid.UUID, user_id: uuid.UUID, foundry_user_id: str
+def _foundry_system_headers(external_system_id: uuid.UUID, raw_key: str) -> dict[str, str]:
+    return {"Authorization": f"FoundrySystem {external_system_id}.{raw_key}"}
+
+
+def _pair(
+    postgres_engine: Engine, *, campaign_id: uuid.UUID, world_id: uuid.UUID, user_id: uuid.UUID
 ) -> tuple[uuid.UUID, str]:
-    """The same three steps `scripts/foundry_provision.py` performs (in
-    its own corrected order: register, link-identity, issue-key — a
-    credential can only be bound to an already-linked Foundry user id per
-    the second Phase 11 workstream 2 correction) — called directly through
-    the command layer here purely to set up fixtures faster than driving
-    three more HTTP round-trips per test; the provisioning script's own
+    """Registers a Foundry external system, then pairs a device for it via
+    the real pairing-code create/consume commands (Phase 11R workstreams
+    D/E — `scripts/foundry_provision.py`'s own `register`/`pairing-code`
+    subcommands drive the identical two calls over HTTP; called directly
+    through the command layer here purely to set up fixtures faster than
+    driving extra HTTP round-trips per test — the provisioning script's own
     HTTP behavior is separately covered by `tests/database/test_foundry_
-    provision.py`. Everything from this point on in every test below goes
-    through the real HTTP API only."""
+    provision.py`). Requests every scope in the closed vocabulary so every
+    claim below can exercise whichever route it needs without a dedicated
+    narrower pairing; scope enforcement itself is covered by `tests/
+    database/test_api_auth.py`/`test_api_integration.py`. Returns
+    (external_system_id, raw_access_token). Everything from this point on
+    in every test below goes through the real HTTP API only."""
     with postgres_engine.begin() as connection:
         external_system_id = make_external_system(connection, world_id)
-    link_foundry_identity(
+    issued = create_foundry_pairing_code(
         postgres_engine,
+        requesting_user_id=user_id,
+        campaign_id=campaign_id,
         external_system_id=external_system_id,
-        foundry_user_id=foundry_user_id,
-        user_id=user_id,
+        requested_scopes=FOUNDRY_SCOPES,
     )
-    key_result = issue_foundry_system_key(
+    consumed = consume_foundry_pairing_code(
         postgres_engine,
-        external_system_id=external_system_id,
-        principal_foundry_user_id=foundry_user_id,
+        raw_code=issued.raw_code,
+        foundry_user_id=f"foundry-user-{uuid.uuid4().hex[:8]}",
+        foundry_origin="https://foundry.example.test",
+        device_label="e2e-test-device",
     )
-    return external_system_id, key_result.raw_key
+    return external_system_id, consumed.raw_access_token
 
 
 def _start_encounter(client: TestClient, f: Fixture) -> uuid.UUID:
@@ -278,10 +299,10 @@ def _combat_sync_body(
 def test_claim_1_a_real_encounter_updates_canonical_state_only_through_the_api(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    external_system_id, raw_key = _provision(
-        postgres_engine, world_id=f.world_id, user_id=f.gm_user_id, foundry_user_id="foundry-gm"
+    external_system_id, raw_access_token = _pair(
+        postgres_engine, campaign_id=f.campaign_id, world_id=f.world_id, user_id=f.gm_user_id
     )
-    headers = _foundry_headers(external_system_id, raw_key, "foundry-gm")
+    headers = _foundry_access_headers(raw_access_token)
 
     with _oidc_client(postgres_engine, f.gm_user_id) as oidc_client:
         encounter_id = _start_encounter(oidc_client, f)
@@ -313,10 +334,10 @@ def test_claim_1_a_real_encounter_updates_canonical_state_only_through_the_api(
 def test_claim_1b_a_non_combat_hp_change_updates_canonical_state_only_through_the_api(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    external_system_id, raw_key = _provision(
-        postgres_engine, world_id=f.world_id, user_id=f.gm_user_id, foundry_user_id="foundry-gm"
+    _external_system_id, raw_access_token = _pair(
+        postgres_engine, campaign_id=f.campaign_id, world_id=f.world_id, user_id=f.gm_user_id
     )
-    headers = _foundry_headers(external_system_id, raw_key, "foundry-gm")
+    headers = _foundry_access_headers(raw_access_token)
 
     with TestClient(_app_for(postgres_engine), raise_server_exceptions=False) as adapter_client:
         response = adapter_client.post(
@@ -341,10 +362,10 @@ def test_claim_1b_a_non_combat_hp_change_updates_canonical_state_only_through_th
 def test_claim_2_duplicate_delivery_creates_no_duplicate_event(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    external_system_id, raw_key = _provision(
-        postgres_engine, world_id=f.world_id, user_id=f.gm_user_id, foundry_user_id="foundry-gm"
+    external_system_id, raw_access_token = _pair(
+        postgres_engine, campaign_id=f.campaign_id, world_id=f.world_id, user_id=f.gm_user_id
     )
-    headers = _foundry_headers(external_system_id, raw_key, "foundry-gm")
+    headers = _foundry_access_headers(raw_access_token)
 
     with _oidc_client(postgres_engine, f.gm_user_id) as oidc_client:
         encounter_id = _start_encounter(oidc_client, f)
@@ -380,10 +401,10 @@ def test_claim_2_duplicate_delivery_creates_no_duplicate_event(
 def test_claim_3_reconnecting_restores_the_updated_state(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    external_system_id, raw_key = _provision(
-        postgres_engine, world_id=f.world_id, user_id=f.gm_user_id, foundry_user_id="foundry-gm"
+    external_system_id, raw_access_token = _pair(
+        postgres_engine, campaign_id=f.campaign_id, world_id=f.world_id, user_id=f.gm_user_id
     )
-    headers = _foundry_headers(external_system_id, raw_key, "foundry-gm")
+    headers = _foundry_access_headers(raw_access_token)
 
     with _oidc_client(postgres_engine, f.gm_user_id) as oidc_client:
         encounter_id = _start_encounter(oidc_client, f)
@@ -402,9 +423,14 @@ def test_claim_3_reconnecting_restores_the_updated_state(
         assert sync_response.status_code == 201, sync_response.text
 
     # "Reconnect": a brand-new client/app instance, no in-memory state
-    # carried over — exactly what a fresh Foundry page load looks like
-    # to the server. Reads only (sync-state + character), mirroring
-    # foundry-module's own SyncEngine.restoreFromServer.
+    # carried over — exactly what a fresh Foundry page load looks like to
+    # the server (the device's own stored credential is what would be
+    # re-exchanged for a fresh access token in a real reload; this test
+    # reuses the same already-issued token, which is exactly as valid,
+    # since FoundryAccessTokenCache's own reload behavior — foundry-module/
+    # scripts/pairing.mjs — is covered by that module's own node --test
+    # suite, not this harness). Reads only (sync-state + character),
+    # mirroring foundry-module's own SyncEngine.restoreFromServer.
     with TestClient(_app_for(postgres_engine), raise_server_exceptions=False) as reconnect_client:
         sync_state_response = reconnect_client.get(
             f"/campaigns/{f.campaign_id}/integration/external-systems/{external_system_id}/sync-state",
@@ -423,19 +449,22 @@ def test_claim_3_reconnecting_restores_the_updated_state(
     assert character_response.json()["current_hit_points"] == 13
 
 
-def test_claim_4_a_foreign_world_credential_is_rejected(
+def test_claim_4_a_connection_paired_for_a_different_campaign_is_rejected(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    # Registered under other_world_id, linked to a user who genuinely
-    # holds canon.edit/campaign.view in BOTH campaigns — the credential
-    # itself, not the linked user's membership, must be what's checked.
-    foreign_system_id, foreign_raw_key = _provision(
+    # Paired for other_campaign_id, by a user who genuinely holds canon.
+    # edit/campaign.view in BOTH campaigns — the connection's own exact
+    # paired campaign, not the linked user's membership, must be what's
+    # checked. Exact-campaign scoping (Workstream 11R) is strictly
+    # narrower than the legacy credential's world-only binding this claim
+    # originally proved.
+    _foreign_system_id, foreign_raw_access_token = _pair(
         postgres_engine,
+        campaign_id=f.other_campaign_id,
         world_id=f.other_world_id,
         user_id=f.gm_user_id,
-        foundry_user_id="foundry-gm-foreign",
     )
-    headers = _foundry_headers(foreign_system_id, foreign_raw_key, "foundry-gm-foreign")
+    headers = _foundry_access_headers(foreign_raw_access_token)
 
     with TestClient(_app_for(postgres_engine), raise_server_exceptions=False) as adapter_client:
         response = adapter_client.get(
@@ -447,10 +476,10 @@ def test_claim_4_a_foreign_world_credential_is_rejected(
 def test_claim_5_the_same_credential_cannot_call_management_only_routes(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    external_system_id, raw_key = _provision(
-        postgres_engine, world_id=f.world_id, user_id=f.gm_user_id, foundry_user_id="foundry-gm"
+    external_system_id, raw_access_token = _pair(
+        postgres_engine, campaign_id=f.campaign_id, world_id=f.world_id, user_id=f.gm_user_id
     )
-    headers = _foundry_headers(external_system_id, raw_key, "foundry-gm")
+    headers = _foundry_access_headers(raw_access_token)
 
     with TestClient(_app_for(postgres_engine), raise_server_exceptions=False) as adapter_client:
         register_response = adapter_client.post(
@@ -463,12 +492,60 @@ def test_claim_5_the_same_credential_cannot_call_management_only_routes(
             json={"foundry_user_id": "someone-else", "user_id": str(f.gm_user_id)},
             headers=headers,
         )
-        issue_key_response = adapter_client.post(
-            f"/campaigns/{f.campaign_id}/integration/external-systems/{external_system_id}/foundry-system-key",
-            json={"foundry_user_id": "foundry-gm"},
-            headers=headers,
-        )
 
     assert register_response.status_code == 403
     assert link_response.status_code == 403
-    assert issue_key_response.status_code == 403
+
+
+def test_claim_6_a_genuine_legacy_foundrysystem_credential_is_rejected_outright(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    # Workstream 11R High-severity finding 2: a fully-valid legacy
+    # credential — linked, bound, active, every precondition the
+    # pre-retirement design required — minted through the same domain-
+    # layer commands `scripts/foundry_provision.py` used to drive before
+    # its own `issue-key` subcommand was retired (Workstream 11R
+    # workstream I). Must be rejected unconditionally, before any per-
+    # route authorization is ever reached, on every route the paired-
+    # device credential above successfully reaches in claims 1-3.
+    with postgres_engine.begin() as connection:
+        external_system_id = make_external_system(connection, f.world_id)
+    link_foundry_identity(
+        postgres_engine,
+        external_system_id=external_system_id,
+        foundry_user_id="foundry-legacy-gm",
+        user_id=f.gm_user_id,
+    )
+    key_result = issue_foundry_system_key(
+        postgres_engine,
+        external_system_id=external_system_id,
+        principal_foundry_user_id="foundry-legacy-gm",
+    )
+    headers = _foundry_system_headers(external_system_id, key_result.raw_key)
+
+    with _oidc_client(postgres_engine, f.gm_user_id) as oidc_client:
+        encounter_id = _start_encounter(oidc_client, f)
+
+    with TestClient(_app_for(postgres_engine), raise_server_exceptions=False) as adapter_client:
+        character_response = adapter_client.get(
+            f"/campaigns/{f.campaign_id}/characters/{f.defender_id}", headers=headers
+        )
+        combat_sync_response = adapter_client.post(
+            f"/campaigns/{f.campaign_id}/integration/foundry/combat-sync",
+            json=_combat_sync_body(
+                f,
+                encounter_id,
+                external_system_id=external_system_id,
+                external_operation_id=f"op-legacy-{uuid.uuid4().hex[:8]}",
+            ),
+            headers=headers,
+        )
+        sync_state_response = adapter_client.get(
+            f"/campaigns/{f.campaign_id}/integration/external-systems/{external_system_id}/sync-state",
+            params={"target_encounter_id": str(encounter_id)},
+            headers=headers,
+        )
+
+    assert character_response.status_code == 401
+    assert combat_sync_response.status_code == 401
+    assert sync_state_response.status_code == 401

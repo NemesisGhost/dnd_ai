@@ -5,13 +5,15 @@ Exposes `create_campaign` as `POST /campaigns`.
 Authorization is deliberately different from every other command router in
 this codebase: there is no campaign yet to resolve `dnd_ai.api.access.
 require_campaign_capability` against, so this route depends only on
-`dnd_ai.api.auth.require_oidc_user_id` at the API layer — any
-*human, OIDC-authenticated* user may *call* this route; a `FoundrySystem`
-adapter credential is rejected outright (Phase 11 workstream 2 correction
-— campaign creation has no `campaign_id` for `require_campaign_capability`'s
-own `allow_foundry_system` gate to scope a Foundry principal's world
-against, and is not part of the bounded adapter-facing surface in any
-case, per `dnd_ai.domain.access.AuthenticatedPrincipal`'s docstring).
+`dnd_ai.api.auth.require_human_user_id` at the API layer — any *human,
+OIDC- or local-session-authenticated* user may *call* this route; every
+Foundry-adapter credential is rejected outright (campaign creation has no
+`campaign_id` for `require_campaign_capability`'s own `allow_foundry_
+access` gate to scope a paired-device principal's campaign against, and
+is not part of the bounded adapter-facing surface in any case — the
+legacy `FoundrySystem` credential this reasoning originally covered is
+now rejected unconditionally before it can reach any route at all, per
+`dnd_ai.api.auth`'s own docstring).
 `dnd_ai.commands.campaigns.
 create_campaign` itself is where the real authorization now lives:
 `_authorize_timeline_reuse()` (that module's own docstring has the full
@@ -83,7 +85,7 @@ from sqlalchemy import Connection
 from dnd_ai.commands.campaigns import create_campaign
 
 from .audit import record_change_log
-from .auth import require_oidc_user_id
+from .auth import require_human_user_id
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .idempotency import (
@@ -113,7 +115,7 @@ class CreateCampaignResponse(BaseModel):
 @router.post("/campaigns", response_model=CreateCampaignResponse, status_code=201)
 def create_campaign_endpoint(
     body: CreateCampaignRequest,
-    creator_user_id: Annotated[uuid.UUID, Depends(require_oidc_user_id)],
+    creator_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  getConnectionSettings,
+  getApiBaseUrl,
   isLoopbackHost,
   isSecureApiBaseUrl,
   isValidHttpUrl,
   isValidUuid,
   registerSettings,
-  setConnectionSettings,
-  validateConnectionSettings,
+  setApiBaseUrl,
+  validateApiBaseUrl,
 } from "../scripts/settings.mjs";
 import { FakeSettings } from "./harness/foundry-globals.mjs";
 
@@ -50,106 +50,46 @@ test("isSecureApiBaseUrl requires https except for a recognized loopback host", 
   assert.equal(isSecureApiBaseUrl("http://localhost:8000"), true);
   assert.equal(isSecureApiBaseUrl("http://127.0.0.1:8000"), true);
   assert.equal(isSecureApiBaseUrl("http://[::1]:8000"), true);
-  // Remote or LAN http:// is rejected — this is the Issue 2 fix: a
-  // long-lived FoundrySystem credential must never travel over plaintext
-  // to a host other than the developer's own machine.
+  // Remote or LAN http:// is rejected — a paired device secret and the
+  // access token it is exchanged for must never travel in plaintext to a
+  // host other than the developer's own machine.
   assert.equal(isSecureApiBaseUrl("http://dnd-ai.example.com"), false);
   assert.equal(isSecureApiBaseUrl("http://192.168.1.50:8000"), false);
   assert.equal(isSecureApiBaseUrl("not a url"), false);
 });
 
-test("registerSettings registers all four settings with the correct config visibility", () => {
+test("registerSettings registers only apiBaseUrl, world-scoped and visible in config", () => {
   const settingsApi = new FakeSettings();
   registerSettings({ settingsApi });
 
-  assert.deepEqual(getConnectionSettings({ settingsApi }), {
-    apiBaseUrl: "",
-    externalSystemId: "",
-    campaignId: "",
-    systemCredential: "",
-  });
-  assert.equal(settingsApi._definitions.get("dnd-ai-adapter.systemCredential").config, false);
-  assert.equal(settingsApi._definitions.get("dnd-ai-adapter.apiBaseUrl").config, true);
+  assert.equal(getApiBaseUrl({ settingsApi }), "");
+  const definition = settingsApi._definitions.get("dnd-ai-adapter.apiBaseUrl");
+  assert.equal(definition.scope, "world");
+  assert.equal(definition.config, true);
 });
 
-test("systemCredential is registered client-scoped — never distributed to other connected clients", () => {
-  // Regression for the Critical defect this correction closes (see
-  // scripts/settings.mjs's own docstring): a world-scoped credential is
-  // delivered by Foundry to every connected client regardless of
-  // config: false, which only hides a setting from the UI, never narrows
-  // its distribution. scope: "client" is what actually keeps this value
-  // confined to the one browser profile that set it.
+test("setApiBaseUrl/getApiBaseUrl round-trip", async () => {
   const settingsApi = new FakeSettings();
   registerSettings({ settingsApi });
 
-  assert.equal(settingsApi._definitions.get("dnd-ai-adapter.systemCredential").scope, "client");
-  for (const key of ["apiBaseUrl", "externalSystemId", "campaignId"]) {
-    assert.equal(settingsApi._definitions.get(`dnd-ai-adapter.${key}`).scope, "world");
-  }
+  await setApiBaseUrl("https://dnd-ai.example.com", { settingsApi });
+
+  assert.equal(getApiBaseUrl({ settingsApi }), "https://dnd-ai.example.com");
 });
 
-test("setConnectionSettings/getConnectionSettings round-trip", async () => {
-  const settingsApi = new FakeSettings();
-  registerSettings({ settingsApi });
-
-  await setConnectionSettings(
-    {
-      apiBaseUrl: "https://dnd-ai.example.com",
-      externalSystemId: "11111111-1111-1111-1111-111111111111",
-      campaignId: "22222222-2222-2222-2222-222222222222",
-      systemCredential: "secret-key",
-    },
-    { settingsApi },
-  );
-
-  assert.deepEqual(getConnectionSettings({ settingsApi }), {
-    apiBaseUrl: "https://dnd-ai.example.com",
-    externalSystemId: "11111111-1111-1111-1111-111111111111",
-    campaignId: "22222222-2222-2222-2222-222222222222",
-    systemCredential: "secret-key",
-  });
+test("validateApiBaseUrl reports the malformed-URL problem", () => {
+  assert.deepEqual(validateApiBaseUrl("not a url"), ["DNDAI.Errors.InvalidApiBaseUrl"]);
+  assert.deepEqual(validateApiBaseUrl(""), ["DNDAI.Errors.InvalidApiBaseUrl"]);
 });
 
-test("validateConnectionSettings reports a specific problem per invalid field", () => {
-  const problems = validateConnectionSettings({
-    apiBaseUrl: "not a url",
-    externalSystemId: "not-a-uuid",
-    campaignId: "22222222-2222-2222-2222-222222222222",
-    systemCredential: "",
-  });
-  assert.deepEqual(problems, [
-    "DNDAI.Errors.InvalidApiBaseUrl",
-    "DNDAI.Errors.InvalidExternalSystemId",
-    "DNDAI.Errors.MissingCredential",
-  ]);
+test("validateApiBaseUrl flags a well-formed but insecure (non-loopback http) URL", () => {
+  assert.deepEqual(validateApiBaseUrl("http://dnd-ai.example.com"), ["DNDAI.Errors.InsecureApiBaseUrl"]);
 });
 
-test("validateConnectionSettings flags a well-formed but insecure (non-loopback http) API base URL", () => {
-  const problems = validateConnectionSettings({
-    apiBaseUrl: "http://dnd-ai.example.com",
-    externalSystemId: "11111111-1111-1111-1111-111111111111",
-    campaignId: "22222222-2222-2222-2222-222222222222",
-    systemCredential: "secret-key",
-  });
-  assert.deepEqual(problems, ["DNDAI.Errors.InsecureApiBaseUrl"]);
+test("validateApiBaseUrl accepts http for a loopback host", () => {
+  assert.deepEqual(validateApiBaseUrl("http://localhost:8000"), []);
 });
 
-test("validateConnectionSettings accepts http for a loopback API base URL", () => {
-  const problems = validateConnectionSettings({
-    apiBaseUrl: "http://localhost:8000",
-    externalSystemId: "11111111-1111-1111-1111-111111111111",
-    campaignId: "22222222-2222-2222-2222-222222222222",
-    systemCredential: "secret-key",
-  });
-  assert.deepEqual(problems, []);
-});
-
-test("validateConnectionSettings reports nothing for fully valid settings", () => {
-  const problems = validateConnectionSettings({
-    apiBaseUrl: "https://dnd-ai.example.com",
-    externalSystemId: "11111111-1111-1111-1111-111111111111",
-    campaignId: "22222222-2222-2222-2222-222222222222",
-    systemCredential: "secret-key",
-  });
-  assert.deepEqual(problems, []);
+test("validateApiBaseUrl reports nothing for a fully valid https URL", () => {
+  assert.deepEqual(validateApiBaseUrl("https://dnd-ai.example.com"), []);
 });

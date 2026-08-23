@@ -158,10 +158,11 @@ jobs:
     # database over the compose-internal network — see Dockerfile and
     # compose.yaml.
     #
-    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and the
-    # three API_OIDC_* settings have no fallback default in compose.yaml
-    # (see its header comment) — CI must supply all six explicitly, and
-    # the two database URLs must agree with POSTGRES_PASSWORD (for
+    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, the
+    # three API_OIDC_* settings, and API_LOCAL_SESSION_ALLOWED_ORIGINS have
+    # no fallback default in compose.yaml (see its header comment) — CI
+    # must supply all seven explicitly, and the two database URLs must
+    # agree with POSTGRES_PASSWORD (for
     # `migrate`) or API_READ_WRITE_PASSWORD (for `api`, provisioned below)
     # on the same password. All values are disposable: a fresh
     # tmpfs-backed container per run, never reused, never exposed on a
@@ -188,6 +189,7 @@ jobs:
       API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
       API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
       API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks
+      API_LOCAL_SESSION_ALLOWED_ORIGINS: https://ci-disposable-portal.example
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -428,14 +430,15 @@ jobs:
       # compose` interpolates every service's environment block up front,
       # regardless of which service is targeted, so `migrate`'s required
       # MIGRATION_DATABASE_URL and `api`'s required API_DATABASE_URL/
-      # API_OIDC_* (no fallback default, by design) must still resolve or
-      # `up -d db` below fails at config-parsing time before it starts
-      # anything.
+      # API_OIDC_*/API_LOCAL_SESSION_ALLOWED_ORIGINS (no fallback default,
+      # by design) must still resolve or `up -d db` below fails at
+      # config-parsing time before it starts anything.
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
       API_DATABASE_URL: postgresql+psycopg://app_read_write:ci_disposable_password@db:5432/dnd_ai
       API_OIDC_ISSUER: https://ci-disposable-idp.example/realm
       API_OIDC_AUDIENCE: dnd-ai-ci-disposable-audience
       API_OIDC_JWKS_URL: https://ci-disposable-idp.example/realm/jwks
+      API_LOCAL_SESSION_ALLOWED_ORIGINS: https://ci-disposable-portal.example
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -213,6 +213,17 @@ MANAGED_TABLES = [
     # live in ai.* — out of this file's scope entirely, since 'ai' is not
     # a MANAGED_SCHEMAS entry (see that list's own comment).
     ("core", "source_documents"),
+    # Phase 11R workstream A/B — local accounts and browser sessions
+    # (migration 099)
+    ("security", "local_credentials"),
+    ("security", "user_activation_tokens"),
+    ("security", "password_reset_tokens"),
+    ("security", "browser_sessions"),
+    # Phase 11R workstream D — Foundry hybrid pairing (migration 100)
+    ("security", "foundry_connections"),
+    ("security", "foundry_pairing_codes"),
+    ("security", "foundry_devices"),
+    ("security", "foundry_access_tokens"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is
