@@ -1,6 +1,6 @@
 .app-shell {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   min-height: 100vh;
 }
 
@@ -34,6 +34,57 @@
   text-align: center;
 }
 
+.campaign-context {
+  color: #243447;
+  background-color: #e8eef4;
+  border-bottom: 1px solid #bcccdc;
+}
+
+.campaign-context__list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem;
+}
+
+.campaign-context__item {
+  min-width: 0;
+}
+
+.campaign-context__item dt {
+  color: #52667a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.campaign-context__item dd {
+  margin: 0.25rem 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.campaign-context-error {
+  width: 100%;
+  max-width: 72rem;
+  margin: 1rem auto;
+  padding: 1rem 1.5rem;
+  color: #7f1d1d;
+  background-color: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 0.25rem;
+}
+
+@media (max-width: 48rem) {
+  .campaign-context__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 40rem) {
   .app-header,
   .app-main,
@@ -45,5 +96,22 @@
   .app-main {
     padding-top: 1.5rem;
     padding-bottom: 1.5rem;
+  }
+
+  .campaign-context__list {
+    padding-right: 1rem;
+    padding-left: 1rem;
+  }
+
+  .campaign-context-error {
+    width: calc(100% - 2rem);
+    padding-right: 1rem;
+    padding-left: 1rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .campaign-context__list {
+    grid-template-columns: 1fr;
   }
 }
