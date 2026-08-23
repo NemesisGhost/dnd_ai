@@ -1,81 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { maskCredential, prepareConnectionSetupContext, submitConnectionSetup } from "../scripts/ui/connection-setup-logic.mjs";
 import { dispatchSyncAction, prepareSyncDialogContext, ACTION_ADJUST_RESOURCE, ACTION_APPLY_CONDITION, ACTION_COMBAT_TURN, ACTION_REMOVE_CONDITION } from "../scripts/ui/sync-dialog-logic.mjs";
-import { registerSettings } from "../scripts/settings.mjs";
-import { FakeCombat, FakeDocument, FakeSettings } from "./harness/foundry-globals.mjs";
-
-test("maskCredential shows only the last 4 characters", () => {
-  assert.equal(maskCredential("abcdefgh1234"), "********1234");
-  assert.equal(maskCredential(""), "");
-  assert.equal(maskCredential("ab"), "**");
-});
-
-test("prepareConnectionSetupContext reflects current settings, masking the credential", () => {
-  const settingsApi = new FakeSettings();
-  registerSettings({ settingsApi });
-  settingsApi.set("dnd-ai-adapter", "apiBaseUrl", "https://dnd-ai.example.com");
-  settingsApi.set("dnd-ai-adapter", "systemCredential", "abcdefgh1234");
-
-  const context = prepareConnectionSetupContext({ settingsApi });
-  assert.equal(context.apiBaseUrl, "https://dnd-ai.example.com");
-  assert.equal(context.maskedCredential, "********1234");
-  assert.equal(context.hasCredential, true);
-});
-
-test("submitConnectionSetup rejects invalid input without persisting anything", async () => {
-  const settingsApi = new FakeSettings();
-  registerSettings({ settingsApi });
-
-  const result = await submitConnectionSetup(
-    { apiBaseUrl: "not a url", externalSystemId: "", campaignId: "", newCredential: "" },
-    { settingsApi },
-  );
-
-  assert.equal(result.ok, false);
-  assert.ok(result.problems.length > 0);
-  assert.equal(settingsApi.get("dnd-ai-adapter", "apiBaseUrl"), "");
-});
-
-test("submitConnectionSetup persists valid input and preserves the credential when not resubmitted", async () => {
-  const settingsApi = new FakeSettings();
-  registerSettings({ settingsApi });
-  settingsApi.set("dnd-ai-adapter", "systemCredential", "existing-key");
-
-  const result = await submitConnectionSetup(
-    {
-      apiBaseUrl: "https://dnd-ai.example.com",
-      externalSystemId: "11111111-1111-1111-1111-111111111111",
-      campaignId: "22222222-2222-2222-2222-222222222222",
-      newCredential: "",
-    },
-    { settingsApi },
-  );
-
-  assert.equal(result.ok, true);
-  assert.equal(settingsApi.get("dnd-ai-adapter", "systemCredential"), "existing-key");
-  assert.equal(settingsApi.get("dnd-ai-adapter", "apiBaseUrl"), "https://dnd-ai.example.com");
-});
-
-test("submitConnectionSetup rotates the credential when a new one is supplied", async () => {
-  const settingsApi = new FakeSettings();
-  registerSettings({ settingsApi });
-  settingsApi.set("dnd-ai-adapter", "systemCredential", "old-key");
-
-  await submitConnectionSetup(
-    {
-      apiBaseUrl: "https://dnd-ai.example.com",
-      externalSystemId: "11111111-1111-1111-1111-111111111111",
-      campaignId: "22222222-2222-2222-2222-222222222222",
-      newCredential: "new-key",
-    },
-    { settingsApi },
-  );
-
-  assert.equal(settingsApi.get("dnd-ai-adapter", "systemCredential"), "new-key");
-});
+import { FakeCombat, FakeDocument } from "./harness/foundry-globals.mjs";
 
 // -- sync-dialog-logic.mjs -------------------------------------------------
+// Pairing's own form logic (`pairing-logic.mjs`) has its own dedicated
+// test file, test/pairing-logic.test.mjs.
 
 function makeEngineStub() {
   const calls = [];

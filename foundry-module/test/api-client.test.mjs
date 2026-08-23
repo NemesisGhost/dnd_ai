@@ -4,18 +4,17 @@ import { DndAiApiClient } from "../scripts/api-client.mjs";
 import { DndAiApiError } from "../scripts/errors.mjs";
 import { createFetchStub } from "./harness/fetch-stub.mjs";
 
-const SETTINGS = {
-  apiBaseUrl: "https://dnd-ai.example.com",
-  externalSystemId: "11111111-1111-1111-1111-111111111111",
+const CONNECTION = {
   campaignId: "22222222-2222-2222-2222-222222222222",
-  systemCredential: "super-secret-key",
+  externalSystemId: "11111111-1111-1111-1111-111111111111",
 };
 
-function makeClient(fetchImpl, settings = SETTINGS) {
+function makeClient(fetchImpl, { connection = CONNECTION, token = "raw-access-token" } = {}) {
   return new DndAiApiClient({
-    getSettings: () => settings,
+    getApiBaseUrl: () => "https://dnd-ai.example.com",
+    getConnection: () => connection,
+    getAccessToken: async () => token,
     fetchImpl,
-    getFoundryActorId: () => "foundry-user-42",
   });
 }
 
@@ -37,11 +36,8 @@ test("mapExternalIdentifier sends the correct method, path, headers, and body", 
     "https://dnd-ai.example.com/campaigns/22222222-2222-2222-2222-222222222222/integration/external-systems/11111111-1111-1111-1111-111111111111/identifiers",
   );
   assert.equal(init.method, "POST");
-  assert.equal(
-    init.headers.Authorization,
-    "FoundrySystem 11111111-1111-1111-1111-111111111111.super-secret-key",
-  );
-  assert.equal(init.headers["X-Foundry-Actor-Id"], "foundry-user-42");
+  assert.equal(init.headers.Authorization, "FoundryAccess raw-access-token");
+  assert.equal(init.headers["X-Foundry-Actor-Id"], undefined);
   assert.equal(init.headers["Idempotency-Key"], undefined);
   assert.deepEqual(JSON.parse(init.body), {
     entity_id: "entity-1",
@@ -80,7 +76,7 @@ test("applyCombatSync never sends an Idempotency-Key header (uses external_opera
   ]);
   const client = makeClient(fetchImpl);
 
-  const payload = { external_system_id: SETTINGS.externalSystemId, external_operation_id: "combat-abc" };
+  const payload = { external_system_id: CONNECTION.externalSystemId, external_operation_id: "combat-abc" };
   await client.applyCombatSync(payload);
 
   const [{ init }] = fetchImpl.calls;
@@ -158,56 +154,39 @@ test("a thrown network failure is classified as retryable with status 0", async 
   );
 });
 
-test("X-Foundry-Actor-Id never influences the Authorization header", async () => {
-  // The server-side security property (dnd_ai.domain.access.
-  // resolve_foundry_system_principal) is that this header is never an
-  // authorization input at all — this is the client-side half: proving
-  // this client itself builds Authorization purely from
-  // externalSystemId/systemCredential, with no code path that could ever
-  // let a different claimed actor id change what credential is sent.
+test("getAccessToken is re-resolved on every request rather than cached by the client itself", async () => {
   const fetchImpl = createFetchStub([
     { status: 200, body: { external_identifier_id: "id-1" } },
     { status: 200, body: { external_identifier_id: "id-1" } },
   ]);
+  let callCount = 0;
   const client = new DndAiApiClient({
-    getSettings: () => SETTINGS,
+    getApiBaseUrl: () => "https://dnd-ai.example.com",
+    getConnection: () => CONNECTION,
+    getAccessToken: async () => {
+      callCount += 1;
+      return `token-${callCount}`;
+    },
     fetchImpl,
-    getFoundryActorId: () => "gm-foundry-id",
-  });
-  const otherClient = new DndAiApiClient({
-    getSettings: () => SETTINGS,
-    fetchImpl,
-    getFoundryActorId: () => "a-completely-different-claimed-actor",
   });
 
-  await client.mapExternalIdentifier({
-    entityId: "entity-1",
-    externalKind: "actor",
-    externalId: "foundry-actor-1",
-  });
-  await otherClient.mapExternalIdentifier({
-    entityId: "entity-1",
-    externalKind: "actor",
-    externalId: "foundry-actor-1",
-  });
+  await client.mapExternalIdentifier({ entityId: "entity-1", externalKind: "actor", externalId: "foundry-actor-1" });
+  await client.mapExternalIdentifier({ entityId: "entity-1", externalKind: "actor", externalId: "foundry-actor-1" });
 
   const [first, second] = fetchImpl.calls;
-  assert.equal(first.init.headers.Authorization, second.init.headers.Authorization);
-  assert.notEqual(
-    first.init.headers["X-Foundry-Actor-Id"],
-    second.init.headers["X-Foundry-Actor-Id"],
-  );
+  assert.equal(first.init.headers.Authorization, "FoundryAccess token-1");
+  assert.equal(second.init.headers.Authorization, "FoundryAccess token-2");
 });
 
-test("the credential never appears in a thrown error", async () => {
+test("the access token never appears in a thrown error", async () => {
   const fetchImpl = createFetchStub([{ status: 403, body: { error: { code: "forbidden", message: "no" } } }]);
-  const client = makeClient(fetchImpl);
+  const client = makeClient(fetchImpl, { token: "super-secret-access-token" });
 
   try {
     await client.getCharacter("char-1");
     assert.fail("expected a rejection");
   } catch (error) {
     const serialized = JSON.stringify({ message: error.message, stack: String(error.stack) });
-    assert.ok(!serialized.includes(SETTINGS.systemCredential));
+    assert.ok(!serialized.includes("super-secret-access-token"));
   }
 });

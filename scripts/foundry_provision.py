@@ -1,35 +1,42 @@
-"""GM-facing provisioning CLI for the FoundryVTT adapter (Phase 11 workstream 7,
-`foundry-module/`).
+"""Provisioning CLI for the FoundryVTT adapter (Phase 11 workstream 7,
+`foundry-module/`; converted to per-device pairing by Phase 11R workstream
+I, docs/PLAN.md §23.5/Workstream 11R item 6).
 
-There is no portal UI yet (Phase 13 is not started) to drive the three
-OIDC-authenticated management endpoints a GM needs before a Foundry world can
-connect: `register_external_system`, `issue_foundry_system_key`, and
-`link_foundry_identity` (`dnd_ai.commands.integration`, all gated on
-`canon.edit`/`access.manage` per `dnd_ai.api.integration`'s own module
-docstring). This script is that missing "explicit GM setup/linking flow" —
-a thin HTTP client, never a database client (CLAUDE.md rule 3: "Clients never
-write directly to the database"): every subcommand below is a plain
-`httpx` call against the real application API, authenticated with an
-OIDC bearer token the GM already has from the platform's identity provider
-(obtaining that token is existing Phase 10 OIDC infrastructure, out of
-scope here).
+There is no portal UI yet (Phase 13 is not started) to drive the
+authenticated management endpoints an operator needs before a Foundry world
+can connect, so this script is a thin HTTP client standing in for it — never
+a database client (CLAUDE.md rule 3: "Clients never write directly to the
+database"): every subcommand below is a plain `httpx` call against the real
+application API, authenticated with a bearer token the operator already has
+(an OIDC token from the platform's identity provider, or a local-account
+session token — either works, since every route here authenticates through
+the same `get_authenticated_user_id` chain as any other API caller;
+obtaining either credential is out of scope here).
 
-Deliberately never calls the `FoundrySystem` scheme this script exists to
-provision — that credential is what `foundry-module/` itself
-authenticates with once configured; this script only ever authenticates
-as the human GM.
+This script issues no credential of its own and never did — it is now a
+diagnostic/admin client over the same public pairing API
+`foundry-module/scripts/pairing.mjs` uses (Workstream 11R item 6's own
+wording): `register` creates the Foundry world's `external_system_id`
+record, and `pairing-code` mints a short-lived, single-use code that any
+campaign member (not only a GM) redeems from inside the Foundry module
+itself (`consumeFoundryPairingCode`) to pair their own device. The device's
+own credential and access token are minted directly by `POST /foundry/pair`
+inside the Foundry client, never routed through this script, so there is no
+long-lived secret for this CLI to ever hold or print.
 
-`issue-key` requires `--foundry-user-id` and binds the minted credential
-to whatever platform user that Foundry id is already linked to
-(`link-identity` must run first) — the second Phase 11 workstream 2
-security correction: a `FoundrySystem` credential now authenticates as
-exactly the one principal it was bound to at issuance, never a caller-
-selected identity (`dnd_ai.domain.access.resolve_foundry_system_
-principal`'s own docstring has the full defect this closes). This MVP's
-module only ever runs from the GM's own browser client
-(`foundry-module/README.md`'s "Trust boundary" section), so in practice
-that means: link the GM's own Foundry account, then issue a key bound to
-it — not one per player.
+The superseded `FoundrySystem` shared-credential subcommands
+(`issue-key`/`link-identity`/`provision`) that used to live here are
+removed, not merely deprecated — Workstream 11R item 6 requires the retained
+CLI to "not... issue the superseded credential." As of a subsequent
+Workstream 11R High-severity correction, this is now moot for a different
+reason too: `issue_foundry_system_key_endpoint` itself no longer exists
+(see `dnd_ai.api.integration`'s own docstring, "Legacy FoundrySystem key
+issuance retired"), and the `FoundrySystem` scheme is rejected
+unconditionally at the authentication boundary (`dnd_ai.api.auth`) — there
+is no remaining way to issue or use this credential at all, through this
+script or otherwise. See "Legacy transition" below for what that
+correction actually did, in place of the phased rollout this docstring
+originally described prospectively.
 
 Usage:
   uv run python scripts/foundry_provision.py register \\
@@ -37,42 +44,64 @@ Usage:
       --display-name "My Foundry World" [--system-type foundry] [--external-reference <ref>]
       # prints the new external_system_id
 
-  uv run python scripts/foundry_provision.py link-identity \\
+  uv run python scripts/foundry_provision.py pairing-code \\
       --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
-      --external-system-id <uuid> --foundry-user-id <foundry-user-id> --user-id <platform-user-uuid>
-      # maps one Foundry-side user id to one existing platform user. Run
-      # this BEFORE issue-key: a credential can only be bound to a Foundry
-      # user id that is already linked. This MVP's module only ever runs
-      # from the GM's own client (foundry-module/README.md's "Trust
-      # boundary" section) - link the GM's own Foundry account, not a
-      # player's.
+      --external-system-id <uuid> --scope combat_sync --scope character_state_sync
+      # mints a short-lived (5-10 minute), single-use pairing code for the
+      # CALLER's own platform account (whoever --token/DND_AI_OIDC_TOKEN
+      # authenticates as - not necessarily the GM: any campaign member with
+      # campaign.view can run this for themselves). Prints the raw code
+      # EXACTLY ONCE - enter it into the Foundry module's "D&D AI Pairing"
+      # settings menu within the printed expiry; it cannot be retrieved
+      # again, only reissued as a new code.
 
-  uv run python scripts/foundry_provision.py issue-key \\
-      --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
-      --external-system-id <uuid> --foundry-user-id <foundry-user-id>
-      # mints (or rotates) the system credential, BOUND to the platform
-      # user --foundry-user-id is already linked to (link-identity must
-      # have been run for this exact foundry-user-id first), and prints
-      # the raw key EXACTLY ONCE - paste it into the Foundry module's
-      # connection settings immediately; it cannot be retrieved again,
-      # only rotated (which also re-binds it, possibly to a different
-      # principal if a different --foundry-user-id is given).
+A bearer token is required for every subcommand: pass `--token`, or set
+`DND_AI_OIDC_TOKEN` in the environment (preferred — keeps it out of shell
+history and process listings; the variable name predates local-account
+sessions but is unchanged so existing scripts/CI keep working — it accepts
+either token type). This script never prints, logs, or otherwise persists
+the token anywhere; the one secret it does print (a newly minted pairing
+code) is printed exactly once, to stdout only, with an explicit one-time
+warning.
 
-  uv run python scripts/foundry_provision.py provision \\
-      --api-base-url https://dnd-ai.example.com --campaign-id <uuid> \\
-      --display-name "My Foundry World" \\
-      --foundry-user-id <gm-foundry-user-id> --user-id <gm-platform-user-uuid>
-      # convenience: register + link-identity (for the one principal this
-      # credential will authenticate as - the GM, for this MVP) +
-      # issue-key, in one call, for first-time setup.
+## Legacy transition
 
-An OIDC bearer token is required for every subcommand: pass `--token`, or
-set `DND_AI_OIDC_TOKEN` in the environment (preferred — keeps it out of
-shell history and process listings). This script never prints, logs, or
-otherwise persists the token anywhere; the one secret it does print
-(a newly issued system credential) is printed exactly once, to stdout
-only, with an explicit one-time warning, exactly as `issue_foundry_
-system_key`'s own docstring documents for the raw key it returns.
+This docstring originally described a four-step, deploy-then-pair-then-
+revoke-then-remove rollout plan (docs/PLAN.md Workstream 11R item 7),
+under the assumption that some deployment might still depend on the
+`FoundrySystem` scheme during a compatibility window. A subsequent review
+found no evidence of any real deployed client still depending on it — the
+sole first-party client, `foundry-module/`, was already fully converted to
+per-device pairing by Workstream 11R workstream H before this review — so
+step 4 (removal) was applied immediately instead of being deferred behind
+a window nothing needed:
+
+1. `get_authenticated_user_id` (`dnd_ai.api.auth`) now rejects the
+   `FoundrySystem` scheme keyword unconditionally, before any database
+   lookup — no principal is ever resolved for it, regardless of whether the
+   presented credential would have been genuinely valid under the retired
+   design.
+2. `require_campaign_capability`'s `allow_foundry_system` parameter, and
+   every route's `allow_foundry_system=True` argument, are removed
+   entirely (not merely defaulted off).
+3. `issue_foundry_system_key_endpoint` is removed from `dnd_ai.api.
+   integration` — there is no HTTP route left that issues this credential.
+4. Migration `102_revoke_foundry_system_keys` cleared `system_key_hash`/
+   `system_key_principal_user_id` to `NULL` for every existing `integration.
+   external_systems` row, revoking every already-issued legacy key at the
+   data level — defense in depth, independent of the code-level rejection
+   above.
+
+`resolve_foundry_system_principal`/`hash_foundry_system_key`/
+`issue_foundry_system_key`/`link_foundry_identity` and the schema columns
+they read remain defined (expand-and-contract: no schema change, no
+command deletion — a deployment that genuinely still needs to administer a
+pre-existing registration's identity mappings can still call `link_
+foundry_identity_endpoint` directly), but nothing reaches the credential-
+issuance path any more. If a future deployment genuinely needs a
+compatibility window this decision didn't anticipate, that is a new,
+explicit, separately-justified change — not a reason to treat this
+retirement as provisional.
 """
 
 from __future__ import annotations
@@ -93,19 +122,20 @@ _TOKEN_ENV_VAR = "DND_AI_OIDC_TOKEN"
 # automatically safe (a shared network can still observe plaintext traffic
 # to it). Mirrors foundry-module/scripts/settings.mjs's identical
 # `LOOPBACK_HOSTS`/`isLoopbackHost` — the same policy enforced on both the
-# module's own connection-setup form and this CLI, since both mint or
-# transmit the same long-lived `FoundrySystem` credential.
+# module's own pairing form and this CLI, since this script's bearer token
+# and the pairing code it prints, and the module's own pairing code/device
+# credential/access token, are all equally exposed by a plain-HTTP
+# connection.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _validate_api_base_url(value: str) -> None:
-    """Issue 2 (transport security): a `FoundrySystem` credential this
-    script prints (issue-key/provision) or the OIDC bearer token it sends
-    on every request must never be allowed to travel to a plain-HTTP,
-    non-loopback `--api-base-url` — a network observer between this
-    machine and that host could read either outright. Raises
-    `ProvisioningError` with a message safe to print (never includes the
-    token)."""
+    """Issue 2 (transport security): the bearer token this script sends on
+    every request, and the pairing code `pairing-code` prints, must never be
+    allowed to travel to a plain-HTTP, non-loopback `--api-base-url` — a
+    network observer between this machine and that host could read either
+    outright. Raises `ProvisioningError` with a message safe to print
+    (never includes the token)."""
     parsed = urlsplit(value)
     if parsed.scheme == "https":
         return
@@ -117,10 +147,9 @@ def _validate_api_base_url(value: str) -> None:
         return
     raise ProvisioningError(
         f"--api-base-url {value!r} must use https://, or http:// only for a recognized "
-        f"loopback host ({', '.join(sorted(_LOOPBACK_HOSTS))}) — this script sends an OIDC "
-        "bearer token, and issue-key/provision print a long-lived FoundrySystem credential, on "
-        "every request; either would travel in the clear over a plain-HTTP connection to any "
-        "other host."
+        f"loopback host ({', '.join(sorted(_LOOPBACK_HOSTS))}) — this script sends a bearer "
+        "token on every request, and pairing-code prints a secret, in the clear, over a "
+        "plain-HTTP connection to any other host."
     )
 
 
@@ -172,18 +201,19 @@ def _raise_for_envelope(response: httpx.Response) -> None:
     if response.status_code == 401:
         raise ProvisioningError(
             f"Authentication rejected (401 {code}): {message} "
-            "Check that --token/DND_AI_OIDC_TOKEN is a current, valid OIDC bearer token."
+            "Check that --token/DND_AI_OIDC_TOKEN is a current, valid bearer token "
+            "(OIDC or local-account session)."
         )
     if response.status_code == 403:
         raise ProvisioningError(
             f"Insufficient capability (403 {code}): {message} "
-            "The authenticated user needs canon.edit (register) or access.manage "
-            "(issue-key, link-identity) in this campaign."
+            "The authenticated user needs campaign.view (pairing-code) or canon.edit "
+            "(register) in this campaign, depending on the subcommand."
         )
     if response.status_code == 404:
         raise ProvisioningError(
             f"Not found (404 {code}): {message} "
-            "Check the campaign id and, for issue-key/link-identity, the external system id."
+            "Check the campaign id and, for pairing-code, the external system id."
         )
     raise ProvisioningError(f"Request failed ({response.status_code} {code}): {message}")
 
@@ -208,50 +238,32 @@ def register_external_system(
     return uuid.UUID(response.json()["external_system_id"])
 
 
-def issue_system_key(
-    ctx: ProvisioningContext, *, external_system_id: uuid.UUID, foundry_user_id: str
-) -> str:
-    """Mints (or rotates) external_system_id's FoundrySystem credential,
-    bound to the platform user foundry_user_id is already linked to
-    (`link_foundry_identity` must have been called for this exact
-    (external_system_id, foundry_user_id) pair first — a 400 `unlinked_
-    foundry_principal` otherwise, per `_raise_for_envelope`'s general
-    handling below)."""
+def create_pairing_code(
+    ctx: ProvisioningContext, *, external_system_id: uuid.UUID, requested_scopes: list[str]
+) -> tuple[str, list[str], str]:
+    """`POST /campaigns/{campaign_id}/foundry/pairing-codes` — mints a
+    pairing code for the platform user `ctx.token` authenticates as (any
+    active campaign member with `campaign.view`, not only the GM; see
+    `dnd_ai.api.foundry_pairing.create_foundry_pairing_code_endpoint`'s own
+    docstring). Returns `(raw_code, requested_scopes, expires_at)`; the raw
+    code is shown to the caller exactly once and never persisted or logged
+    by this script."""
     response = ctx.client.post(
-        f"/campaigns/{ctx.campaign_id}/integration/external-systems/"
-        f"{external_system_id}/foundry-system-key",
+        f"/campaigns/{ctx.campaign_id}/foundry/pairing-codes",
         headers=ctx.headers(),
-        json={"foundry_user_id": foundry_user_id},
+        json={"external_system_id": str(external_system_id), "requested_scopes": requested_scopes},
     )
     _raise_for_envelope(response)
-    raw_key = response.json()["raw_key"]
-    assert isinstance(raw_key, str)
-    return raw_key
-
-
-def link_foundry_identity(
-    ctx: ProvisioningContext,
-    *,
-    external_system_id: uuid.UUID,
-    foundry_user_id: str,
-    user_id: uuid.UUID,
-) -> uuid.UUID:
-    response = ctx.client.post(
-        f"/campaigns/{ctx.campaign_id}/integration/external-systems/"
-        f"{external_system_id}/foundry-identities",
-        headers=ctx.headers(),
-        json={"foundry_user_id": foundry_user_id, "user_id": str(user_id)},
-    )
-    _raise_for_envelope(response)
-    return uuid.UUID(response.json()["external_identity_id"])
+    body = response.json()
+    raw_code = body["raw_code"]
+    assert isinstance(raw_code, str)
+    return raw_code, list(body["requested_scopes"]), body["expires_at"]
 
 
 def _resolve_token(cli_token: str | None) -> str:
     token = cli_token or os.environ.get(_TOKEN_ENV_VAR)
     if not token:
-        raise ProvisioningError(
-            f"No OIDC bearer token supplied — pass --token or set {_TOKEN_ENV_VAR}."
-        )
+        raise ProvisioningError(f"No bearer token supplied — pass --token or set {_TOKEN_ENV_VAR}.")
     return token
 
 
@@ -260,7 +272,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-base-url", required=True)
     parser.add_argument("--campaign-id", required=True, type=uuid.UUID)
     parser.add_argument(
-        "--token", default=None, help=f"OIDC bearer token; falls back to ${_TOKEN_ENV_VAR}"
+        "--token",
+        default=None,
+        help=f"Bearer token (OIDC or local-account session); falls back to ${_TOKEN_ENV_VAR}",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -270,41 +284,18 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--system-type", default="foundry")
     register_parser.add_argument("--external-reference", default=None)
 
-    issue_key_parser = subparsers.add_parser(
-        "issue-key",
-        help="Mint or rotate a system's FoundrySystem credential, bound to one platform user",
+    pairing_code_parser = subparsers.add_parser(
+        "pairing-code",
+        help="Mint a pairing code for the caller's own account (current, recommended)",
     )
-    issue_key_parser.add_argument("--external-system-id", required=True, type=uuid.UUID)
-    issue_key_parser.add_argument(
-        "--foundry-user-id",
+    pairing_code_parser.add_argument("--external-system-id", required=True, type=uuid.UUID)
+    pairing_code_parser.add_argument(
+        "--scope",
+        dest="scopes",
+        action="append",
         required=True,
-        help="Must already be linked via link-identity for this external-system-id",
-    )
-
-    link_parser = subparsers.add_parser(
-        "link-identity", help="Map a Foundry-side user id to a platform user"
-    )
-    link_parser.add_argument("--external-system-id", required=True, type=uuid.UUID)
-    link_parser.add_argument("--foundry-user-id", required=True)
-    link_parser.add_argument("--user-id", required=True, type=uuid.UUID)
-
-    provision_parser = subparsers.add_parser(
-        "provision",
-        help="Convenience: register + link-identity + issue-key, bound to one platform user",
-    )
-    provision_parser.add_argument("--display-name", required=True)
-    provision_parser.add_argument("--system-type", default="foundry")
-    provision_parser.add_argument("--external-reference", default=None)
-    provision_parser.add_argument(
-        "--foundry-user-id",
-        required=True,
-        help="The Foundry user the issued credential will authenticate as (this MVP's GM)",
-    )
-    provision_parser.add_argument(
-        "--user-id",
-        required=True,
-        type=uuid.UUID,
-        help="The existing platform user --foundry-user-id maps to",
+        help="A requested Foundry scope; repeat for more than one (e.g. --scope combat_sync "
+        "--scope character_state_sync)",
     )
 
     return parser
@@ -339,56 +330,16 @@ def _run_command(args: argparse.Namespace, ctx: ProvisioningContext) -> int:
             )
             print(f"external_system_id: {external_system_id}")
 
-        elif args.command == "issue-key":
-            raw_key = issue_system_key(
-                ctx,
-                external_system_id=args.external_system_id,
-                foundry_user_id=args.foundry_user_id,
+        elif args.command == "pairing-code":
+            raw_code, granted_scopes, expires_at = create_pairing_code(
+                ctx, external_system_id=args.external_system_id, requested_scopes=args.scopes
             )
             print(
-                "raw_key (shown ONCE - paste it into the Foundry module's connection "
-                f"settings now, it cannot be retrieved again): {raw_key}"
+                'raw_code (shown ONCE - enter it into the Foundry module\'s "D&D AI Pairing" '
+                f"settings menu before it expires, it cannot be retrieved again): {raw_code}"
             )
-            print(f"Bound to the platform user linked to Foundry user {args.foundry_user_id!r}.")
-
-        elif args.command == "link-identity":
-            external_identity_id = link_foundry_identity(
-                ctx,
-                external_system_id=args.external_system_id,
-                foundry_user_id=args.foundry_user_id,
-                user_id=args.user_id,
-            )
-            print(f"external_identity_id: {external_identity_id}")
-
-        elif args.command == "provision":
-            external_system_id = register_external_system(
-                ctx,
-                system_type=args.system_type,
-                display_name=args.display_name,
-                external_reference=args.external_reference,
-            )
-            print(f"external_system_id: {external_system_id}")
-            link_foundry_identity(
-                ctx,
-                external_system_id=external_system_id,
-                foundry_user_id=args.foundry_user_id,
-                user_id=args.user_id,
-            )
-            raw_key = issue_system_key(
-                ctx,
-                external_system_id=external_system_id,
-                foundry_user_id=args.foundry_user_id,
-            )
-            print(
-                "raw_key (shown ONCE - paste it into the Foundry module's connection "
-                f"settings now, it cannot be retrieved again): {raw_key}"
-            )
-            print(
-                f"Bound to the platform user (--user-id {args.user_id}) linked to Foundry "
-                f"user {args.foundry_user_id!r} — this credential authenticates as that one "
-                "principal only. This MVP's module runs only from the GM's own client, so "
-                "that should be the GM's own Foundry account and platform user."
-            )
+            print(f"scopes: {', '.join(granted_scopes)}")
+            print(f"expires_at: {expires_at}")
 
     except ProvisioningError as exc:
         print(f"error: {exc}", file=sys.stderr)

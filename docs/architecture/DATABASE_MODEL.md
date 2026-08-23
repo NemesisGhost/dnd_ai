@@ -817,6 +817,64 @@ Key columns:
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
 - `last_login_at TIMESTAMPTZ NULL`
+- `is_platform_administrator BOOLEAN` (migration 099, Phase 11R workstream A) — a minimal, campaign-independent authorization primitive for account-management operations with no `campaign_id` to scope a `security.roles`/`.resource_grants` check against at all: creating a local account, issuing a password-reset token, and the one-time initial-admin bootstrap (`dnd_ai.commands.local_auth.bootstrap_initial_admin`, engine-only, never exposed over HTTP, fails closed once any `security.users` row already exists). Deliberately not a `security.roles` row — campaign roles grant capabilities within one campaign membership (§19.3 below), the opposite scope from platform-account administration. A deliberate extension beyond docs/PLAN.md §23.1's own text, which describes "an administrator" creating accounts without specifying how that administrator is itself authorized.
+
+##### `security.local_credentials`
+
+A user's local password credential, separated from `security.users` itself (docs/PLAN.md §23.1). One row per user, created only when `dnd_ai.commands.local_auth.activate_local_account` consumes a `security.user_activation_tokens` row.
+
+Key columns:
+
+- `local_credential_id UUID PK`
+- `user_id UUID FK` — unique; one credential row per user
+- `password_hash TEXT` — Argon2id-encoded (`dnd_ai.domain.passwords.hash_password`); never the raw password
+- `password_updated_at TIMESTAMPTZ`
+
+##### `security.user_activation_tokens`
+
+A hashed, expiring, single-use token an administrator issues when creating an account; consuming it is how a user chooses their own password and claims their login name. The login name itself is not a new durable column — consumption writes it into `security.external_identities` with a synthetic `issuer='local'` (`dnd_ai.domain.access.LOCAL_AUTH_ISSUER`), the same synthetic-issuer pattern §19.1's Foundry-identity paragraph above already established for `foundry:<external_system_id>`.
+
+Key columns:
+
+- `user_activation_token_id UUID PK`
+- `user_id UUID FK`
+- `login_name TEXT` — normalized, reserved only at consumption (not issuance); format-constrained (`^[a-z0-9._-]{3,64}$`)
+- `token_hash TEXT` — sha256 hex digest; the raw token is returned to the issuing administrator exactly once
+- `created_by_user_id UUID FK NULL` — NULL only for the one-time initial-admin bootstrap token
+- `expires_at TIMESTAMPTZ`
+- `consumed_at TIMESTAMPTZ NULL`
+
+##### `security.password_reset_tokens`
+
+The administrator-initiated counterpart to activation tokens.
+
+Key columns:
+
+- `password_reset_token_id UUID PK`
+- `user_id UUID FK`
+- `token_hash TEXT` — sha256 hex digest
+- `requested_by_user_id UUID FK` — the administrator who issued this reset token
+- `revoke_sessions BOOLEAN` — whether consumption also revokes the user's browser sessions and Foundry connections (docs/PLAN.md §23.1's "full sign-out" reset policy; wired to `dnd_ai.commands.local_auth.revoke_all_browser_sessions`/`dnd_ai.commands.foundry_pairing.revoke_all_foundry_connections`)
+- `expires_at TIMESTAMPTZ`
+- `consumed_at TIMESTAMPTZ NULL`
+
+##### `security.browser_sessions`
+
+The opaque, server-side browser session behind the `__Host-dnd_ai_session` cookie (docs/PLAN.md §23.4). Named `browser_sessions`, not `sessions`, to avoid colliding with the pre-existing, unrelated `campaign.sessions` (game-session) concept.
+
+Key columns:
+
+- `browser_session_id UUID PK`
+- `user_id UUID FK`
+- `session_token_hash TEXT` — sha256 hex digest of the cookie's opaque value
+- `csrf_token TEXT` — a server-generated CSRF secret, stored in the clear (unlike every other credential in this table) since the session-bootstrap endpoint already returns the same value in its JSON body on every call — the double-submit contract requires the matching `HttpOnly` cookie too, so hashing this column would not reduce what an attacker with database access already learns from a live response
+- `created_at TIMESTAMPTZ`, `last_used_at TIMESTAMPTZ`
+- `idle_expires_at TIMESTAMPTZ` — sliding window, extended on each authenticated request up to `absolute_expires_at`
+- `absolute_expires_at TIMESTAMPTZ` — a hard ceiling `idle_expires_at` can never be extended past
+- `revoked_at TIMESTAMPTZ NULL`
+- `created_ip TEXT NULL`, `last_used_ip TEXT NULL`, `user_agent TEXT NULL`
+
+No pruning/archival job for expired or revoked rows in any of the four tables above is added by migration 099 — like `security.idempotent_requests`, these are disposable operational state with real `ON DELETE CASCADE` foreign keys, not audit history; a periodic cleanup job is left to a future operational workstream.
 
 ##### `security.external_identities`
 
@@ -1079,9 +1137,73 @@ Security-sensitive audit records identify the authenticated user or service acco
 
 External IDs must never replace internal UUID identity.
 
-`integration.external_systems.system_key_hash` (migration 089, Phase 11 workstream 2) holds the sha256 hash of a Foundry-adapter system-level credential — minted by `dnd_ai.commands.integration.issue_foundry_system_key`, verified during authentication by `dnd_ai.domain.access.resolve_foundry_system_principal`, which resolves a full `AuthenticatedPrincipal` (carrying the authenticated `external_system_id`/`world_id`, not just a bare `user_id` — see that dataclass's own docstring for why, following a Phase 11 security correction) rather than a `user_id` alone. `NULL` until a key is issued; issuing again overwrites it in place (rotation, immediately invalidating the prior key), matching `security.campaign_invitations.invitation_token_hash`'s existing "store only a hash" shape rather than a new table. `system_key_principal_user_id` (migration 092, a second, more severe Phase 11 workstream 2 correction — a Critical credential-impersonation defect the first correction pass above did not touch) is bound to that same row *atomically with issuance*: the one platform user this credential authenticates as, resolved once and stored, never re-derived from anything a caller supplies per request. `NULL` (cannot authenticate at all) until bound, or if the bound user is later deleted. See §19.1's `security.external_identities` entry for the companion identity mapping (`foundry:<external_system_id>` issuer) `issue_foundry_system_key` resolves this from, and `foundry-module/README.md`'s "Trust boundary" section for the full defect this closes and the client-side half of the fix (the credential moved from a Foundry world-scoped setting to a client-scoped one).
+`integration.external_systems.system_key_hash` (migration 089, Phase 11 workstream 2) held the sha256 hash of a Foundry-adapter system-level credential — minted by `dnd_ai.commands.integration.issue_foundry_system_key`, verified during authentication by `dnd_ai.domain.access.resolve_foundry_system_principal`, which resolves a full `AuthenticatedPrincipal` (carrying the authenticated `external_system_id`/`world_id`, not just a bare `user_id` — see that dataclass's own docstring for why, following a Phase 11 security correction) rather than a `user_id` alone. **Retired (Workstream 11R High-severity finding 2):** the `FoundrySystem` scheme this credential authenticated is now rejected unconditionally at `dnd_ai.api.auth.get_authenticated_user_id` itself, and migration `102_revoke_foundry_system_keys` cleared `system_key_hash`/`system_key_principal_user_id` to `NULL` for every existing row — a presented key can therefore never match even if the legacy scheme were somehow reachable again. Both columns and `resolve_foundry_system_principal`/`hash_foundry_system_key`/`issue_foundry_system_key` themselves remain defined (expand-and-contract: no schema change, no command deletion) since nothing in this repository requires removing them yet, but neither is reachable from any HTTP route (`issue_foundry_system_key_endpoint` is itself removed — see `dnd_ai.api.integration`'s own docstring, "Legacy FoundrySystem key issuance retired"). `system_key_principal_user_id` (migration 092, a second, more severe Phase 11 workstream 2 correction — a Critical credential-impersonation defect the first correction pass above did not touch) bound that same row *atomically with issuance*: the one platform user the credential authenticated as, resolved once and stored, never re-derived from anything a caller supplied per request. See §19.1's `security.external_identities` entry for the companion identity mapping (`foundry:<external_system_id>` issuer) `issue_foundry_system_key` resolved this from, and `foundry-module/README.md`'s "Trust boundary" section for the full defect this closed and the client-side half of that fix (the credential moved from a Foundry world-scoped setting to a client-scoped one, before being superseded entirely by per-device pairing).
 
 `audit.change_log.acting_external_system_id` (migration 091, Phase 11 workstream 2 security correction) records which `integration.external_systems` row authenticated a change made through a delegated `FoundrySystem` credential, set alongside (never instead of) `actor_user_id` — distinct from `actor_service`, which is documented as set *instead of* `actor_user_id` for an actor with no linked platform user at all. `NULL` for every OIDC-authenticated change. `acting_foundry_actor_id` (migration 092) is its sibling for the client-claimed, server-unverified Foundry actor id (`X-Foundry-Actor-Id`, renamed from `X-Foundry-User-Id`) — recorded as free text purely for operator visibility, never consulted by `resolve_foundry_system_principal` or any other authorization logic; `actor_user_id` is resolved entirely from `system_key_principal_user_id` above, regardless of what this header claims.
+
+`audit.change_log.acting_foundry_connection_id`/`.acting_foundry_device_id` (migration 101, Phase 11R workstream G) are the paired-device credential's counterparts to `acting_external_system_id` above — `dnd_ai.domain.access.AuthenticatedPrincipal.foundry_connection_id`/`.foundry_device_id` for a `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated change, `NULL` for every other auth method including the legacy `FoundrySystem` one. `acting_external_system_id` is still populated for this credential type too (both Foundry auth methods carry `foundry_external_system_id` since workstream C); these two columns add the finer "which paired connection, which specific device" identity the legacy shared credential could never carry. No `acting_foundry_actor_id` equivalent exists for a paired connection — it already names its one Foundry user directly, so there is no claimed-but-unverified actor concept to record.
+
+#### Foundry hybrid pairing (migrations 100-102, Phase 11R workstreams D-G plus the High-severity findings correction)
+
+docs/PLAN.md §23.5's replacement for the single shared `FoundrySystem` credential above: individually paired devices and short-lived access tokens, in four new `security` schema tables (not `integration`, to sit alongside the other credential tables workstream A/B added). `FOUNDRY_ACCESS_AUTH_METHOD` (workstream C) is a full `AuthenticatedPrincipal` type resolved from `Authorization: FoundryAccess <token>` by `dnd_ai.domain.foundry_pairing.resolve_foundry_access_principal`, exact-campaign-scoped via `dnd_ai.api.access.require_campaign_capability`'s `allow_foundry_access` gate (narrower than the legacy credential's world-only scope) — and, as of the Workstream 11R High-severity correction, additionally scoped by `foundry_scope`: every `allow_foundry_access=True` route must declare exactly one scope from `FOUNDRY_SCOPES`, checked against the resolved principal's own `foundry_scopes` (see `granted_scopes` below), never merely reachable by any paired connection regardless of what it was actually granted. The legacy `FoundrySystem` gate this sat alongside is retired, not merely superseded — see `integration.external_systems.system_key_hash`'s own entry above for the full account. The management/pairing HTTP surface (`dnd_ai.api.foundry_pairing`, workstream E) and audit attribution (workstream G, above) are both delivered.
+
+##### `security.foundry_connections`
+
+The non-secret binding "D&D AI user X, on campaign Y, is Foundry user Z in external system W" a pairing code creates or confirms. Portable metadata only, never a bearer credential. Several `security.foundry_devices` rows may share one connection (several browsers for the same Foundry user).
+
+Key columns:
+
+- `foundry_connection_id UUID PK`
+- `user_id UUID FK`, `campaign_id UUID FK`, `external_system_id UUID FK`
+- `foundry_user_id TEXT` — the Foundry-side user id; identity only, never authorization by itself
+- `foundry_origin TEXT` — the exact Foundry browser origin recorded at pairing time; portability metadata only
+- `granted_scopes TEXT[]` — the closed `dnd_ai.domain.foundry_pairing.FOUNDRY_SCOPES` set this connection may use, re-checked on every access-token-authenticated request rather than frozen onto a device or token. Workstream 11R High-severity finding 1: this column was persisted since workstream D but not actually read back onto the resolved principal or enforced by `require_campaign_capability` until the High-severity correction — `dnd_ai.domain.foundry_pairing.resolve_foundry_access_principal` now selects it fresh on every call and carries it as `AuthenticatedPrincipal.foundry_scopes`, so a scope revoked here (e.g. by re-pairing with a narrower `requested_scopes` set, which upserts this column in place) takes effect on the connection's very next request, even one presenting an access token that has not itself expired
+- `revoked_at TIMESTAMPTZ NULL`, `revoked_by_user_id UUID FK NULL`
+
+Unique (while unrevoked) on `(campaign_id, external_system_id, foundry_user_id)`.
+
+##### `security.foundry_pairing_codes`
+
+A hashed, single-use, 5-10 minute bootstrap code a local-session-authenticated user creates from the portal and enters into a FoundryVTT client to pair one browser/device.
+
+Key columns:
+
+- `foundry_pairing_code_id UUID PK`
+- `user_id UUID FK`, `campaign_id UUID FK`, `external_system_id UUID FK`
+- `code_hash TEXT` — sha256 hex digest; the raw code is returned to the creating browser session exactly once
+- `requested_scopes TEXT[]`
+- `created_by_browser_session_id UUID FK NULL`
+- `expires_at TIMESTAMPTZ`, `consumed_at TIMESTAMPTZ NULL`, `consumed_by_foundry_device_id UUID FK NULL`
+
+Consumed atomically by `dnd_ai.commands.foundry_pairing.consume_foundry_pairing_code` via a single `UPDATE ... WHERE consumed_at IS NULL ... RETURNING` — the same single-winner pattern `security.user_activation_tokens` already established.
+
+##### `security.foundry_devices`
+
+One row per paired browser/device — the client-scoped, 30-90 day device credential a FoundryVTT module exchanges for short-lived access tokens.
+
+Key columns:
+
+- `foundry_device_id UUID PK`
+- `foundry_connection_id UUID FK`
+- `device_label TEXT`, `module_version TEXT NULL`, `foundry_version TEXT NULL`
+- `device_secret_hash TEXT` — sha256 hex digest; the raw secret is returned to the pairing Foundry client exactly once, for storage only in its own client-scoped `game.settings` value
+- `expires_at TIMESTAMPTZ`, `revoked_at TIMESTAMPTZ NULL`, `revoked_by_user_id UUID FK NULL`
+- `replaced_by_foundry_device_id UUID FK NULL` — set by `dnd_ai.commands.foundry_pairing.rotate_foundry_device` when rotation is requested with a bounded overlap window
+
+Revoking a device leaves its connection and any sibling devices untouched; revoking the connection (`dnd_ai.commands.foundry_pairing.revoke_foundry_connection`) cascades to every device under it.
+
+##### `security.foundry_access_tokens`
+
+A short-lived (10-30 minute) opaque access token exchanged from a device credential for ordinary Foundry-adapter API requests — the `Authorization: FoundryAccess <token>` bearer value. Deliberately carries no scope/campaign snapshot of its own: resolving a request always re-joins to the owning device's connection, so revoking the connection or device takes effect on this token's very next use even though the token row itself is untouched.
+
+Key columns:
+
+- `foundry_access_token_id UUID PK`
+- `foundry_device_id UUID FK`
+- `token_hash TEXT` — sha256 hex digest; held only in memory by the Foundry client
+- `issued_at TIMESTAMPTZ`, `expires_at TIMESTAMPTZ`, `revoked_at TIMESTAMPTZ NULL`, `last_used_at TIMESTAMPTZ NULL`
+
+No pruning/archival job for any of the four tables above, matching `security.idempotent_requests`'/migration 099's identical "disposable operational state, not audit history" precedent.
 
 ## 20. Import staging
 

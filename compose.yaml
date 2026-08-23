@@ -199,6 +199,16 @@ services:
       DND_AI_OIDC_ISSUER: ${API_OIDC_ISSUER:?API_OIDC_ISSUER is required — copy .env.example to .env and set it to your OIDC provider's issuer URL (HTTPS) before starting the api service}
       DND_AI_OIDC_AUDIENCE: ${API_OIDC_AUDIENCE:?API_OIDC_AUDIENCE is required — copy .env.example to .env and set it to your OIDC provider's audience before starting the api service}
       DND_AI_OIDC_JWKS_URL: ${API_OIDC_JWKS_URL:?API_OIDC_JWKS_URL is required — copy .env.example to .env and set it to your OIDC provider's JWKS URL (HTTPS) before starting the api service}
+      # Phase 11R workstream A/B: the exact-origin allowlist a cookie-
+      # authenticated, state-changing local-session request's Origin header
+      # is checked against (docs/PLAN.md §23.4; see .env.example's "Local
+      # authentication" section). Unlike API_FOUNDRY_ALLOWED_ORIGINS below,
+      # this has no safe soft default in production — local authentication
+      # is not an opt-in feature the way Foundry integration is, so
+      # dnd_ai.config.Settings requires it unconditionally whenever
+      # DND_AI_ENVIRONMENT=production (which this file always sets for
+      # `api`), with no fallback, and requires every origin to be HTTPS.
+      DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS: ${API_LOCAL_SESSION_ALLOWED_ORIGINS:?API_LOCAL_SESSION_ALLOWED_ORIGINS is required — copy .env.example to .env and set it to the portal's real HTTPS origin before starting the api service}
       # Issue 1's CORS fix: the explicit allowlist of browser origins the
       # FoundryVTT module is served from (see .env.example's "Foundry CORS"
       # section). Optional soft defaults here on purpose — most self-hosted
