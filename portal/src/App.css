@@ -115,3 +115,26 @@
     grid-template-columns: 1fr;
   }
 }
+
+.placeholder-page {
+  max-width: 48rem;
+}
+
+.placeholder-page h1 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.placeholder-page p {
+  line-height: 1.6;
+}
+
+.placeholder-page__status {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  color: #634b16;
+  background-color: #fff3cd;
+  border: 1px solid #e2c66d;
+  border-radius: 0.375rem;
+}
