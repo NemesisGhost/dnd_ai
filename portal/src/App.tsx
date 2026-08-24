@@ -1,65 +1,63 @@
-import { Route, Routes } from 'react-router'
+import { Navigate, Route, Routes } from 'react-router'
 import './App.css'
-import { CampaignContextBar } from "./components/CampaignContextBar"
 import { sessionBootstrapFixture } from './fixtures/sessionBootstrap'
+import { CampaignLayout } from './layouts/CampaignLayout'
 import PlaceholderPage from './pages/PlaceholderPage'
 
 function App() {
-  const selectedCampaign =
-    sessionBootstrapFixture.campaigns.find(
-      (campaign) =>
-        campaign.campaignId ===
-        sessionBootstrapFixture.selectedCampaignId,
-    ) ?? null
-
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1 className="app-header__title">D&amp;D AI Portal</h1>
       </header>
 
-      {selectedCampaign ? (
-        <CampaignContextBar campaign={selectedCampaign} />
-      ) : (
-        <p className="context-error" role="alert">
-          No campaign is currently selected.
-        </p>
-      )}
-
-      <main className="app-main">
-        <Routes>
-          <Route
-            path="/"
-            element={
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <main className="app-main">
               <PlaceholderPage
                 title="Portal Foundation"
                 description="The Phase 13 portal foundation is running."
               />
-            }
-          />
+            </main>
+          }
+        />
 
-          <Route
-            path="/login"
-            element={
+        <Route
+          path="/login"
+          element={
+            <main className="app-main">
               <PlaceholderPage
                 title="Log in"
                 description="Local application authentication will be added in Phase 13B."
               />
-            }
-          />
+            </main>
+          }
+        />
 
-          <Route
-            path="/campaigns"
-            element={
+        <Route
+          path="/campaigns"
+          element={
+            <main className="app-main">
               <PlaceholderPage
                 title="Campaigns"
                 description="Select a campaign to enter the portal."
               />
-            }
-          />
+            </main>
+          }
+        />
+
+        <Route
+          path="/app/:campaignId"
+          element={
+            <CampaignLayout bootstrap={sessionBootstrapFixture} />
+          }
+        >
+          <Route index element={<Navigate to="home" replace />} />
 
           <Route
-            path="/app/:campaignId/home"
+            path="home"
             element={
               <PlaceholderPage
                 title="Home"
@@ -69,7 +67,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/world"
+            path="world"
             element={
               <PlaceholderPage
                 title="World"
@@ -79,7 +77,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/characters"
+            path="characters"
             element={
               <PlaceholderPage
                 title="Characters"
@@ -89,7 +87,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/quests"
+            path="quests"
             element={
               <PlaceholderPage
                 title="Quests"
@@ -99,7 +97,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/sessions"
+            path="sessions"
             element={
               <PlaceholderPage
                 title="Sessions"
@@ -109,7 +107,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/knowledge"
+            path="knowledge"
             element={
               <PlaceholderPage
                 title="Knowledge"
@@ -119,7 +117,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/ask"
+            path="ask"
             element={
               <PlaceholderPage
                 title="Ask"
@@ -130,7 +128,7 @@ function App() {
           />
 
           <Route
-            path="/app/:campaignId/access"
+            path="access"
             element={
               <PlaceholderPage
                 title="Access management"
@@ -143,13 +141,25 @@ function App() {
             path="*"
             element={
               <PlaceholderPage
-                title="Page not found"
-                description="The requested portal page does not exist."
+                title="Campaign page not found"
+                description="The requested campaign page does not exist."
               />
             }
           />
-        </Routes>
-      </main>
+        </Route>
+
+        <Route
+          path="*"
+          element={
+            <main className="app-main">
+              <PlaceholderPage
+                title="Page not found"
+                description="The requested portal page does not exist."
+              />
+            </main>
+          }
+        />
+      </Routes>
 
       <footer className="app-footer">
         <p>&copy; 2026 D&amp;D AI Portal</p>

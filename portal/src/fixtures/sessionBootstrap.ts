@@ -10,7 +10,7 @@ export const sessionBootstrapFixture = {
 
   campaigns: [
     {
-      campaignId: "campaign-mundivita",
+      campaignId: "mundivita",
       campaignName: "Mundivita",
       timelineId: "timeline-primary",
       timelineName: "Primary Timeline",
