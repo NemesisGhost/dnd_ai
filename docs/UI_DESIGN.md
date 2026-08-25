@@ -85,14 +85,15 @@ Changing perspective refreshes the page from the server. It is not a client-only
 
 States:
 
-- Sign in.
+- Sign in (local username/password against `POST /auth/login`).
+- Account activation from an administrator-issued invitation link (`POST /auth/activate` — sets the account's first password; no temporary password is ever assigned or displayed).
 - Accept campaign invitation.
 - First-time profile confirmation.
 - No active campaign membership.
-- Expired, revoked, or invalid invitation.
-- Account recovery through the identity provider.
+- Expired, revoked, or invalid invitation/activation/reset token.
+- Password reset (self-initiated request plus administrator-issued reset — `POST /auth/password-reset`), and an account-disabled state distinct from a wrong-credential state (both still return the same non-disclosing sign-in error, per §12).
 
-The portal does not expose campaign names or invitation details until the invitation token is validated. After login, the application maps the external identity to an internal user and evaluates campaign membership.
+The portal does not expose campaign names or invitation details until the invitation token is validated. After login, the session-bootstrap response (`GET /auth/session`) is what the application uses to resolve the authenticated user and evaluate campaign membership — never an external identity mapping.
 
 ### 5.2 Campaign selector
 
@@ -466,10 +467,10 @@ Optimistic updates are limited to low-risk presentation changes. Canonical mutat
 
 The production browser UI and `/api/*` should share the `world` origin. Use `Secure`, `HttpOnly`, narrowly scoped authentication cookies; do not store long-lived application secrets or bearer tokens in browser code. Protect every cookie-authenticated state-changing request with CSRF tokens and origin checks. Exact hostnames are chosen at deployment time from the custom-domain-plus-No-IP or No-IP-only arrangements in ADR 0012.
 
-- Use OIDC authorization-code flow with PKCE for the browser client.
-- Store no long-lived application secret in browser code.
-- Validate issuer, audience, signature, expiry, and revocation-relevant state at the API boundary.
-- Protect state-changing requests against CSRF according to the selected token/session architecture.
+- Browser login is local application authentication (PLAN.md §23.1/§23.4), not an OIDC authorization-code/PKCE flow: the portal submits a username and password to a same-origin FastAPI endpoint, which issues an opaque, server-side, PostgreSQL-backed session via a `Secure`, `HttpOnly`, `SameSite=Lax` cookie (`__Host-dnd_ai_session` in production). External OIDC bearer-token verification remains available only as an optional compatibility path for non-browser clients presenting their own `Authorization: Bearer` token — the browser client never performs an OIDC redirect/callback and never handles a token itself.
+- Store no long-lived application secret in browser code — no bearer or refresh token in `localStorage`, `sessionStorage`, IndexedDB, a JavaScript-readable cookie, a URL, or application state.
+- The session-bootstrap endpoint (`GET /auth/session`) is the single source of the current user, campaigns/roles/character-perspectives/capabilities, a CSRF token, and the Phase 12 feature manifest; the server recomputes every authorization-sensitive field from current database state on every call, so the client never infers permissions from a cached value or a display-role string.
+- Protect every cookie-authenticated, state-changing request with the `X-CSRF-Token` header (validated against the current server-side session) and an allowed `Origin` — the selected token/session architecture is the one described above, not a placeholder.
 - Avoid tokens and restricted content in URLs, analytics, logs, or client error reports.
 - Reauthorize every command and sensitive query; UI state is not proof of permission.
 - Audit role changes, grants, revocations, preview use, sensitive reads, proposal decisions, and canonical writes.
