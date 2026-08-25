@@ -70,6 +70,7 @@ never carry. No `acting_foundry_actor_id` equivalent exists for this
 credential type — see that column's own comment (`src/dnd_ai/persistence/
 tables/audit.py`) for why."""
 
+import json
 import uuid
 
 from sqlalchemy import Connection, text
@@ -86,10 +87,14 @@ def record_change_log(
     record_id: uuid.UUID | None,
     entity_id: uuid.UUID | None,
     world_id: uuid.UUID | None,
-    actor_user_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None = None,
+    actor_service: str | None = None,
     correlation_id: str | None,
     command_name: str,
     event_id: uuid.UUID | None,
+    previous_status: str | None = None,
+    new_status: str | None = None,
+    changed_fields: dict[str, object] | None = None,
     acting_external_system_id: uuid.UUID | None = None,
     acting_foundry_actor_id: str | None = None,
     acting_foundry_connection_id: uuid.UUID | None = None,
@@ -109,7 +114,40 @@ def record_change_log(
     ever" — revision 007); it is not added retroactively here either,
     matching that same reasoning now that a real target table exists but
     this column's own contract was always informational, not referential
-    integrity."""
+    integrity.
+
+    `actor_user_id`/`actor_service` (Phase 13B blocker 3): exactly one is
+    required — mirroring `audit.change_log`'s own `ck_change_log_actor_
+    present` CHECK constraint, enforced here too so a caller gets an
+    immediate, specific `ValueError` rather than an opaque database
+    constraint violation. `actor_service` is for an actor with no linked
+    `security.users` row at all (the identical "actor is a service,
+    integration, or AI agent rather than a person" case that column's own
+    migration comment already documents) — `dnd_ai.api.local_auth`'s
+    failed-login audit write is this module's first caller with no
+    authenticated `user_id` to attribute the attempt to (an unknown login
+    name resolves to no user at all); every other call site in this
+    codebase still passes `actor_user_id` exactly as before.
+
+    `previous_status`/`new_status` and `changed_fields` (Phase 13B blocker
+    3): the first two are `audit.change_log`'s own pre-existing lifecycle-
+    transition columns (revision 007, "previous_status/new_status ... when
+    the change was one") — present in the schema since this table's
+    original migration but never previously wired through this writer
+    function, since no prior caller recorded a lifecycle transition.
+    `dnd_ai.commands.local_auth`'s administrative account disable/
+    reactivate commands are the first to (`core.lifecycle_statuses.code`
+    values — `'active'`/`'inactive'` — never a raw column value or
+    anything else caller-supplied). `changed_fields` is that same
+    pre-existing JSONB column, serialized with `json.dumps` exactly like
+    every other JSONB write in this codebase (e.g. `dnd_ai.commands.
+    character_state`) — used here only for small, bounded, non-secret
+    context (e.g. `{"revoked_session_count": 3}` for an administrator's
+    revoke-all action), never request bodies or anything from the
+    forbidden-content list this module's own docstring's "Never store"
+    section (in `dnd_ai.api.local_auth`) enumerates."""
+    if actor_user_id is None and actor_service is None:
+        raise ValueError("record_change_log requires actor_user_id or actor_service")
     change_action_id = lookup_id(
         connection, "audit", "change_actions", "change_action_id", change_action_code
     )
@@ -117,12 +155,14 @@ def record_change_log(
         text("""
             INSERT INTO audit.change_log
                 (change_action_id, schema_name, table_name, record_id, entity_id, world_id,
-                 actor_user_id, correlation_id, command_name, event_id,
+                 actor_user_id, actor_service, correlation_id, command_name, event_id,
+                 previous_status, new_status, changed_fields,
                  acting_external_system_id, acting_foundry_actor_id,
                  acting_foundry_connection_id, acting_foundry_device_id, ai_proposal_id)
             VALUES
                 (:action, :schema, :table, :record, :entity, :world,
-                 :actor, :correlation, :command, :event, :acting_external_system,
+                 :actor, :actor_service, :correlation, :command, :event,
+                 :previous_status, :new_status, :changed_fields, :acting_external_system,
                  :acting_foundry_actor, :acting_foundry_connection, :acting_foundry_device,
                  :ai_proposal)
         """),
@@ -134,9 +174,13 @@ def record_change_log(
             "entity": entity_id,
             "world": world_id,
             "actor": actor_user_id,
+            "actor_service": actor_service,
             "correlation": uuid.UUID(correlation_id) if correlation_id is not None else None,
             "command": command_name,
             "event": event_id,
+            "previous_status": previous_status,
+            "new_status": new_status,
+            "changed_fields": json.dumps(changed_fields) if changed_fields is not None else None,
             "acting_external_system": acting_external_system_id,
             "acting_foundry_actor": acting_foundry_actor_id,
             "acting_foundry_connection": acting_foundry_connection_id,

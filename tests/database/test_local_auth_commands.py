@@ -44,13 +44,17 @@ from dnd_ai.commands.local_auth import (
     ActivationNotAcceptableError,
     AlreadyBootstrappedError,
     ForeignBrowserSessionError,
+    LocalAccountNotFoundError,
     LoginNameAlreadyTakenError,
     LoginNameFormatError,
     NotPlatformAdministratorError,
     PasswordResetNotAcceptableError,
     _activate_local_account_impl,
+    _admin_revoke_all_browser_sessions_impl,
     _create_local_account_impl,
+    _disable_local_account_impl,
     _issue_password_reset_token_impl,
+    _reactivate_local_account_impl,
     _reset_password_with_token_impl,
     activate_local_account,
     authenticate_local_user,
@@ -705,3 +709,199 @@ def test_reset_password_with_token_rejects_reuse(
         _reset_password_with_token_impl(
             db_connection, raw_reset_token=issued.raw_token, new_raw_password=_VALID_PASSWORD
         )
+
+
+# ---------------------------------------------------------------------------
+# Administrative account lifecycle: disable, reactivate, revoke-all-sessions
+# (Phase 13B blocker 3)
+# ---------------------------------------------------------------------------
+
+
+def test_disable_local_account_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _disable_local_account_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_disable_local_account_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _disable_local_account_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_disable_local_account_sets_inactive_and_revokes_sessions(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    session = create_browser_session(db_connection, user_id=user_id)
+
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.previous_lifecycle_status_code == "active"
+    assert result.new_lifecycle_status_code == "inactive"
+    assert (
+        resolve_local_session_principal(db_connection, raw_session_token=session.raw_session_token)
+        is None
+    )
+
+
+def test_disable_local_account_prevents_further_login(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, login_name = activated_account
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+    assert (
+        authenticate_local_user(db_connection, login_name=login_name, raw_password=_VALID_PASSWORD)
+        is None
+    )
+
+
+def test_disable_local_account_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.previous_lifecycle_status_code == "inactive"
+    assert result.new_lifecycle_status_code == "inactive"
+
+
+def test_reactivate_local_account_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _reactivate_local_account_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_reactivate_local_account_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _reactivate_local_account_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_reactivate_local_account_restores_login_but_not_old_sessions(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, login_name = activated_account
+    session = create_browser_session(db_connection, user_id=user_id)
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+
+    result = _reactivate_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.previous_lifecycle_status_code == "inactive"
+    assert result.new_lifecycle_status_code == "active"
+    # Login works again...
+    assert (
+        authenticate_local_user(db_connection, login_name=login_name, raw_password=_VALID_PASSWORD)
+        is not None
+    )
+    # ...but the session that was active before disablement stays revoked.
+    assert (
+        resolve_local_session_principal(db_connection, raw_session_token=session.raw_session_token)
+        is None
+    )
+
+
+def test_reactivate_local_account_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    result = _reactivate_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.previous_lifecycle_status_code == "active"
+    assert result.new_lifecycle_status_code == "active"
+
+
+def test_admin_revoke_all_browser_sessions_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _admin_revoke_all_browser_sessions_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_admin_revoke_all_browser_sessions_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _admin_revoke_all_browser_sessions_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_admin_revoke_all_browser_sessions_revokes_every_session_for_the_target(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    session_a = create_browser_session(db_connection, user_id=user_id)
+    session_b = create_browser_session(db_connection, user_id=user_id)
+
+    result = _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.revoked_count == 2
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=session_a.raw_session_token
+        )
+        is None
+    )
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=session_b.raw_session_token
+        )
+        is None
+    )
+
+
+def test_admin_revoke_all_browser_sessions_does_not_affect_other_users(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    other_user_id = make_user(db_connection)
+    other_session = create_browser_session(db_connection, user_id=other_user_id)
+    create_browser_session(db_connection, user_id=user_id)
+
+    _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=other_session.raw_session_token
+        )
+        is not None
+    )
+
+
+def test_admin_revoke_all_browser_sessions_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    result = _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.revoked_count == 0
