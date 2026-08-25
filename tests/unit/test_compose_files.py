@@ -156,14 +156,18 @@ def test_api_healthcheck_targets_healthz_not_readyz() -> None:
 
 
 # ---------------------------------------------------------------------------
-# api's production/OIDC configuration (Phase 10 workstream 11 correction
-# pass) — regression guard for the defect where api ran with no
+# api's production configuration and optional OIDC bearer-token
+# compatibility (Phase 10 workstream 11 correction pass; Phase 13B
+# correction) — regression guard for the defect where api ran with no
 # DND_AI_ENVIRONMENT at all, silently defaulting to dnd_ai.config.Settings'
-# own "local" mode: /healthz and /readyz still passed (neither touches
-# OIDC), but every authenticated route failed closed with a generic 500
-# (dnd_ai.api.auth.get_jwks_client()'s own assertion that oidc_jwks_url is
-# configured) instead of the intended 401, and production's fail-closed/
-# HTTPS validation never ran at all.
+# own "local" mode: /healthz and /readyz still passed, but production's
+# fail-closed database-identity/HTTPS validation never ran at all. The
+# three DND_AI_OIDC_* settings are deliberately optional, with soft `:-`
+# defaults — a fully local-authentication-only deployment must be able to
+# start `api` with none of the three set (dnd_ai.config.Settings' own
+# all-or-nothing validator is what rejects a genuinely partial
+# configuration at process startup; this file only proves compose.yaml
+# itself no longer hard-requires them).
 # ---------------------------------------------------------------------------
 
 
@@ -184,17 +188,26 @@ def test_api_runs_with_environment_hardcoded_to_production() -> None:
         ("DND_AI_OIDC_JWKS_URL", "API_OIDC_JWKS_URL"),
     ],
 )
-def test_api_oidc_settings_are_required_with_no_fallback(container_var: str, host_var: str) -> None:
-    # Same reasoning as test_api_service_requires_an_explicit_database_url
-    # above: each of the three OIDC settings must come from its own
-    # required (`:?`), never-defaulted (`:-`) host-side variable — a
-    # distinct name per setting, not all three sharing one variable, and
-    # not reusing API_DATABASE_URL's own host-side name.
+def test_api_oidc_settings_have_safe_soft_defaults_not_hard_requirements(
+    container_var: str, host_var: str
+) -> None:
+    # Mirrors test_api_ai_provider_settings_have_safe_soft_defaults_not_hard_
+    # requirements below: each of the three OIDC settings must come from its
+    # own optional (`:-`), never-required (`:?`) host-side variable — a
+    # distinct name per setting, not all three sharing one variable, and not
+    # reusing API_DATABASE_URL's own host-side name.
     api = _load("compose.yaml")["services"]["api"]
     value = api["environment"][container_var]
     assert host_var in value
-    assert ":?" in value, f"{host_var} must be required, not defaulted"
-    assert ":-" not in value, f"{host_var} must not have a fallback default"
+    assert ":-" in value, f"{host_var} must have a soft (`:-`) fallback default"
+    assert ":?" not in value, f"{host_var} must not be a hard requirement"
+
+
+def test_api_oidc_settings_default_to_blank_not_a_placeholder_value() -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert api["environment"]["DND_AI_OIDC_ISSUER"] == "${API_OIDC_ISSUER:-}"
+    assert api["environment"]["DND_AI_OIDC_AUDIENCE"] == "${API_OIDC_AUDIENCE:-}"
+    assert api["environment"]["DND_AI_OIDC_JWKS_URL"] == "${API_OIDC_JWKS_URL:-}"
 
 
 def test_api_oidc_settings_use_three_distinct_host_side_variables() -> None:

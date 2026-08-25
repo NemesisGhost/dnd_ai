@@ -63,12 +63,20 @@ two different names — but, per the production rule above, only outside
 production.
 
 `oidc_issuer`/`oidc_audience`/`oidc_jwks_url` (`DND_AI_OIDC_ISSUER`,
-`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) follow the identical
-production-fail-closed shape as `database_url`: all three default to
-`None` locally/in tests (no OIDC provider is required to run the API
-skeleton or its non-authenticated endpoints yet), but `Settings()` raises
-immediately in production unless all three are populated. `_validate_oidc_
-settings` goes further than mere presence, in both environments:
+`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) are optional **external
+bearer-token compatibility** configuration, in every environment including
+production — local application authentication (docs/PLAN.md §23.1/§23.4)
+is the platform's primary, self-contained login path and must work with
+OIDC entirely unconfigured; nothing about local cookie authentication ever
+constructs an OIDC verifier or reads these fields (`dnd_ai.api.auth.
+get_jwks_client()` is called lazily, only from the OIDC bearer branch of
+`get_authenticated_user_id`, never at import or app-startup time). All
+three default to `None` in every environment; `_validate_oidc_settings`
+enforces an identical **all-or-nothing** rule everywhere — some but not
+all three fields set is a `Settings()` construction failure regardless of
+`environment` — and, once all three are set, both environments run the
+same structural checks (non-empty, well-formed, no embedded credentials,
+no URL fragment) with only the allowed URL scheme set differing:
 
 - **Production** additionally requires `oidc_issuer`/`oidc_jwks_url` to be
   absolute, credential-free, fragment-free **HTTPS** URLs with a host, and
@@ -80,14 +88,19 @@ settings` goes further than mere presence, in both environments:
   never merely warned about or discovered lazily on first use.
 - **Local/test** may configure an HTTP identity provider (`OIDC_LOCAL_URL_
   SCHEMES` — a private/in-process test IdP has no equivalent network-
-  attacker threat model), but a *partial* configuration — some but not all
-  three fields set — is rejected exactly like production's all-or-nothing
-  rule, and whichever fields *are* set still go through the same
-  structural checks (non-empty, well-formed, no credentials, no fragment)
-  minus the scheme restriction. An incomplete or malformed OIDC
-  configuration can never actually serve an authenticated route, so
-  accepting it silently would only defer an otherwise-immediate startup
-  failure to first use.
+  attacker threat model), and, exactly like production, a *partial*
+  configuration — some but not all three fields set — is rejected. An
+  incomplete or malformed OIDC configuration can never actually serve an
+  authenticated route, so accepting it silently would only defer an
+  otherwise-immediate startup failure to first use.
+
+A blank/whitespace-only value for any of the three (e.g. Compose
+interpolating an unset `API_OIDC_*` host variable to `${API_OIDC_ISSUER:-}`)
+is normalized to `None` before the all-or-nothing check runs — the same
+"blank means unset, never a validation error" treatment
+`_validate_foundry_allowed_origins`/`_normalize_ai_provider_api_key`
+already apply to their own optional settings — so a fully-unset Compose
+OIDC block and a fully-omitted one are indistinguishable to this module.
 
 Deliberately never trimmed, rewritten, or otherwise normalized beyond
 this validation: `dnd_ai.domain.tokens.verify_bearer_token` compares a
@@ -557,44 +570,58 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_oidc_settings(self) -> "Settings":
-        """No silent partial or malformed OIDC configuration, in either
-        environment — see the module docstring's `oidc_issuer`/
-        `oidc_audience`/`oidc_jwks_url` paragraph for the full policy.
-        Presence (all-or-nothing) is checked first and identically in
-        both branches below; only the allowed URL scheme set differs
-        between them."""
-        configured = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
-        if self.environment == "production":
-            missing = [
-                name
-                for name, value in (
-                    ("DND_AI_OIDC_ISSUER", self.oidc_issuer),
-                    ("DND_AI_OIDC_AUDIENCE", self.oidc_audience),
-                    ("DND_AI_OIDC_JWKS_URL", self.oidc_jwks_url),
-                )
-                if value is None
-            ]
-            if missing:
-                raise ValueError(
-                    f"{', '.join(missing)} (as environment variables, or mounted secrets) "
-                    "are required when DND_AI_ENVIRONMENT=production — all three OIDC settings "
-                    "must be configured together, or none of them."
-                )
-            allowed_schemes = OIDC_PRODUCTION_URL_SCHEMES
-        else:
-            if any(value is not None for value in configured) and not all(
-                value is not None for value in configured
-            ):
-                raise ValueError(
-                    "DND_AI_OIDC_ISSUER, DND_AI_OIDC_AUDIENCE, and DND_AI_OIDC_JWKS_URL must be "
-                    "configured together, or none of them — a partially configured OIDC "
-                    "provider can never actually serve an authenticated route."
-                )
-            if all(value is None for value in configured):
-                return self
-            allowed_schemes = OIDC_LOCAL_URL_SCHEMES
+    def _normalize_oidc_settings(self) -> "Settings":
+        """Blank/whitespace-only treated identically to unset, for each of
+        the three OIDC fields independently — mirrors `_normalize_ai_
+        provider_api_key`'s identical reasoning: Compose cannot omit an
+        environment key entirely when the host-side variable is unset
+        (`${API_OIDC_ISSUER:-}` interpolates to `""`, never a genuinely
+        absent `DND_AI_OIDC_ISSUER`), so a blank value must read as `None`
+        here, before `_validate_oidc_settings`' all-or-nothing check ever
+        runs — otherwise a fully-unset Compose OIDC block would be rejected
+        as "partially configured" instead of accepted as "not configured at
+        all". Runs before `_validate_oidc_settings` (definition order) so
+        that validator always sees already-normalized values."""
+        if self.oidc_issuer is not None and self.oidc_issuer.strip() == "":
+            self.oidc_issuer = None
+        if self.oidc_audience is not None and self.oidc_audience.strip() == "":
+            self.oidc_audience = None
+        if self.oidc_jwks_url is not None and self.oidc_jwks_url.strip() == "":
+            self.oidc_jwks_url = None
+        return self
 
+    @model_validator(mode="after")
+    def _validate_oidc_settings(self) -> "Settings":
+        """External OIDC bearer-token compatibility is optional in every
+        environment, including production — see the module docstring's
+        `oidc_issuer`/`oidc_audience`/`oidc_jwks_url` paragraph for the full
+        policy this enforces. All three unset is always valid (external
+        bearer authentication disabled; local cookie authentication is
+        unaffected either way). Otherwise, presence is all-or-nothing,
+        identically in every environment — a partial configuration can
+        never actually serve an authenticated route, so it is rejected
+        here rather than deferred to first use — and, once all three are
+        set, only the allowed URL scheme set differs between production
+        (HTTPS only) and local/test (HTTP also permitted, for a private/
+        in-process test IdP)."""
+        configured = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
+        if any(value is not None for value in configured) and not all(
+            value is not None for value in configured
+        ):
+            raise ValueError(
+                "DND_AI_OIDC_ISSUER, DND_AI_OIDC_AUDIENCE, and DND_AI_OIDC_JWKS_URL must be "
+                "configured together, or none of them — a partially configured OIDC provider "
+                "can never actually serve an authenticated route. External OIDC is optional in "
+                "every environment; local application authentication does not require it."
+            )
+        if all(value is None for value in configured):
+            return self
+
+        allowed_schemes = (
+            OIDC_PRODUCTION_URL_SCHEMES
+            if self.environment == "production"
+            else OIDC_LOCAL_URL_SCHEMES
+        )
         assert self.oidc_issuer is not None
         assert self.oidc_audience is not None
         assert self.oidc_jwks_url is not None

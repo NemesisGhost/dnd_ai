@@ -158,29 +158,36 @@ jobs:
     # database over the compose-internal network — see Dockerfile and
     # compose.yaml.
     #
-    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, the
-    # three API_OIDC_* settings, and API_LOCAL_SESSION_ALLOWED_ORIGINS have
-    # no fallback default in compose.yaml (see its header comment) — CI
-    # must supply all seven explicitly, and the two database URLs must
-    # agree with POSTGRES_PASSWORD (for
-    # `migrate`) or API_READ_WRITE_PASSWORD (for `api`, provisioned below)
-    # on the same password. All values are disposable: a fresh
-    # tmpfs-backed container per run, never reused, never exposed on a
-    # host port, not a real secret. `api` connects as **app_read_write**,
-    # never `postgres`/`migration_runner`/`migration_owner` — the same
-    # production security boundary compose.yaml's own comment on that
-    # service documents; API_DATABASE_URL below reflects that identity,
-    # not the migration/superuser one MIGRATION_DATABASE_URL uses. The
-    # database URLs address `db` (the compose service name), not
-    # `localhost` — `migrate`/`api` reach it over the compose-internal
-    # network, not a published host port. The OIDC values are
-    # syntactically valid (HTTPS, well-formed — dnd_ai.config requires
-    # this since api always runs with DND_AI_ENVIRONMENT=production) but
-    # deliberately never resolved against a live identity provider: PyJWT's
-    # PyJWKClient fetches lazily, so constructing api's JWKS client at
-    # startup makes no network call by itself, and this job's own
+    # POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and
+    # API_LOCAL_SESSION_ALLOWED_ORIGINS have no fallback default in
+    # compose.yaml (see its header comment) — CI must supply all four
+    # explicitly, and the two database URLs must agree with
+    # POSTGRES_PASSWORD (for `migrate`) or API_READ_WRITE_PASSWORD (for
+    # `api`, provisioned below) on the same password. All values are
+    # disposable: a fresh tmpfs-backed container per run, never reused,
+    # never exposed on a host port, not a real secret. `api` connects as
+    # **app_read_write**, never `postgres`/`migration_runner`/
+    # `migration_owner` — the same production security boundary
+    # compose.yaml's own comment on that service documents;
+    # API_DATABASE_URL below reflects that identity, not the
+    # migration/superuser one MIGRATION_DATABASE_URL uses. The database
+    # URLs address `db` (the compose service name), not `localhost` —
+    # `migrate`/`api` reach it over the compose-internal network, not a
+    # published host port. The three API_OIDC_* settings are optional,
+    # all-or-nothing external bearer-token compatibility (Phase 13B
+    # correction) — this job deliberately keeps them configured, with
+    # syntactically valid values (HTTPS, well-formed — dnd_ai.config
+    # requires this since api always runs with
+    # DND_AI_ENVIRONMENT=production), so the same end-to-end run also
+    # proves the *configured* OIDC path still starts and validates
+    # correctly; they are never resolved against a live identity provider:
+    # PyJWT's PyJWKClient fetches lazily, so constructing api's JWKS client
+    # at startup makes no network call by itself, and this job's own
     # unauthenticated-request smoke test below never sends a token that
-    # would trigger one either.
+    # would trigger one either. The separate "all three OIDC variables
+    # unset" case is proven earlier in this job, at the Compose
+    # config-resolution level, before any of these job-level values are
+    # overridden.
     env:
       POSTGRES_PASSWORD: ci_disposable_password
       MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_disposable_password@db:5432/dnd_ai
@@ -212,25 +219,31 @@ jobs:
       - name: Validate compose configuration
         run: docker compose -f compose.yaml -f compose.ci.yaml config
 
-      - name: Verify compose config fails when a required OIDC variable is missing
-        # Regression guard for the Phase 10 workstream 11 correction pass:
-        # proves API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL truly
-        # have no fallback the way POSTGRES_PASSWORD/MIGRATION_DATABASE_URL/
-        # API_DATABASE_URL already do — omitting any one of them must fail
-        # Compose's own config resolution outright, not silently render an
-        # empty string that would only surface later as a runtime 500.
-        # `env -u VAR` unsets just that one variable for this command while
-        # every other required variable inherited from the job's own `env:`
-        # above stays set.
+      - name: Verify compose config still resolves with all three OIDC variables unset
+        # Phase 13B correction: API_OIDC_ISSUER/API_OIDC_AUDIENCE/
+        # API_OIDC_JWKS_URL are optional, all-or-nothing external
+        # bearer-token compatibility (compose.yaml now interpolates each
+        # with a soft `${VAR:-}` default, not `${VAR:?...}`) — local
+        # application authentication is this deployment's primary login
+        # path and must never require an OIDC provider to start `api`, in
+        # any environment. `env -u VAR` unsets all three for this command
+        # while every other required variable inherited from the job's own
+        # `env:` above stays set; this must still succeed at the Compose
+        # YAML-resolution level. Compose itself can no longer reject a
+        # *partial* OIDC configuration (there is no `:?` guard left to do
+        # that) — that all-or-nothing enforcement now lives entirely in
+        # `dnd_ai.config.Settings`, which only runs once the container
+        # actually starts the `api` process; it is covered by
+        # `tests/unit/test_config.py`'s production-partial-OIDC tests, not
+        # by this Compose-level step.
         run: |
           set -e
-          for var in API_OIDC_ISSUER API_OIDC_AUDIENCE API_OIDC_JWKS_URL; do
-            if env -u "$var" docker compose -f compose.yaml -f compose.ci.yaml config >/dev/null 2>&1; then
-              echo "compose config unexpectedly succeeded with $var unset" >&2
-              exit 1
-            fi
-          done
-          echo "compose config correctly fails when any required OIDC variable is missing"
+          if ! env -u API_OIDC_ISSUER -u API_OIDC_AUDIENCE -u API_OIDC_JWKS_URL \
+            docker compose -f compose.yaml -f compose.ci.yaml config >/dev/null 2>&1; then
+            echo "compose config unexpectedly failed with all three OIDC variables unset" >&2
+            exit 1
+          fi
+          echo "compose config correctly resolves with OIDC entirely unset"
 
       - name: Check CI compose config publishes no db/api port, mounts PostgreSQL 18, and configures api for production
         # Regression guard for issue-2/issue-1, and for the Phase 10
@@ -364,21 +377,26 @@ jobs:
           "
 
       - name: Verify an authenticated route rejects a request with no Authorization header
-        # Proves OIDC/authentication wiring is actually active in this exact
-        # deployment configuration — get_jwks_client() successfully
-        # constructs its client from the now-required DND_AI_OIDC_*
-        # settings — without making a live JWKS network request:
-        # PyJWKClient fetches lazily, and get_verified_token_claims rejects
-        # a request with no Authorization header before ever calling
-        # jwks_client.get_signing_key(). Before the Phase 10 workstream 11
-        # correction pass, this same request returned a generic 500
-        # (config.py's oidc_jwks_url assertion failing, since the container
-        # silently ran in "local" mode with no OIDC configured) rather than
-        # the fixed 401 contract dnd_ai.api.errors.UnauthorizedError
-        # defines. campaign_id in the URL and the body's own IDs are
-        # arbitrary, well-formed UUIDs — access resolution never runs far
-        # enough to look any of them up, since authentication itself is
-        # rejected first.
+        # Proves authentication wiring is actually active in this exact
+        # deployment configuration — a request with neither a session
+        # cookie nor an Authorization header is rejected before
+        # get_authenticated_user_id ever reaches its OIDC branch, so this
+        # holds regardless of whether OIDC is configured; this job happens
+        # to run with the three API_OIDC_* settings configured (see the
+        # job-level env: block above) so it also incidentally proves
+        # get_jwks_client() can construct its client from them without
+        # making a live JWKS network request — PyJWKClient fetches lazily,
+        # and get_verified_token_claims rejects a request with no
+        # Authorization header before ever calling jwks_client.
+        # get_signing_key(). Before the Phase 10 workstream 11 correction
+        # pass, this same request returned a generic 500 (config.py's
+        # oidc_jwks_url assertion failing, since the container silently ran
+        # in "local" mode with no OIDC configured) rather than the fixed
+        # 401 contract dnd_ai.api.errors.UnauthorizedError defines.
+        # campaign_id in the URL and the body's own IDs are arbitrary,
+        # well-formed UUIDs — access resolution never runs far enough to
+        # look any of them up, since authentication itself is rejected
+        # first.
         run: |
           docker compose -f compose.yaml -f compose.ci.yaml exec -T api python -c "
           import json

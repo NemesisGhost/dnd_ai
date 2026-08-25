@@ -16,14 +16,17 @@ Reads the merged config as JSON from stdin and checks:
     /var/lib/postgresql/18/docker) — not /var/lib/postgresql/data, the
     pre-18 convention that would silently miss where the server writes.
   - `api` is explicitly configured for production: `DND_AI_ENVIRONMENT`
-    resolves to exactly `"production"`, and all three `DND_AI_OIDC_*`
-    settings are present and non-empty. Regression guard for the Phase 10
+    resolves to exactly `"production"`. Regression guard for the Phase 10
     workstream 11 defect where `api` ran with no `DND_AI_ENVIRONMENT` at
     all — `dnd_ai.config.Settings`' own `"local"` default silently skipped
-    OIDC/HTTPS validation, so the container passed `/healthz`/`/readyz`
-    while every authenticated route failed closed with a generic 500
-    instead of the intended 401 (`dnd_ai.api.auth.get_jwks_client()`'s own
-    assertion that `oidc_jwks_url` is configured).
+    production's fail-closed database-identity/HTTPS validation.
+  - The three `DND_AI_OIDC_*` settings, if any of them is present and
+    non-empty, are all present and non-empty — external OIDC bearer-token
+    compatibility is optional (Phase 13B correction: a local-authentication-
+    only deployment must be able to start `api` with none of the three
+    set), but a partial configuration can never actually serve an
+    authenticated route, so this still guards against that half-configured
+    state reaching a real deployment.
 
 Deliberately checks these specific invariants rather than diffing the
 whole rendered document, so an unrelated, intentional change to the merged
@@ -79,16 +82,18 @@ def check_api_environment_configured(config: dict[str, Any]) -> None:
         raise ComposeConfigError(
             "CI's merged compose config does not run `api` with DND_AI_ENVIRONMENT="
             f"production (got: {environment.get('DND_AI_ENVIRONMENT')!r}) — compose.yaml "
-            "regressed; running outside production silently skips OIDC/HTTPS validation "
-            "(see compose.yaml's own comment on the api service's environment)."
+            "regressed; running outside production silently skips database-identity/HTTPS "
+            "validation (see compose.yaml's own comment on the api service's environment)."
         )
-    missing_or_empty = [name for name in _REQUIRED_API_OIDC_ENV_VARS if not environment.get(name)]
-    if missing_or_empty:
+    configured = [name for name in _REQUIRED_API_OIDC_ENV_VARS if environment.get(name)]
+    if configured and len(configured) != len(_REQUIRED_API_OIDC_ENV_VARS):
+        missing = sorted(set(_REQUIRED_API_OIDC_ENV_VARS) - set(configured))
         raise ComposeConfigError(
-            "CI's merged compose config is missing (or has an empty) required OIDC "
-            f"setting(s) for `api`: {missing_or_empty!r} — every authenticated route would "
-            "fail closed with a generic 500 instead of the intended 401 (see compose.yaml's "
-            "own comment on the api service's environment)."
+            "CI's merged compose config has a partial OIDC configuration for `api`: "
+            f"{configured!r} set, {missing!r} missing or empty — external OIDC bearer-token "
+            "compatibility is optional (all three unset is valid), but a partial "
+            "configuration can never actually serve an authenticated route (see "
+            "compose.yaml's own comment on the api service's environment)."
         )
 
 
@@ -108,7 +113,8 @@ def main() -> None:
         sys.exit(1)
     print(
         "PASS: CI compose config publishes no db/api host port, mounts PostgreSQL 18's "
-        "data directory correctly, and runs api in production with OIDC configured."
+        "data directory correctly, runs api in production, and has no partial OIDC "
+        "configuration."
     )
 
 

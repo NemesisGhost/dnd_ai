@@ -255,12 +255,61 @@ def test_oidc_settings_default_to_none_outside_production() -> None:
     assert settings.oidc_jwks_url is None
 
 
-def test_production_without_oidc_settings_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_production_with_all_oidc_settings_unset_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """External OIDC bearer-token compatibility is optional in every
+    environment, including production — a fully local-authentication-only
+    production deployment must be able to start with no OIDC provider
+    configured at all (docs/PLAN.md §23.1: "local authentication must work
+    with OIDC entirely unconfigured")."""
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
     monkeypatch.setenv(
         "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
     )
-    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    settings = Settings()
+    assert settings.oidc_issuer is None
+    assert settings.oidc_audience is None
+    assert settings.oidc_jwks_url is None
+
+
+@pytest.mark.parametrize("blank_value", ["", "   "])
+def test_production_treats_blank_oidc_settings_as_unset(
+    blank_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compose cannot omit an environment key entirely when the host-side
+    variable is unset (`${API_OIDC_ISSUER:-}` interpolates to `""`) — a
+    blank value for all three must be accepted identically to all three
+    being genuinely absent, not rejected as a partial configuration."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", blank_value)
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", blank_value)
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", blank_value)
+    settings = Settings()
+    assert settings.oidc_issuer is None
+    assert settings.oidc_audience is None
+    assert settings.oidc_jwks_url is None
+
+
+def test_production_treats_one_blank_oidc_setting_as_unset_and_still_rejects_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank value normalizes to unset per-field, independently — so one
+    blank field alongside two genuinely configured ones is still a partial
+    (two-of-three) configuration, rejected exactly like any other partial
+    configuration, never silently treated as "fully configured"."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError):
         Settings()
 
 
@@ -645,6 +694,48 @@ def test_import_path_fails_on_misspelled_application_setting(tmp_path: Path) -> 
     result = _run_config_import({"DND_AI_DATABAWSE_URL": "typo"}, cwd=tmp_path)
     assert result.returncode != 0
     assert "DND_AI_DATABAWSE_URL" in result.stderr
+
+
+_OIDC_DISABLED_PROBE = (
+    "import json\n"
+    "import dnd_ai.config as config\n"
+    "print(json.dumps({'environment': config.settings.environment, "
+    "'oidc_issuer': config.settings.oidc_issuer, "
+    "'oidc_audience': config.settings.oidc_audience, "
+    "'oidc_jwks_url': config.settings.oidc_jwks_url}))\n"
+)
+
+
+def test_import_path_succeeds_in_production_with_oidc_entirely_unset(tmp_path: Path) -> None:
+    """The real module-import/startup path (not `_load_settings()` called
+    directly) for a fully local-authentication-only production deployment:
+    a real self-hosted deployment must be able to boot with no OIDC
+    provider configured at all (docs/PLAN.md §23.1's "local authentication
+    must work with OIDC entirely unconfigured")."""
+    env = os.environ.copy()
+    for name in _ALL_TEST_MANAGED_ENV_VARS:
+        env.pop(name, None)
+    env.update(
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DND_AI_DATABASE_URL": "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai",
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _OIDC_DISABLED_PROBE],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["environment"] == "production"
+    assert payload["oidc_issuer"] is None
+    assert payload["oidc_audience"] is None
+    assert payload["oidc_jwks_url"] is None
 
 
 def test_production_ignores_developer_env_file_and_fails_closed(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@
 #
 # Usage — this exact order matters, see the `api` service's own comment
 # below for why steps 3-4 must both complete before step 5:
-#   cp .env.example .env              # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, API_DATABASE_URL, and API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL — all required
+#   cp .env.example .env              # then set POSTGRES_PASSWORD, MIGRATION_DATABASE_URL, and API_DATABASE_URL — required; API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL are optional external-bearer-token compatibility, all three together or none
 #   docker compose up -d db           # 1. start PostgreSQL (dev: also publishes 127.0.0.1:5432 via the override)
 #   docker compose --profile tools run --rm migrate   # 2. apply migrations (creates app_read_write, among five other roles)
 #   uv run python scripts/operations/database_recovery.py set-role-password \  # 3. provision app_read_write's password
@@ -34,10 +34,14 @@
 # the same image the `migrate` job already builds, with a different
 # command selecting this role (docs/DEVELOPMENT.md §2, PLAN.md §31.3). It
 # always runs with DND_AI_ENVIRONMENT=production (a fixed literal, not a
-# variable — see that service's own comment below) and therefore requires
-# a real, HTTPS OIDC provider configured via API_OIDC_ISSUER/
-# API_OIDC_AUDIENCE/API_OIDC_JWKS_URL; there is no way to start this
-# service without one. It also always connects to PostgreSQL as
+# variable — see that service's own comment below). Local application
+# authentication (opaque PostgreSQL-backed browser sessions, Argon2id
+# passwords, HttpOnly cookies) is this deployment's primary login path and
+# needs no OIDC provider at all; API_OIDC_ISSUER/API_OIDC_AUDIENCE/
+# API_OIDC_JWKS_URL are optional, all-or-nothing external bearer-token
+# compatibility — see that block below for the HTTPS/all-or-nothing rule
+# dnd_ai.config.Settings still enforces once any of the three is set. It
+# also always connects to PostgreSQL as
 # app_read_write, never postgres/migration_runner/migration_owner (see
 # that service's DND_AI_DATABASE_URL comment below) — a role with no
 # schema-DDL, role-management, or migration_owner-membership privilege at
@@ -185,20 +189,24 @@ services:
       # actually looks up, not API_DATABASE_URL itself (that name only
       # exists on the host side, in .env).
       DND_AI_DATABASE_URL: ${API_DATABASE_URL:?API_DATABASE_URL is required — copy .env.example to .env and set it before starting the api service. Must authenticate as app_read_write, never postgres/migration_runner/migration_owner}
-      # API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL are deployment-
-      # supplied — point them at whatever standards-compliant OIDC provider
-      # this deployment actually uses (see .env.example). All three are
-      # required together with no fallback default, matching
-      # dnd_ai.config.Settings' own production all-or-nothing rule — a
-      # partially configured OIDC provider can never actually serve an
-      # authenticated route, so Compose refuses to start rather than let
-      # the container boot into that state. DND_AI_ENVIRONMENT=production
-      # above additionally requires dnd_ai.config to reject a non-HTTPS
-      # issuer/JWKS URL, embedded credentials, or a URL fragment — see that
-      # module's own docstring for the full validation this enforces.
-      DND_AI_OIDC_ISSUER: ${API_OIDC_ISSUER:?API_OIDC_ISSUER is required — copy .env.example to .env and set it to your OIDC provider's issuer URL (HTTPS) before starting the api service}
-      DND_AI_OIDC_AUDIENCE: ${API_OIDC_AUDIENCE:?API_OIDC_AUDIENCE is required — copy .env.example to .env and set it to your OIDC provider's audience before starting the api service}
-      DND_AI_OIDC_JWKS_URL: ${API_OIDC_JWKS_URL:?API_OIDC_JWKS_URL is required — copy .env.example to .env and set it to your OIDC provider's JWKS URL (HTTPS) before starting the api service}
+      # API_OIDC_ISSUER/API_OIDC_AUDIENCE/API_OIDC_JWKS_URL are optional,
+      # deployment-supplied external-bearer-token compatibility — point them
+      # at a standards-compliant OIDC provider only if this deployment
+      # actually wants to accept OIDC-bearer-authenticated API calls
+      # alongside local cookie login (see .env.example). Soft `:-` defaults
+      # here on purpose, exactly like API_FOUNDRY_ALLOWED_ORIGINS below —
+      # dnd_ai.config.Settings treats a blank value identically to
+      # unconfigured (never a validation error), and local application
+      # authentication needs none of the three. If you do set one, you must
+      # set all three — dnd_ai.config.Settings still enforces that
+      # all-or-nothing rule unconditionally, and, since this file always
+      # runs `api` with DND_AI_ENVIRONMENT=production, requires the issuer
+      # and JWKS URL to be HTTPS with no embedded credentials or fragment —
+      # see that module's own docstring for the full validation this
+      # enforces.
+      DND_AI_OIDC_ISSUER: ${API_OIDC_ISSUER:-}
+      DND_AI_OIDC_AUDIENCE: ${API_OIDC_AUDIENCE:-}
+      DND_AI_OIDC_JWKS_URL: ${API_OIDC_JWKS_URL:-}
       # Phase 11R workstream A/B: the exact-origin allowlist a cookie-
       # authenticated, state-changing local-session request's Origin header
       # is checked against (docs/PLAN.md §23.4; see .env.example's "Local
