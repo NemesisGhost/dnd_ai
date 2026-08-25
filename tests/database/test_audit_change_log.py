@@ -71,7 +71,19 @@ def _log(connection: Connection, **kwargs: object) -> None:
 
 def test_seeded_change_actions_cover_the_lifecycle(db_connection: Connection) -> None:
     codes = {r[0] for r in db_connection.execute(text("SELECT code FROM audit.change_actions"))}
-    assert codes == {"created", "updated", "status_changed", "archived", "restored", "deleted"}
+    # "denied" (migration 103, Phase 13B blocker 3): the one action-code gap
+    # the original six left — an attempted action that did not succeed and
+    # produced no data change (e.g. a failed login), which none of the other
+    # six (all of which describe a completed data change) can represent.
+    assert codes == {
+        "created",
+        "updated",
+        "status_changed",
+        "archived",
+        "restored",
+        "deleted",
+        "denied",
+    }
 
 
 # ---------------------------------------------------------------------------
