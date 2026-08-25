@@ -40,8 +40,8 @@ These are the project defaults. They are decisions, not suggestions — an imple
 | Types | **mypy** | `strict` on `src/`; relaxed in tests |
 | Development database | **PostgreSQL 18.x**, local install or `compose.yaml` | The default development and test target ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). The major version must match everywhere it runs — see [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version). Setup: [§3](#3-local-setup) |
 | Self-hosted deployment | **Docker Compose** (`compose.yaml`, `Dockerfile`) | The supported deployment topology ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)). One shared image for migrations today, API/worker/adapter once they exist |
-| UI | **React** | Not yet started; no build tooling chosen |
-| Foundry module (`foundry-module/`) | **Plain ES modules, zero npm dependencies**; tests on Node's built-in test runner (`node --test`) | Phase 11 workstream 7. A separate, deliberately minimal choice from the still-undecided React-portal toolchain above — it ships as native ES modules FoundryVTT loads directly (`module.json`'s `esmodules`), so there is nothing to bundle or transpile. The only place Node is used in this repository; CI's `foundry-module-check` job is the only job that runs `actions/setup-node` |
+| UI (`portal/`) | **React 19, TypeScript, Vite, React Router**; npm; Vitest/Testing Library; ESLint | Phase 13 browser portal. `package-lock.json` is committed; use `npm ci` for clean or automated installs. The older `ui/` directory is not the portal application and must not be adopted as the Phase 13 frontend. |
+| Foundry module (`foundry-module/`) | **Plain ES modules, zero npm dependencies**; tests on Node's built-in test runner (`node --test`) | Phase 11 workstream 7. This is deliberately separate from the React portal toolchain: Foundry loads the module's native ES modules directly via `module.json`, so there is nothing to bundle or transpile. CI's `foundry-module-check` job runs its Node checks independently of the portal. |
 
 ---
 
@@ -68,6 +68,12 @@ The tree below describes the repository layout. `database/` holds migrations and
 │   ├── scripts/               # native ES modules, no build step
 │   ├── test/                  # node --test
 │   └── packaging/package.mjs      # zips scripts/styles/templates/lang/module.json into dist/
+├── portal/                    # Phase 13 React/TypeScript browser portal
+│   ├── src/                   # components, layouts, pages, fixtures, types, and tests
+│   ├── public/                # static browser assets
+│   ├── package.json           # npm scripts and dependency declarations
+│   ├── package-lock.json      # committed reproducible dependency lock
+│   └── vite.config.ts         # React, Vitest/jsdom, and local /api + /auth proxies
 ├── scripts/                   # one-off CI/ops/provisioning scripts (incl. foundry_provision.py,
 │                              # bootstrap_admin.py — the DB-direct, never-over-HTTP CLI that
 │                              # creates the very first platform administrator, Phase 11R
@@ -189,6 +195,37 @@ DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai
 No `sslmode=require` locally: a stock local server has no TLS configured, whereas `dev` enforces SSL and rejects a plain connection outright (`FATAL: no pg_hba.conf entry for host "...", ... no encryption`) — that asymmetry is the single most common surprise when you do connect to `dev`. On earlier RDS PostgreSQL versions this showed up as an `rds.force_ssl` parameter; as of the PostgreSQL 18 replacement ([POSTGRES18_UPGRADE_PLAN.md](POSTGRES18_UPGRADE_PLAN.md)) that GUC no longer exists at all (confirmed absent from `pg_settings`) — enforcement moved to `pg_hba.conf`, verified directly rather than by parameter inspection.
 
 The bare `DATABASE_URL` above is what Alembic, pytest, and CI read directly. The application itself (`src/dnd_ai/api/`, via `src/dnd_ai/config.py`) has its own, separate configuration source rule, summarized here and stated in full in that module's docstring and in `.env.example`: locally/in tests it accepts `DND_AI_DATABASE_URL`, falls back to the same unprefixed `DATABASE_URL` as a compatibility alias, and finally a hardcoded local-dev default — but in production (`DND_AI_ENVIRONMENT=production`, selected *only* by the real process/deployment environment, checked before `.env` is even considered) it never loads `.env` at all and requires `DND_AI_DATABASE_URL` explicitly, as a real environment variable or a mounted secret file named `dnd_ai_database_url` (docs/LOCAL_DEPLOYMENT.md). `.env` cannot select production either: if the real environment doesn't already say `production`, `.env` does get loaded, but if it turns out to set `DND_AI_ENVIRONMENT=production` itself, that fails startup outright rather than silently promoting the process. Other `DND_AI_*`-prefixed variables — `DND_AI_TEST_DATABASE_URL`, `DND_AI_CI_DB_NAME` (§8, tests/conftest.py), `DND_AI_SEEDS_DIR` (seed loading) — share the namespace but belong to those other subsystems, not to `Settings`; `config.py` keeps an explicit allowlist for them rather than accepting every `DND_AI_*` name.
+
+#### Portal toolchain
+
+The Phase 13 portal is a separate npm project under `portal/`. Install the
+locked dependencies and start Vite from the repository root:
+
+```bash
+cd portal
+npm ci
+npm run dev
+```
+
+Vite serves the development portal at `http://localhost:5173`. Its
+`vite.config.ts` proxies relative `/api/*` and `/auth/*` requests to FastAPI at
+`http://localhost:8000`, preserving the production same-origin URL contract.
+Phase 13A uses fixture data and makes no backend requests; the proxies exist for
+later increments.
+
+Use `npm install` only when intentionally changing dependencies and updating
+`package-lock.json`. The portal's focused checks are:
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
+`npm run build` performs the TypeScript project build before Vite and writes
+generated output to `portal/dist/`. See `portal/README.md` for the current route
+map, source organization, authentication boundary, and Phase 13A learning
+checkpoints.
 
 ### 3.4 Verify
 
@@ -406,6 +443,7 @@ Three layers, matching [PLAN.md §25](PLAN.md#25-testing-strategy) and [DATABASE
 | Unit | `tests/unit/` | none | Pure logic — rules calculations, policy decisions, validation |
 | Database | `tests/database/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Constraints, triggers, subtype consistency, same-world invariants, state uniqueness, branch behavior |
 | Scenario | `tests/scenario/` | Local/self-hosted PostgreSQL 18 (ephemeral database per run); disposable containerized PostgreSQL 18 in CI | Cross-domain flows, ultimately the full acceptance scenario in [PLAN.md §25](PLAN.md#25-vertical-slice-acceptance-scenario) |
+| Portal | `portal/src/**/*.test.tsx` | none | Focused Vitest/jsdom and Testing Library coverage for meaningful routing, state, and authorization-presentation behavior; run from `portal/` with `npm test` |
 
 Database and scenario tests create a throwaway database per test session — `dnd_ai_test_<run-id>` — migrate it to head, run, and drop it. That is the same mechanism against either target, which is what lets the identical suite run locally and in CI with nothing skipped or conditionally disabled on either ([PLAN.md §24.0](PLAN.md#240-verification-policy), [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)).
 
@@ -450,6 +488,19 @@ uv run mypy src
 
 Run all three before committing. CI runs them without `--fix`.
 
+Portal changes have their own checks because `portal/` is an independent npm
+project:
+
+```bash
+cd portal
+npm test
+npm run lint
+npm run build
+```
+
+Run all three before committing portal work. The build command includes the
+TypeScript project build (`tsc -b`) as well as the Vite production build.
+
 `scripts/verify.sh` wraps the read-only form of these checks, plus the
 pytest layers and `alembic check`, as a single command that prints one
 PASS/FAIL line per stage instead of each tool's full output — `full` output
@@ -480,6 +531,11 @@ CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hoste
 **`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
 
 **`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test test/` and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
+
+**Portal checks are not yet wired into CI.** Until a dedicated portal job is
+added, run `npm test`, `npm run lint`, and `npm run build` locally from
+`portal/`. Do not treat the Python or Foundry jobs as verification of the React
+application.
 
 **`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 
