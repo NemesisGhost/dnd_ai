@@ -184,7 +184,49 @@ def test_upgrading_to_103_adds_exactly_the_denied_code() -> None:
         _drop_database(admin_url, test_url)
 
 
+def _denied_change_action_id(database_url: str) -> uuid.UUID:
+    engine = create_engine(database_url, connect_args=_connect_args())
+    try:
+        with engine.connect() as conn:
+            value = conn.execute(
+                text("SELECT change_action_id FROM audit.change_actions WHERE code = 'denied'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _insert_denied_audit_row(database_url: str) -> int:
+    """A real `audit.change_log` row referencing `denied` through the same
+    production `schema_name`/`table_name` pairing `dnd_ai.api.local_auth.
+    _record_login_failure_audit` actually writes, resolving `change_action_
+    id` through the real `audit.change_actions` foreign key rather than a
+    literal — exactly the protected-history condition revision 103's
+    conditional downgrade must detect and refuse to destroy."""
+    engine = create_engine(database_url, connect_args=_connect_args())
+    try:
+        with engine.begin() as conn:
+            change_log_id = conn.execute(
+                text("""
+                    INSERT INTO audit.change_log
+                        (change_action_id, schema_name, table_name, actor_service, command_name)
+                    VALUES (
+                        (SELECT change_action_id FROM audit.change_actions WHERE code = 'denied'),
+                        'security', 'browser_sessions', 'local_auth', 'local_auth.login_failure'
+                    )
+                    RETURNING change_log_id
+                """)
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert isinstance(change_log_id, int)
+    return change_log_id
+
+
 def test_downgrading_103_to_102_removes_only_the_denied_code() -> None:
+    """Reversible path: no `denied` audit history exists yet, so downgrading
+    must succeed and restore the exact pre-103 reference-data state."""
     admin_url, test_url = _provision_database("downgrade")
     try:
         _alembic_upgrade(test_url, _THIS_REVISION)
@@ -231,5 +273,67 @@ def test_downgrade_then_reupgrade_round_trips_cleanly() -> None:
         finally:
             engine.dispose()
         assert count == 1
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+def test_downgrading_103_to_102_fails_safely_when_denied_audit_history_exists() -> None:
+    """Protected-history path: once a real `audit.change_log` row
+    references the `denied` outcome, downgrading past 103 must fail with a
+    clear, actionable message rather than deleting or relabeling that
+    history — and must leave the database completely unchanged: still at
+    revision 103, the `denied` change action still defined, the
+    referencing audit row still present and unmodified, and every other
+    revision-103 reference-data row still exactly as it was."""
+    admin_url, test_url = _provision_database("protected")
+    try:
+        _alembic_upgrade(test_url, _THIS_REVISION)
+        denied_id_before = _denied_change_action_id(test_url)
+        change_log_id = _insert_denied_audit_row(test_url)
+
+        result = _alembic(test_url, "downgrade", _PREVIOUS_REVISION)
+        assert result.returncode != 0, (
+            "expected the downgrade to fail while durable 'denied' audit history exists:\n"
+            + result.stdout
+            + result.stderr
+        )
+        combined_output = result.stdout + result.stderr
+        assert "Cannot downgrade revision 103_login_failure_audit_action" in combined_output
+        assert "durable 'denied' security-audit history exists" in combined_output
+        assert "will not be deleted or relabeled" in combined_output
+        assert "restoring a database backup" in combined_output
+
+        # The Alembic revision never moved off 103.
+        assert _current_revision(test_url) == _THIS_REVISION
+
+        # The denied change_action row is untouched — same id, still present.
+        assert _denied_change_action_id(test_url) == denied_id_before
+
+        # The referencing audit row is untouched.
+        engine = create_engine(test_url, connect_args=_connect_args())
+        try:
+            with engine.connect() as conn:
+                row = (
+                    conn.execute(
+                        text(
+                            "SELECT change_action_id, schema_name, table_name, actor_service "
+                            "FROM audit.change_log WHERE change_log_id = :id"
+                        ),
+                        {"id": change_log_id},
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+        finally:
+            engine.dispose()
+        assert row is not None, "the referencing audit row must not have been deleted"
+        assert row["change_action_id"] == denied_id_before
+        assert row["schema_name"] == "security"
+        assert row["table_name"] == "browser_sessions"
+        assert row["actor_service"] == "local_auth"
+
+        # No partial downgrade: every original code, plus 'denied', is
+        # still present — nothing was removed or relabeled.
+        assert _change_action_codes(test_url) == _ORIGINAL_SIX_CODES | {"denied"}
     finally:
         _drop_database(admin_url, test_url)

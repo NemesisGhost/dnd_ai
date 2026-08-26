@@ -66,18 +66,50 @@ finding — not a new migration):
     change of any kind revision 007 makes going forward.
 
 Rollback:
-    Supported. Deletes the `denied` row by code — this is now a complete,
-    correct inverse of the `INSERT` above: nothing else in this migration's
-    chain of ancestors inserts, references, or depends on that row.
-    Safe only because nothing yet references it by foreign key (`audit.
-    change_log.change_action_id` does, but only rows this same
-    deployment's own audit writes would have created since this migration
-    applied; a downgrade immediately after upgrade, before any login
-    failure has occurred, has nothing referencing it to break). A
-    production downgrade after real failed-login audit rows have
-    accumulated would violate `audit.change_log`'s `change_action_id`
-    foreign key — the same class of caveat every lookup-row-removing
-    downgrade in this codebase carries.
+    Conditionally supported (second correction — see "Conditional downgrade
+    policy" below). Deletes the `denied` row by code, the complete, correct
+    inverse of the `INSERT` above — but only once a read-only precondition
+    check confirms nothing in `audit.change_log` still references it.
+    `audit.change_log.change_action_id REFERENCES audit.change_actions
+    (change_action_id) ON DELETE RESTRICT` (revision `007_audit_change_
+    log`) would itself refuse the `DELETE` once a real `denied` row exists,
+    but letting that surface as a raw foreign-key-violation error is not
+    "reverse those changes safely" — an operator sees a generic constraint
+    error, not why, or what to do about it. `downgrade()` now checks first
+    and raises a specific, actionable `RuntimeError` before touching
+    anything, so a downgrade that cannot safely proceed never gets far
+    enough to leave a partial change behind either.
+
+Conditional downgrade policy:
+    - No `audit.change_log` row anywhere yet has `change_action_id`
+      resolving to `code = 'denied'` (the common case: no failed login has
+      ever been recorded, or the deployment predates real traffic):
+      `downgrade()` deletes the `denied` row and exits successfully — the
+      exact pre-103 `audit.change_actions` content is restored.
+    - One or more `audit.change_log` rows already reference `denied`:
+      `downgrade()` raises `RuntimeError` immediately, before the `DELETE`
+      (or anything else) runs, and changes nothing. The message states
+      plainly that (a) the downgrade cannot proceed because durable
+      `denied` security-audit history exists, (b) those records are never
+      deleted or relabeled to force it through — reassigning them to an
+      existing code such as `failed`/`rejected`/`error` would misrepresent
+      what actually happened just as much as deleting them would, silently
+      corrupting audit history a security review may depend on — and (c)
+      rolling back past this revision in that situation requires restoring
+      a database backup taken before `103_login_failure_audit_action` was
+      applied, not an Alembic downgrade. The Alembic revision stays at 103,
+      `audit.change_actions`'s `denied` row and every referencing
+      `audit.change_log` row are untouched, and no other revision-103
+      schema change is affected — this migration makes no schema change
+      besides the one seeded row (see "Data implications" below).
+    - The precondition check is a read-only `SELECT EXISTS (...)` against
+      `audit.change_log` joined to `audit.change_actions` — it never
+      disables, defers, or bypasses the `ON DELETE RESTRICT` foreign key
+      itself; that constraint stays exactly as revision 007 defined it and
+      would still refuse the `DELETE` on its own if this check were ever
+      wrong. The check exists to fail with a clear explanation *before* a
+      caller ever reaches that generic constraint error, not to replace
+      the constraint as the actual safety mechanism.
 
 Data implications:
     Seeds one row. No other rows created, updated, or removed.
@@ -87,27 +119,46 @@ Locking considerations:
     already-existing lookup table.
 
 See: database/migrations/versions/007_audit_change_log.py (the table, its
-     own still-current `apply_seed` call, and the frozen seed file this
-     migration must never share content with again)
+     own still-current `apply_seed` call, the frozen seed file this
+     migration must never share content with again, and the `ON DELETE
+     RESTRICT` foreign key the conditional downgrade check below exists to
+     explain rather than replace)
      database/seeds/audit.change_actions.yaml (007's frozen input — the
      six original rows only)
      docs/DATABASE_CONVENTIONS.md §25.4 (the frozen-seed-file convention
      this migration originally violated)
      tests/database/test_login_failure_audit_action_migration.py (single-
      step upgrade/downgrade/re-upgrade coverage for this exact revision,
-     plus the regression proof that 102 alone seeds only the original six
-     codes)
+     the regression proof that 102 alone seeds only the original six
+     codes, and the reversible/protected-history downgrade coverage for
+     the conditional policy above)
      src/dnd_ai/api/local_auth.py (the local-auth/session audit call sites
      this code, and the pre-existing six, are used from)
 """
 
 from alembic import op
+from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision = "103_login_failure_audit_action"
 down_revision = "102_revoke_foundry_system_keys"
 branch_labels = None
 depends_on = None
+
+# Kept as one literal, not re-derived from a query result, so the message
+# downgrade() raises never depends on what it just read from the database —
+# see that function's own docstring for the exact conditional policy this
+# implements.
+_DOWNGRADE_BLOCKED_BY_DENIED_HISTORY = (
+    "Cannot downgrade revision 103_login_failure_audit_action: durable 'denied' "
+    "security-audit history exists in audit.change_log. These records will not be "
+    "deleted or relabeled to force the downgrade through — reassigning them to another "
+    "change action (e.g. 'failed', 'rejected', 'error') would misrepresent what actually "
+    "happened just as destructively as deleting them, corrupting audit history a security "
+    "review may depend on. Rolling back past this revision requires restoring a database "
+    "backup taken before 103_login_failure_audit_action was applied, not an Alembic "
+    "downgrade."
+)
 
 
 def upgrade() -> None:
@@ -128,6 +179,39 @@ def upgrade() -> None:
     """)
 
 
+def _denied_change_action_is_referenced() -> bool:
+    """Read-only precondition check for `downgrade()` (never disables,
+    defers, or bypasses `audit.change_log.change_action_id`'s own `ON
+    DELETE RESTRICT` foreign key — see this module's "Conditional
+    downgrade policy" docstring section) — `True` once at least one
+    `audit.change_log` row's `change_action_id` resolves to `code =
+    'denied'`, checked by joining rather than trusting any cached id,
+    since a fresh downgrade run never assumes what `upgrade()` inserted
+    this row as."""
+    bind = op.get_bind()
+    return bool(
+        bind.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM audit.change_log cl
+                    JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                    WHERE ca.code = 'denied'
+                )
+            """)
+        ).scalar()
+    )
+
+
 def downgrade() -> None:
-    """Revert the migration."""
+    """Revert the migration — conditionally. See this module's own
+    "Conditional downgrade policy" docstring section for the full policy;
+    in short: deletes the `denied` row and succeeds when nothing
+    references it, or raises `RuntimeError` and changes nothing at all
+    when durable `denied` audit history exists. The precondition check
+    runs, and this function can still raise, before any destructive
+    statement — a downgrade that cannot proceed safely never gets far
+    enough to leave a partial change behind."""
+    if _denied_change_action_is_referenced():
+        raise RuntimeError(_DOWNGRADE_BLOCKED_BY_DENIED_HISTORY)
     op.execute("DELETE FROM audit.change_actions WHERE code = 'denied';")
