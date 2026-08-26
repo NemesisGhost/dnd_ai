@@ -634,6 +634,7 @@ _ALL_TEST_MANAGED_ENV_VARS = (
     "DND_AI_OIDC_ISSUER",
     "DND_AI_OIDC_AUDIENCE",
     "DND_AI_OIDC_JWKS_URL",
+    "DND_AI_TRUSTED_PROXIES",
     "DND_AI_SECRETS_DIR",
     "DND_AI_TEST_DATABASE_URL",
     "DND_AI_CI_DB_NAME",
@@ -1091,6 +1092,69 @@ def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) ->
     )
     assert result.returncode != 0
     assert "DND_AI_DATABASE_URL" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# trusted_proxies — the single authoritative source of which immediate TCP
+# peers dnd_ai.api.client_address.resolve_client_ip trusts to set
+# X-Forwarded-For (Phase 13B correction). Unlike foundry_allowed_origins/
+# local_session_allowed_origins, never required in any environment — a
+# self-hosted deployment with no reverse proxy in front of `api` (this
+# repository's current compose.yaml topology) has nothing to configure.
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_proxies_defaults_to_none_in_every_environment() -> None:
+    assert Settings().trusted_proxies is None
+
+
+def test_production_does_not_require_trusted_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    _production_env(monkeypatch)
+    settings = Settings()
+    assert settings.trusted_proxies is None
+
+
+def test_a_blank_trusted_proxies_value_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "")
+    settings = Settings()
+    assert settings.trusted_proxies is None
+
+
+def test_trusted_proxies_accepts_a_bare_ip_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "10.0.0.5")
+    settings = Settings()
+    assert settings.trusted_proxies == "10.0.0.5/32"
+
+
+def test_trusted_proxies_accepts_a_cidr_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "172.20.0.0/16")
+    settings = Settings()
+    assert settings.trusted_proxies == "172.20.0.0/16"
+
+
+def test_trusted_proxies_normalizes_and_deduplicates_a_comma_separated_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "10.0.0.5, 172.20.0.0/16, 10.0.0.5")
+    settings = Settings()
+    assert settings.trusted_proxies == "10.0.0.5/32,172.20.0.0/16"
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "not-an-ip-or-network",
+        "example.com",
+        "10.0.0.5,",
+        "10.0.0.5,,172.20.0.0/16",
+    ],
+)
+def test_trusted_proxies_rejects_malformed_entries(
+    bad_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", bad_value)
+    with pytest.raises(ValidationError, match="DND_AI_TRUSTED_PROXIES"):
+        Settings()
 
 
 # ---------------------------------------------------------------------------

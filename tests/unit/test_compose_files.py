@@ -302,3 +302,45 @@ def test_env_example_documents_the_ai_provider_host_side_variables() -> None:
     assert "API_AI_PROVIDER_API_KEY=sk-" not in content
     assert "sk-proj-" not in content
     assert "sk-test-" not in content
+
+
+# ---------------------------------------------------------------------------
+# api's trusted-reverse-proxy configuration (Phase 13B correction) —
+# regression guard for the defect where the IP-wide login rate limiter
+# always read `request.client.host`, which collapses to one shared bucket
+# across every real client once a reverse proxy sits in front of `api`.
+# `DND_AI_TRUSTED_PROXIES` is the one setting dnd_ai.config.Settings and
+# dnd_ai.api.client_address.resolve_client_ip both read to decide whether an
+# inbound X-Forwarded-For may be trusted; this file's own environment
+# mapping must expose exactly that same container-side variable name — not
+# a differently spelled or second, parallel setting — so a deployment that
+# configures the documented host-side variable is actually changing the
+# same trust boundary the application (and this suite's own
+# tests/database/test_api_local_auth.py trusted-proxy tests, and
+# tests/unit/test_client_address.py) exercises.
+# ---------------------------------------------------------------------------
+
+
+def test_api_trusted_proxies_is_forwarded_from_a_distinct_host_side_variable() -> None:
+    api = _load("compose.yaml")["services"]["api"]
+    assert "DND_AI_TRUSTED_PROXIES" in api["environment"], (
+        "api service must set DND_AI_TRUSTED_PROXIES — the exact setting "
+        "dnd_ai.config.Settings/dnd_ai.api.client_address.resolve_client_ip read"
+    )
+    value = api["environment"]["DND_AI_TRUSTED_PROXIES"]
+    assert "API_TRUSTED_PROXIES" in value
+
+
+def test_api_trusted_proxies_has_a_safe_soft_default_not_a_hard_requirement() -> None:
+    # Unset must mean "trust nothing" (dnd_ai.config.Settings' own safe
+    # default), never a hard startup requirement — most self-hosted
+    # deployments run `api` directly exposed, with no reverse proxy at all.
+    api = _load("compose.yaml")["services"]["api"]
+    value = api["environment"]["DND_AI_TRUSTED_PROXIES"]
+    assert value == "${API_TRUSTED_PROXIES:-}"
+
+
+def test_env_example_documents_the_trusted_proxies_host_side_variable() -> None:
+    content = (REPO_ROOT / ".env.example").read_text()
+    assert "API_TRUSTED_PROXIES" in content
+    assert "DND_AI_TRUSTED_PROXIES" in content

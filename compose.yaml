@@ -217,6 +217,22 @@ services:
       # DND_AI_ENVIRONMENT=production (which this file always sets for
       # `api`), with no fallback, and requires every origin to be HTTPS.
       DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS: ${API_LOCAL_SESSION_ALLOWED_ORIGINS:?API_LOCAL_SESSION_ALLOWED_ORIGINS is required — copy .env.example to .env and set it to the portal's real HTTPS origin before starting the api service}
+      # Phase 13B correction: the exact IP addresses/CIDR networks trusted
+      # to set X-Forwarded-For on an inbound request (see .env.example's
+      # "Trusted reverse proxy" section and dnd_ai.config's own docstring).
+      # Safe soft default (`:-`, blank) on purpose, exactly like
+      # API_FOUNDRY_ALLOWED_ORIGINS below — this base file, as documented
+      # at its own header, sits behind no reverse proxy yet (PLAN.md §32,
+      # Phase 14), so "trust nothing" (dnd_ai.config.Settings' own default)
+      # is correct until an operator actually places one in front of `api`.
+      # Once you do, this MUST name that proxy's address before exposing
+      # login publicly through it — left unset, the IP-wide login rate
+      # limiter (dnd_ai.api.local_auth.get_login_ip_rate_limiter) degrades
+      # to one shared bucket keyed on the proxy's own address across every
+      # real client behind it, since request.client.host is then always
+      # the proxy, never the true caller (dnd_ai.api.client_address's own
+      # docstring).
+      DND_AI_TRUSTED_PROXIES: ${API_TRUSTED_PROXIES:-}
       # Issue 1's CORS fix: the explicit allowlist of browser origins the
       # FoundryVTT module is served from (see .env.example's "Foundry CORS"
       # section). Optional soft defaults here on purpose — most self-hosted

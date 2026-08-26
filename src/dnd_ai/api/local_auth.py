@@ -35,17 +35,36 @@ bucket on every request merely by varying `login_name`, which neither
 independent ceiling permits (see `get_login_ip_rate_limiter`'s own
 module-level comment for the full reasoning).
 
-Known deployment-topology deviation: `_client_ip` reads `request.client.host`
-only, never `X-Forwarded-For` — trusting that header requires knowing which
-hops are the deployment's own reverse proxy, a topology decision this
-module does not own. Behind a reverse proxy that terminates TLS/forwards
-client IPs, every request's `request.client.host` is the proxy's own
-address, so the IP-wide ceiling degrades to one shared bucket across every
-real client behind it — the account-wide ceiling is unaffected either way,
-since it never reads client IP at all. Documented here, and in this
-workstream's completion report, as a deliberate scope boundary for a
-future reverse-proxy-aware deployment workstream to close, not an
-oversight.
+Client-address resolution (Phase 13B correction): `resolve_client_ip`
+(`dnd_ai.api.client_address`, shared with `dnd_ai.api.foundry_pairing` —
+see that module's own docstring for the full trust algorithm) reads
+`request.client.host` unless that immediate peer is a configured trusted
+proxy (`dnd_ai.config.settings.trusted_proxies`), in which case it trusts
+the last `X-Forwarded-For` entry instead. With no trusted proxy configured
+— the safe default, and this repository's current `compose.yaml` topology,
+which has no reverse proxy in front of `api` yet (PLAN.md §32, Phase 14) —
+this behaves identically to the plain `request.client.host` read this
+module used before the correction. A real deployment that places a reverse
+proxy in front of `api` must set `DND_AI_TRUSTED_PROXIES` to that proxy's
+address before enabling public login, or the IP-wide ceiling below still
+degrades to one shared bucket across every client behind it (the proxy's
+own address) — see `dnd_ai.config`'s own docstring and `compose.yaml`'s
+`api` service comment.
+
+Account-wide rate limiting does not gate authentication itself (Phase 13B
+correction): `get_login_account_rate_limiter`'s ceiling is checked only
+*after* `authenticate_local_user` has already run and reported a failure —
+never before it — so a caller who has filled one login name's failure
+bucket (by distributing wrong-password attempts across many source
+addresses, each individually under the IP-wide ceiling) can never turn
+that into a hard lock against the *correct* password for that same
+account; every IP-admitted request is always fully authenticated. The
+account-wide ceiling instead bounds what happens after a failed attempt —
+audit-log admission and how long invalid attempts against one login name
+keep receiving a plain `401` before degrading to `429` — so distributed
+brute-forcing of one account remains bounded and observable without ever
+becoming a denial-of-service primitive against that account's legitimate
+owner. See `login_endpoint`'s own docstring for the exact flow.
 """
 
 import uuid
@@ -80,6 +99,7 @@ from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from .audit import record_change_log
 from .auth import get_authenticated_user_id, require_human_user_id
+from .client_address import resolve_client_ip
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
 from .deps import get_connection
@@ -103,14 +123,17 @@ _LOGIN_REQUEST_LOGIN_NAME_MAX_LENGTH = 64
 # a single limiter keyed on "ip:login_name" let an attacker reset their own
 # bucket every request merely by varying login_name, defeating the limit
 # entirely. Two independent limiters close that gap without depending on
-# each other: an IP-wide ceiling (any login_name from one source address)
-# and an account-wide ceiling (one login_name from any source address).
-# The IP ceiling is deliberately more generous than the account one — it
-# exists to bound abuse volume from one address, not to police how many
-# distinct users a shared address (e.g. NAT/office gateway) legitimately
-# serves. A composite per-(ip, login_name) limiter was deliberately
-# dropped: with both independent ceilings in place it added no coverage
-# neither already provides, only a third bucket to maintain.
+# each other: an IP-wide ceiling (any login_name from one source address),
+# checked *before* authenticate_local_user runs, and an account-wide
+# ceiling (one login_name from any source address), checked only *after* a
+# failed attempt (see login_endpoint below) — never before, so it can never
+# reject a correct password without verifying it first. The IP ceiling is
+# deliberately more generous than the account one — it exists to bound
+# abuse volume from one address, not to police how many distinct users a
+# shared address (e.g. NAT/office gateway) legitimately serves. A composite
+# per-(ip, login_name) limiter was deliberately dropped: with both
+# independent ceilings in place it added no coverage neither already
+# provides, only a third bucket to maintain.
 _LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS = 30
 _LOGIN_IP_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 _LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS = 10
@@ -150,6 +173,12 @@ def get_login_ip_rate_limiter() -> RateLimiter:
 
 
 def get_login_account_rate_limiter() -> RateLimiter:
+    """Bounds *failed* attempts against one login name (Phase 13B
+    correction) — `login_endpoint` never consults this before calling
+    `authenticate_local_user`, only after it reports a failure, precisely
+    so a full account bucket can never itself reject a correct password.
+    See `login_endpoint`'s own docstring for the exact flow this and
+    `get_login_ip_rate_limiter` together implement."""
     global _login_account_rate_limiter
     if _login_account_rate_limiter is None:
         _login_account_rate_limiter = RateLimiter(
@@ -167,14 +196,6 @@ def get_token_consumption_rate_limiter() -> RateLimiter:
             window=_TOKEN_CONSUMPTION_RATE_LIMIT_WINDOW,
         )
     return _token_consumption_rate_limiter
-
-
-def _client_ip(request: Request) -> str:
-    """`request.client.host`, or a fixed placeholder if the ASGI server
-    didn't supply one (e.g. some test transports) — never `None` passed to
-    a rate-limiter key. See this module's own docstring for the reverse-
-    proxy deviation this leaves open."""
-    return request.client.host if request.client is not None else "unknown"
 
 
 def _record_login_failure_audit(
@@ -216,15 +237,19 @@ def _record_login_failure_audit(
     any token), and its presence here is exactly what makes this record
     useful for spotting a brute-force pattern against one account.
 
-    Reached only for an *admitted* attempt (both `get_login_ip_rate_limiter`
-    and `get_login_account_rate_limiter` already passed before
-    `authenticate_local_user` is ever called) — the IP-wide ceiling in
-    particular bounds how many of these rows one source address can ever
-    produce per window regardless of how many distinct login names it
-    presents, closing the "vary the name every request to always get a
-    fresh limiter bucket" gap the original single composite-key limiter
-    left open. No `actor_user_id` — a failed login authenticates no one —
-    so `actor_service` names this module instead, the same "actor is not a
+    Reached only once a real credential check has already failed *and*
+    `get_login_account_rate_limiter` still admits this login name (Phase
+    13B correction — the account ceiling is checked after, never before,
+    authentication itself; see `login_endpoint`'s own docstring) — the
+    IP-wide ceiling bounds how many *attempts* one source address can ever
+    make per window regardless of how many distinct login names it
+    presents, and the account-wide ceiling separately bounds how many of
+    *these audit rows* one login name can accumulate per window regardless
+    of how many distinct source addresses present it, closing both the
+    "vary the name every request" and the "vary the source address every
+    request" versions of the same unbounded-audit-growth gap. No
+    `actor_user_id` — a failed login authenticates no one — so
+    `actor_service` names this module instead, the same "actor is not a
     person" case that column exists for."""
     record_change_log(
         connection,
@@ -286,32 +311,52 @@ def login_endpoint(
     matching `dnd_ai.commands.local_auth.authenticate_local_user`'s own
     non-disclosing contract one layer down).
 
-    Two independent rate-limit ceilings gate every attempt before
-    `authenticate_local_user` (and therefore Argon2id, and therefore a
-    possible audit write) ever runs — see `get_login_ip_rate_limiter`/
-    `get_login_account_rate_limiter`'s own module-level comment for why
-    both are needed and why a single per-(ip, login_name) limiter isn't. A
-    rate-limited attempt is never itself audited, by either ceiling — that
-    is exactly what keeps the number of `denied`-action audit rows a
-    sustained attack can generate bounded, even one that varies
-    `login_name` on every single request (see `_record_login_failure_
-    audit`'s own docstring)."""
-    client_ip = _client_ip(request)
+    Only `ip_rate_limiter` gates admission *before* `authenticate_local_
+    user` runs (Phase 13B correction, replacing an earlier shape that also
+    consulted `account_rate_limiter` up front): once a request is IP-
+    admitted, its credential is *always* verified — there is no
+    attacker-reachable state, including a login name's own failure bucket
+    being completely full, that can turn into a 429 for a caller who
+    presents the *correct* password. `account_rate_limiter` is instead
+    consulted only in the failure branch below, where it decides two
+    things bounded independently of the IP ceiling: whether this failure
+    is durably audited, and whether the caller sees `401` (credential
+    genuinely rejected, this login name's own bucket still has room) or
+    `429` (this login name has already accumulated
+    `_LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS` recent failures, from however
+    many distinct source addresses). Both outcomes are reachable for both
+    a real and a nonexistent login name — the bucket is keyed on the
+    normalized name text, not on whether an account actually exists behind
+    it — so neither response shape discloses account existence any more
+    than the pre-existing `401`-vs-`401` non-disclosure already didn't.
+    A successful login on an IP-admitted request always succeeds
+    regardless of the account bucket's state, and forgives only that
+    bucket (see the comment at `account_rate_limiter.reset` below)."""
+    client_ip = resolve_client_ip(request)
     normalized_login_name = normalize_login_name(body.login_name)
     now = datetime.now(UTC)
     if not ip_rate_limiter.allow(client_ip, now=now):
-        raise RateLimitedError()
-    if not account_rate_limiter.allow(normalized_login_name, now=now):
         raise RateLimitedError()
 
     user_id = authenticate_local_user(
         connection, login_name=body.login_name, raw_password=body.password
     )
     if user_id is None:
-        _record_login_failure_audit(
-            connection, login_name=body.login_name, correlation_id=correlation_id
-        )
-        raise UnauthorizedError()
+        # Checked here, never before authenticate_local_user runs (Phase
+        # 13B correction) — a full bucket for this login name must never
+        # reject a correct password without verifying it, only throttle
+        # how the *invalid*-credential path behaves. allow() itself
+        # already declines to extend the window when the bucket is full
+        # (dnd_ai.domain.rate_limit.RateLimiter.allow's own docstring), so
+        # a sustained attack against one name, from any number of distinct
+        # source addresses, cannot grow this bucket's own memory or the
+        # audit rows it admits below past that ceiling.
+        if account_rate_limiter.allow(normalized_login_name, now=now):
+            _record_login_failure_audit(
+                connection, login_name=body.login_name, correlation_id=correlation_id
+            )
+            raise UnauthorizedError()
+        raise RateLimitedError()
     # Only the account-wide bucket is cleared on success — never the
     # IP-wide one. Resetting the IP bucket too would let one throwaway
     # successful login (e.g. the attacker's own account, or any account
@@ -879,7 +924,7 @@ def activate_account_endpoint(
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> ActivateAccountResponse:
-    if not rate_limiter.allow(_client_ip(request), now=datetime.now(UTC)):
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
     result = _activate_local_account_impl(
         connection, raw_activation_token=body.token, raw_password=body.password
@@ -918,7 +963,7 @@ def reset_password_endpoint(
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> ResetPasswordResponse:
-    if not rate_limiter.allow(_client_ip(request), now=datetime.now(UTC)):
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
     result = _reset_password_with_token_impl(
         connection, raw_reset_token=body.token, new_raw_password=body.new_password

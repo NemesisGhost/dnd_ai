@@ -143,6 +143,34 @@ this allowlist is actually enforced, and `foundry-module/README.md`'s
 this correction (the module's own connection validator requires HTTPS for
 any non-loopback API base URL).
 
+`trusted_proxies` (`DND_AI_TRUSTED_PROXIES`; Phase 13B correction) is the
+single authoritative source of which immediate TCP peers this process
+trusts to set `X-Forwarded-For` — a comma-separated list of exact IP
+addresses and/or CIDR networks (e.g. `10.0.0.5,172.20.0.0/16`), parsed with
+`ipaddress`, never a hostname (a reverse proxy's *container/network*
+address, not its DNS name — `ipaddress.ip_network` cannot resolve one, and
+resolving one at startup would make trust depend on DNS, a second
+attacker-influenced input). Optional in every environment, including
+production, and defaults to empty (no peer trusted, `X-Forwarded-For`
+never read) — the current `compose.yaml` topology publishes no host port
+for `api` and sits behind no reverse proxy yet (PLAN.md §32, Phase 14), so
+"trust nothing" is the correct default until an operator actually places
+one in front of it. `dnd_ai.api.client_address.resolve_client_ip` is the
+one place this setting is read to decide whether an inbound request's
+`X-Forwarded-For` header may override `request.client.host` for rate-
+limiting purposes — see that module's own docstring for the trust
+algorithm (single-hop: the *last* `X-Forwarded-For` entry is trusted, since
+that is what the trusted proxy itself observed as its peer). A malformed
+entry (not a valid IP address or CIDR network) is a `Settings()`
+construction failure, the same fail-fast posture as every other optional
+allowlist setting here — there is no safe way to silently drop or repair a
+malformed trust-boundary entry. **A production deployment that places this
+API behind a reverse proxy and wants the IP-wide login rate limiter (and
+any other per-source-address abuse guard) to see real client addresses
+instead of one shared proxy address must set this before enabling public
+login** — see `compose.yaml`'s own `api` service comment and
+`.env.example`'s "Trusted reverse proxy" section.
+
 `database_url` carries one more production-only rule beyond the one
 above: `Settings()` also parses it (with SQLAlchemy's own URL parser, not
 string splitting) and refuses to start unless its username is exactly
@@ -174,6 +202,7 @@ secrets live*, so it is exactly the kind of thing that must always be a
 real deployment-supplied variable, not a developer-convenience default.
 """
 
+import ipaddress
 import os
 from pathlib import Path
 from typing import Literal
@@ -243,6 +272,7 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_JWKS_URL",
         "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
         "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS",
+        "DND_AI_TRUSTED_PROXIES",
         "DND_AI_AI_PROVIDER_API_KEY",
         "DND_AI_AI_PROVIDER_MODEL",
         "DND_AI_AI_PROVIDER_BASE_URL",
@@ -417,6 +447,57 @@ def foundry_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
     return tuple(settings_obj.foundry_allowed_origins.split(","))
 
 
+_TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def _parse_trusted_proxies(raw: str) -> tuple[_TrustedProxyNetwork, ...]:
+    """Splits, validates, and order-preserving-deduplicates a raw
+    comma-separated `DND_AI_TRUSTED_PROXIES` value into parsed networks.
+    Each entry must be a literal IP address (treated as a /32 or /128) or
+    CIDR network — never a hostname, since `ipaddress.ip_network` performs
+    no DNS resolution (see the module docstring's `trusted_proxies`
+    paragraph for why that is deliberate, not a limitation to work
+    around). `strict=False` permits an entry like `10.0.0.5/24` (host bits
+    set) without erroring, matching how an operator is likeliest to copy a
+    single proxy address in from `ip addr`/`docker inspect` output."""
+    networks: list[_TrustedProxyNetwork] = []
+    seen: set[_TrustedProxyNetwork] = set()
+    for entry in raw.split(","):
+        candidate = entry.strip()
+        if not candidate:
+            raise ValueError(
+                f"DND_AI_TRUSTED_PROXIES contains an empty or whitespace-padded entry: {raw!r}"
+            )
+        try:
+            network = ipaddress.ip_network(candidate, strict=False)
+        except ValueError as exc:
+            raise ValueError(
+                f"DND_AI_TRUSTED_PROXIES entry {candidate!r} is not a valid IP address or CIDR "
+                "network"
+            ) from exc
+        if network not in seen:
+            seen.add(network)
+            networks.append(network)
+    return tuple(networks)
+
+
+def trusted_proxy_networks_tuple(settings_obj: "Settings") -> tuple[_TrustedProxyNetwork, ...]:
+    """The parsed, already-validated set of peer networks
+    `dnd_ai.api.client_address.resolve_client_ip` trusts to set
+    `X-Forwarded-For` — mirrors `foundry_allowed_origins_tuple`/
+    `local_session_allowed_origins_tuple` exactly, over the separate
+    `trusted_proxies` setting. Re-parses on every call rather than caching
+    a parsed form on `Settings` itself, so a test that directly
+    `monkeypatch.setattr(settings, "trusted_proxies", ...)`s a raw string
+    (this codebase's established pattern — see `tests/database/
+    test_api_auth.py`'s identical use for `oidc_issuer` et al.) is picked
+    up immediately, without needing to also reconstruct a `Settings`
+    instance to re-run its model validators."""
+    if not settings_obj.trusted_proxies:
+        return ()
+    return _parse_trusted_proxies(settings_obj.trusted_proxies)
+
+
 def local_session_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
     """The parsed, already-validated `Origin` allowlist `dnd_ai.api.auth`
     checks a cookie-authenticated state-changing request's `Origin` header
@@ -478,6 +559,14 @@ class Settings(BaseSettings):
     # authentication; see _validate_local_session_allowed_origins), and
     # defaulting to the documented dev topology outside it.
     local_session_allowed_origins: str | None = None
+
+    # Comma-separated exact IP addresses/CIDR networks trusted to set
+    # X-Forwarded-For (Phase 13B correction) — see this module's own
+    # docstring's `trusted_proxies` paragraph. Optional, unconditionally,
+    # in every environment; empty/unset means "trust nothing," the safe
+    # default matching the current no-reverse-proxy-yet compose.yaml
+    # topology.
+    trusted_proxies: str | None = None
 
     # Phase 12 AI provider credential/model/endpoint pin (dnd_ai.domain.
     # ai_provider.OpenAiCompatibleProvider). ai_provider_base_url defaults
@@ -706,6 +795,35 @@ class Settings(BaseSettings):
             raw, field_name="DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", require_https=require_https
         )
         self.local_session_allowed_origins = ",".join(origins)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_trusted_proxies(self) -> "Settings":
+        """Blank/whitespace-only treated identically to unset (mirrors
+        every other optional allowlist setting's normalization above) —
+        never a validation error, never a fallback to "trust everything."
+        A non-blank value must fully parse as a comma-separated list of IP
+        addresses/CIDR networks (`_parse_trusted_proxies`); any malformed
+        entry fails `Settings()` construction outright, the same fail-fast
+        posture as `foundry_allowed_origins`/`local_session_allowed_
+        origins` — there is no safe way to silently drop or repair a
+        malformed trust-boundary entry for a setting that governs which
+        peers this process trusts to relabel a request's source address.
+        Unconditionally optional, in every environment including
+        production: unlike `local_session_allowed_origins`, no rule here
+        requires this to be set, since a self-hosted deployment with no
+        reverse proxy in front of `api` (this repository's current
+        compose.yaml topology) has nothing to configure. Normalizes the
+        field in place (canonical `str(network)` form, deduplicated) so
+        `trusted_proxy_networks_tuple` never has to re-validate."""
+        raw = self.trusted_proxies
+        if raw is not None and raw.strip() == "":
+            raw = None
+        if raw is None:
+            self.trusted_proxies = None
+            return self
+        networks = _parse_trusted_proxies(raw)
+        self.trusted_proxies = ",".join(str(network) for network in networks)
         return self
 
     @model_validator(mode="after")

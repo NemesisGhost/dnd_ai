@@ -34,6 +34,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+import dnd_ai.config as config
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
@@ -609,6 +610,346 @@ def test_rate_limited_attempts_do_not_create_unbounded_audit_rows(postgres_engin
             {"login_name": login_name},
         ).scalar_one()
     assert count == 3
+
+
+# ---------------------------------------------------------------------------
+# Account-wide rate limiting must never become an account-lockout primitive
+# (Critical correction, second review pass): the account bucket is checked
+# only after a real credential verification has already failed, never
+# before — so an attacker who fills one login name's failure bucket via
+# distributed wrong-password attempts can never turn that into a denial of
+# service against that account's real owner.
+# ---------------------------------------------------------------------------
+
+
+def test_correct_password_succeeds_even_when_the_account_failure_bucket_is_full(
+    postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    """The exact denial-of-service this correction closes: distributed
+    wrong-password attempts against one login name, from several different
+    source addresses, fill that login name's account-wide failure bucket —
+    but a subsequent *correct* password, from yet another still-IP-admitted
+    address, must still succeed rather than being rejected by the now-full
+    bucket without ever being verified."""
+    ip_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=4, window=timedelta(minutes=15))
+    login_name = f"targeted-{uuid.uuid4().hex[:8]}"
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False) as setup_client:
+        _activate_via_api(setup_client, postgres_engine, admin_user_id, login_name=login_name)
+
+    with contextlib.ExitStack() as stack:
+        attacker_clients = [
+            stack.enter_context(
+                TestClient(app, raise_server_exceptions=False, client=(f"198.51.100.{i}", 51000))
+            )
+            for i in range(4)
+        ]
+        for client in attacker_clients:
+            assert _attempt_login(client, login_name=login_name) == 401
+        # The bucket is now full — a fifth distributed invalid attempt is
+        # throttled, not verified.
+        another_attacker = stack.enter_context(
+            TestClient(app, raise_server_exceptions=False, client=("198.51.100.99", 51000))
+        )
+        assert _attempt_login(another_attacker, login_name=login_name) == 429
+
+        # The real owner, from yet another still-IP-admitted address,
+        # submits the CORRECT password — this must succeed, not 429.
+        owner_client = stack.enter_context(
+            TestClient(app, raise_server_exceptions=False, client=("198.51.100.200", 51000))
+        )
+        response = owner_client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+    assert response.status_code == 200, response.text
+
+
+def test_successful_login_resets_only_the_account_bucket_not_the_ip_bucket(
+    postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    ip_limiter = RateLimiter(max_attempts=2, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    login_name = f"resets-{uuid.uuid4().hex[:8]}"
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_name)
+
+        # One failed attempt against a different name consumes 1 of the
+        # IP's 2 slots.
+        assert _attempt_login(client, login_name="someone-else-entirely") == 401
+        # A successful login from the SAME address consumes the second.
+        success = client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        assert success.status_code == 200, success.text
+        # The IP bucket is exhausted (2/2) even though the second attempt
+        # succeeded — proving a successful login never resets the IP-wide
+        # ceiling, only the account-wide one.
+        assert _attempt_login(client, login_name="irrelevant-again") == 429
+
+
+def test_continued_distributed_invalid_attempts_remain_throttled(postgres_engine: Engine) -> None:
+    ip_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=3, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    login_name = f"throttled-{uuid.uuid4().hex[:8]}"
+    with contextlib.ExitStack() as stack:
+        clients = [
+            stack.enter_context(
+                TestClient(app, raise_server_exceptions=False, client=(f"203.0.113.{i}", 51000))
+            )
+            for i in range(6)
+        ]
+        for client in clients[:3]:
+            assert _attempt_login(client, login_name=login_name) == 401
+        # Every attempt after the bucket fills remains throttled — not just
+        # the very next one — regardless of how many further distinct
+        # source addresses present it.
+        for client in clients[3:]:
+            assert _attempt_login(client, login_name=login_name) == 429
+
+
+def test_unknown_and_real_accounts_expose_the_same_response_contract(
+    postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    """Both the `401`-vs-`401` (credential rejected) and the `429`-vs-`429`
+    (account bucket full) responses must be indistinguishable whether or
+    not `login_name` actually names an account — the account-wide bucket is
+    keyed on the normalized name text, never on whether a real account sits
+    behind it, so this correction must not introduce a new oracle."""
+    ip_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=2, window=timedelta(minutes=15))
+    real_login_name = f"real-{uuid.uuid4().hex[:8]}"
+    unknown_login_name = f"unknown-{uuid.uuid4().hex[:8]}"
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=real_login_name)
+
+        real_first = client.post(
+            "/auth/login",
+            json={"login_name": real_login_name, "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        unknown_first = client.post(
+            "/auth/login",
+            json={"login_name": unknown_login_name, "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        assert real_first.status_code == unknown_first.status_code == 401
+        # Compare the fixed error shape, not the whole body — `correlation_id`
+        # is a fresh per-request UUID (dnd_ai.api.errors._envelope) and
+        # would otherwise never match between two independent requests even
+        # when the rest of the contract is identical.
+        assert real_first.json()["error"]["code"] == unknown_first.json()["error"]["code"]
+        assert real_first.json()["error"]["message"] == unknown_first.json()["error"]["message"]
+
+        # Second failure fills each bucket (max_attempts=2); a third against
+        # each must throttle identically, with the same response contract.
+        assert _attempt_login(client, login_name=real_login_name) == 401
+        assert _attempt_login(client, login_name=unknown_login_name) == 401
+        real_throttled = client.post(
+            "/auth/login",
+            json={"login_name": real_login_name, "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        unknown_throttled = client.post(
+            "/auth/login",
+            json={"login_name": unknown_login_name, "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+    assert real_throttled.status_code == unknown_throttled.status_code == 429
+    assert real_throttled.json()["error"]["code"] == unknown_throttled.json()["error"]["code"]
+    assert real_throttled.json()["error"]["message"] == unknown_throttled.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Trusted-reverse-proxy client-address resolution (Critical correction,
+# second review pass): with no DND_AI_TRUSTED_PROXIES configured — the safe
+# default — every test above already proves the IP-wide ceiling keys on
+# `request.client.host` (via TestClient's own `client=(ip, port)`
+# parameter). These tests specifically cover the trusted-proxy branch:
+# `dnd_ai.api.client_address.resolve_client_ip` trusting the last
+# X-Forwarded-For entry only when the immediate peer is configured as
+# trusted — see that module's own docstring for the full algorithm, and
+# tests/unit/test_client_address.py for resolver-only coverage that needs
+# no database.
+# ---------------------------------------------------------------------------
+
+
+def test_two_forwarded_clients_behind_a_trusted_proxy_get_separate_ip_buckets(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config.settings, "trusted_proxies", "203.0.113.1")
+    ip_limiter = RateLimiter(max_attempts=1, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    # Every request in this test arrives from the SAME trusted-proxy peer —
+    # only the forwarded client address differs.
+    with TestClient(app, raise_server_exceptions=False, client=("203.0.113.1", 51000)) as client:
+        first = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "198.51.100.10"},
+        )
+        assert first.status_code == 401
+        # A different forwarded client's first attempt is unaffected —
+        # separate bucket, not blocked by the first client's exhausted one.
+        second = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "198.51.100.20"},
+        )
+        assert second.status_code == 401
+        # A repeat from the FIRST forwarded client is now throttled — proving
+        # its bucket really is being enforced per forwarded address, not
+        # merged with the proxy's own single peer bucket.
+        third = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "198.51.100.10"},
+        )
+        assert third.status_code == 429
+        # The second forwarded client's own bucket is still untouched by
+        # the first client's throttling.
+        fourth = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "198.51.100.30"},
+        )
+        assert fourth.status_code == 401
+
+
+def test_untrusted_direct_caller_cannot_forge_x_forwarded_for(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Configures a trusted proxy, but never this caller's own peer address —
+    # its X-Forwarded-For must be ignored entirely.
+    monkeypatch.setattr(config.settings, "trusted_proxies", "203.0.113.1")
+    ip_limiter = RateLimiter(max_attempts=1, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False, client=("198.51.100.50", 51000)) as client:
+        first = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "1.2.3.4"},
+        )
+        assert first.status_code == 401
+        # A second attempt, forging a DIFFERENT X-Forwarded-For — either to
+        # evade its own now-exhausted bucket, or to pin the blame on
+        # another address — still hits the same bucket, keyed on its own
+        # real peer address, since that peer is not a trusted proxy.
+        second = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "9.9.9.9"},
+        )
+        assert second.status_code == 429
+
+
+def test_malformed_or_multi_hop_forwarded_values_follow_the_documented_safe_policy(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config.settings, "trusted_proxies", "203.0.113.1")
+    ip_limiter = RateLimiter(max_attempts=1, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False, client=("203.0.113.1", 51000)) as client:
+        # Malformed X-Forwarded-For from the trusted proxy falls back to the
+        # proxy's own peer address, rather than being trusted verbatim or
+        # raising an error.
+        malformed = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "not-an-ip-address"},
+        )
+        assert malformed.status_code == 401
+        # The fallback bucket — keyed on the proxy's own peer address — is
+        # now exhausted, proving the malformed header was NOT trusted as
+        # some other, still-fresh key.
+        malformed_again = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "also-not-an-ip"},
+        )
+        assert malformed_again.status_code == 429
+
+    # Multi-hop: a reverse proxy following the documented convention always
+    # APPENDS the address it directly observed — the last entry — so only
+    # that entry is trusted, regardless of what an attacker prepends.
+    ip_limiter2 = RateLimiter(max_attempts=1, window=timedelta(minutes=15))
+    account_limiter2 = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app2 = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter2, account_rate_limiter=account_limiter2
+    )
+    with TestClient(app2, raise_server_exceptions=False, client=("203.0.113.1", 51000)) as client:
+        first = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "9.9.9.9, 198.51.100.77"},
+        )
+        assert first.status_code == 401
+        # A different forged prefix but the SAME real last hop still hits
+        # the same, now-exhausted bucket.
+        second = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "1.1.1.1, 198.51.100.77"},
+        )
+        assert second.status_code == 429
+        # A genuinely different real last hop gets its own, fresh bucket.
+        third = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "198.51.100.88"},
+        )
+        assert third.status_code == 401
+
+
+def test_missing_trusted_proxy_configuration_does_not_silently_trust_headers(
+    postgres_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config.settings, "trusted_proxies", None)
+    ip_limiter = RateLimiter(max_attempts=1, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False, client=("198.51.100.1", 51000)) as client:
+        first = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "1.2.3.4"},
+        )
+        assert first.status_code == 401
+        # A different forwarded value from the same real peer is still
+        # bucketed by that peer's own address — the header is never
+        # consulted at all with no trusted proxy configured.
+        second = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": "wrong-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN, "X-Forwarded-For": "5.6.7.8"},
+        )
+        assert second.status_code == 429
 
 
 # ---------------------------------------------------------------------------

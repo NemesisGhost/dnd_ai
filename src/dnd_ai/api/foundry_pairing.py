@@ -84,6 +84,7 @@ from dnd_ai.domain.rate_limit import RateLimiter
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .auth import require_human_user_id
+from .client_address import resolve_client_ip
 from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
 
@@ -120,12 +121,6 @@ def get_foundry_pairing_rate_limiter() -> RateLimiter:
             window=_FOUNDRY_PAIRING_RATE_LIMIT_WINDOW,
         )
     return _foundry_pairing_rate_limiter
-
-
-def _client_ip(request: Request) -> str:
-    """Same `request.client.host`-only shape, and the same known reverse-
-    proxy-topology deviation, as `dnd_ai.api.local_auth._client_ip`."""
-    return request.client.host if request.client is not None else "unknown"
 
 
 def _device_summary_response(summary: FoundryDeviceSummary) -> "FoundryDeviceResponse":
@@ -234,7 +229,7 @@ def consume_foundry_pairing_code_endpoint(
     access token — all three returned exactly once, never persisted or
     logged raw anywhere past this response. Rate-limited by client IP alone
     (no device id exists yet at this point, unlike `/foundry/token`)."""
-    if not rate_limiter.allow(_client_ip(request), now=datetime.now(UTC)):
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
     result = _consume_foundry_pairing_code_impl(
         connection,
@@ -245,7 +240,7 @@ def consume_foundry_pairing_code_endpoint(
         module_version=body.module_version,
         foundry_version=body.foundry_version,
     )
-    rate_limiter.reset(_client_ip(request))
+    rate_limiter.reset(resolve_client_ip(request))
     return ConsumeFoundryPairingCodeResponse(
         foundry_connection_id=result.foundry_connection_id,
         foundry_device_id=result.foundry_device_id,
@@ -298,7 +293,7 @@ def foundry_token_endpoint(
     except ValueError as exc:
         raise UnauthorizedError() from exc
 
-    rate_limit_key = f"{_client_ip(request)}:{foundry_device_id}"
+    rate_limit_key = f"{resolve_client_ip(request)}:{foundry_device_id}"
     if not rate_limiter.allow(rate_limit_key, now=datetime.now(UTC)):
         raise RateLimitedError()
 
