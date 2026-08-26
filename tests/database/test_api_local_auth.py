@@ -552,6 +552,11 @@ def test_distinct_legitimate_users_are_not_collapsed_into_one_account_bucket(
 def test_oversized_login_name_is_rejected_before_any_backend_work(
     client_factory: Callable[[], TestClient], postgres_engine: Engine
 ) -> None:
+    # This shared session database routinely already has login_failure
+    # rows from earlier tests by the time this one runs — the assertion
+    # below proves this specific request added none, not that none exist
+    # at all.
+    before = _audit_row_count(postgres_engine, command_name="local_auth.login_failure")
     oversized_login_name = "x" * 65  # one past dnd_ai.commands.local_auth's 64-char maximum
     with client_factory() as client:
         response = client.post(
@@ -560,12 +565,13 @@ def test_oversized_login_name_is_rejected_before_any_backend_work(
             headers={"Origin": _DEV_ORIGIN},
         )
     assert response.status_code == 422, response.text
-    assert _latest_audit_row(postgres_engine, command_name="local_auth.login_failure") is None
+    assert _audit_row_count(postgres_engine, command_name="local_auth.login_failure") == before
 
 
 def test_oversized_password_is_rejected_before_any_backend_work(
     client_factory: Callable[[], TestClient], postgres_engine: Engine
 ) -> None:
+    before = _audit_row_count(postgres_engine, command_name="local_auth.login_failure")
     oversized_password = "x" * 513  # one past MAX_PASSWORD_LENGTH
     with client_factory() as client:
         response = client.post(
@@ -574,7 +580,7 @@ def test_oversized_password_is_rejected_before_any_backend_work(
             headers={"Origin": _DEV_ORIGIN},
         )
     assert response.status_code == 422, response.text
-    assert _latest_audit_row(postgres_engine, command_name="local_auth.login_failure") is None
+    assert _audit_row_count(postgres_engine, command_name="local_auth.login_failure") == before
 
 
 def test_rate_limited_attempts_do_not_create_unbounded_audit_rows(postgres_engine: Engine) -> None:
@@ -902,6 +908,20 @@ def _latest_audit_row(postgres_engine: Engine, *, command_name: str) -> dict[str
             .one_or_none()
         )
     return dict(row) if row is not None else None
+
+
+def _audit_row_count(postgres_engine: Engine, *, command_name: str) -> int:
+    """Total rows for `command_name`, across this shared session database
+    — used where a test needs to prove *no new row was added by its own
+    request* (a before/after comparison), since this database routinely
+    already has rows for a given `command_name` from earlier tests by the
+    time any one test runs; unlike `_latest_audit_row`, "is there a row at
+    all" is never the right question here."""
+    with postgres_engine.begin() as connection:
+        return connection.execute(
+            text("SELECT count(*) FROM audit.change_log WHERE command_name = :command_name"),
+            {"command_name": command_name},
+        ).scalar_one()
 
 
 def test_successful_login_is_audited(
