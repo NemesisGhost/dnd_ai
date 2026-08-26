@@ -38,14 +38,29 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SEEDS_DIR = REPO_ROOT / "database" / "seeds"
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations" / "versions"
 
-# Seeded lookup tables and their primary-key column.
+# Seeded lookup tables and their primary-key column — every row in each of
+# these tables comes from exactly one `database/seeds/<schema>.<table>.yaml`
+# file, applied via `apply_seed`, which is what the parametrized checks below
+# assume.
+#
+# `("audit", "change_actions", "change_action_id")` was here until migration
+# 103 (Phase 13B correction): that migration originally added its one new
+# `denied` row by editing `database/seeds/audit.change_actions.yaml` in
+# place — a violation of docs/DATABASE_CONVENTIONS.md §25.4's frozen-seed-
+# file rule, since revision `007_audit_change_log` already applies that same
+# file. The fix restored the file to its original six-row content and has
+# `103` insert `denied` directly (`op.execute(...)`, not `apply_seed`) — so
+# `audit.change_actions` is no longer a table whose *entire* content comes
+# from one seed file, and no longer fits the invariant the tests below
+# check. `tests/database/test_login_failure_audit_action_migration.py`
+# covers the equivalent idempotency/content guarantee for the `denied` row
+# specifically, against the exact migration that owns it.
 SEEDED_LOOKUPS = [
     ("core", "canon_statuses", "canon_status_id"),
     ("core", "lifecycle_statuses", "lifecycle_status_id"),
     ("core", "source_types", "source_type_id"),
     ("core", "name_types", "name_type_id"),
     ("core", "world_time_precisions", "world_time_precision_id"),
-    ("audit", "change_actions", "change_action_id"),
     ("security", "membership_statuses", "membership_status_id"),
     ("security", "character_relationship_types", "character_relationship_type_id"),
     ("security", "capabilities", "capability_id"),
