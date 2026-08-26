@@ -255,12 +255,61 @@ def test_oidc_settings_default_to_none_outside_production() -> None:
     assert settings.oidc_jwks_url is None
 
 
-def test_production_without_oidc_settings_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_production_with_all_oidc_settings_unset_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """External OIDC bearer-token compatibility is optional in every
+    environment, including production — a fully local-authentication-only
+    production deployment must be able to start with no OIDC provider
+    configured at all (docs/PLAN.md §23.1: "local authentication must work
+    with OIDC entirely unconfigured")."""
     monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
     monkeypatch.setenv(
         "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
     )
-    with pytest.raises(ValidationError, match="DND_AI_OIDC_ISSUER"):
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    settings = Settings()
+    assert settings.oidc_issuer is None
+    assert settings.oidc_audience is None
+    assert settings.oidc_jwks_url is None
+
+
+@pytest.mark.parametrize("blank_value", ["", "   "])
+def test_production_treats_blank_oidc_settings_as_unset(
+    blank_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compose cannot omit an environment key entirely when the host-side
+    variable is unset (`${API_OIDC_ISSUER:-}` interpolates to `""`) — a
+    blank value for all three must be accepted identically to all three
+    being genuinely absent, not rejected as a partial configuration."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", blank_value)
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", blank_value)
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", blank_value)
+    settings = Settings()
+    assert settings.oidc_issuer is None
+    assert settings.oidc_audience is None
+    assert settings.oidc_jwks_url is None
+
+
+def test_production_treats_one_blank_oidc_setting_as_unset_and_still_rejects_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank value normalizes to unset per-field, independently — so one
+    blank field alongside two genuinely configured ones is still a partial
+    (two-of-three) configuration, rejected exactly like any other partial
+    configuration, never silently treated as "fully configured"."""
+    monkeypatch.setenv("DND_AI_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "DND_AI_DATABASE_URL", "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai"
+    )
+    monkeypatch.setenv("DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", "https://world.example.com")
+    monkeypatch.setenv("DND_AI_OIDC_ISSUER", "")
+    monkeypatch.setenv("DND_AI_OIDC_AUDIENCE", "dnd-ai-api")
+    monkeypatch.setenv("DND_AI_OIDC_JWKS_URL", "https://idp.example/jwks")
+    with pytest.raises(ValidationError):
         Settings()
 
 
@@ -585,6 +634,7 @@ _ALL_TEST_MANAGED_ENV_VARS = (
     "DND_AI_OIDC_ISSUER",
     "DND_AI_OIDC_AUDIENCE",
     "DND_AI_OIDC_JWKS_URL",
+    "DND_AI_TRUSTED_PROXIES",
     "DND_AI_SECRETS_DIR",
     "DND_AI_TEST_DATABASE_URL",
     "DND_AI_CI_DB_NAME",
@@ -645,6 +695,48 @@ def test_import_path_fails_on_misspelled_application_setting(tmp_path: Path) -> 
     result = _run_config_import({"DND_AI_DATABAWSE_URL": "typo"}, cwd=tmp_path)
     assert result.returncode != 0
     assert "DND_AI_DATABAWSE_URL" in result.stderr
+
+
+_OIDC_DISABLED_PROBE = (
+    "import json\n"
+    "import dnd_ai.config as config\n"
+    "print(json.dumps({'environment': config.settings.environment, "
+    "'oidc_issuer': config.settings.oidc_issuer, "
+    "'oidc_audience': config.settings.oidc_audience, "
+    "'oidc_jwks_url': config.settings.oidc_jwks_url}))\n"
+)
+
+
+def test_import_path_succeeds_in_production_with_oidc_entirely_unset(tmp_path: Path) -> None:
+    """The real module-import/startup path (not `_load_settings()` called
+    directly) for a fully local-authentication-only production deployment:
+    a real self-hosted deployment must be able to boot with no OIDC
+    provider configured at all (docs/PLAN.md §23.1's "local authentication
+    must work with OIDC entirely unconfigured")."""
+    env = os.environ.copy()
+    for name in _ALL_TEST_MANAGED_ENV_VARS:
+        env.pop(name, None)
+    env.update(
+        {
+            "DND_AI_ENVIRONMENT": "production",
+            "DND_AI_DATABASE_URL": "postgresql+psycopg://app_read_write:prod@dbhost/dnd_ai",
+            "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS": "https://world.example.com",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _OIDC_DISABLED_PROBE],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["environment"] == "production"
+    assert payload["oidc_issuer"] is None
+    assert payload["oidc_audience"] is None
+    assert payload["oidc_jwks_url"] is None
 
 
 def test_production_ignores_developer_env_file_and_fails_closed(tmp_path: Path) -> None:
@@ -1000,6 +1092,69 @@ def test_production_with_only_legacy_database_url_is_rejected(tmp_path: Path) ->
     )
     assert result.returncode != 0
     assert "DND_AI_DATABASE_URL" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# trusted_proxies — the single authoritative source of which immediate TCP
+# peers dnd_ai.api.client_address.resolve_client_ip trusts to set
+# X-Forwarded-For (Phase 13B correction). Unlike foundry_allowed_origins/
+# local_session_allowed_origins, never required in any environment — a
+# self-hosted deployment with no reverse proxy in front of `api` (this
+# repository's current compose.yaml topology) has nothing to configure.
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_proxies_defaults_to_none_in_every_environment() -> None:
+    assert Settings().trusted_proxies is None
+
+
+def test_production_does_not_require_trusted_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    _production_env(monkeypatch)
+    settings = Settings()
+    assert settings.trusted_proxies is None
+
+
+def test_a_blank_trusted_proxies_value_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "")
+    settings = Settings()
+    assert settings.trusted_proxies is None
+
+
+def test_trusted_proxies_accepts_a_bare_ip_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "10.0.0.5")
+    settings = Settings()
+    assert settings.trusted_proxies == "10.0.0.5/32"
+
+
+def test_trusted_proxies_accepts_a_cidr_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "172.20.0.0/16")
+    settings = Settings()
+    assert settings.trusted_proxies == "172.20.0.0/16"
+
+
+def test_trusted_proxies_normalizes_and_deduplicates_a_comma_separated_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", "10.0.0.5, 172.20.0.0/16, 10.0.0.5")
+    settings = Settings()
+    assert settings.trusted_proxies == "10.0.0.5/32,172.20.0.0/16"
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "not-an-ip-or-network",
+        "example.com",
+        "10.0.0.5,",
+        "10.0.0.5,,172.20.0.0/16",
+    ],
+)
+def test_trusted_proxies_rejects_malformed_entries(
+    bad_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DND_AI_TRUSTED_PROXIES", bad_value)
+    with pytest.raises(ValidationError, match="DND_AI_TRUSTED_PROXIES"):
+        Settings()
 
 
 # ---------------------------------------------------------------------------

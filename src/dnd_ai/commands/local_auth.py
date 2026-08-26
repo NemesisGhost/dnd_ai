@@ -60,6 +60,7 @@ _PASSWORD_RESET_TOKEN_TTL = timedelta(hours=2)
 _BROWSER_SESSION_IDLE_TIMEOUT = timedelta(minutes=30)
 _BROWSER_SESSION_ABSOLUTE_TIMEOUT = timedelta(hours=12)
 _ACTIVE_LIFECYCLE_STATUS_CODE = "active"
+_INACTIVE_LIFECYCLE_STATUS_CODE = "inactive"
 
 
 def _active_lifecycle_status_id(connection: Connection) -> uuid.UUID:
@@ -625,19 +626,26 @@ def resolve_browser_session_csrf_token(
     return str(value) if value is not None else None
 
 
-def revoke_browser_session_by_token(connection: Connection, *, raw_session_token: str) -> None:
+def revoke_browser_session_by_token(
+    connection: Connection, *, raw_session_token: str
+) -> uuid.UUID | None:
     """Logout (docs/PLAN.md §23.4): revokes the session `raw_session_token`
     names, if any — silently a no-op for an unknown/already-revoked token,
     since "log out a session that no longer exists" is already the
-    caller's desired end state, not an error."""
-    connection.execute(
+    caller's desired end state, not an error. Returns the revoked
+    `browser_session_id`, or `None` for the no-op case — `dnd_ai.api.
+    local_auth.logout_endpoint` uses this to record a durable logout audit
+    row naming the specific session, without a second query, and skips
+    that audit write entirely when there was nothing to revoke."""
+    return connection.execute(
         text("""
             UPDATE security.browser_sessions
             SET revoked_at = now()
             WHERE session_token_hash = :hash AND revoked_at IS NULL
+            RETURNING browser_session_id
         """),
         {"hash": hash_opaque_secret(raw_session_token)},
-    )
+    ).scalar()
 
 
 class ForeignBrowserSessionError(DomainAuthorizationError):
@@ -925,23 +933,279 @@ def reset_password_with_token(
         )
 
 
+# ---------------------------------------------------------------------------
+# Administrative account lifecycle: disable, reactivate, revoke-all-sessions
+# (Phase 13B blocker 3)
+# ---------------------------------------------------------------------------
+
+
+class LocalAccountNotFoundError(DomainAuthorizationError):
+    """Raised by the administrative lifecycle commands below when
+    `target_user_id` does not name any `security.users` row — a fixed,
+    non-disclosing 404, matching `ForeignBrowserSessionError`'s identical
+    reasoning for a nonexistent/foreign browser session."""
+
+
+@dataclass(frozen=True)
+class AccountLifecycleResult:
+    user_id: uuid.UUID
+    previous_lifecycle_status_code: str
+    new_lifecycle_status_code: str
+
+
+class LastActivePlatformAdministratorError(SafeMessageError):
+    """Raised by `_set_local_account_lifecycle_status_impl` when disabling
+    `target_user_id` would leave `security.users` with zero rows that are
+    both `is_platform_administrator` and active — the platform would then
+    have no principal left capable of creating, activating, disabling, or
+    reactivating any account, including recovering from this exact state.
+    Applies identically whether the caller is disabling their own account
+    or a different administrator's — the invariant is a global count, not
+    a same-caller check. A fixed 409; never discloses how many other
+    users exist, their identities, or their own status, matching this
+    module's other non-disclosing error contracts."""
+
+    safe_status_code = 409
+    safe_error_code = "last_active_platform_administrator"
+    safe_message = (
+        "This is the platform's only active administrator account and cannot be disabled. "
+        "Activate another administrator account first."
+    )
+
+
+# The single, fixed advisory-lock key every active-platform-administrator
+# lifecycle transition acquires (via pg_advisory_xact_lock(hashtext(...)))
+# before reading or changing the invariant this class of command protects
+# — the same "acquire a session-scoped advisory lock for the whole
+# transaction, serializing every concurrent caller against the same key"
+# shape `bootstrap_initial_admin` above already establishes for its own
+# "exactly one first administrator" invariant. Deliberately one global key,
+# not one per target user: the invariant itself ("at least one active
+# platform administrator exists, platform-wide") is global, so two
+# concurrent disables of two *different* target users must still serialize
+# against each other — a per-target-user lock would let both proceed
+# concurrently and race exactly like the unprotected code did.
+_PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY = "platform_administrator_lifecycle"
+
+
+def _count_active_platform_administrators(connection: Connection) -> int:
+    value = connection.execute(
+        text("""
+            SELECT count(*)
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.is_platform_administrator AND ls.code = 'active'
+        """)
+    ).scalar()
+    assert isinstance(value, int)
+    return value
+
+
+def _set_local_account_lifecycle_status_impl(
+    connection: Connection,
+    *,
+    admin_user_id: uuid.UUID,
+    target_user_id: uuid.UUID,
+    new_status_code: str,
+) -> AccountLifecycleResult:
+    """Shared by `_disable_local_account_impl`/`_reactivate_local_account_
+    impl`: authorizes `admin_user_id` as a platform administrator (same
+    check every other admin command in this module performs, inside the
+    caller's own transaction), locks the target row (`SELECT ... FOR
+    UPDATE`, the same single-writer-at-a-time shape every token-consumption
+    command in this module already uses) to avoid a lost-update race
+    against a concurrent lifecycle change, and updates `security.users.
+    lifecycle_status_id`. Idempotent: setting a status the account already
+    has still succeeds and still returns a result (`previous_lifecycle_
+    status_code == new_lifecycle_status_code`) — an administrator
+    re-disabling an already-disabled account, or re-reactivating an
+    already-active one, is not an error, matching this codebase's existing
+    idempotency posture (e.g. `revoke_browser_session_by_token`'s own
+    no-op-for-already-revoked contract).
+
+    Disabling the platform's last remaining active administrator (finding:
+    "a sole administrator can disable themselves... leaving no
+    application-level principal capable of reactivation") is rejected via
+    `LastActivePlatformAdministratorError` before any write happens — see
+    that class's own docstring. Only the disable path (`new_status_code ==
+    _INACTIVE_LIFECYCLE_STATUS_CODE`) can ever reduce the active-
+    administrator count, so only it acquires `_PLATFORM_ADMINISTRATOR_
+    LIFECYCLE_LOCK_KEY`'s transaction-scoped advisory lock and runs the
+    count check; reactivation only ever increases or preserves that count
+    and needs neither. The lock is acquired *before* the target row is
+    read/locked, and held for the remainder of this transaction
+    (`pg_advisory_xact_lock` releases automatically at commit or
+    rollback) — every concurrent disable attempt, anywhere, serializes on
+    it, so a second transaction's own count read always reflects the
+    first transaction's fully-committed (or fully-rolled-back) effect
+    under PostgreSQL's default READ COMMITTED isolation, never an
+    in-flight, uncommitted one. The count check itself is skipped
+    entirely for a target that is not currently both an active
+    administrator (idempotent re-disable of an already-inactive account,
+    or disabling a non-administrator) — neither can affect the invariant,
+    so neither needs to contend for the lock's own critical section... a
+    caller with no such row still acquires the lock first (a nonexistent-
+    target's own status can't be known until the row is read), but never
+    reaches the count query itself once `LocalAccountNotFoundError` fires.
+    """
+    if not is_platform_administrator(connection, user_id=admin_user_id):
+        raise NotPlatformAdministratorError(f"user {admin_user_id} is not a platform administrator")
+
+    disabling = new_status_code == _INACTIVE_LIFECYCLE_STATUS_CODE
+    if disabling:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": _PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY},
+        )
+
+    row = (
+        connection.execute(
+            text("""
+                SELECT ls.code, u.is_platform_administrator
+                FROM security.users u
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE u.user_id = :user_id
+                FOR UPDATE OF u
+            """),
+            {"user_id": target_user_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise LocalAccountNotFoundError(f"user {target_user_id} does not exist")
+    previous_status_code = row["code"]
+
+    if (
+        disabling
+        and row["is_platform_administrator"]
+        and previous_status_code == _ACTIVE_LIFECYCLE_STATUS_CODE
+        and _count_active_platform_administrators(connection) <= 1
+    ):
+        raise LastActivePlatformAdministratorError(
+            f"disabling user {target_user_id} would leave zero active platform administrators"
+        )
+
+    new_status_id = lookup_id(
+        connection, "core", "lifecycle_statuses", "lifecycle_status_id", new_status_code
+    )
+    connection.execute(
+        text("UPDATE security.users SET lifecycle_status_id = :status WHERE user_id = :user_id"),
+        {"status": new_status_id, "user_id": target_user_id},
+    )
+    return AccountLifecycleResult(
+        user_id=target_user_id,
+        previous_lifecycle_status_code=previous_status_code,
+        new_lifecycle_status_code=new_status_code,
+    )
+
+
+def _disable_local_account_impl(
+    connection: Connection, *, admin_user_id: uuid.UUID, target_user_id: uuid.UUID
+) -> AccountLifecycleResult:
+    """Marks `target_user_id` inactive (`core.lifecycle_statuses.code =
+    'inactive'`) and revokes every one of its active browser sessions in
+    the same transaction — so a session already in flight is rejected on
+    its very next request (`resolve_local_session_principal`'s own `ls.code
+    = 'active'` join stops authenticating the account the moment this
+    commits; `revoke_all_browser_sessions` additionally guarantees no
+    already-issued session cookie keeps working even for the idle-timeout
+    window it would otherwise have left). Does not touch Foundry pairing —
+    disabling a local login account is independent of Foundry device
+    access, which `dnd_ai.commands.foundry_pairing` owns; see this
+    workstream's own scope notes for why that is deliberate, not an
+    oversight."""
+    result = _set_local_account_lifecycle_status_impl(
+        connection,
+        admin_user_id=admin_user_id,
+        target_user_id=target_user_id,
+        new_status_code=_INACTIVE_LIFECYCLE_STATUS_CODE,
+    )
+    revoke_all_browser_sessions(connection, user_id=target_user_id)
+    return result
+
+
+def _reactivate_local_account_impl(
+    connection: Connection, *, admin_user_id: uuid.UUID, target_user_id: uuid.UUID
+) -> AccountLifecycleResult:
+    """Marks `target_user_id` active again, restoring its ability to
+    authenticate — but deliberately does not touch `security.browser_
+    sessions` at all: every session `_disable_local_account_impl` revoked
+    stays revoked (a `revoked_at` timestamp, once set, is never cleared by
+    any command in this module), so a reactivated account still requires a
+    fresh `POST /auth/login` rather than resuming whatever browser tab was
+    open when it was disabled."""
+    return _set_local_account_lifecycle_status_impl(
+        connection,
+        admin_user_id=admin_user_id,
+        target_user_id=target_user_id,
+        new_status_code=_ACTIVE_LIFECYCLE_STATUS_CODE,
+    )
+
+
+@dataclass(frozen=True)
+class AdminRevokeAllSessionsResult:
+    user_id: uuid.UUID
+    revoked_count: int
+
+
+def _admin_revoke_all_browser_sessions_impl(
+    connection: Connection, *, admin_user_id: uuid.UUID, target_user_id: uuid.UUID
+) -> AdminRevokeAllSessionsResult:
+    """An administrator revoking every browser session belonging to
+    `target_user_id` — distinct from `revoke_all_browser_sessions` (used
+    internally by password reset and account disablement above) only in
+    that this is reachable as its own bounded operation, checks platform-
+    administrator authorization itself, confirms the target account
+    exists, and reports how many sessions it actually revoked. Revokes
+    only `target_user_id`'s own sessions (`WHERE user_id = :target_user_id
+    AND revoked_at IS NULL`) — every other user's sessions are
+    untouched — and takes effect on each revoked session's very next
+    request, the same immediate-revalidation guarantee every other
+    session-revocation path in this module already provides."""
+    if not is_platform_administrator(connection, user_id=admin_user_id):
+        raise NotPlatformAdministratorError(f"user {admin_user_id} is not a platform administrator")
+    exists = connection.execute(
+        text("SELECT 1 FROM security.users WHERE user_id = :user_id"),
+        {"user_id": target_user_id},
+    ).scalar()
+    if exists is None:
+        raise LocalAccountNotFoundError(f"user {target_user_id} does not exist")
+    result = connection.execute(
+        text("""
+            UPDATE security.browser_sessions
+            SET revoked_at = now()
+            WHERE user_id = :user_id AND revoked_at IS NULL
+        """),
+        {"user_id": target_user_id},
+    )
+    return AdminRevokeAllSessionsResult(user_id=target_user_id, revoked_count=result.rowcount)
+
+
 __all__ = [
+    "AccountLifecycleResult",
     "ActivateLocalAccountResult",
     "ActivationNotAcceptableError",
+    "AdminRevokeAllSessionsResult",
     "AlreadyBootstrappedError",
     "BrowserSessionSummary",
     "CreatedBrowserSession",
     "ForeignBrowserSessionError",
     "IssuedActivationToken",
     "IssuedPasswordResetToken",
+    "LastActivePlatformAdministratorError",
+    "LocalAccountNotFoundError",
     "LoginNameAlreadyTakenError",
     "LoginNameFormatError",
     "NotPlatformAdministratorError",
     "PasswordResetNotAcceptableError",
     "ResetPasswordResult",
     "_activate_local_account_impl",
+    "_admin_revoke_all_browser_sessions_impl",
     "_create_local_account_impl",
+    "_disable_local_account_impl",
     "_issue_password_reset_token_impl",
+    "_reactivate_local_account_impl",
     "_reset_password_with_token_impl",
     "activate_local_account",
     "authenticate_local_user",

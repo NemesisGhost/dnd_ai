@@ -44,13 +44,18 @@ from dnd_ai.commands.local_auth import (
     ActivationNotAcceptableError,
     AlreadyBootstrappedError,
     ForeignBrowserSessionError,
+    LastActivePlatformAdministratorError,
+    LocalAccountNotFoundError,
     LoginNameAlreadyTakenError,
     LoginNameFormatError,
     NotPlatformAdministratorError,
     PasswordResetNotAcceptableError,
     _activate_local_account_impl,
+    _admin_revoke_all_browser_sessions_impl,
     _create_local_account_impl,
+    _disable_local_account_impl,
     _issue_password_reset_token_impl,
+    _reactivate_local_account_impl,
     _reset_password_with_token_impl,
     activate_local_account,
     authenticate_local_user,
@@ -705,3 +710,442 @@ def test_reset_password_with_token_rejects_reuse(
         _reset_password_with_token_impl(
             db_connection, raw_reset_token=issued.raw_token, new_raw_password=_VALID_PASSWORD
         )
+
+
+# ---------------------------------------------------------------------------
+# Administrative account lifecycle: disable, reactivate, revoke-all-sessions
+# (Phase 13B blocker 3)
+# ---------------------------------------------------------------------------
+
+
+def test_disable_local_account_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _disable_local_account_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_disable_local_account_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _disable_local_account_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_disable_local_account_sets_inactive_and_revokes_sessions(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    session = create_browser_session(db_connection, user_id=user_id)
+
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.previous_lifecycle_status_code == "active"
+    assert result.new_lifecycle_status_code == "inactive"
+    assert (
+        resolve_local_session_principal(db_connection, raw_session_token=session.raw_session_token)
+        is None
+    )
+
+
+def test_disable_local_account_prevents_further_login(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, login_name = activated_account
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+    assert (
+        authenticate_local_user(db_connection, login_name=login_name, raw_password=_VALID_PASSWORD)
+        is None
+    )
+
+
+def test_disable_local_account_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.previous_lifecycle_status_code == "inactive"
+    assert result.new_lifecycle_status_code == "inactive"
+
+
+def test_reactivate_local_account_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _reactivate_local_account_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_reactivate_local_account_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _reactivate_local_account_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_reactivate_local_account_restores_login_but_not_old_sessions(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, login_name = activated_account
+    session = create_browser_session(db_connection, user_id=user_id)
+    _disable_local_account_impl(db_connection, admin_user_id=admin_user_id, target_user_id=user_id)
+
+    result = _reactivate_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.previous_lifecycle_status_code == "inactive"
+    assert result.new_lifecycle_status_code == "active"
+    # Login works again...
+    assert (
+        authenticate_local_user(db_connection, login_name=login_name, raw_password=_VALID_PASSWORD)
+        is not None
+    )
+    # ...but the session that was active before disablement stays revoked.
+    assert (
+        resolve_local_session_principal(db_connection, raw_session_token=session.raw_session_token)
+        is None
+    )
+
+
+def test_reactivate_local_account_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    result = _reactivate_local_account_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.previous_lifecycle_status_code == "active"
+    assert result.new_lifecycle_status_code == "active"
+
+
+def test_admin_revoke_all_browser_sessions_requires_platform_administrator(
+    db_connection: Connection, plain_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    with pytest.raises(NotPlatformAdministratorError):
+        _admin_revoke_all_browser_sessions_impl(
+            db_connection, admin_user_id=plain_user_id, target_user_id=user_id
+        )
+
+
+def test_admin_revoke_all_browser_sessions_raises_for_missing_target(
+    db_connection: Connection, admin_user_id: uuid.UUID
+) -> None:
+    with pytest.raises(LocalAccountNotFoundError):
+        _admin_revoke_all_browser_sessions_impl(
+            db_connection, admin_user_id=admin_user_id, target_user_id=uuid.uuid4()
+        )
+
+
+def test_admin_revoke_all_browser_sessions_revokes_every_session_for_the_target(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    session_a = create_browser_session(db_connection, user_id=user_id)
+    session_b = create_browser_session(db_connection, user_id=user_id)
+
+    result = _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert result.revoked_count == 2
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=session_a.raw_session_token
+        )
+        is None
+    )
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=session_b.raw_session_token
+        )
+        is None
+    )
+
+
+def test_admin_revoke_all_browser_sessions_does_not_affect_other_users(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    other_user_id = make_user(db_connection)
+    other_session = create_browser_session(db_connection, user_id=other_user_id)
+    create_browser_session(db_connection, user_id=user_id)
+
+    _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+
+    assert (
+        resolve_local_session_principal(
+            db_connection, raw_session_token=other_session.raw_session_token
+        )
+        is not None
+    )
+
+
+def test_admin_revoke_all_browser_sessions_is_idempotent(
+    db_connection: Connection, admin_user_id: uuid.UUID, activated_account: tuple[uuid.UUID, str]
+) -> None:
+    user_id, _login_name = activated_account
+    result = _admin_revoke_all_browser_sessions_impl(
+        db_connection, admin_user_id=admin_user_id, target_user_id=user_id
+    )
+    assert result.revoked_count == 0
+
+
+# ---------------------------------------------------------------------------
+# The last-active-platform-administrator invariant (security review
+# follow-up: a sole administrator could disable themselves, or two
+# administrators could disable each other concurrently, leaving zero
+# principals able to reactivate anyone).
+# ---------------------------------------------------------------------------
+
+
+def _neutralize_other_active_administrators(
+    db_connection: Connection, *, keep: set[uuid.UUID]
+) -> None:
+    """Marks every `is_platform_administrator` user other than `keep`
+    inactive, *on this connection's own uncommitted transaction only* —
+    `db_connection` is always rolled back at the end of the test that
+    calls this, so this never durably affects the shared `postgres_engine`
+    database other tests in the same session rely on. Needed because the
+    last-active-administrator invariant is a genuinely global count
+    (`security.users.is_platform_administrator` has no campaign/tenant
+    scoping), and this shared session database routinely already has other
+    committed administrators from earlier tests/fixtures by the time any
+    one test runs — without neutralizing them first, a test cannot reduce
+    the *effective* global count to a specific, known value like 1."""
+    inactive_status = status_id(db_connection, "lifecycle_statuses", "inactive")
+    db_connection.execute(
+        text("""
+            UPDATE security.users
+            SET lifecycle_status_id = :status
+            WHERE is_platform_administrator AND NOT (user_id = ANY(:keep))
+        """),
+        {"status": inactive_status, "keep": list(keep)},
+    )
+
+
+def _active_administrator_count(connection: Connection) -> int:
+    return connection.execute(
+        text("""
+            SELECT count(*)
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.is_platform_administrator AND ls.code = 'active'
+        """)
+    ).scalar_one()
+
+
+def test_disable_rejects_self_disable_of_the_sole_active_administrator(
+    db_connection: Connection,
+) -> None:
+    admin_id = make_platform_administrator(db_connection)
+    _neutralize_other_active_administrators(db_connection, keep={admin_id})
+
+    with pytest.raises(LastActivePlatformAdministratorError):
+        _disable_local_account_impl(db_connection, admin_user_id=admin_id, target_user_id=admin_id)
+
+
+def test_disable_of_the_only_other_active_administrator_succeeds_when_actor_remains(
+    db_connection: Connection,
+) -> None:
+    """Two active administrators, A and B. A disables B. A itself remains
+    active, so the platform never has zero active administrators — this
+    must succeed, not be rejected merely because only one would remain
+    afterward."""
+    admin_a = make_platform_administrator(db_connection, display_name="Admin A")
+    admin_b = make_platform_administrator(db_connection, display_name="Admin B")
+    _neutralize_other_active_administrators(db_connection, keep={admin_a, admin_b})
+
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_a, target_user_id=admin_b
+    )
+    assert result.new_lifecycle_status_code == "inactive"
+    assert _active_administrator_count(db_connection) == 1
+
+
+def test_disabling_the_resulting_sole_administrator_is_then_rejected(
+    db_connection: Connection,
+) -> None:
+    """Following on from the previous scenario: once disabling B leaves A
+    as the only active administrator, disabling A next — even though A
+    and B were, a moment ago, two independent administrators — is
+    rejected. One administrator must never be able to disable the only
+    other active administrator when doing so leaves none."""
+    admin_a = make_platform_administrator(db_connection, display_name="Admin A")
+    admin_b = make_platform_administrator(db_connection, display_name="Admin B")
+    _neutralize_other_active_administrators(db_connection, keep={admin_a, admin_b})
+
+    _disable_local_account_impl(db_connection, admin_user_id=admin_a, target_user_id=admin_b)
+
+    with pytest.raises(LastActivePlatformAdministratorError):
+        _disable_local_account_impl(db_connection, admin_user_id=admin_a, target_user_id=admin_a)
+
+
+def test_self_disable_succeeds_when_another_active_administrator_remains(
+    db_connection: Connection,
+) -> None:
+    admin_a = make_platform_administrator(db_connection, display_name="Admin A")
+    admin_b = make_platform_administrator(db_connection, display_name="Admin B")
+    _neutralize_other_active_administrators(db_connection, keep={admin_a, admin_b})
+
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_a, target_user_id=admin_a
+    )
+    assert result.new_lifecycle_status_code == "inactive"
+    assert _active_administrator_count(db_connection) == 1
+
+
+def test_disable_of_non_administrator_account_succeeds_regardless_of_administrator_count(
+    db_connection: Connection,
+) -> None:
+    admin_id = make_platform_administrator(db_connection)
+    _neutralize_other_active_administrators(db_connection, keep={admin_id})
+    plain_user_id = make_user(db_connection)
+
+    result = _disable_local_account_impl(
+        db_connection, admin_user_id=admin_id, target_user_id=plain_user_id
+    )
+    assert result.new_lifecycle_status_code == "inactive"
+    # The sole administrator is completely unaffected.
+    assert _active_administrator_count(db_connection) == 1
+
+
+def test_failed_invariant_check_rolls_back_lifecycle_and_session_changes(
+    db_connection: Connection,
+) -> None:
+    admin_id = make_platform_administrator(db_connection)
+    _neutralize_other_active_administrators(db_connection, keep={admin_id})
+    session = create_browser_session(db_connection, user_id=admin_id)
+
+    with pytest.raises(LastActivePlatformAdministratorError):
+        _disable_local_account_impl(db_connection, admin_user_id=admin_id, target_user_id=admin_id)
+
+    # Lifecycle status is unchanged...
+    row = (
+        db_connection.execute(
+            text("""
+                SELECT ls.code
+                FROM security.users u
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE u.user_id = :u
+            """),
+            {"u": admin_id},
+        )
+        .mappings()
+        .one()
+    )
+    assert row["code"] == "active"
+    # ...and the session that would have been revoked as part of a
+    # successful disable was never touched, since
+    # _disable_local_account_impl's own revoke_all_browser_sessions call
+    # is never reached once the invariant check raises first.
+    assert (
+        resolve_local_session_principal(db_connection, raw_session_token=session.raw_session_token)
+        is not None
+    )
+
+
+def test_concurrent_disable_cannot_leave_zero_active_administrators(
+    postgres_engine: Engine,
+) -> None:
+    """The exact race the advisory lock exists to close: two
+    administrators, each attempting to disable the other, submitted at
+    (as close as this test can arrange to) the same moment. Without
+    serialization, both transactions could independently read "the other
+    one is still active" before either commits, and both then proceed,
+    leaving zero. Uses `postgres_engine` and two genuinely independent,
+    concurrently-committing transactions — by necessity, matching this
+    file's own established pattern (see
+    `test_concurrent_activation_of_the_same_token_succeeds_exactly_once`)
+    — with the shared session database's other already-committed active
+    administrators neutralized first and restored afterward so this
+    test's own count check is deterministic."""
+    with postgres_engine.begin() as setup:
+        previously_active_admin_ids = [
+            row[0]
+            for row in setup.execute(
+                text("""
+                    SELECT u.user_id
+                    FROM security.users u
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE u.is_platform_administrator AND ls.code = 'active'
+                """)
+            )
+        ]
+        if previously_active_admin_ids:
+            inactive_status = status_id(setup, "lifecycle_statuses", "inactive")
+            setup.execute(
+                text(
+                    "UPDATE security.users SET lifecycle_status_id = :status "
+                    "WHERE user_id = ANY(:ids)"
+                ),
+                {"status": inactive_status, "ids": previously_active_admin_ids},
+            )
+        admin_a = make_platform_administrator(setup, display_name="Concurrent Admin A")
+        admin_b = make_platform_administrator(setup, display_name="Concurrent Admin B")
+
+    try:
+
+        def _disable(admin_user_id: uuid.UUID, target_user_id: uuid.UUID) -> str:
+            try:
+                with postgres_engine.begin() as connection:
+                    _disable_local_account_impl(
+                        connection, admin_user_id=admin_user_id, target_user_id=target_user_id
+                    )
+            except LastActivePlatformAdministratorError:
+                return "rejected"
+            return "accepted"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = [
+                f.result()
+                for f in [
+                    pool.submit(_disable, admin_b, admin_a),
+                    pool.submit(_disable, admin_a, admin_b),
+                ]
+            ]
+
+        # Exactly one of the two mutually-exclusive disables must have won
+        # — never both (which would leave zero), and, since each admin
+        # started active, never neither.
+        assert sorted(outcomes) == ["accepted", "rejected"]
+        with postgres_engine.connect() as verify:
+            count = verify.execute(
+                text("""
+                    SELECT count(*)
+                    FROM security.users u
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE u.is_platform_administrator AND ls.code = 'active'
+                      AND u.user_id IN (:a, :b)
+                """),
+                {"a": admin_a, "b": admin_b},
+            ).scalar_one()
+        assert count == 1
+    finally:
+        with postgres_engine.begin() as cleanup:
+            if previously_active_admin_ids:
+                active_status = status_id(cleanup, "lifecycle_statuses", "active")
+                cleanup.execute(
+                    text(
+                        "UPDATE security.users SET lifecycle_status_id = :status "
+                        "WHERE user_id = ANY(:ids)"
+                    ),
+                    {"status": active_status, "ids": previously_active_admin_ids},
+                )

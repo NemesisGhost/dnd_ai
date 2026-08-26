@@ -63,12 +63,20 @@ two different names — but, per the production rule above, only outside
 production.
 
 `oidc_issuer`/`oidc_audience`/`oidc_jwks_url` (`DND_AI_OIDC_ISSUER`,
-`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) follow the identical
-production-fail-closed shape as `database_url`: all three default to
-`None` locally/in tests (no OIDC provider is required to run the API
-skeleton or its non-authenticated endpoints yet), but `Settings()` raises
-immediately in production unless all three are populated. `_validate_oidc_
-settings` goes further than mere presence, in both environments:
+`DND_AI_OIDC_AUDIENCE`, `DND_AI_OIDC_JWKS_URL`) are optional **external
+bearer-token compatibility** configuration, in every environment including
+production — local application authentication (docs/PLAN.md §23.1/§23.4)
+is the platform's primary, self-contained login path and must work with
+OIDC entirely unconfigured; nothing about local cookie authentication ever
+constructs an OIDC verifier or reads these fields (`dnd_ai.api.auth.
+get_jwks_client()` is called lazily, only from the OIDC bearer branch of
+`get_authenticated_user_id`, never at import or app-startup time). All
+three default to `None` in every environment; `_validate_oidc_settings`
+enforces an identical **all-or-nothing** rule everywhere — some but not
+all three fields set is a `Settings()` construction failure regardless of
+`environment` — and, once all three are set, both environments run the
+same structural checks (non-empty, well-formed, no embedded credentials,
+no URL fragment) with only the allowed URL scheme set differing:
 
 - **Production** additionally requires `oidc_issuer`/`oidc_jwks_url` to be
   absolute, credential-free, fragment-free **HTTPS** URLs with a host, and
@@ -80,14 +88,19 @@ settings` goes further than mere presence, in both environments:
   never merely warned about or discovered lazily on first use.
 - **Local/test** may configure an HTTP identity provider (`OIDC_LOCAL_URL_
   SCHEMES` — a private/in-process test IdP has no equivalent network-
-  attacker threat model), but a *partial* configuration — some but not all
-  three fields set — is rejected exactly like production's all-or-nothing
-  rule, and whichever fields *are* set still go through the same
-  structural checks (non-empty, well-formed, no credentials, no fragment)
-  minus the scheme restriction. An incomplete or malformed OIDC
-  configuration can never actually serve an authenticated route, so
-  accepting it silently would only defer an otherwise-immediate startup
-  failure to first use.
+  attacker threat model), and, exactly like production, a *partial*
+  configuration — some but not all three fields set — is rejected. An
+  incomplete or malformed OIDC configuration can never actually serve an
+  authenticated route, so accepting it silently would only defer an
+  otherwise-immediate startup failure to first use.
+
+A blank/whitespace-only value for any of the three (e.g. Compose
+interpolating an unset `API_OIDC_*` host variable to `${API_OIDC_ISSUER:-}`)
+is normalized to `None` before the all-or-nothing check runs — the same
+"blank means unset, never a validation error" treatment
+`_validate_foundry_allowed_origins`/`_normalize_ai_provider_api_key`
+already apply to their own optional settings — so a fully-unset Compose
+OIDC block and a fully-omitted one are indistinguishable to this module.
 
 Deliberately never trimmed, rewritten, or otherwise normalized beyond
 this validation: `dnd_ai.domain.tokens.verify_bearer_token` compares a
@@ -130,6 +143,34 @@ this allowlist is actually enforced, and `foundry-module/README.md`'s
 this correction (the module's own connection validator requires HTTPS for
 any non-loopback API base URL).
 
+`trusted_proxies` (`DND_AI_TRUSTED_PROXIES`; Phase 13B correction) is the
+single authoritative source of which immediate TCP peers this process
+trusts to set `X-Forwarded-For` — a comma-separated list of exact IP
+addresses and/or CIDR networks (e.g. `10.0.0.5,172.20.0.0/16`), parsed with
+`ipaddress`, never a hostname (a reverse proxy's *container/network*
+address, not its DNS name — `ipaddress.ip_network` cannot resolve one, and
+resolving one at startup would make trust depend on DNS, a second
+attacker-influenced input). Optional in every environment, including
+production, and defaults to empty (no peer trusted, `X-Forwarded-For`
+never read) — the current `compose.yaml` topology publishes no host port
+for `api` and sits behind no reverse proxy yet (PLAN.md §32, Phase 14), so
+"trust nothing" is the correct default until an operator actually places
+one in front of it. `dnd_ai.api.client_address.resolve_client_ip` is the
+one place this setting is read to decide whether an inbound request's
+`X-Forwarded-For` header may override `request.client.host` for rate-
+limiting purposes — see that module's own docstring for the trust
+algorithm (single-hop: the *last* `X-Forwarded-For` entry is trusted, since
+that is what the trusted proxy itself observed as its peer). A malformed
+entry (not a valid IP address or CIDR network) is a `Settings()`
+construction failure, the same fail-fast posture as every other optional
+allowlist setting here — there is no safe way to silently drop or repair a
+malformed trust-boundary entry. **A production deployment that places this
+API behind a reverse proxy and wants the IP-wide login rate limiter (and
+any other per-source-address abuse guard) to see real client addresses
+instead of one shared proxy address must set this before enabling public
+login** — see `compose.yaml`'s own `api` service comment and
+`.env.example`'s "Trusted reverse proxy" section.
+
 `database_url` carries one more production-only rule beyond the one
 above: `Settings()` also parses it (with SQLAlchemy's own URL parser, not
 string splitting) and refuses to start unless its username is exactly
@@ -161,6 +202,7 @@ secrets live*, so it is exactly the kind of thing that must always be a
 real deployment-supplied variable, not a developer-convenience default.
 """
 
+import ipaddress
 import os
 from pathlib import Path
 from typing import Literal
@@ -230,6 +272,7 @@ _APPLICATION_SETTINGS_ENV_VARS = frozenset(
         "DND_AI_OIDC_JWKS_URL",
         "DND_AI_FOUNDRY_ALLOWED_ORIGINS",
         "DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS",
+        "DND_AI_TRUSTED_PROXIES",
         "DND_AI_AI_PROVIDER_API_KEY",
         "DND_AI_AI_PROVIDER_MODEL",
         "DND_AI_AI_PROVIDER_BASE_URL",
@@ -404,6 +447,57 @@ def foundry_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
     return tuple(settings_obj.foundry_allowed_origins.split(","))
 
 
+_TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def _parse_trusted_proxies(raw: str) -> tuple[_TrustedProxyNetwork, ...]:
+    """Splits, validates, and order-preserving-deduplicates a raw
+    comma-separated `DND_AI_TRUSTED_PROXIES` value into parsed networks.
+    Each entry must be a literal IP address (treated as a /32 or /128) or
+    CIDR network — never a hostname, since `ipaddress.ip_network` performs
+    no DNS resolution (see the module docstring's `trusted_proxies`
+    paragraph for why that is deliberate, not a limitation to work
+    around). `strict=False` permits an entry like `10.0.0.5/24` (host bits
+    set) without erroring, matching how an operator is likeliest to copy a
+    single proxy address in from `ip addr`/`docker inspect` output."""
+    networks: list[_TrustedProxyNetwork] = []
+    seen: set[_TrustedProxyNetwork] = set()
+    for entry in raw.split(","):
+        candidate = entry.strip()
+        if not candidate:
+            raise ValueError(
+                f"DND_AI_TRUSTED_PROXIES contains an empty or whitespace-padded entry: {raw!r}"
+            )
+        try:
+            network = ipaddress.ip_network(candidate, strict=False)
+        except ValueError as exc:
+            raise ValueError(
+                f"DND_AI_TRUSTED_PROXIES entry {candidate!r} is not a valid IP address or CIDR "
+                "network"
+            ) from exc
+        if network not in seen:
+            seen.add(network)
+            networks.append(network)
+    return tuple(networks)
+
+
+def trusted_proxy_networks_tuple(settings_obj: "Settings") -> tuple[_TrustedProxyNetwork, ...]:
+    """The parsed, already-validated set of peer networks
+    `dnd_ai.api.client_address.resolve_client_ip` trusts to set
+    `X-Forwarded-For` — mirrors `foundry_allowed_origins_tuple`/
+    `local_session_allowed_origins_tuple` exactly, over the separate
+    `trusted_proxies` setting. Re-parses on every call rather than caching
+    a parsed form on `Settings` itself, so a test that directly
+    `monkeypatch.setattr(settings, "trusted_proxies", ...)`s a raw string
+    (this codebase's established pattern — see `tests/database/
+    test_api_auth.py`'s identical use for `oidc_issuer` et al.) is picked
+    up immediately, without needing to also reconstruct a `Settings`
+    instance to re-run its model validators."""
+    if not settings_obj.trusted_proxies:
+        return ()
+    return _parse_trusted_proxies(settings_obj.trusted_proxies)
+
+
 def local_session_allowed_origins_tuple(settings_obj: "Settings") -> tuple[str, ...]:
     """The parsed, already-validated `Origin` allowlist `dnd_ai.api.auth`
     checks a cookie-authenticated state-changing request's `Origin` header
@@ -465,6 +559,14 @@ class Settings(BaseSettings):
     # authentication; see _validate_local_session_allowed_origins), and
     # defaulting to the documented dev topology outside it.
     local_session_allowed_origins: str | None = None
+
+    # Comma-separated exact IP addresses/CIDR networks trusted to set
+    # X-Forwarded-For (Phase 13B correction) — see this module's own
+    # docstring's `trusted_proxies` paragraph. Optional, unconditionally,
+    # in every environment; empty/unset means "trust nothing," the safe
+    # default matching the current no-reverse-proxy-yet compose.yaml
+    # topology.
+    trusted_proxies: str | None = None
 
     # Phase 12 AI provider credential/model/endpoint pin (dnd_ai.domain.
     # ai_provider.OpenAiCompatibleProvider). ai_provider_base_url defaults
@@ -557,44 +659,58 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_oidc_settings(self) -> "Settings":
-        """No silent partial or malformed OIDC configuration, in either
-        environment — see the module docstring's `oidc_issuer`/
-        `oidc_audience`/`oidc_jwks_url` paragraph for the full policy.
-        Presence (all-or-nothing) is checked first and identically in
-        both branches below; only the allowed URL scheme set differs
-        between them."""
-        configured = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
-        if self.environment == "production":
-            missing = [
-                name
-                for name, value in (
-                    ("DND_AI_OIDC_ISSUER", self.oidc_issuer),
-                    ("DND_AI_OIDC_AUDIENCE", self.oidc_audience),
-                    ("DND_AI_OIDC_JWKS_URL", self.oidc_jwks_url),
-                )
-                if value is None
-            ]
-            if missing:
-                raise ValueError(
-                    f"{', '.join(missing)} (as environment variables, or mounted secrets) "
-                    "are required when DND_AI_ENVIRONMENT=production — all three OIDC settings "
-                    "must be configured together, or none of them."
-                )
-            allowed_schemes = OIDC_PRODUCTION_URL_SCHEMES
-        else:
-            if any(value is not None for value in configured) and not all(
-                value is not None for value in configured
-            ):
-                raise ValueError(
-                    "DND_AI_OIDC_ISSUER, DND_AI_OIDC_AUDIENCE, and DND_AI_OIDC_JWKS_URL must be "
-                    "configured together, or none of them — a partially configured OIDC "
-                    "provider can never actually serve an authenticated route."
-                )
-            if all(value is None for value in configured):
-                return self
-            allowed_schemes = OIDC_LOCAL_URL_SCHEMES
+    def _normalize_oidc_settings(self) -> "Settings":
+        """Blank/whitespace-only treated identically to unset, for each of
+        the three OIDC fields independently — mirrors `_normalize_ai_
+        provider_api_key`'s identical reasoning: Compose cannot omit an
+        environment key entirely when the host-side variable is unset
+        (`${API_OIDC_ISSUER:-}` interpolates to `""`, never a genuinely
+        absent `DND_AI_OIDC_ISSUER`), so a blank value must read as `None`
+        here, before `_validate_oidc_settings`' all-or-nothing check ever
+        runs — otherwise a fully-unset Compose OIDC block would be rejected
+        as "partially configured" instead of accepted as "not configured at
+        all". Runs before `_validate_oidc_settings` (definition order) so
+        that validator always sees already-normalized values."""
+        if self.oidc_issuer is not None and self.oidc_issuer.strip() == "":
+            self.oidc_issuer = None
+        if self.oidc_audience is not None and self.oidc_audience.strip() == "":
+            self.oidc_audience = None
+        if self.oidc_jwks_url is not None and self.oidc_jwks_url.strip() == "":
+            self.oidc_jwks_url = None
+        return self
 
+    @model_validator(mode="after")
+    def _validate_oidc_settings(self) -> "Settings":
+        """External OIDC bearer-token compatibility is optional in every
+        environment, including production — see the module docstring's
+        `oidc_issuer`/`oidc_audience`/`oidc_jwks_url` paragraph for the full
+        policy this enforces. All three unset is always valid (external
+        bearer authentication disabled; local cookie authentication is
+        unaffected either way). Otherwise, presence is all-or-nothing,
+        identically in every environment — a partial configuration can
+        never actually serve an authenticated route, so it is rejected
+        here rather than deferred to first use — and, once all three are
+        set, only the allowed URL scheme set differs between production
+        (HTTPS only) and local/test (HTTP also permitted, for a private/
+        in-process test IdP)."""
+        configured = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
+        if any(value is not None for value in configured) and not all(
+            value is not None for value in configured
+        ):
+            raise ValueError(
+                "DND_AI_OIDC_ISSUER, DND_AI_OIDC_AUDIENCE, and DND_AI_OIDC_JWKS_URL must be "
+                "configured together, or none of them — a partially configured OIDC provider "
+                "can never actually serve an authenticated route. External OIDC is optional in "
+                "every environment; local application authentication does not require it."
+            )
+        if all(value is None for value in configured):
+            return self
+
+        allowed_schemes = (
+            OIDC_PRODUCTION_URL_SCHEMES
+            if self.environment == "production"
+            else OIDC_LOCAL_URL_SCHEMES
+        )
         assert self.oidc_issuer is not None
         assert self.oidc_audience is not None
         assert self.oidc_jwks_url is not None
@@ -679,6 +795,35 @@ class Settings(BaseSettings):
             raw, field_name="DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS", require_https=require_https
         )
         self.local_session_allowed_origins = ",".join(origins)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_trusted_proxies(self) -> "Settings":
+        """Blank/whitespace-only treated identically to unset (mirrors
+        every other optional allowlist setting's normalization above) —
+        never a validation error, never a fallback to "trust everything."
+        A non-blank value must fully parse as a comma-separated list of IP
+        addresses/CIDR networks (`_parse_trusted_proxies`); any malformed
+        entry fails `Settings()` construction outright, the same fail-fast
+        posture as `foundry_allowed_origins`/`local_session_allowed_
+        origins` — there is no safe way to silently drop or repair a
+        malformed trust-boundary entry for a setting that governs which
+        peers this process trusts to relabel a request's source address.
+        Unconditionally optional, in every environment including
+        production: unlike `local_session_allowed_origins`, no rule here
+        requires this to be set, since a self-hosted deployment with no
+        reverse proxy in front of `api` (this repository's current
+        compose.yaml topology) has nothing to configure. Normalizes the
+        field in place (canonical `str(network)` form, deduplicated) so
+        `trusted_proxy_networks_tuple` never has to re-validate."""
+        raw = self.trusted_proxies
+        if raw is not None and raw.strip() == "":
+            raw = None
+        if raw is None:
+            self.trusted_proxies = None
+            return self
+        networks = _parse_trusted_proxies(raw)
+        self.trusted_proxies = ",".join(str(network) for network in networks)
         return self
 
     @model_validator(mode="after")
