@@ -24,18 +24,24 @@ CSRF token, since CSRF enforcement only ever applies to a
 would bypass the exact mechanism these tests exist to prove.
 """
 
+import contextlib
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
-from dnd_ai.api.local_auth import get_login_rate_limiter, get_token_consumption_rate_limiter
+from dnd_ai.api.local_auth import (
+    get_login_account_rate_limiter,
+    get_login_ip_rate_limiter,
+    get_token_consumption_rate_limiter,
+)
 from dnd_ai.commands.local_auth import _create_local_account_impl
 from dnd_ai.domain.rate_limit import RateLimiter
 from tests.factories import make_platform_administrator, make_user, oidc_principal
@@ -68,7 +74,8 @@ def client_factory(postgres_engine: Engine) -> Callable[[], TestClient]:
     def _make() -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_login_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_login_ip_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_login_account_rate_limiter] = _generous_rate_limiter
         app.dependency_overrides[get_token_consumption_rate_limiter] = _generous_rate_limiter
         return TestClient(app, raise_server_exceptions=False)
 
@@ -80,7 +87,8 @@ def admin_client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestC
     def _make(user_id: uuid.UUID) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
-        app.dependency_overrides[get_login_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_login_ip_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_login_account_rate_limiter] = _generous_rate_limiter
         app.dependency_overrides[get_token_consumption_rate_limiter] = _generous_rate_limiter
         app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
         return TestClient(app, raise_server_exceptions=False)
@@ -429,31 +437,172 @@ def test_password_reset_flow(
 # ---------------------------------------------------------------------------
 
 
-def test_login_is_rate_limited(postgres_engine: Engine) -> None:
-    # One shared instance, captured by the override closure — FastAPI
-    # calls the override on every request, so a lambda that *constructs* a
-    # fresh RateLimiter each time would give every request its own,
-    # always-empty limiter and never actually rate limit anything.
-    shared_limiter = RateLimiter(max_attempts=2, window=timedelta(minutes=15))
-
+def _login_app(
+    postgres_engine: Engine,
+    *,
+    ip_rate_limiter: RateLimiter,
+    account_rate_limiter: RateLimiter,
+) -> FastAPI:
     app = create_app()
     app.dependency_overrides[get_engine] = lambda: postgres_engine
-    app.dependency_overrides[get_login_rate_limiter] = lambda: shared_limiter
+    app.dependency_overrides[get_login_ip_rate_limiter] = lambda: ip_rate_limiter
+    app.dependency_overrides[get_login_account_rate_limiter] = lambda: account_rate_limiter
     app.dependency_overrides[get_token_consumption_rate_limiter] = _generous_rate_limiter
+    return app
+
+
+def _attempt_login(
+    client: TestClient, *, login_name: str, password: str = "wrong-but-long-enough"
+) -> int:
+    return client.post(
+        "/auth/login",
+        json={"login_name": login_name, "password": password},
+        headers={"Origin": _DEV_ORIGIN},
+    ).status_code
+
+
+def test_login_is_rate_limited(postgres_engine: Engine) -> None:
+    # One shared instance per limiter, captured by the override closure —
+    # FastAPI calls the override on every request, so a lambda that
+    # *constructs* a fresh RateLimiter each time would give every request
+    # its own, always-empty limiter and never actually rate limit
+    # anything.
+    ip_limiter = RateLimiter(max_attempts=2, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
     with TestClient(app, raise_server_exceptions=False) as client:
         for _ in range(2):
-            response = client.post(
-                "/auth/login",
-                json={"login_name": "irrelevant", "password": "irrelevant-too-but-long-enough"},
-                headers={"Origin": _DEV_ORIGIN},
+            assert _attempt_login(client, login_name="irrelevant") == 401
+        assert _attempt_login(client, login_name="irrelevant") == 429
+
+
+def test_ip_wide_limiter_blocks_regardless_of_varying_login_names(postgres_engine: Engine) -> None:
+    """The exact bypass this correction closes: an unauthenticated caller
+    that varies `login_name` on every request must not obtain a fresh
+    rate-limit bucket each time — the IP-wide ceiling applies regardless
+    of what name is submitted."""
+    ip_limiter = RateLimiter(max_attempts=5, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for i in range(5):
+            assert _attempt_login(client, login_name=f"never-existed-{i}") == 401
+        # A sixth attempt, with yet another brand-new login_name, is still
+        # blocked — proving the ceiling is keyed on the caller's address,
+        # not on the (now-exhausted) composite pair.
+        assert _attempt_login(client, login_name="never-existed-yet-again") == 429
+
+
+def test_account_wide_limiter_blocks_across_multiple_source_addresses(
+    postgres_engine: Engine,
+) -> None:
+    """One targeted login name, attacked from several different source
+    addresses, must still hit an account-wide ceiling — an IP-wide limiter
+    alone would let a distributed attacker reset the count merely by
+    switching addresses."""
+    ip_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=4, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    target_login_name = "targeted-account-does-not-need-to-exist"
+    with contextlib.ExitStack() as stack:
+        # Five distinct source addresses hitting the same shared `app` (and
+        # therefore the same overridden limiter instances) — proves the
+        # ceiling follows the account, not any one address.
+        clients = [
+            stack.enter_context(
+                TestClient(app, raise_server_exceptions=False, client=(f"203.0.113.{i}", 51000))
             )
-            assert response.status_code == 401
-        limited_response = client.post(
+            for i in range(5)
+        ]
+        for client in clients[:4]:
+            assert _attempt_login(client, login_name=target_login_name) == 401
+        # A fifth attempt against the same account, from yet another
+        # address, is still blocked.
+        assert _attempt_login(clients[4], login_name=target_login_name) == 429
+
+
+def test_distinct_legitimate_users_are_not_collapsed_into_one_account_bucket(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_a = f"bucketa-{uuid.uuid4().hex[:8]}"
+    login_b = f"bucketb-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_a)
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_b)
+
+        # A few failed attempts against account B must not affect account
+        # A's own bucket.
+        for _ in range(3):
+            assert _attempt_login(client, login_name=login_b) == 401
+
+        response = client.post(
             "/auth/login",
-            json={"login_name": "irrelevant", "password": "irrelevant-too-but-long-enough"},
+            json={"login_name": login_a, "password": _VALID_PASSWORD},
             headers={"Origin": _DEV_ORIGIN},
         )
-    assert limited_response.status_code == 429, limited_response.text
+    assert response.status_code == 200, response.text
+
+
+def test_oversized_login_name_is_rejected_before_any_backend_work(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    oversized_login_name = "x" * 65  # one past dnd_ai.commands.local_auth's 64-char maximum
+    with client_factory() as client:
+        response = client.post(
+            "/auth/login",
+            json={"login_name": oversized_login_name, "password": "irrelevant-but-long-enough"},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+    assert response.status_code == 422, response.text
+    assert _latest_audit_row(postgres_engine, command_name="local_auth.login_failure") is None
+
+
+def test_oversized_password_is_rejected_before_any_backend_work(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine
+) -> None:
+    oversized_password = "x" * 513  # one past MAX_PASSWORD_LENGTH
+    with client_factory() as client:
+        response = client.post(
+            "/auth/login",
+            json={"login_name": "irrelevant", "password": oversized_password},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+    assert response.status_code == 422, response.text
+    assert _latest_audit_row(postgres_engine, command_name="local_auth.login_failure") is None
+
+
+def test_rate_limited_attempts_do_not_create_unbounded_audit_rows(postgres_engine: Engine) -> None:
+    ip_limiter = RateLimiter(max_attempts=3, window=timedelta(minutes=15))
+    account_limiter = RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+    app = _login_app(
+        postgres_engine, ip_rate_limiter=ip_limiter, account_rate_limiter=account_limiter
+    )
+    login_name = f"unbounded-audit-check-{uuid.uuid4().hex[:8]}"
+    with TestClient(app, raise_server_exceptions=False) as client:
+        # 3 admitted (and therefore audited) failures, then many more
+        # rate-limited (and therefore never-audited) ones.
+        for _ in range(3):
+            assert _attempt_login(client, login_name=login_name) == 401
+        for _ in range(20):
+            assert _attempt_login(client, login_name=login_name) == 429
+
+    with postgres_engine.begin() as connection:
+        count = connection.execute(
+            text("""
+                SELECT count(*) FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.command_name = 'local_auth.login_failure'
+                  AND cl.changed_fields ->> 'login_name' = :login_name
+            """),
+            {"login_name": login_name},
+        ).scalar_one()
+    assert count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +644,68 @@ def test_disable_account_rejects_missing_target(
     with admin_client_factory(admin_user_id) as client:
         response = client.post(f"/admin/accounts/{uuid.uuid4()}/disable")
     assert response.status_code == 404, response.text
+
+
+def test_disable_account_rejects_the_sole_active_administrator_with_a_safe_error(
+    admin_client_factory: Callable[[uuid.UUID], TestClient],
+    postgres_engine: Engine,
+    admin_user_id: uuid.UUID,
+) -> None:
+    # Neutralize every other already-committed active administrator in
+    # this shared session database (there are typically several, from
+    # earlier tests' own admin_user_id fixtures) so admin_user_id is
+    # genuinely the sole one, on this test's own connection only —
+    # restored afterward so no lasting effect touches later tests.
+    with postgres_engine.begin() as connection:
+        other_active_admin_ids = [
+            row[0]
+            for row in connection.execute(
+                text("""
+                    SELECT u.user_id FROM security.users u
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE u.is_platform_administrator AND ls.code = 'active'
+                      AND u.user_id != :keep
+                """),
+                {"keep": admin_user_id},
+            )
+        ]
+        if other_active_admin_ids:
+            inactive_status = connection.execute(
+                text(
+                    "SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'inactive'"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "UPDATE security.users SET lifecycle_status_id = :status "
+                    "WHERE user_id = ANY(:ids)"
+                ),
+                {"status": inactive_status, "ids": other_active_admin_ids},
+            )
+    try:
+        with admin_client_factory(admin_user_id) as client:
+            response = client.post(f"/admin/accounts/{admin_user_id}/disable")
+        assert response.status_code == 409, response.text
+        body = response.json()
+        assert body["error"]["code"] == "last_active_platform_administrator"
+        # A fixed, safe message only — never any other user's id, name, or
+        # status.
+        assert str(admin_user_id) not in body["error"]["message"]
+    finally:
+        if other_active_admin_ids:
+            with postgres_engine.begin() as connection:
+                active_status = connection.execute(
+                    text(
+                        "SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'"
+                    )
+                ).scalar_one()
+                connection.execute(
+                    text(
+                        "UPDATE security.users SET lifecycle_status_id = :status "
+                        "WHERE user_id = ANY(:ids)"
+                    ),
+                    {"status": active_status, "ids": other_active_admin_ids},
+                )
 
 
 def test_disable_account_revokes_active_sessions_and_blocks_next_login(

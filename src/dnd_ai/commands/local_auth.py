@@ -953,6 +953,54 @@ class AccountLifecycleResult:
     new_lifecycle_status_code: str
 
 
+class LastActivePlatformAdministratorError(SafeMessageError):
+    """Raised by `_set_local_account_lifecycle_status_impl` when disabling
+    `target_user_id` would leave `security.users` with zero rows that are
+    both `is_platform_administrator` and active — the platform would then
+    have no principal left capable of creating, activating, disabling, or
+    reactivating any account, including recovering from this exact state.
+    Applies identically whether the caller is disabling their own account
+    or a different administrator's — the invariant is a global count, not
+    a same-caller check. A fixed 409; never discloses how many other
+    users exist, their identities, or their own status, matching this
+    module's other non-disclosing error contracts."""
+
+    safe_status_code = 409
+    safe_error_code = "last_active_platform_administrator"
+    safe_message = (
+        "This is the platform's only active administrator account and cannot be disabled. "
+        "Activate another administrator account first."
+    )
+
+
+# The single, fixed advisory-lock key every active-platform-administrator
+# lifecycle transition acquires (via pg_advisory_xact_lock(hashtext(...)))
+# before reading or changing the invariant this class of command protects
+# — the same "acquire a session-scoped advisory lock for the whole
+# transaction, serializing every concurrent caller against the same key"
+# shape `bootstrap_initial_admin` above already establishes for its own
+# "exactly one first administrator" invariant. Deliberately one global key,
+# not one per target user: the invariant itself ("at least one active
+# platform administrator exists, platform-wide") is global, so two
+# concurrent disables of two *different* target users must still serialize
+# against each other — a per-target-user lock would let both proceed
+# concurrently and race exactly like the unprotected code did.
+_PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY = "platform_administrator_lifecycle"
+
+
+def _count_active_platform_administrators(connection: Connection) -> int:
+    value = connection.execute(
+        text("""
+            SELECT count(*)
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.is_platform_administrator AND ls.code = 'active'
+        """)
+    ).scalar()
+    assert isinstance(value, int)
+    return value
+
+
 def _set_local_account_lifecycle_status_impl(
     connection: Connection,
     *,
@@ -973,13 +1021,47 @@ def _set_local_account_lifecycle_status_impl(
     re-disabling an already-disabled account, or re-reactivating an
     already-active one, is not an error, matching this codebase's existing
     idempotency posture (e.g. `revoke_browser_session_by_token`'s own
-    no-op-for-already-revoked contract)."""
+    no-op-for-already-revoked contract).
+
+    Disabling the platform's last remaining active administrator (finding:
+    "a sole administrator can disable themselves... leaving no
+    application-level principal capable of reactivation") is rejected via
+    `LastActivePlatformAdministratorError` before any write happens — see
+    that class's own docstring. Only the disable path (`new_status_code ==
+    _INACTIVE_LIFECYCLE_STATUS_CODE`) can ever reduce the active-
+    administrator count, so only it acquires `_PLATFORM_ADMINISTRATOR_
+    LIFECYCLE_LOCK_KEY`'s transaction-scoped advisory lock and runs the
+    count check; reactivation only ever increases or preserves that count
+    and needs neither. The lock is acquired *before* the target row is
+    read/locked, and held for the remainder of this transaction
+    (`pg_advisory_xact_lock` releases automatically at commit or
+    rollback) — every concurrent disable attempt, anywhere, serializes on
+    it, so a second transaction's own count read always reflects the
+    first transaction's fully-committed (or fully-rolled-back) effect
+    under PostgreSQL's default READ COMMITTED isolation, never an
+    in-flight, uncommitted one. The count check itself is skipped
+    entirely for a target that is not currently both an active
+    administrator (idempotent re-disable of an already-inactive account,
+    or disabling a non-administrator) — neither can affect the invariant,
+    so neither needs to contend for the lock's own critical section... a
+    caller with no such row still acquires the lock first (a nonexistent-
+    target's own status can't be known until the row is read), but never
+    reaches the count query itself once `LocalAccountNotFoundError` fires.
+    """
     if not is_platform_administrator(connection, user_id=admin_user_id):
         raise NotPlatformAdministratorError(f"user {admin_user_id} is not a platform administrator")
+
+    disabling = new_status_code == _INACTIVE_LIFECYCLE_STATUS_CODE
+    if disabling:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": _PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY},
+        )
+
     row = (
         connection.execute(
             text("""
-                SELECT ls.code
+                SELECT ls.code, u.is_platform_administrator
                 FROM security.users u
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
                 WHERE u.user_id = :user_id
@@ -993,6 +1075,16 @@ def _set_local_account_lifecycle_status_impl(
     if row is None:
         raise LocalAccountNotFoundError(f"user {target_user_id} does not exist")
     previous_status_code = row["code"]
+
+    if (
+        disabling
+        and row["is_platform_administrator"]
+        and previous_status_code == _ACTIVE_LIFECYCLE_STATUS_CODE
+        and _count_active_platform_administrators(connection) <= 1
+    ):
+        raise LastActivePlatformAdministratorError(
+            f"disabling user {target_user_id} would leave zero active platform administrators"
+        )
 
     new_status_id = lookup_id(
         connection, "core", "lifecycle_statuses", "lifecycle_status_id", new_status_code
@@ -1101,6 +1193,7 @@ __all__ = [
     "ForeignBrowserSessionError",
     "IssuedActivationToken",
     "IssuedPasswordResetToken",
+    "LastActivePlatformAdministratorError",
     "LocalAccountNotFoundError",
     "LoginNameAlreadyTakenError",
     "LoginNameFormatError",

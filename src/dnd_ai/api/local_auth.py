@@ -22,22 +22,28 @@ _create_local_account_impl`'s docstring for why both forms exist.
 
 Rate limiting (docs/PLAN.md §23.4/§23.5's "account/IP-aware rate-limit
 abstractions for login/activation/reset/pairing/token-exchange"):
-`get_login_rate_limiter`/`get_token_consumption_rate_limiter` mirror
-`dnd_ai.api.auth.get_jwks_client`'s singleton-plus-override shape exactly
-— a process-wide `dnd_ai.domain.rate_limit.RateLimiter`, resolved through
-a FastAPI dependency so tests can substitute a fresh instance via
+`get_login_ip_rate_limiter`/`get_login_account_rate_limiter`/
+`get_token_consumption_rate_limiter` mirror `dnd_ai.api.auth.
+get_jwks_client`'s singleton-plus-override shape exactly — each a
+process-wide `dnd_ai.domain.rate_limit.RateLimiter`, resolved through a
+FastAPI dependency so tests can substitute a fresh instance via
 `app.dependency_overrides` instead of sharing rate-limit state across
-unrelated test cases in the same process.
+unrelated test cases in the same process. `login_endpoint` checks the IP-
+and account-wide ceilings as two *independent* limiters, not one composite
+"ip:login_name" key — that composite shape let a caller reset its own
+bucket on every request merely by varying `login_name`, which neither
+independent ceiling permits (see `get_login_ip_rate_limiter`'s own
+module-level comment for the full reasoning).
 
 Known deployment-topology deviation: `_client_ip` reads `request.client.host`
 only, never `X-Forwarded-For` — trusting that header requires knowing which
 hops are the deployment's own reverse proxy, a topology decision this
 module does not own. Behind a reverse proxy that terminates TLS/forwards
 client IPs, every request's `request.client.host` is the proxy's own
-address, so IP-scoped rate limiting degrades to a single shared bucket
-across every real client — login-name scoping in `login_endpoint`'s own
-key still bounds the blast radius per account. Documented here, and in
-this workstream's completion report, as a deliberate scope boundary for a
+address, so the IP-wide ceiling degrades to one shared bucket across every
+real client behind it — the account-wide ceiling is unaffected either way,
+since it never reads client IP at all. Documented here, and in this
+workstream's completion report, as a deliberate scope boundary for a
 future reverse-proxy-aware deployment workstream to close, not an
 oversight.
 """
@@ -48,7 +54,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection
 
 from dnd_ai.commands.local_auth import (
     _activate_local_account_impl,
@@ -68,6 +74,7 @@ from dnd_ai.commands.local_auth import (
     revoke_browser_session_by_token,
 )
 from dnd_ai.domain.access import AuthenticatedPrincipal
+from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 
@@ -75,17 +82,44 @@ from .audit import record_change_log
 from .auth import get_authenticated_user_id, require_human_user_id
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
-from .deps import get_connection, get_engine
+from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
 
 router = APIRouter(tags=["local_auth"])
 
-_LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
-_LOGIN_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+# Login-name field size limit for /auth/login specifically, mirroring
+# dnd_ai.commands.local_auth._LOGIN_NAME_MAX_LENGTH (64) — that module's
+# own `_validate_login_name_format` already enforces this for every login
+# name a *command* ever persists or compares, but /auth/login never calls
+# it (there is nothing to "create" on a login attempt), so an oversized
+# login_name would otherwise reach the database lookup, the rate-limiter
+# key, and (on a genuine mismatch) the audit write unbounded. Duplicated
+# here, not imported, since that constant is private to the commands
+# module and this is the one API-layer field that needs its own copy of
+# the same limit.
+_LOGIN_REQUEST_LOGIN_NAME_MAX_LENGTH = 64
+
+# Independent rate-limit ceilings for /auth/login (Phase 13B correction):
+# a single limiter keyed on "ip:login_name" let an attacker reset their own
+# bucket every request merely by varying login_name, defeating the limit
+# entirely. Two independent limiters close that gap without depending on
+# each other: an IP-wide ceiling (any login_name from one source address)
+# and an account-wide ceiling (one login_name from any source address).
+# The IP ceiling is deliberately more generous than the account one — it
+# exists to bound abuse volume from one address, not to police how many
+# distinct users a shared address (e.g. NAT/office gateway) legitimately
+# serves. A composite per-(ip, login_name) limiter was deliberately
+# dropped: with both independent ceilings in place it added no coverage
+# neither already provides, only a third bucket to maintain.
+_LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS = 30
+_LOGIN_IP_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+_LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS = 10
+_LOGIN_ACCOUNT_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 _TOKEN_CONSUMPTION_RATE_LIMIT_MAX_ATTEMPTS = 20
 _TOKEN_CONSUMPTION_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
-_login_rate_limiter: RateLimiter | None = None
+_login_ip_rate_limiter: RateLimiter | None = None
+_login_account_rate_limiter: RateLimiter | None = None
 _token_consumption_rate_limiter: RateLimiter | None = None
 
 # Fixed command_name literals for audit.change_log rows (dnd_ai.api.audit.
@@ -106,13 +140,23 @@ _REACTIVATE_ACCOUNT_COMMAND_NAME = "local_auth.reactivate_account"
 _ADMIN_REVOKE_ALL_SESSIONS_COMMAND_NAME = "local_auth.admin_revoke_all_sessions"
 
 
-def get_login_rate_limiter() -> RateLimiter:
-    global _login_rate_limiter
-    if _login_rate_limiter is None:
-        _login_rate_limiter = RateLimiter(
-            max_attempts=_LOGIN_RATE_LIMIT_MAX_ATTEMPTS, window=_LOGIN_RATE_LIMIT_WINDOW
+def get_login_ip_rate_limiter() -> RateLimiter:
+    global _login_ip_rate_limiter
+    if _login_ip_rate_limiter is None:
+        _login_ip_rate_limiter = RateLimiter(
+            max_attempts=_LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS, window=_LOGIN_IP_RATE_LIMIT_WINDOW
         )
-    return _login_rate_limiter
+    return _login_ip_rate_limiter
+
+
+def get_login_account_rate_limiter() -> RateLimiter:
+    global _login_account_rate_limiter
+    if _login_account_rate_limiter is None:
+        _login_account_rate_limiter = RateLimiter(
+            max_attempts=_LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS,
+            window=_LOGIN_ACCOUNT_RATE_LIMIT_WINDOW,
+        )
+    return _login_account_rate_limiter
 
 
 def get_token_consumption_rate_limiter() -> RateLimiter:
@@ -134,18 +178,33 @@ def _client_ip(request: Request) -> str:
 
 
 def _record_login_failure_audit(
-    engine: Engine, *, login_name: str, correlation_id: str | None
+    connection: Connection, *, login_name: str, correlation_id: str | None
 ) -> None:
-    """A failed login attempt (`login_endpoint`, below) produces no data
-    change to attach an audit row to on the request's own connection —
-    `get_connection` rolls that connection's transaction back the moment
-    `login_endpoint` raises `UnauthorizedError`, which would silently
-    discard an audit row written on it too. This function instead opens
-    and commits its own, independent transaction on `engine` — the one
-    place in this module (or, so far, this codebase) a security-audit
-    write deliberately does not share the request's own transaction —
-    specifically so the audit record survives the very failure it
-    describes.
+    """A failed login attempt (`login_endpoint`, below) produces no other
+    data change on this request's connection — `get_connection` rolls that
+    connection's transaction back the moment `login_endpoint` raises
+    `UnauthorizedError` right after this call, which would silently
+    discard an audit row written normally. Committing this write
+    immediately, on the connection `login_endpoint` already holds, durably
+    persists it despite that rollback.
+
+    Deliberately reuses the *request's own* connection rather than opening
+    a second one (an `engine.begin()`-backed independent transaction, this
+    function's original Phase 13B shape) — a failed request that held its
+    request-scoped connection open *and* a second audit connection
+    simultaneously could starve or, on a pool sized to 1, deadlock a small
+    connection pool under concurrent failed-login load, since neither
+    connection could be released until the other's work finished. Calling
+    `Connection.commit()` mid-request like this ends the transaction
+    `get_connection`'s own `with connection.begin():` started early and is
+    officially supported "commit as you go" usage — per `Connection.
+    begin()`'s own docstring, doing so "is not fundamentally any different"
+    from ending that `with` block here; when the generator resumes and
+    that block's `__exit__` eventually runs, it observes the transaction
+    already completed and simply closes without attempting a second
+    commit. Nothing else touches `connection` after this call on the
+    failure path (the endpoint raises immediately), so no further
+    statement can autobegin a new, orphaned transaction on it.
 
     Never distinguishes "unknown login name" from "wrong password" (no
     `reason` is recorded) — the same non-disclosing contract `dnd_ai.
@@ -155,27 +214,33 @@ def _record_login_failure_audit(
     the same way `authenticate_local_user` normalizes it before comparison,
     is recorded in `changed_fields` — not a secret (unlike a password or
     any token), and its presence here is exactly what makes this record
-    useful for spotting a brute-force pattern against one account; rate
-    limiting (`get_login_rate_limiter`) is the mechanism that actually
-    bounds the abuse this could otherwise invite, not this audit write
-    itself. No `actor_user_id` — a failed login authenticates no one — so
-    `actor_service` names this module instead, the same "actor is not a
+    useful for spotting a brute-force pattern against one account.
+
+    Reached only for an *admitted* attempt (both `get_login_ip_rate_limiter`
+    and `get_login_account_rate_limiter` already passed before
+    `authenticate_local_user` is ever called) — the IP-wide ceiling in
+    particular bounds how many of these rows one source address can ever
+    produce per window regardless of how many distinct login names it
+    presents, closing the "vary the name every request to always get a
+    fresh limiter bucket" gap the original single composite-key limiter
+    left open. No `actor_user_id` — a failed login authenticates no one —
+    so `actor_service` names this module instead, the same "actor is not a
     person" case that column exists for."""
-    with engine.begin() as connection:
-        record_change_log(
-            connection,
-            change_action_code="denied",
-            schema_name="security",
-            table_name="browser_sessions",
-            record_id=None,
-            entity_id=None,
-            world_id=None,
-            actor_service="local_auth",
-            correlation_id=correlation_id,
-            command_name=_LOGIN_FAILURE_COMMAND_NAME,
-            event_id=None,
-            changed_fields={"login_name": normalize_login_name(login_name)},
-        )
+    record_change_log(
+        connection,
+        change_action_code="denied",
+        schema_name="security",
+        table_name="browser_sessions",
+        record_id=None,
+        entity_id=None,
+        world_id=None,
+        actor_service="local_auth",
+        correlation_id=correlation_id,
+        command_name=_LOGIN_FAILURE_COMMAND_NAME,
+        event_id=None,
+        changed_fields={"login_name": normalize_login_name(login_name)},
+    )
+    connection.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +249,17 @@ def _record_login_failure_audit(
 
 
 class LoginRequest(BaseModel):
-    login_name: str
-    password: str = Field(repr=False)
+    # Explicit upper bounds, checked by Pydantic before this model even
+    # reaches login_endpoint — before any database lookup, Argon2 call,
+    # rate-limiter key, or audit write (Phase 13B correction). An oversized
+    # login_name would otherwise become an unbounded rate-limiter/audit key;
+    # an oversized password would otherwise be handed straight to Argon2id
+    # verification (authenticate_local_user calls dnd_ai.domain.passwords.
+    # verify_password directly, never dnd_ai.domain.passwords.
+    # validate_password_policy — that check only applies when *setting* a
+    # password, not verifying one), making hashing cost attacker-controlled.
+    login_name: str = Field(max_length=_LOGIN_REQUEST_LOGIN_NAME_MAX_LENGTH)
+    password: str = Field(repr=False, max_length=MAX_PASSWORD_LENGTH)
 
 
 class LoginResponse(BaseModel):
@@ -199,8 +273,8 @@ def login_endpoint(
     request: Request,
     response: Response,
     connection: Annotated[Connection, Depends(get_connection)],
-    engine: Annotated[Engine, Depends(get_engine)],
-    rate_limiter: Annotated[RateLimiter, Depends(get_login_rate_limiter)],
+    ip_rate_limiter: Annotated[RateLimiter, Depends(get_login_ip_rate_limiter)],
+    account_rate_limiter: Annotated[RateLimiter, Depends(get_login_account_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> LoginResponse:
     """docs/PLAN.md §23.4 steps 1-4: rate limit, constant-work credential
@@ -210,13 +284,24 @@ def login_endpoint(
     (distinct status codes, 429 vs. 401, but neither discloses which of
     "unknown login name," "inactive account," or "wrong password" applies,
     matching `dnd_ai.commands.local_auth.authenticate_local_user`'s own
-    non-disclosing contract one layer down). A rate-limited attempt is not
-    itself audited — `get_login_rate_limiter` already bounds the volume of
-    both real attempts and the audit rows a sustained attack could
-    otherwise generate; a genuine credential mismatch is, via `engine`'s
-    own independent transaction (see `_record_login_failure_audit`)."""
-    rate_limit_key = f"{_client_ip(request)}:{body.login_name.strip().lower()}"
-    if not rate_limiter.allow(rate_limit_key, now=datetime.now(UTC)):
+    non-disclosing contract one layer down).
+
+    Two independent rate-limit ceilings gate every attempt before
+    `authenticate_local_user` (and therefore Argon2id, and therefore a
+    possible audit write) ever runs — see `get_login_ip_rate_limiter`/
+    `get_login_account_rate_limiter`'s own module-level comment for why
+    both are needed and why a single per-(ip, login_name) limiter isn't. A
+    rate-limited attempt is never itself audited, by either ceiling — that
+    is exactly what keeps the number of `denied`-action audit rows a
+    sustained attack can generate bounded, even one that varies
+    `login_name` on every single request (see `_record_login_failure_
+    audit`'s own docstring)."""
+    client_ip = _client_ip(request)
+    normalized_login_name = normalize_login_name(body.login_name)
+    now = datetime.now(UTC)
+    if not ip_rate_limiter.allow(client_ip, now=now):
+        raise RateLimitedError()
+    if not account_rate_limiter.allow(normalized_login_name, now=now):
         raise RateLimitedError()
 
     user_id = authenticate_local_user(
@@ -224,10 +309,18 @@ def login_endpoint(
     )
     if user_id is None:
         _record_login_failure_audit(
-            engine, login_name=body.login_name, correlation_id=correlation_id
+            connection, login_name=body.login_name, correlation_id=correlation_id
         )
         raise UnauthorizedError()
-    rate_limiter.reset(rate_limit_key)
+    # Only the account-wide bucket is cleared on success — never the
+    # IP-wide one. Resetting the IP bucket too would let one throwaway
+    # successful login (e.g. the attacker's own account, or any account
+    # sharing that address) wipe the IP-wide abuse counter clean and let a
+    # sustained attack against *other* accounts from the same address
+    # continue unthrottled; the account-wide bucket, in contrast, tracks
+    # exactly the identity that just proved it knows the current password,
+    # so it alone is safe to forgive.
+    account_rate_limiter.reset(normalized_login_name)
 
     # "Successful login rotates the session" (docs/PLAN.md §23.4): a fresh
     # session is always created here, never reused — there is no pre-
@@ -238,7 +331,7 @@ def login_endpoint(
     session = create_browser_session(
         connection,
         user_id=user_id,
-        created_ip=_client_ip(request),
+        created_ip=client_ip,
         user_agent=request.headers.get("user-agent"),
     )
     record_change_log(
@@ -846,4 +939,9 @@ def reset_password_endpoint(
     return ResetPasswordResponse(user_id=result.user_id, sessions_revoked=result.sessions_revoked)
 
 
-__all__ = ["router", "get_login_rate_limiter", "get_token_consumption_rate_limiter"]
+__all__ = [
+    "router",
+    "get_login_account_rate_limiter",
+    "get_login_ip_rate_limiter",
+    "get_token_consumption_rate_limiter",
+]
