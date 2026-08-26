@@ -416,7 +416,26 @@ def logout_endpoint(
     server-side action, so that is an acceptable outcome, not a gap) and to
     attribute the logout audit row below; the actual revocation reads the
     raw cookie value directly rather than the resolved principal, since
-    `AuthenticatedPrincipal` deliberately carries no raw secret."""
+    `AuthenticatedPrincipal` deliberately carries no raw secret.
+
+    Returns the injected `response` object itself (correction) — the
+    `response.delete_cookie(...)` call below only mutates *that* object's
+    headers, and FastAPI's routing layer never merges an injected
+    `Response` dependency's headers into a handler's own `return
+    Response(...)`: when a route explicitly returns a `Response` instance,
+    FastAPI substitutes it wholesale for the request's actual response
+    (`fastapi.routing.get_request_handler`'s `if isinstance(raw_response,
+    Response): response = raw_response` branch) rather than extending it
+    with `solved_result.response.headers.raw` the way it does for every
+    other return shape. Returning a second, brand-new `Response(status_code
+    =204)` therefore silently discarded the deletion header — the session
+    was still revoked server-side (this function's own database write), so
+    every existing behavioral proof of logout kept passing, but the
+    browser was never actually told to drop the cookie. `status_code` is
+    set explicitly here for the same reason: once a handler returns a
+    `Response` instance directly, the route decorator's own `status_code=
+    204` is never applied to it either (that only happens on the
+    non-`Response`-return path `_build_response_args` covers)."""
     raw_session_token = request.cookies.get(session_cookie_name())
     if raw_session_token is not None:
         revoked_session_id = revoke_browser_session_by_token(
@@ -437,7 +456,8 @@ def logout_endpoint(
                 event_id=None,
             )
     response.delete_cookie(key=session_cookie_name(), path="/")
-    return Response(status_code=204)
+    response.status_code = 204
+    return response
 
 
 class SessionUserResponse(BaseModel):
@@ -748,7 +768,16 @@ def issue_password_reset_endpoint(
         change_action_code="created",
         schema_name="security",
         table_name="password_reset_tokens",
-        record_id=result.user_id,
+        # `password_reset_token_id` (correction) — audit.change_log.record_id's own
+        # column comment (migration 007) fixes its contract as "Primary key of the
+        # changed row, in whatever table schema_name.table_name names." The row this
+        # command creates is in security.password_reset_tokens, whose primary key is
+        # password_reset_token_id (database/migrations/versions/099_local_authentication.py)
+        # — never user_id, which is only a non-unique foreign key on that table (an
+        # administrator may issue more than one outstanding reset token for the same
+        # user). The prior `record_id=result.user_id` pointed at a value that both
+        # fails to identify the created row and does not even uniquely identify one.
+        record_id=result.password_reset_token_id,
         entity_id=None,
         world_id=None,
         actor_user_id=admin_user_id,

@@ -40,13 +40,3 @@
     removal — see docs/ENTITY_LIFECYCLE.md §14. The audit row outlives the record.
   sort_order: 60
   is_active: true
-
-- code: denied
-  display_name: Denied
-  description: >-
-    An attempted action was not authorized, or did not succeed, and produced no
-    data change — for example a failed login attempt. Used when a security-
-    relevant attempt must still be durably recorded even though none of the
-    other change actions (which all describe a completed data change) apply.
-  sort_order: 70
-  is_active: true
