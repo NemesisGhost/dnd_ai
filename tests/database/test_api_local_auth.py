@@ -37,6 +37,7 @@ from sqlalchemy import Engine, text
 import dnd_ai.config as config
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
+from dnd_ai.api.cookies import session_cookie_name
 from dnd_ai.api.deps import get_engine
 from dnd_ai.api.local_auth import (
     get_login_account_rate_limiter,
@@ -348,6 +349,104 @@ def test_logout_revokes_the_session(
 
         after_logout = client.get("/auth/session")
     assert after_logout.status_code == 401, after_logout.text
+
+
+def test_logout_clears_the_session_cookie_and_rejects_reuse_of_the_old_cookie(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    """Regression test for a discarded Set-Cookie deletion header:
+    `logout_endpoint` called `response.delete_cookie(...)` on the injected
+    `Response` dependency but then `return`ed a brand-new `Response(status_
+    code=204)` — FastAPI sends a handler-returned `Response` instance as-is
+    rather than merging in the injected dependency's headers, so every
+    header set on `response` (including the deletion cookie) was silently
+    lost. The session was still correctly revoked server-side (this
+    function's own database write), so `test_logout_revokes_the_session`
+    above kept passing throughout — this test specifically proves the
+    cookie itself is cleared, not merely that the session is revoked."""
+    login_name = f"logoutcookie-{uuid.uuid4().hex[:8]}"
+    cookie_name = session_cookie_name()
+    with client_factory() as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_name)
+        login_response = client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        csrf_token = login_response.json()["csrf_token"]
+        old_raw_cookie = client.cookies.get(cookie_name)
+        assert old_raw_cookie is not None
+
+        session_before = client.get("/auth/session")
+        browser_session_id = session_before.json()["browser_session_id"]
+        assert browser_session_id is not None
+
+        logout_response = client.post(
+            "/auth/logout", headers={"Origin": _DEV_ORIGIN, "X-CSRF-Token": csrf_token}
+        )
+        assert logout_response.status_code == 204, logout_response.text
+
+        # The response actually carries a Set-Cookie deletion header for
+        # this exact cookie, not merely a bare 204.
+        set_cookie_headers = logout_response.headers.get_list("set-cookie")
+        deletion_headers = [h for h in set_cookie_headers if h.startswith(f"{cookie_name}=")]
+        assert deletion_headers, set_cookie_headers
+        assert "max-age=0" in deletion_headers[0].lower()
+
+        # httpx's own cookie jar honored the deletion — the client no
+        # longer holds any value for this cookie.
+        assert client.cookies.get(cookie_name) is None
+
+    # Revoked server-side too: security.browser_sessions.revoked_at is set.
+    with postgres_engine.begin() as connection:
+        revoked_at = connection.execute(
+            text("SELECT revoked_at FROM security.browser_sessions WHERE browser_session_id = :id"),
+            {"id": browser_session_id},
+        ).scalar_one()
+    assert revoked_at is not None
+
+    # A request presenting the OLD raw cookie value explicitly (bypassing
+    # the jar, as a non-browser caller or a captured/replayed cookie would)
+    # is still rejected — server-side revocation, not merely client-side
+    # cookie deletion, is what actually protects a stale credential.
+    with client_factory() as replay_client:
+        replay_client.cookies.set(cookie_name, old_raw_cookie)
+        replay_response = replay_client.get("/auth/session")
+    assert replay_response.status_code == 401, replay_response.text
+
+
+def test_logout_without_csrf_header_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_name = f"logoutcsrf-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_name)
+        client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        response = client.post("/auth/logout", headers={"Origin": _DEV_ORIGIN})
+    assert response.status_code == 403, response.text
+
+
+def test_logout_from_a_disallowed_origin_is_rejected(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_name = f"logoutorigin-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        _activate_via_api(client, postgres_engine, admin_user_id, login_name=login_name)
+        login_response = client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": _DEV_ORIGIN},
+        )
+        csrf_token = login_response.json()["csrf_token"]
+        response = client.post(
+            "/auth/logout",
+            headers={"Origin": "https://evil.example.com", "X-CSRF-Token": csrf_token},
+        )
+    assert response.status_code == 403, response.text
 
 
 def test_list_and_revoke_sessions(
@@ -1376,6 +1475,52 @@ def test_password_change_is_audited(
     row = _latest_audit_row(postgres_engine, command_name="local_auth.change_password")
     assert row is not None
     assert row["actor_user_id"] == target_user_id
+
+
+def test_issue_password_reset_is_audited_with_the_tokens_own_record_id(
+    admin_client_factory: Callable[[uuid.UUID], TestClient],
+    client_factory: Callable[[], TestClient],
+    postgres_engine: Engine,
+    admin_user_id: uuid.UUID,
+) -> None:
+    """`audit.change_log.record_id`'s own column comment (migration 007)
+    fixes its contract as "Primary key of the changed row, in whatever
+    table schema_name.table_name names." The row this command creates is a
+    `security.password_reset_tokens` row, whose primary key is
+    `password_reset_token_id` — never the target user's id, which is only
+    a non-unique foreign key on that table (an administrator may issue
+    more than one outstanding reset token for the same user)."""
+    login_name = f"auditissuereset-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        target_user_id = _create_and_activate(
+            client, postgres_engine, admin_user_id, login_name=login_name
+        )
+    with admin_client_factory(admin_user_id) as admin_client:
+        response = admin_client.post(f"/admin/accounts/{target_user_id}/password-reset", json={})
+    assert response.status_code == 201, response.text
+    raw_reset_token = response.json()["raw_reset_token"]
+
+    with postgres_engine.begin() as connection:
+        password_reset_token_id = connection.execute(
+            text(
+                "SELECT password_reset_token_id FROM security.password_reset_tokens "
+                "WHERE user_id = :user_id"
+            ),
+            {"user_id": target_user_id},
+        ).scalar_one()
+
+    row = _latest_audit_row(postgres_engine, command_name="local_auth.issue_password_reset")
+    assert row is not None
+    assert row["actor_user_id"] == admin_user_id
+    assert row["change_action_code"] == "created"
+    assert row["record_id"] == password_reset_token_id
+    # The prior defect: record_id held the target user's id, which both
+    # fails to identify the created row and does not even uniquely
+    # identify one.
+    assert row["record_id"] != target_user_id
+    # Never the raw token or anything derived from it, only the row's own
+    # opaque identifier.
+    assert raw_reset_token not in str(row)
 
 
 def test_audit_rows_never_contain_password_or_token_fields(
