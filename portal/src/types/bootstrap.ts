@@ -1,4 +1,4 @@
-// Provisional Phase 13A shape; the Phase 13B API contract remains authoritative.
+// Authoritative response shape for GET /auth/session.
 export interface UserSummary {
   user_id: string
   display_name: string
@@ -30,6 +30,7 @@ export interface FeatureManifest {
 export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
+  browser_session_id: string | null
   selected_campaign_id: string | null
   campaigns: CampaignContext[]
   features: FeatureManifest

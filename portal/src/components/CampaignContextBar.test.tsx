@@ -21,5 +21,6 @@ describe("CampaignContextBar", () => {
     expect(screen.getByText("Test Campaign")).toBeTruthy()
     expect(screen.getByText("No timeline selected")).toBeTruthy()
     expect(screen.getByText("No role assigned")).toBeTruthy()
+    expect(screen.getByText("No character selected"),).toBeInTheDocument()
   })
 })
