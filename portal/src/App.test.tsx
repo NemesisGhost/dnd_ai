@@ -43,6 +43,8 @@ describe('portal routing', () => {
       'aria-disabled',
       'true',
     )
+
+    expect(screen.getByRole("link", { name: "Access" }),).toBeInTheDocument()
   })
 
   it('does not disclose campaign chrome for an unknown campaign', () => {

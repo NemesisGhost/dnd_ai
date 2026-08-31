@@ -1,35 +1,37 @@
-// Provisional Phase 13A shape; the Phase 13B API contract remains authoritative.
-
+// Authoritative response shape for GET /auth/session.
 export interface UserSummary {
-  userId: string
-  displayName: string
+  user_id: string
+  display_name: string
 }
 
 export interface CharacterPerspective {
-  characterId: string
-  characterName: string
+  character_id: string
+  character_name: string
 }
 
 export interface CampaignContext {
-  campaignId: string
-  campaignName: string
-  timelineId: string
-  timelineName: string
+  campaign_id: string
+  campaign_name: string
+  timeline_id: string | null
+  timeline_name: string | null
   roles: string[]
-  characterPerspectives: CharacterPerspective[]
-  selectedCharacterId: string | null
+  character_perspectives: CharacterPerspective[]
+  selected_character_id: string | null
+  capabilities: string[]
 }
 
 export interface FeatureManifest {
   ask: boolean
-  aiSummaries: boolean
-  gmBriefs: boolean
-  citedRules: boolean
+  ai_summaries: boolean
+  gm_briefs: boolean
+  cited_rules: boolean
 }
 
 export interface SessionBootstrap {
   user: UserSummary
-  selectedCampaignId: string | null
+  csrf_token: string
+  browser_session_id: string | null
+  selected_campaign_id: string | null
   campaigns: CampaignContext[]
   features: FeatureManifest
 }
