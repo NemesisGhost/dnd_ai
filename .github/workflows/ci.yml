@@ -44,6 +44,44 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src
 
+  portal-check:
+    name: Portal tests, lint, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # portal/ is the React/TypeScript admin client (docs/DEVELOPMENT.md's
+    # toolchain table): Vite build, Vitest tests, ESLint. It has its own
+    # npm dependency tree and lockfile and talks only to the application
+    # API, never PostgreSQL — so this job is fully independent of every
+    # other job here (no PostgreSQL, no Docker, no Python, no Foundry) and
+    # installs strictly from the committed portal/package-lock.json via
+    # `npm ci`. Node 24 matches portal/README.md's documented dev version.
+
+    defaults:
+      run:
+        working-directory: portal
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+
+      - name: Install portal dependencies
+        run: npm ci
+
+      - name: Run portal tests
+        run: npm test
+
+      - name: Lint portal
+        run: npm run lint
+
+      - name: Build portal
+        run: npm run build
+
   foundry-module-check:
     name: Foundry module tests and packaging
     runs-on: ubuntu-latest
