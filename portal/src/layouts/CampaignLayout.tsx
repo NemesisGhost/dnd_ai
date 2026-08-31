@@ -13,7 +13,7 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
 
   const campaign =
     bootstrap.campaigns.find(
-      (candidate) => candidate.campaignId === campaignId,
+      (candidate) => candidate.campaign_id === campaignId,
     ) ?? null
 
   if (!campaign) {
@@ -27,14 +27,14 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     )
   }
 
-  const showAccess = campaign.roles.includes('Game Master')
+  const showAccess = campaign.capabilities.includes('access.manage')
 
   return (
     <>
       <CampaignContextBar campaign={campaign} />
 
       <AppNavigation
-        campaignId={campaign.campaignId}
+        campaignId={campaign.campaign_id}
         askEnabled={bootstrap.features.ask}
         showAccess={showAccess}
       />

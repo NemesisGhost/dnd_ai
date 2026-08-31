@@ -7,13 +7,13 @@ interface CampaignContextBarProps {
 export function CampaignContextBar({
   campaign,
 }: CampaignContextBarProps) {
-  const selectedCharacter = campaign.characterPerspectives.find(
+  const selectedCharacter = campaign.character_perspectives.find(
     (character) =>
-      character.characterId === campaign.selectedCharacterId,
+      character.character_id === campaign.selected_character_id,
   )
 
   const perspectiveName =
-    selectedCharacter?.characterName ?? "No character selected"
+    selectedCharacter?.character_name ?? "No character selected"
 
   const roleNames =
     campaign.roles.length > 0
@@ -28,12 +28,12 @@ export function CampaignContextBar({
       <dl className="campaign-context__list">
         <div className="campaign-context__item">
           <dt>Campaign</dt>
-          <dd>{campaign.campaignName}</dd>
+          <dd>{campaign.campaign_name}</dd>
         </div>
 
         <div className="campaign-context__item">
           <dt>Timeline</dt>
-          <dd>{campaign.timelineName}</dd>
+          <dd>{campaign.timeline_name ?? "No timeline selected"}</dd>
         </div>
 
         <div className="campaign-context__item">
