@@ -1,25 +1,27 @@
 import type { SessionBootstrap } from "../types/bootstrap"
 
-export async function fetchSessionBootstrap():
-  Promise<SessionBootstrap | null> {
-  const response = await fetch("/auth/session", {
-    method: "GET",
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
-  })
+export async function fetchSessionBootstrap(
+    signal?: AbortSignal,
+): Promise<SessionBootstrap | null> {
+    const response = await fetch("/auth/session", {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        signal,
+        headers: {
+            Accept: "application/json",
+        },
+    })
 
-  if (response.status === 401) {
-    return null
-  }
+    if (response.status === 401) {
+        return null
+    }
 
-  if (!response.ok) {
-    throw new Error(
-      `Session bootstrap request failed with status ${response.status}`,
-    )
-  }
+    if (!response.ok) {
+        throw new Error(
+            `Session bootstrap request failed with status ${response.status}`,
+        )
+    }
 
-  return (await response.json()) as SessionBootstrap
+    return (await response.json()) as SessionBootstrap
 }

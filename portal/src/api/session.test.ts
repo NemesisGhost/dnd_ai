@@ -8,6 +8,8 @@ afterEach(() => {
 
 describe("fetchSessionBootstrap", () => {
     it("returns the session bootstrap from a successful response", async () => {
+        const controller = new AbortController()
+
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify(sessionBootstrapFixture), {
                 status: 200,
@@ -19,9 +21,9 @@ describe("fetchSessionBootstrap", () => {
 
         vi.stubGlobal("fetch", fetchMock)
 
-        await expect(fetchSessionBootstrap()).resolves.toEqual(
-            sessionBootstrapFixture,
-        )
+        await expect(
+            fetchSessionBootstrap(controller.signal),
+        ).resolves.toEqual(sessionBootstrapFixture)
 
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -29,6 +31,7 @@ describe("fetchSessionBootstrap", () => {
             method: "GET",
             credentials: "same-origin",
             cache: "no-store",
+            signal: controller.signal,
             headers: {
                 Accept: "application/json",
             },
