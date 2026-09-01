@@ -1,72 +1,95 @@
-import { useEffect, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useState,
+} from "react"
 import { fetchSessionBootstrap } from "../api/session"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 export type SessionBootstrapState =
-    | {
-        status: "loading"
+  | {
+      status: "loading"
     }
-    | {
-        status: "authenticated"
-        bootstrap: SessionBootstrap
+  | {
+      status: "authenticated"
+      bootstrap: SessionBootstrap
     }
-    | {
-        status: "unauthenticated"
+  | {
+      status: "unauthenticated"
     }
-    | {
-        status: "error"
-        error: Error
+  | {
+      status: "error"
+      error: Error
     }
 
-const initialState: SessionBootstrapState = {
-    status: "loading",
+export interface UseSessionBootstrapResult {
+  state: SessionBootstrapState
+  reload: () => void
 }
 
-export function useSessionBootstrap(): SessionBootstrapState {
-    const [state, setState] =
-        useState<SessionBootstrapState>(initialState)
+const initialState: SessionBootstrapState = {
+  status: "loading",
+}
 
-    useEffect(() => {
-        const controller = new AbortController()
+export function useSessionBootstrap():
+  UseSessionBootstrapResult {
+  const [state, setState] =
+    useState<SessionBootstrapState>(initialState)
 
-        void fetchSessionBootstrap(controller.signal)
-            .then((bootstrap) => {
-                if (controller.signal.aborted) {
-                    return
-                }
+  const [requestVersion, setRequestVersion] = useState(0)
 
-                if (bootstrap === null) {
-                    setState({
-                        status: "unauthenticated",
-                    })
-                    return
-                }
+  const reload = useCallback(() => {
+    setState({
+      status: "loading",
+    })
 
-                setState({
-                    status: "authenticated",
-                    bootstrap,
-                })
-            })
-            .catch((cause: unknown) => {
-                if (controller.signal.aborted) {
-                    return
-                }
+    setRequestVersion((currentVersion) => currentVersion + 1)
+  }, [])
 
-                const error =
-                    cause instanceof Error
-                        ? cause
-                        : new Error("Session bootstrap request failed")
+  useEffect(() => {
+    const controller = new AbortController()
 
-                setState({
-                    status: "error",
-                    error,
-                })
-            })
-
-        return () => {
-            controller.abort()
+    void fetchSessionBootstrap(controller.signal)
+      .then((bootstrap) => {
+        if (controller.signal.aborted) {
+          return
         }
-    }, [])
 
-    return state
+        if (bootstrap === null) {
+          setState({
+            status: "unauthenticated",
+          })
+          return
+        }
+
+        setState({
+          status: "authenticated",
+          bootstrap,
+        })
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        const error =
+          cause instanceof Error
+            ? cause
+            : new Error("Session bootstrap request failed")
+
+        setState({
+          status: "error",
+          error,
+        })
+      })
+
+    return () => {
+      controller.abort()
+    }
+  }, [requestVersion])
+
+  return {
+    state,
+    reload,
+  }
 }

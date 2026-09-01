@@ -1,8 +1,7 @@
-import { Navigate, Route, Routes } from 'react-router'
-import './App.css'
-import { sessionBootstrapFixture } from './fixtures/sessionBootstrap'
-import { CampaignLayout } from './layouts/CampaignLayout'
-import PlaceholderPage from './pages/PlaceholderPage'
+import { Navigate, Route, Routes } from "react-router"
+import "./App.css"
+import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
+import PlaceholderPage from "./pages/PlaceholderPage"
 
 function App() {
   return (
@@ -50,9 +49,7 @@ function App() {
 
         <Route
           path="/app/:campaignId"
-          element={
-            <CampaignLayout bootstrap={sessionBootstrapFixture} />
-          }
+          element={<CampaignSessionBoundary />}
         >
           <Route index element={<Navigate to="home" replace />} />
 
