@@ -10,17 +10,32 @@ import {
 } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { useSession } from "../context/SessionContext"
+import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignSessionBoundary } from "./CampaignSessionBoundary"
 
 vi.mock("../context/SessionContext", () => ({
   useSession: vi.fn(),
 }))
+vi.mock("../context/CharacterPerspectiveContext", () => ({
+  usePerspective: vi.fn(),
+}))
 
 const useSessionMock = vi.mocked(useSession)
+const usePerspectiveMock = vi.mocked(usePerspective)
 
 beforeEach(() => {
   useSessionMock.mockReset()
+  usePerspectiveMock.mockReset()
+
+  usePerspectiveMock.mockReturnValue({
+    getSelectedCharacterId: (campaignId) =>
+      sessionBootstrapFixture.campaigns.find(
+        (campaign) =>
+          campaign.campaign_id === campaignId,
+      )?.selected_character_id ?? null,
+    selectCharacter: vi.fn(),
+  })
 })
 
 function renderBoundary() {

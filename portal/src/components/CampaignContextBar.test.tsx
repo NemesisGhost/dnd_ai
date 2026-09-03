@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
-import { CampaignContextBar } from "./CampaignContextBar"
+import { describe, expect, it, vi } from "vitest"
+import { CharacterPerspectiveContext } from "../context/CharacterPerspectiveContext"
 import type { CampaignContext } from "../types/bootstrap"
+import { CampaignContextBar } from "./CampaignContextBar"
 
 const mockCampaign = {
   campaign_id: "campaign-test",
@@ -15,12 +16,38 @@ const mockCampaign = {
 } satisfies CampaignContext
 
 describe("CampaignContextBar", () => {
-  it("renders the campaign and timeline status", () => {
-    render(<CampaignContextBar campaign={mockCampaign} />)
+  it("renders the campaign and empty context states", () => {
+    render(
+      <CharacterPerspectiveContext.Provider
+        value={{
+          getSelectedCharacterId: () => null,
+          selectCharacter: vi.fn(),
+        }}
+      >
+        <CampaignContextBar campaign={mockCampaign} />
+      </CharacterPerspectiveContext.Provider>,
+    )
 
-    expect(screen.getByText("Test Campaign")).toBeTruthy()
-    expect(screen.getByText("No timeline selected")).toBeTruthy()
-    expect(screen.getByText("No role assigned")).toBeTruthy()
-    expect(screen.getByText("No character selected"),).toBeInTheDocument()
+    expect(
+      screen.getByText("Test Campaign"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText("No timeline selected"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText("No role assigned"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText("No character selected"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("combobox", {
+        name: "Character perspective",
+      }),
+    ).toBeDisabled()
   })
 })

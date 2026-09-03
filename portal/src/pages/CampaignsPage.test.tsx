@@ -1,4 +1,5 @@
 import {
+  fireEvent,
   render,
   screen,
   within,
@@ -8,6 +9,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignsPage } from "./CampaignsPage"
@@ -31,7 +33,7 @@ describe("CampaignsPage", () => {
             selected_campaign_id: null,
             campaigns: [],
           }}
-          onCampaignSelect={() => {}}
+          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -58,7 +60,7 @@ describe("CampaignsPage", () => {
       <MemoryRouter>
         <CampaignsPage
           bootstrap={sessionBootstrapFixture}
-          onCampaignSelect={() => {}}
+          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -102,7 +104,7 @@ describe("CampaignsPage", () => {
               },
             ],
           }}
-          onCampaignSelect={() => {}}
+          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -122,5 +124,26 @@ describe("CampaignsPage", () => {
         "Currently selected",
       ),
     ).not.toBeInTheDocument()
+  })
+
+  it("refreshes the session when a campaign is selected", () => {
+    const onCampaignSelect = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <CampaignsPage
+          bootstrap={sessionBootstrapFixture}
+          onCampaignSelect={onCampaignSelect}
+        />
+      </MemoryRouter>,
+    )
+
+    const campaignLink = screen.getByRole("link", {
+      name: /Mundivita/,
+    })
+
+    fireEvent.click(campaignLink)
+
+    expect(onCampaignSelect).toHaveBeenCalledTimes(1)
   })
 })
