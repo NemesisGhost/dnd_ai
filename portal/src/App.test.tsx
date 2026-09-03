@@ -1,4 +1,7 @@
-import { render, screen } from "@testing-library/react"
+import {
+  render,
+  screen,
+} from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import {
   beforeEach,
@@ -45,12 +48,25 @@ function renderAppAt(path: string) {
 }
 
 describe("portal routing", () => {
-  it("does not show campaign navigation on the login route", () => {
+  it("shows login without campaign navigation for an unauthenticated user", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: {
+        status: "unauthenticated",
+      },
+      reload: vi.fn(),
+    })
+
     renderAppAt("/login")
 
     expect(
       screen.getByRole("heading", {
-        name: "Log in",
+        name: "D&D AI World",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("button", {
+        name: "Sign In",
       }),
     ).toBeInTheDocument()
 

@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router"
 import "./App.css"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
+import { LoginPage } from "./pages/LoginPage"
 
 function App() {
   return (
@@ -25,14 +26,7 @@ function App() {
 
         <Route
           path="/login"
-          element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Log in"
-                description="Local application authentication will be added in Phase 13B."
-              />
-            </main>
-          }
+          element={<LoginPage />}
         />
 
         <Route
