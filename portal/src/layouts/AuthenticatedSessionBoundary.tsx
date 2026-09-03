@@ -7,16 +7,14 @@ import PlaceholderPage from "../pages/PlaceholderPage"
 interface AuthenticatedSessionBoundaryProps {
     children: (
         bootstrap: SessionBootstrap,
+        reload: () => void,
     ) => ReactNode
 }
 
 export function AuthenticatedSessionBoundary({
     children,
 }: AuthenticatedSessionBoundaryProps) {
-    const {
-        state,
-        reload,
-    } = useSession()
+    const { state, reload } = useSession()
 
     switch (state.status) {
         case "loading":
@@ -44,14 +42,11 @@ export function AuthenticatedSessionBoundary({
                         </h1>
 
                         <p>
-                            Your session could not be checked. No
-                            protected information has been displayed.
+                            Your session could not be checked. No protected
+                            information has been displayed.
                         </p>
 
-                        <button
-                            type="button"
-                            onClick={reload}
-                        >
+                        <button type="button" onClick={reload}>
                             Try again
                         </button>
                     </section>
@@ -59,6 +54,6 @@ export function AuthenticatedSessionBoundary({
             )
 
         case "authenticated":
-            return children(state.bootstrap)
+            return children(state.bootstrap, reload)
     }
 }

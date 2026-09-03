@@ -31,6 +31,7 @@ describe("CampaignsPage", () => {
             selected_campaign_id: null,
             campaigns: [],
           }}
+          onCampaignSelect={() => {}}
         />
       </MemoryRouter>,
     )
@@ -57,6 +58,7 @@ describe("CampaignsPage", () => {
       <MemoryRouter>
         <CampaignsPage
           bootstrap={sessionBootstrapFixture}
+          onCampaignSelect={() => {}}
         />
       </MemoryRouter>,
     )
@@ -100,6 +102,7 @@ describe("CampaignsPage", () => {
               },
             ],
           }}
+          onCampaignSelect={() => {}}
         />
       </MemoryRouter>,
     )

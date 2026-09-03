@@ -4,9 +4,10 @@ import type { SessionBootstrap } from "../types/bootstrap"
 
 interface CampaignsPageProps {
   bootstrap: SessionBootstrap
+  onCampaignSelect: () => void
 }
 
-export function CampaignsPage({ bootstrap }: CampaignsPageProps) {
+export function CampaignsPage({ bootstrap, onCampaignSelect }: CampaignsPageProps) {
   if (bootstrap.campaigns.length === 0) {
     return (
       <main className="app-main">
@@ -33,6 +34,7 @@ export function CampaignsPage({ bootstrap }: CampaignsPageProps) {
               <Link
                 className="campaign-selection__link"
                 to={`/app/${campaign.campaign_id}/home`}
+                onClick={onCampaignSelect}
               >
                 <h2>{campaign.campaign_name}</h2>
                 <p>
