@@ -3,6 +3,8 @@ import "./App.css"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { LoginPage } from "./pages/LoginPage"
+import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
+import { CampaignsPage } from "./pages/CampaignsPage"
 
 function App() {
   return (
@@ -32,12 +34,11 @@ function App() {
         <Route
           path="/campaigns"
           element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Campaigns"
-                description="Select a campaign to enter the portal."
-              />
-            </main>
+            <AuthenticatedSessionBoundary>
+              {(bootstrap) => (
+                <CampaignsPage bootstrap={bootstrap} />
+              )}
+            </AuthenticatedSessionBoundary>
           }
         />
 
