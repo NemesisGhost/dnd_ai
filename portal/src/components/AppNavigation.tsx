@@ -25,6 +25,14 @@ export function AppNavigation({
   return (
     <nav className="app-navigation" aria-label="Campaign">
       <ul className="app-navigation__list">
+        <li>
+          <NavLink
+            className="app-navigation__link"
+            to="/campaigns"
+          >
+            Change campaign
+          </NavLink>
+        </li>
         {navigationItems.map((item) => (
           <li key={item.path}>
             <NavLink

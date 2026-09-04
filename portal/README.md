@@ -5,23 +5,34 @@ Vite, and React Router.
 
 ## Current status
 
-Phase 13A establishes the fixture-only UI foundation.
+Phase 13A is complete. Phase 13C campaign-context integration is implemented
+on this branch, with live multi-campaign and perspective verification still
+outstanding. Phase 13C is not yet marked complete.
 
-The current portal includes:
+The portal currently includes:
 
-- A responsive application shell.
-- Public and campaign-specific route boundaries.
-- Placeholder routes for the planned portal destinations.
-- Fixture-backed campaign, timeline, role, and character-perspective context.
+- A responsive application shell and nested campaign routes.
+- Local login and session restoration through FastAPI.
+- Authoritative identity, campaign, timeline, role, perspective, capability,
+  and feature data from `GET /auth/session`.
+- Loading, unauthenticated, recoverable-error, and empty-campaign states.
+- Campaign selection and a Change campaign navigation link.
+- Fresh session bootstrap when entering, leaving, or switching campaign
+  scope, including browser Back/Forward navigation.
+- In-memory character-perspective selection, checked against the latest
+  server-authorized perspective list after refresh.
 - Capability-dependent navigation.
-- A visibly disabled Ask feature pending Phase 12 verification.
-- Focused tests for meaningful routing and navigation behavior.
-- Development proxies for the future `/api` and `/auth` endpoints.
+- A visibly disabled Ask feature while the server manifest disables it.
+- Placeholder pages for later portal increments.
+- Focused automated tests for session, routing, and selection behavior.
 
-Phase 13A does not perform authenticated requests or communicate with FastAPI.
-The fixture bootstrap contract is provisional. The Phase 13B backend contract
-will become authoritative when local authentication and browser sessions are
-implemented.
+Navigating between pages within the same campaign preserves the provider
+and selected perspective. Changing campaign scope resets them.
+
+The campaign picker's Default campaign marker describes the server's
+bootstrap default, not a persisted last-visited preference.
+
+Phase 13D read-only resource views have not started.
 
 ## Prerequisites
 
@@ -98,33 +109,35 @@ npm run build
 
 ## Development proxy contract
 
-React code should use same-origin relative URLs:
-
-```ts
-fetch('/api/session')
-fetch('/auth/logout')
-```
+Frontend API requests use same-origin relative URLs. Session bootstrap uses
+`GET /auth/session`, not `/api/session`.
 
 During local development, Vite forwards:
 
 - `/api/*` to `http://localhost:8000/api/*`
 - `/auth/*` to `http://localhost:8000/auth/*`
 
-In production, the reverse proxy will serve the portal and forward `/api` and
-`/auth` from the same public origin.
+FastAPI must be running separately. Its database configuration must point
+to the PostgreSQL instance actually used by that API process. Native local
+PostgreSQL and Docker Compose can use different hostnames and ports.
 
-Phase 13A components must not make these requests. The proxy exists so later
-phases can use the production URL contract during development.
+In production, the reverse proxy must serve the portal and forward API
+requests from the same public origin.
 
-## Placeholder routes
+Do not commit local database credentials or authentication secrets.
+
+## Routes
 
 Public routes:
 
 - `/`
 - `/login`
+
+Authenticated campaign selection:
+
 - `/campaigns`
 
-Campaign routes:
+Authenticated campaign routes:
 
 - `/app/:campaignId/home`
 - `/app/:campaignId/world`
@@ -135,34 +148,74 @@ Campaign routes:
 - `/app/:campaignId/ask`
 - `/app/:campaignId/access`
 
-The `:campaignId` segment is supplied by the selected campaign.
+Campaign resource pages remain placeholders. Campaign IDs from URLs are
+matched against the current bootstrap's authorized campaign list.
+Unavailable campaigns receive a generic unavailable/not-found state.
+
+Frontend navigation visibility is presentation only. The backend remains
+responsible for authorizing every resource request.
 
 ## Source organization
 
-- `src/components`: Reusable interface components.
-- `src/fixtures`: Phase 13A fixture data.
-- `src/layouts`: Shared route layouts.
-- `src/pages`: Route-level page components and placeholders.
+- `src/api`: HTTP clients.
+- `src/components`: Interface components.
+- `src/context`: Session and perspective contexts/providers.
+- `src/fixtures`: Test fixture data; not production identity data.
+- `src/hooks`: Session, login, and perspective behavior.
+- `src/layouts`: Authentication boundaries and campaign layouts.
+- `src/pages`: Route-level pages and placeholders.
 - `src/test`: Shared test initialization.
-- `src/types`: Provisional frontend data contracts.
-- `src/App.tsx`: Current declarative route table.
-- `src/main.tsx`: Browser application entry point.
+- `src/types`: TypeScript representations of backend contracts.
+- `src/App.tsx`: Declarative route table.
+- `src/main.tsx`: Router and provider setup.
 
 ## Authentication boundary
 
-The browser will not store passwords, bearer tokens, or Foundry credentials.
+The portal uses local application authentication and an opaque server-side
+browser session. JavaScript does not read the HttpOnly session cookie.
 
-Phase 13B will add:
+`GET /auth/session` supplies current identity and authorization context.
+The frontend retains bootstrap data, including the CSRF token, in memory;
+it does not persist these values in localStorage or sessionStorage.
 
-- Application-owned local authentication.
-- Opaque server-side browser sessions.
-- A secure `HttpOnly`, `SameSite=Lax` session cookie.
-- CSRF tokens for mutating browser requests.
-- Allowed-Origin validation.
-- Session bootstrap through FastAPI.
+Cookie-authenticated mutations requiring CSRF protection must send the
+in-memory token using `X-CSRF-Token`. The backend also validates Origin.
 
-Foundry device pairing is a separate authentication boundary and is not part of
-the Phase 13A portal foundation.
+Campaign roles are display information. The frontend must not derive or
+grant capabilities from role names or perspective choices.
+
+A selected character is a requested viewing context, not an authorization
+grant. A null selection does not grant campaign-wide access.
+
+Foundry device authentication remains a separate boundary. The portal does
+not store Foundry device credentials.
+
+Backend endpoint availability does not mean that every account-management
+or authentication workflow has a completed portal screen.
+
+## Phase 13C verification
+
+Latest owner-reported local checks:
+
+- 53 automated tests passed.
+- ESLint passed.
+- Production build passed.
+
+Live checks already reported:
+
+- Login succeeds and opens campaign selection.
+- Refresh restores the authenticated session.
+- An account with no campaigns sees the empty state.
+- An unknown campaign URL receives Campaign not found.
+- Two authorized campaigns appear with correct timeline and role data.
+- Selecting a campaign refreshes `/auth/session` before displaying its protected context.
+- Change campaign and browser Back/Forward refresh authorization when campaign scope changes.
+- Navigating within one campaign preserves the selected perspective.
+- Selecting either of two authorized perspectives refreshes the session and keeps the dropdown and context summary synchronized.
+- Removing a perspective or campaign membership through supported backend operations removes it from the portal after refresh.
+- Session expiry/revocation followed by refresh shows login without retained protected context.
+- A failed refresh hides protected context and offers a working retry.
+- Disabled Phase 12 surfaces make no related network requests.
 
 ## Learning checkpoints
 

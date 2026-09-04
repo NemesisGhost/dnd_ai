@@ -1,8 +1,10 @@
-import { Navigate, Route, Routes } from 'react-router'
-import './App.css'
-import { sessionBootstrapFixture } from './fixtures/sessionBootstrap'
-import { CampaignLayout } from './layouts/CampaignLayout'
-import PlaceholderPage from './pages/PlaceholderPage'
+import { Navigate, Route, Routes } from "react-router"
+import "./App.css"
+import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
+import PlaceholderPage from "./pages/PlaceholderPage"
+import { LoginPage } from "./pages/LoginPage"
+import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
+import { CampaignsPage } from "./pages/CampaignsPage"
 
 function App() {
   return (
@@ -26,33 +28,23 @@ function App() {
 
         <Route
           path="/login"
-          element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Log in"
-                description="Local application authentication will be added in Phase 13B."
-              />
-            </main>
-          }
+          element={<LoginPage />}
         />
 
         <Route
           path="/campaigns"
           element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Campaigns"
-                description="Select a campaign to enter the portal."
-              />
-            </main>
+            <AuthenticatedSessionBoundary>
+              {(bootstrap) => (
+                <CampaignsPage bootstrap={bootstrap} />
+              )}
+            </AuthenticatedSessionBoundary>
           }
         />
 
         <Route
           path="/app/:campaignId"
-          element={
-            <CampaignLayout bootstrap={sessionBootstrapFixture} />
-          }
+          element={<CampaignSessionBoundary />}
         >
           <Route index element={<Navigate to="home" replace />} />
 

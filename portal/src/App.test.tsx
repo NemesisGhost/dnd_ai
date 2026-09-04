@@ -1,61 +1,133 @@
-import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
-import { describe, expect, it } from 'vitest'
-import App from './App'
+import {
+  render,
+  screen,
+} from "@testing-library/react"
+import { MemoryRouter } from "react-router"
+import {
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
+import App from "./App"
+import { RouteSessionProvider } from "./context/RouteSessionProvider"
+import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
+import {
+  useSessionBootstrap,
+} from "./hooks/useSessionBootstrap"
+
+vi.mock("./hooks/useSessionBootstrap", () => ({
+  useSessionBootstrap: vi.fn(),
+}))
+
+const useSessionBootstrapMock = vi.mocked(
+  useSessionBootstrap,
+)
+
+beforeEach(() => {
+  useSessionBootstrapMock.mockReset()
+
+  useSessionBootstrapMock.mockReturnValue({
+    state: {
+      status: "authenticated",
+      bootstrap: sessionBootstrapFixture,
+    },
+    reload: vi.fn(),
+  })
+})
 
 function renderAppAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <App />
+      <RouteSessionProvider>
+        <App />
+      </RouteSessionProvider>
     </MemoryRouter>,
   )
 }
 
-describe('portal routing', () => {
-  it('does not show campaign navigation on the login route', () => {
-    renderAppAt('/login')
+describe("portal routing", () => {
+  it("shows login without campaign navigation for an unauthenticated user", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: {
+        status: "unauthenticated",
+      },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/login")
 
     expect(
-      screen.getByRole('heading', { name: 'Log in' }),
+      screen.getByRole("heading", {
+        name: "D&D AI World",
+      }),
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole('navigation', { name: 'Campaign' }),
+      screen.getByRole("button", {
+        name: "Sign In",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.queryByRole("navigation", {
+        name: "Campaign",
+      }),
     ).not.toBeInTheDocument()
   })
 
-  it('shows campaign navigation and disables unavailable Ask', () => {
-    renderAppAt('/app/mundivita/home')
+  it("shows campaign navigation and disables unavailable Ask", () => {
+    renderAppAt("/app/mundivita/home")
 
     expect(
-      screen.getByRole('navigation', { name: 'Campaign' }),
+      screen.getByRole("navigation", {
+        name: "Campaign",
+      }),
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole('link', { name: 'Home' }),
-    ).toHaveAttribute('aria-current', 'page')
+      screen.getByRole("link", {
+        name: "Home",
+      }),
+    ).toHaveAttribute("aria-current", "page")
 
     expect(
-      screen.queryByRole('link', { name: 'Ask' }),
+      screen.queryByRole("link", {
+        name: "Ask",
+      }),
     ).not.toBeInTheDocument()
 
-    expect(screen.getByText('Ask')).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
-
-    expect(screen.getByRole("link", { name: "Access" }),).toBeInTheDocument()
-  })
-
-  it('does not disclose campaign chrome for an unknown campaign', () => {
-    renderAppAt('/app/not-a-real-campaign/home')
+    expect(
+      screen.getByText("Ask"),
+    ).toHaveAttribute("aria-disabled", "true")
 
     expect(
-      screen.getByRole('heading', { name: 'Campaign not found' }),
+      screen.getByRole("link", {
+        name: "Access",
+      }),
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole('navigation', { name: 'Campaign' }),
+      screen.getByRole("link", {
+        name: "Change campaign",
+      }),
+    ).toHaveAttribute("href", "/campaigns")
+  })
+
+  it("does not disclose campaign chrome for an unknown campaign", () => {
+    renderAppAt("/app/not-a-real-campaign/home")
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Campaign not found",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.queryByRole("navigation", {
+        name: "Campaign",
+      }),
     ).not.toBeInTheDocument()
   })
 })

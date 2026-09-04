@@ -1,4 +1,6 @@
+import { usePerspective } from "../context/CharacterPerspectiveContext"
 import type { CampaignContext } from "../types/bootstrap"
+import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface CampaignContextBarProps {
   campaign: CampaignContext
@@ -7,13 +9,23 @@ interface CampaignContextBarProps {
 export function CampaignContextBar({
   campaign,
 }: CampaignContextBarProps) {
-  const selectedCharacter = campaign.character_perspectives.find(
-    (character) =>
-      character.character_id === campaign.selected_character_id,
-  )
+  const {
+    getSelectedCharacterId,
+    selectCharacter,
+  } = usePerspective()
+
+  const selectedCharacterId =
+    getSelectedCharacterId(campaign.campaign_id)
+
+  const selectedCharacter =
+    campaign.character_perspectives.find(
+      (character) =>
+        character.character_id === selectedCharacterId,
+    )
 
   const perspectiveName =
-    selectedCharacter?.character_name ?? "No character selected"
+    selectedCharacter?.character_name ??
+    "No character selected"
 
   const roleNames =
     campaign.roles.length > 0
@@ -33,7 +45,9 @@ export function CampaignContextBar({
 
         <div className="campaign-context__item">
           <dt>Timeline</dt>
-          <dd>{campaign.timeline_name ?? "No timeline selected"}</dd>
+          <dd>
+            {campaign.timeline_name ?? "No timeline selected"}
+          </dd>
         </div>
 
         <div className="campaign-context__item">
@@ -46,6 +60,17 @@ export function CampaignContextBar({
           <dd>{perspectiveName}</dd>
         </div>
       </dl>
+
+      <CharacterPerspectiveSelector
+        perspectives={campaign.character_perspectives}
+        selectedCharacterId={selectedCharacterId}
+        onSelectCharacter={(characterId) =>
+          selectCharacter(
+            campaign.campaign_id,
+            characterId,
+          )
+        }
+      />
     </section>
   )
 }
