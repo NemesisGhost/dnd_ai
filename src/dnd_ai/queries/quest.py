@@ -238,3 +238,123 @@ def get_quest_view(
         status_code=quest_status_code,
         stages=stages,
     )
+
+
+@dataclass(frozen=True)
+class QuestListItemView:
+    quest_id: uuid.UUID
+    name: str
+    status_code: str | None
+
+
+def list_campaign_quests(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID | None,
+    include_all_parties: bool,
+    denied_quest_ids: frozenset[uuid.UUID] = frozenset(),
+) -> tuple[QuestListItemView, ...]:
+    """Every quest currently tracked on `timeline_id` — i.e. one with at
+    least one `campaign.quest_state` row there — most recently defined by
+    `narrative.quests` itself carrying no `campaign_id` (world-scoped, like
+    the dungeon/item/relationship domains; §14): a quest with no tracked
+    state at all was never surfaced to this campaign in the first place, so
+    it is not listed. `status_code` prefers `party_id`'s own row over the
+    campaign-wide one when both exist, identically to `get_quest_view`'s
+    own per-objective preference; a quest tracked *only* by some other
+    party's independent row (no campaign-wide row, and not `party_id`'s own)
+    resolves to `status_code=None` rather than being silently excluded —
+    the caller learns the quest is tracked even without a resolvable status
+    for their own perspective.
+
+    `include_all_parties` (docs/PHASE13D_BACKEND_READINESS.md §5) decides
+    which quests count as "tracked" in the first place:
+
+    - `True` — a caller who sees canonical truth across every party (a GM,
+      resolved via `AccessContext.has_capability("canon.edit")` with no
+      resource target — the same baseline-only check `dnd_ai.api.summary`
+      already uses for its own list-wide default) sees every quest with
+      *any* `campaign.quest_state` row on this timeline, campaign-wide or
+      scoped to any party — including a quest tracked exclusively through
+      one party's own independent progress, with no campaign-wide row ever
+      created (`docs/architecture/DATABASE_MODEL.md` §14: campaign-wide and
+      per-party tracking are independent, neither implies the other).
+      `party_id` is expected to be `None` in this case (mirroring
+      `get_quest_endpoint`'s own "a GM never resolves a party perspective"
+      rule), so status resolution still only ever prefers the campaign-wide
+      row, never leaking one party's status into another party's absence of
+      one.
+    - `False` — a non-GM caller sees only campaign-wide-tracked quests plus
+      any tracked exclusively through their own authorized `party_id` — a
+      quest another party tracks independently, with no campaign-wide row,
+      stays invisible to a caller not authorized for that party's own
+      perspective. This preserves cross-party privacy: one party's private
+      quest tracking is not disclosed to a different party's own member
+      merely because both are `campaign.view` holders in the same campaign.
+
+    `denied_quest_ids` (resolved by the caller from `AccessContext.
+    resource_grant_targets("campaign.view", field_name="quest_id")`)
+    excludes specific quests even from a caller who would otherwise see
+    them under either rule above — a per-quest `campaign.view` deny
+    overrides both the GM's canonical-truth visibility and the
+    campaign-wide/own-party default, the same "deny overrides baseline"
+    precedence every other resource-grant check in this codebase applies.
+    There is no `allowed_quest_ids` counterpart: unlike a draft event
+    (baseline visibility `False` for a non-GM), every quest's baseline
+    listing visibility under the rule above is already `True` for any
+    `campaign.view` caller, so there is no default-hidden state for an
+    explicit allow to ever add back — the same reasoning `dnd_ai.queries.
+    session.list_campaign_sessions` already documents for its own
+    `denied_session_ids`-only contract.
+
+    Unlike `get_quest_view`, this function needs no separate objective-
+    level `include_hidden` parameter: `quest_id`/`name`/`status_code` are
+    the same three fields `get_quest_endpoint` already returns
+    unconditionally to any authorized caller at the top level of its own
+    response (only per-objective `visibility_policy` is audience-split
+    there) — so there is no baseline this list could leak beyond what the
+    existing detail endpoint already discloses for the same quest, once
+    `denied_quest_ids` is honored identically by both routes. This module
+    is framework-free and performs no authorization of its own:
+    `include_all_parties`, `party_id`, and `denied_quest_ids` must already
+    be authorized/resolved decisions by the time they reach here, exactly
+    like `get_quest_view`."""
+    rows = connection.execute(
+        text("""
+            WITH tracked AS (
+                SELECT DISTINCT quest_id
+                FROM campaign.quest_state
+                WHERE timeline_id = :timeline
+                  AND (:include_all_parties OR party_id IS NULL OR party_id = :party)
+                  AND NOT (quest_id = ANY(CAST(:denied AS uuid[])))
+            )
+            SELECT e.entity_id AS quest_id, e.canonical_name AS name,
+                   COALESCE(qs_party.code, qs_campaign.code) AS status_code
+            FROM tracked t
+            JOIN core.entities e ON e.entity_id = t.quest_id
+            LEFT JOIN campaign.quest_state qst_party
+                   ON qst_party.timeline_id = :timeline AND qst_party.quest_id = t.quest_id
+                  AND qst_party.party_id = :party
+            LEFT JOIN campaign.quest_statuses qs_party
+                   ON qs_party.quest_status_id = qst_party.quest_status_id
+            LEFT JOIN campaign.quest_state qst_campaign
+                   ON qst_campaign.timeline_id = :timeline AND qst_campaign.quest_id = t.quest_id
+                  AND qst_campaign.party_id IS NULL
+            LEFT JOIN campaign.quest_statuses qs_campaign
+                   ON qs_campaign.quest_status_id = qst_campaign.quest_status_id
+            ORDER BY e.canonical_name, e.entity_id
+        """),
+        {
+            "timeline": timeline_id,
+            "party": party_id,
+            "include_all_parties": include_all_parties,
+            "denied": list(denied_quest_ids),
+        },
+    ).mappings()
+    return tuple(
+        QuestListItemView(
+            quest_id=row["quest_id"], name=row["name"], status_code=row["status_code"]
+        )
+        for row in rows
+    )
