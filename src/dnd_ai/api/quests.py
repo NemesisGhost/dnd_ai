@@ -64,15 +64,21 @@ Phase 10 workstream 14 added the read side over the same URL prefix:
 `GET /campaigns/{campaign_id}/quests/{quest_id}`
 (`dnd_ai.queries.quest.get_quest_view`), requiring only `campaign.view`
 (the read-only counterpart to every command route's `canon.edit`, matching
-`dnd_ai.api.dungeon`/`.characters`). Audience filtering — a caller holding
-`canon.edit` for this exact `quest_id` (`access.has_capability(...,
-quest_id=quest_id)` — never checked without a target, which would skip
-any quest-scoped `security.resource_grants` deny and let a role-derived
-GM bypass an explicit, targeted restriction) sees every objective
-regardless of `visibility_policy` — and party-perspective authorization
-(`dnd_ai.api.access.resolve_party_perspective`, optional
-`character_id`/`party_id` query parameters) mirror `dnd_ai.api.dungeon`'s
-exactly — see `dnd_ai.queries.quest`'s own docstring for how
+`dnd_ai.api.dungeon`/`.characters`). Two independent `quest_id`-scoped
+capability checks apply, never to be confused with each other:
+`access.has_capability(_QUEST_VIEW_CAPABILITY, quest_id=quest_id)` (Phase
+13D correction) gates whether the caller may see this quest *at all* — a
+per-quest `campaign.view` resource-grant deny is indistinguishable from a
+nonexistent quest, the fixed non-disclosing 404 every other resource-scoped
+denial in this codebase already returns — while the separate `access.
+has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)` (`canon.edit`
+— never checked without a target, which would skip any quest-scoped
+`security.resource_grants` deny and let a role-derived GM bypass an
+explicit, targeted restriction) decides only `include_hidden`: whether
+every objective is returned regardless of `visibility_policy`. Party-
+perspective authorization (`dnd_ai.api.access.resolve_party_perspective`,
+optional `character_id`/`party_id` query parameters) mirrors `dnd_ai.api.
+dungeon`'s exactly — see `dnd_ai.queries.quest`'s own docstring for how
 `narrative.quest_objectives.visibility_policy` drives it. This route is a
 read: no idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
@@ -82,8 +88,18 @@ Phase 13D backend-readiness workstream added `GET /campaigns/
 list the portal's Home dashboard ("active quests") and a Quests screen
 need, since the detail route above requires already knowing a `quest_id`.
 Same `campaign.view` gate and the same optional `character_id`/`party_id`
-perspective parameters as the detail route; see `list_campaign_quests`'s
-own docstring for why it needs no separate `include_hidden` handling.
+perspective parameters as the detail route. A subsequent correction pass
+fixed two defects the initial cut had: the list originally never resolved
+per-quest `campaign.view` resource-grant denies at all (an incorrect
+module comment claimed "no per-quest resource-grant target exists here" —
+`quest_id` is, in fact, a `security.resource_grants`/`AccessContext.
+has_capability()`/`.resource_grant_targets()` target column, exactly like
+`session_id` already is for `dnd_ai.api.sessions`), and a GM-visible quest
+tracked *only* through one party's independent `campaign.quest_state` row
+(no campaign-wide row) was silently excluded from the GM's own list. See
+`list_campaign_quests`'s own docstring for the corrected
+`include_all_parties`/`denied_quest_ids` contract and
+docs/PHASE13D_BACKEND_READINESS.md §5 for the full account.
 """
 
 import uuid
@@ -102,6 +118,7 @@ from .access import require_campaign_capability, resolve_party_perspective
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["quests"])
@@ -278,6 +295,16 @@ def get_quest_endpoint(
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> QuestResponse:
+    if not access.has_capability(_QUEST_VIEW_CAPABILITY, quest_id=quest_id):
+        # A per-quest campaign.view resource-grant deny — indistinguishable
+        # from a nonexistent quest, matching every other resource-scoped
+        # denial in this codebase (dnd_ai.api.access's own module
+        # docstring). Deliberately separate from the include_hidden check
+        # below: that one decides objective-level visibility for an
+        # already-authorized caller, not whether the caller may see the
+        # quest at all.
+        raise NotFoundError()
+
     include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)
     authorized_party_id = (
         None
@@ -354,11 +381,13 @@ def list_quests_endpoint(
     # reasoning get_quest_endpoint's own include_hidden branch already
     # applies (there, to skip resolving a perspective at all rather than
     # requiring the caller to additionally hold character.view_knowledge
-    # for some named character just to view a list). No per-quest
-    # resource-grant target exists here (a list has no single quest_id to
-    # check against), so this is the baseline check only, matching
-    # dnd_ai.api.summary's own has_capability(_DRAFT_EVENTS_CAPABILITY)
-    # (no target) precedent for a list endpoint's broader default.
+    # for some named character just to view a list). This is the baseline
+    # check only (no resource target) — matching dnd_ai.api.summary's own
+    # has_capability(_DRAFT_EVENTS_CAPABILITY) (no target) precedent for a
+    # list endpoint's broader default — and also decides list_campaign_
+    # quests' own include_all_parties: a GM sees every tracked quest across
+    # every party, not only campaign-wide/own-party ones (see that
+    # function's own docstring).
     is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
     authorized_party_id = (
         None
@@ -372,8 +401,20 @@ def list_quests_endpoint(
         )
     )
 
+    # quest_id is a valid security.resource_grants/AccessContext target
+    # column (exactly like session_id already is for dnd_ai.api.sessions) —
+    # a per-quest campaign.view deny must exclude that quest from the list
+    # the same way it excludes it from direct detail access below.
+    denied_quest_ids, _allowed_quest_ids = access.resource_grant_targets(
+        _QUEST_VIEW_CAPABILITY, field_name="quest_id"
+    )
+
     items = list_campaign_quests(
-        connection, timeline_id=access.timeline_id, party_id=authorized_party_id
+        connection,
+        timeline_id=access.timeline_id,
+        party_id=authorized_party_id,
+        include_all_parties=is_gm,
+        denied_quest_ids=denied_quest_ids,
     )
 
     return [

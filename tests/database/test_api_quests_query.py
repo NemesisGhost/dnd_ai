@@ -136,9 +136,11 @@ class Fixture:
         view_knowledge_capability_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "character.view_knowledge"
         )
+        self.view_capability_id = view_capability_id
 
         self.gm_user_id = make_user(connection, "Quest Query GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = gm_membership_id
         gm_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
         )
@@ -576,6 +578,80 @@ def test_a_targeted_canon_edit_allow_reveals_every_objective_without_a_role(
         str(f.hidden_until_active_objective_id),
         str(f.hidden_until_discovered_objective_id),
     }
+
+
+# ---------------------------------------------------------------------------
+# Targeted campaign.view deny (correction pass: get_quest_endpoint only
+# ever checked quest-scoped canon.edit — which decides include_hidden, not
+# overall visibility — so a quest-targeted campaign.view deny was never
+# consulted at all and had no effect on this route, distinct from every
+# canon.edit-targeted test above.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_campaign_view_deny_returns_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """f.gm_user_id holds role-derived campaign.view *and* canon.edit — the
+    pre-correction-pass bug never checked campaign.view against a
+    quest_id target at all, so this deny had no effect and the GM saw the
+    quest (with every objective, via the separate canon.edit check) exactly
+    as if no grant existed."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            quest_id=f.quest_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_quest_url(f))
+    assert response.status_code == 404
+
+
+def test_the_campaign_view_deny_does_not_affect_a_different_member(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            quest_id=f.quest_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_quest_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["quest_id"] == str(f.quest_id)
+
+
+def test_an_unrelated_campaign_view_deny_does_not_hide_a_different_quest(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The deny's own database-enforced same-world scope
+    (`security.enforce_resource_grant_scope()`) requires a second, real
+    same-world quest here rather than reusing f.other_world_quest_id."""
+    with postgres_engine.begin() as setup:
+        unrelated_quest_id = make_quest(setup, f.world_id, name="An Unrelated Quest")
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            quest_id=unrelated_quest_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(_quest_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json()["quest_id"] == str(f.quest_id)
 
 
 # ---------------------------------------------------------------------------

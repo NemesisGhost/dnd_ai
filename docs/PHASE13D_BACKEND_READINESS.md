@@ -169,14 +169,11 @@ and a Quests screen both need a list.
 Added:
 
 - `list_campaign_quests` in `src/dnd_ai/queries/quest.py` — every quest
-  with a `campaign.quest_state` row on the caller's timeline (party-scoped
-  preferred over campaign-wide, mirroring `get_quest_view`'s own
-  fallback); a quest never tracked on this campaign is not listed.
-  `quest_id`/`name`/`status_code` only — the same three fields
-  `get_quest_endpoint` already returns unconditionally at the top level of
-  its own response (only per-objective `visibility_policy` is
-  audience-split there), so the list discloses nothing the existing
-  detail route didn't already.
+  with a `campaign.quest_state` row on the caller's timeline. `quest_id`/
+  `name`/`status_code` only — the same three fields `get_quest_endpoint`
+  already returns unconditionally at the top level of its own response
+  (only per-objective `visibility_policy` is audience-split there), so the
+  list discloses nothing the existing detail route didn't already.
 - `GET /campaigns/{campaign_id}/quests` in `dnd_ai.api.quests`. A caller
   holding baseline `canon.edit` (a GM) never resolves a party perspective
   for this list — the same "GM sees canonical truth, not one party's
@@ -184,14 +181,57 @@ Added:
   already applies, kept consistent here so a GM isn't required to hold a
   `character.view_knowledge` relationship just to view the list.
 
+**Post-implementation review correction.** The initial cut had two
+defects, both fixed before merge:
+
+1. **The list never resolved per-quest `campaign.view` resource-grant
+   denies.** An incorrect module comment claimed "no per-quest
+   resource-grant target exists here" — `quest_id` is, in fact, a valid
+   `security.resource_grants`/`AccessContext.has_capability()`/
+   `.resource_grant_targets()` target column, exactly like `session_id`
+   already is for sessions. `list_quests_endpoint` now resolves
+   `access.resource_grant_targets("campaign.view", field_name="quest_id")`
+   and passes the denied set into `list_campaign_quests`, which excludes
+   those quests in SQL before the response is built — the same pattern
+   `dnd_ai.api.sessions` already uses for `denied_session_ids`. The
+   **detail** route (`get_quest_endpoint`) had the identical gap from the
+   opposite direction: it only ever checked a quest-scoped `canon.edit`
+   grant (which correctly gates `include_hidden` — whether every objective
+   is returned regardless of `visibility_policy`) but never checked a
+   quest-scoped `campaign.view` grant, so a targeted `campaign.view` deny
+   had no effect on the route at all. It now checks
+   `access.has_capability("campaign.view", quest_id=quest_id)` first and
+   returns the standard non-disclosing 404 if denied, kept explicitly
+   separate from the `include_hidden` check that follows it.
+2. **A quest tracked only through one party's independent
+   `campaign.quest_state` row (no campaign-wide row) was silently excluded
+   from a GM's own list.** `docs/architecture/DATABASE_MODEL.md` §14:
+   campaign-wide (`party_id IS NULL`) and per-party tracking are
+   independent — neither implies the other — so a GM (who sees canonical
+   truth across every party) needs to see quests tracked exclusively
+   through any single party too. `list_campaign_quests` gained an explicit
+   `include_all_parties` parameter: `True` for a caller holding baseline
+   `canon.edit` (every `campaign.quest_state` row on the timeline counts,
+   campaign-wide or any party's own), `False` otherwise (only
+   campaign-wide rows plus the caller's own authorized party's rows count —
+   preserving cross-party privacy: one party's private tracking is not
+   disclosed to a different party's own member). The contract is now
+   **"every quest with a `campaign.quest_state` row visible to this
+   caller's own perspective (canonical for a GM, own-party-or-campaign-wide
+   otherwise)"**, not merely "every quest with a campaign-wide row."
+
 ## 5. Files changed
 
 - `src/dnd_ai/queries/session.py` (new)
 - `src/dnd_ai/api/sessions.py` (list/detail routes added; docstring updated)
-- `src/dnd_ai/queries/quest.py` (`list_campaign_quests` added)
-- `src/dnd_ai/api/quests.py` (list route added; docstring updated)
+- `src/dnd_ai/queries/quest.py` (`list_campaign_quests` added, then
+  corrected per §4.2: `include_all_parties`/`denied_quest_ids`)
+- `src/dnd_ai/api/quests.py` (list route added; detail route hardened with
+  a quest-scoped `campaign.view` check; docstrings updated)
 - `tests/database/test_api_sessions_query.py` (new)
-- `tests/database/test_api_quests_list.py` (new)
+- `tests/database/test_api_quests_list.py` (new, then extended per §4.2)
+- `tests/database/test_api_quests_query.py` (extended per §4.2: the
+  detail-route `campaign.view` deny regression)
 - `docs/PHASE13D_BACKEND_READINESS.md` (this file)
 - `docs/PLAN.md` (Phase 13 status paragraph — one sentence noting the
   session/quest read-side addition; see §7)
@@ -214,17 +254,31 @@ convention (`tests/database/test_api_organizations_query.py`,
   `security.resource_grants.session_id` before this workstream; the same
   deny not affecting a different member; and cross-campaign/nonexistent-
   session rejection.
-- **`tests/database/test_api_quests_list.py`** (5 tests): access control;
+- **`tests/database/test_api_quests_list.py`** (10 tests): access control;
   that only tracked quests appear (an untracked-but-defined quest is
-  proven absent); the campaign-wide-status default; and the
+  proven absent, now alongside a party-only-tracked one that *is* proven
+  present); the campaign-wide-status default; the
   party-preferred-over-campaign-wide status fallback with an authorized
-  character/party perspective.
+  character/party perspective; a party-only-tracked quest visible to a GM
+  (`status_code=None`, no campaign-wide row to resolve) and to its owning
+  party's own authorized perspective; and — the §4.2 correction's own
+  regression coverage — a targeted `campaign.view` deny hiding a quest
+  from the list without removing other visible quests, that same deny
+  returning 404 on direct detail access, and the deny not affecting a
+  different campaign member.
+- **`tests/database/test_api_quests_query.py`** (+3 tests): the detail
+  route's own targeted `campaign.view` deny returning 404, the deny not
+  affecting a different member, and an unrelated quest's deny not hiding
+  the quest under test — deliberately kept separate from this file's
+  existing targeted-`canon.edit` tests (§4.2: two independent checks, easy
+  to conflate).
 
 Deliberately not duplicated: `visibility_policy` filtering,
-resource-grant overrides for quest *detail*, and party-perspective
-authorization edge cases are already exhaustively covered by
-`tests/database/test_api_quests_query.py` and `test_api_dungeon.py`; this
-workstream's tests prove only the new list/session behavior, not those
+resource-grant overrides for quest-detail `include_hidden`, and
+party-perspective authorization edge cases are already exhaustively
+covered by `tests/database/test_api_quests_query.py` and
+`test_api_dungeon.py`; this workstream's tests prove only the new list/
+session behavior and the §4.2 `campaign.view`-deny regression, not those
 paths again.
 
 ## 7. docs/PLAN.md update
@@ -246,7 +300,7 @@ uv run ruff format --check   # PASS
 uv run ruff check            # PASS
 uv run mypy src              # PASS
 uv run pytest tests/unit           # PASS
-uv run pytest tests/database       # PASS (includes the 18 new tests above)
+uv run pytest tests/database       # PASS (includes the 26 new/added tests above)
 uv run pytest tests/scenario       # PASS
 uv run alembic -c database/alembic.ini upgrade head && \
   uv run alembic check        # PASS — no schema diff (no migration needed;
