@@ -76,6 +76,14 @@ exactly — see `dnd_ai.queries.quest`'s own docstring for how
 `narrative.quest_objectives.visibility_policy` drives it. This route is a
 read: no idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
+
+Phase 13D backend-readiness workstream added `GET /campaigns/
+{campaign_id}/quests` (`dnd_ai.queries.quest.list_campaign_quests`) — the
+list the portal's Home dashboard ("active quests") and a Quests screen
+need, since the detail route above requires already knowing a `quest_id`.
+Same `campaign.view` gate and the same optional `character_id`/`party_id`
+perspective parameters as the detail route; see `list_campaign_quests`'s
+own docstring for why it needs no separate `include_hidden` handling.
 """
 
 import uuid
@@ -87,7 +95,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.quests import _advance_objective_impl
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.quest import get_quest_view
+from dnd_ai.queries.quest import get_quest_view, list_campaign_quests
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability, resolve_party_perspective
@@ -320,3 +328,55 @@ def get_quest_endpoint(
             for stage in view.stages
         ],
     )
+
+
+class QuestListItemResponse(BaseModel):
+    quest_id: uuid.UUID
+    name: str
+    status_code: str | None
+
+
+@router.get(
+    "/campaigns/{campaign_id}/quests",
+    response_model=list[QuestListItemResponse],
+    status_code=200,
+)
+def list_quests_endpoint(
+    campaign_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_QUEST_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    character_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
+) -> list[QuestListItemResponse]:
+    # A caller holding baseline canon.edit (a GM) never needs a party
+    # perspective for status — campaign-wide status applies uniformly, the
+    # same "GM sees canonical truth, not one party's subjective view"
+    # reasoning get_quest_endpoint's own include_hidden branch already
+    # applies (there, to skip resolving a perspective at all rather than
+    # requiring the caller to additionally hold character.view_knowledge
+    # for some named character just to view a list). No per-quest
+    # resource-grant target exists here (a list has no single quest_id to
+    # check against), so this is the baseline check only, matching
+    # dnd_ai.api.summary's own has_capability(_DRAFT_EVENTS_CAPABILITY)
+    # (no target) precedent for a list endpoint's broader default.
+    is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
+    authorized_party_id = (
+        None
+        if is_gm
+        else resolve_party_perspective(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=party_id,
+        )
+    )
+
+    items = list_campaign_quests(
+        connection, timeline_id=access.timeline_id, party_id=authorized_party_id
+    )
+
+    return [
+        QuestListItemResponse(quest_id=item.quest_id, name=item.name, status_code=item.status_code)
+        for item in items
+    ]

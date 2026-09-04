@@ -238,3 +238,71 @@ def get_quest_view(
         status_code=quest_status_code,
         stages=stages,
     )
+
+
+@dataclass(frozen=True)
+class QuestListItemView:
+    quest_id: uuid.UUID
+    name: str
+    status_code: str | None
+
+
+def list_campaign_quests(
+    connection: Connection,
+    *,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID | None,
+) -> tuple[QuestListItemView, ...]:
+    """Every quest currently tracked on `timeline_id` — i.e. one with at
+    least one `campaign.quest_state` row there, campaign-wide or scoped to
+    `party_id` — most recently defined by `narrative.quests` itself
+    carrying no `campaign_id` (world-scoped, like the dungeon/item/
+    relationship domains; §14): a quest with no tracked state at all was
+    never surfaced to this campaign in the first place, so it is not
+    listed. `status_code` prefers `party_id`'s own row over the
+    campaign-wide one when both exist, identically to `get_quest_view`'s
+    own per-objective preference.
+
+    Unlike `get_quest_view`, this function takes no `include_hidden`
+    parameter: `quest_id`/`name`/`status_code` are the same three fields
+    `get_quest_endpoint` already returns unconditionally to any
+    `campaign.view` caller at the top level of its own response (only
+    per-objective `visibility_policy` is audience-split there) — so there
+    is no baseline this list could leak beyond what the existing detail
+    endpoint already discloses for the same quest. This module is
+    framework-free and performs no authorization of its own: `party_id`
+    must already be an authorized perspective (`dnd_ai.api.access.
+    resolve_party_perspective`) by the time it reaches here, exactly like
+    `get_quest_view`."""
+    rows = connection.execute(
+        text("""
+            WITH tracked AS (
+                SELECT DISTINCT quest_id
+                FROM campaign.quest_state
+                WHERE timeline_id = :timeline
+                  AND (party_id IS NULL OR party_id = :party)
+            )
+            SELECT e.entity_id AS quest_id, e.canonical_name AS name,
+                   COALESCE(qs_party.code, qs_campaign.code) AS status_code
+            FROM tracked t
+            JOIN core.entities e ON e.entity_id = t.quest_id
+            LEFT JOIN campaign.quest_state qst_party
+                   ON qst_party.timeline_id = :timeline AND qst_party.quest_id = t.quest_id
+                  AND qst_party.party_id = :party
+            LEFT JOIN campaign.quest_statuses qs_party
+                   ON qs_party.quest_status_id = qst_party.quest_status_id
+            LEFT JOIN campaign.quest_state qst_campaign
+                   ON qst_campaign.timeline_id = :timeline AND qst_campaign.quest_id = t.quest_id
+                  AND qst_campaign.party_id IS NULL
+            LEFT JOIN campaign.quest_statuses qs_campaign
+                   ON qs_campaign.quest_status_id = qst_campaign.quest_status_id
+            ORDER BY e.canonical_name, e.entity_id
+        """),
+        {"timeline": timeline_id, "party": party_id},
+    ).mappings()
+    return tuple(
+        QuestListItemView(
+            quest_id=row["quest_id"], name=row["name"], status_code=row["status_code"]
+        )
+        for row in rows
+    )
