@@ -5,6 +5,7 @@ import PlaceholderPage from "./pages/PlaceholderPage"
 import { LoginPage } from "./pages/LoginPage"
 import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
 import { CampaignsPage } from "./pages/CampaignsPage"
+import { CampaignHomePage } from "./pages/CampaignHomePage"
 
 function App() {
   return (
@@ -50,12 +51,7 @@ function App() {
 
           <Route
             path="home"
-            element={
-              <PlaceholderPage
-                title="Home"
-                description="Campaign activity and summary information will appear here."
-              />
-            }
+            element={<CampaignHomePage />}
           />
 
           <Route

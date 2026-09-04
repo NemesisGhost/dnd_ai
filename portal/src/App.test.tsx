@@ -13,17 +13,29 @@ import {
 import App from "./App"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
-import {
-  useSessionBootstrap,
-} from "./hooks/useSessionBootstrap"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import { useCampaignSummary } from "./hooks/useCampaignSummary"
+import type { CampaignSummary } from "./types/campaignSummary"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
 }))
 
+vi.mock("./hooks/useCampaignSummary", () => ({
+  useCampaignSummary: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
+
+const useCampaignSummaryMock = vi.mocked(useCampaignSummary)
+
+const emptyCampaignSummary = {
+  current_session: null,
+  previous_session_recap: null,
+  recent_events: [],
+} satisfies CampaignSummary
 
 beforeEach(() => {
   useSessionBootstrapMock.mockReset()
@@ -34,6 +46,16 @@ beforeEach(() => {
       bootstrap: sessionBootstrapFixture,
     },
     reload: vi.fn(),
+  })
+
+  useCampaignSummaryMock.mockReset()
+
+  useCampaignSummaryMock.mockReturnValue({
+    state: {
+      status: "success",
+      summary: emptyCampaignSummary,
+    },
+    retry: vi.fn(),
   })
 })
 
@@ -113,6 +135,13 @@ describe("portal routing", () => {
         name: "Change campaign",
       }),
     ).toHaveAttribute("href", "/campaigns")
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Home",
+      }),
+    ).toBeInTheDocument()
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {
