@@ -210,20 +210,20 @@ Live checks already reported:
 
 Remaining live checks require suitable development data:
 
-- [ ] Two authorized campaigns appear with correct timeline and role data.
-- [ ] Selecting a campaign refreshes `/auth/session` before displaying its
+- [X] Two authorized campaigns appear with correct timeline and role data.
+- [X] Selecting a campaign refreshes `/auth/session` before displaying its
       protected context.
-- [ ] Change campaign and browser Back/Forward refresh authorization when
+- [X] Change campaign and browser Back/Forward refresh authorization when
       campaign scope changes.
-- [ ] Navigating within one campaign preserves the selected perspective.
-- [ ] Selecting either of two authorized perspectives refreshes the session
+- [X] Navigating within one campaign preserves the selected perspective.
+- [X] Selecting either of two authorized perspectives refreshes the session
       and keeps the dropdown and context summary synchronized.
-- [ ] Removing a perspective or campaign membership through supported
+- [X] Removing a perspective or campaign membership through supported
       backend operations removes it from the portal after refresh.
-- [ ] Session expiry/revocation followed by refresh shows login without
+- [X] Session expiry/revocation followed by refresh shows login without
       retained protected context.
-- [ ] A failed refresh hides protected context and offers a working retry.
-- [ ] Disabled Phase 12 surfaces make no related network requests.
+- [X] A failed refresh hides protected context and offers a working retry.
+- [X] Disabled Phase 12 surfaces make no related network requests.
 
 Record the tested commit, date, outcomes, and relevant HTTP statuses.
 Do not include passwords, cookies, CSRF tokens, or other secrets in the
