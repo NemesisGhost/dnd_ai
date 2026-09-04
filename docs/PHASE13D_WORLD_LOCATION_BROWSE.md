@@ -20,7 +20,6 @@ Query parameters (all optional):
 |---|---|---|
 | `entity_type` | `str` | `core.entity_types.code` to filter to (`settlement`, `building`, `dungeon`, `dungeon_area`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`). An unrecognized code matches nothing — not an error, since entity-type codes are a fixed, non-sensitive vocabulary. |
 | `q` | `str` | Case-insensitive substring match against `canonical_name` and `summary` (PostgreSQL `ILIKE`, with `%`/`_`/`\` escaped so a literal search term behaves as the user expects). |
-| `character_id`, `party_id` | `UUID` | The requested viewing perspective — see §3. |
 | `cursor` | `str` | Opaque keyset-pagination cursor from a previous page's `next_cursor`. |
 | `limit` | `int` | Page size, `1`–`100`, default `20`. |
 
@@ -75,9 +74,9 @@ other location subtypes.
   trimming the last one back off if present — never a second `COUNT(*)`
   query. `None` once no further authorized rows exist.
 - **No total count, ever.** Computing one would require evaluating the
-  full three-layer visibility rule (§3) over every matching row regardless
-  of page size, which is itself the exact kind of "how many hidden things
-  exist" signal `docs/PLAN.md`'s "cannot be inferred through counts" rule
+  full visibility rule (§3) over every matching row regardless of page
+  size, which is itself the exact kind of "how many hidden things exist"
+  signal `docs/PLAN.md`'s "cannot be inferred through counts" rule
   forbids. `LocationListResponse` has no count field, and
   `list_campaign_locations` never runs a counting query internally either.
 - **Malformed cursor:** `decode_location_cursor` raises a bare `ValueError`
@@ -92,7 +91,7 @@ other location subtypes.
   endpoint to inherit from, matching the task's explicit "do not create a
   generalized pagination framework for the repository" instruction.
 
-## 3. Authorization and discovery behavior
+## 3. Authorization behavior (and a pre-merge correction)
 
 Reuses the existing unified boundary throughout — no second
 implementation:
@@ -104,49 +103,56 @@ implementation:
   ("campaign.view")`, re-resolved fresh (`dnd_ai.domain.access.
   resolve_access_context`) on every request — a non-member gets a fixed,
   non-disclosing 404; a member without the capability gets 403.
-- **Perspective is context, not a grant:** `character_id`/`party_id` are
-  authorized through the existing `dnd_ai.api.access.
-  resolve_party_perspective` — a caller-supplied `party_id` is trusted
-  only after proving the caller holds `character.view_knowledge` for the
-  named `character_id` *and* that character currently belongs to that
-  exact party. A caller holding baseline `canon.edit` (a GM) never
-  resolves a perspective at all — the same "GM sees canonical truth, not
-  one party's subjective view" rule `dnd_ai.api.quests`/`.dungeon` already
-  apply, kept consistent here so a GM is never required to hold a
-  `character.view_knowledge` relationship just to browse.
-- **Three-layer per-row visibility**, evaluated inside the SQL `WHERE`
-  clause (never post-filtered after fetching, and always before `LIMIT` —
-  see §2's "inaccessible records excluded before pagination" test):
-  1. A per-location `campaign.view` resource-grant deny
-     (`AccessContext.resource_grant_targets("campaign.view",
-     field_name="entity_id")`) excludes that location outright, even for
-     an otherwise-authorized caller. `entity_id` is a valid `security.
-     resource_grants` target column, and a location's own `location_id`
-     *is* its `entity_id` (class-table inheritance) — the same
-     `resource_grant_targets`-per-list pattern `dnd_ai.api.sessions`/
-     `.quests` already established for `session_id`/`quest_id`.
-  2. A caller canonical-truth-authorized for that location — baseline
-     `canon.edit` (not specifically denied it) or a targeted `canon.edit`
-     allow for it specifically — sees it regardless of discovery.
-     Mirrors `dnd_ai.queries.dungeon.get_dungeon_area_view`'s
-     `include_hidden` exactly, resolved per row via the same deny/allow
-     id sets rather than one `has_capability()` call per resource.
-  3. Otherwise, a location is *discovery-gated* only if a `knowledge.
-     knowledge_items` row names it via `subject_entity_id` — the general
-     entity-subject column (already used for NPC context assembly), since
-     `world.locations`/`world.dungeon_areas` carry no `is_hidden` column
-     of their own (unlike a dungeon area's own structural children, which
-     do). An ungated location is always visible; a gated one is visible
-     only once the requesting party has discovered some knowledge item
-     naming it (`knowledge.party_discoveries`), identical in shape to
-     `get_dungeon_area_view`'s own discovery check.
-- **`party_id=None`** (no perspective authorized, or none requested) is a
-  safe default, not an error — every gated location is simply excluded,
-  matching `dnd_ai.queries.dungeon`'s own documented contract for the same
-  case.
+- **Per-row visibility rule — baseline `campaign.view` plus one explicit
+  override**, evaluated inside the SQL `WHERE` clause (never post-filtered
+  after fetching, and always before `LIMIT` — see §2's
+  "inaccessible records excluded before pagination" test): every caller
+  reaching this endpoint already holds `campaign.view` for the whole
+  campaign (the gate above), and a row is excluded only by an explicit
+  per-location `campaign.view` resource-grant deny
+  (`AccessContext.resource_grant_targets("campaign.view",
+  field_name="entity_id")`). `entity_id` is a valid `security.
+  resource_grants` target column, and a location's own `location_id` *is*
+  its `entity_id` (class-table inheritance) — the same
+  `resource_grant_targets`-per-list pattern `dnd_ai.api.sessions`/`.quests`
+  already established for `session_id`/`quest_id`. There is no second
+  (`canon.edit`) override layer and no perspective/discovery parameter —
+  see the correction below for why.
+- **Correction (pre-merge review, this document's own prior draft):** an
+  earlier version of this endpoint additionally accepted `character_id`/
+  `party_id` query parameters, authorized a viewing perspective through
+  `dnd_ai.api.access.resolve_party_perspective`, and treated a location as
+  *discovery-gated* — hidden from anyone but a `canon.edit` holder unless
+  the caller's authorized party had discovered a `knowledge.
+  knowledge_items` row naming that location via `subject_entity_id`. That
+  rule was unsound and has been removed before merge, not merely tuned: a
+  knowledge item is a claim *about* its subject, not a flag on the
+  subject itself — public lore, recorded history, an unconfirmed rumor,
+  and a genuine secret are all represented identically as rows in that
+  table, and a party's discovery of one such claim proves only that the
+  claim was learned, never that the *location* itself was ever hidden.
+  Under the removed rule, attaching ordinary, undiscovered lore to an
+  already-public location would have silently hidden that location from
+  every non-GM caller once such lore existed at all, while a genuinely
+  secret location with no knowledge item pointed at it yet (or one whose
+  single associated claim happened to already be discovered) would have
+  been fully exposed — backwards in both directions. `world.locations`/
+  `world.dungeon_areas` carry no `is_hidden` (or any other authoritative
+  discoverability) column of their own (unlike a dungeon area's own
+  structural children — features/hazards/interactables/connections —
+  which do have one, per docs/architecture/DATABASE_MODEL.md §9.3), and
+  CLAUDE.md's own domain rules already forbid the shape the removed rule
+  needed anyway ("Knowledge is per-knower, never a global boolean... no
+  `is_player_known`/`is_discovered` flags on the object itself").
+  `dnd_ai.queries.location`'s own docstring carries the full account.
+  Because the only thing a viewing perspective would have filtered was
+  this now-removed discovery gate, `character_id`/`party_id` were dropped
+  from the endpoint entirely rather than kept as accepted-but-inert
+  parameters — see §9 for the tracked follow-up if a real,
+  schema-backed location discoverability mechanism is designed later.
 - **Parent/breadcrumb non-disclosure:** a location's `parent_location_id`/
   `parent_name` are populated only when the parent *independently* passes
-  the identical three-layer test. An inaccessible parent's id/name are
+  the identical per-row deny check. An inaccessible parent's id/name are
   never revealed through an otherwise-visible child's breadcrumb fields —
   both come back `null` together, indistinguishable from "no parent."
   Only one level of parent is resolved (no ancestor chain, no
@@ -220,14 +226,20 @@ No other wording in that paragraph was rewritten, and Phase 13's overall
 
 ## 7. Focused tests added
 
-`tests/database/test_api_locations_list.py` (17 tests), following the
+`tests/database/test_api_locations_list.py` (16 tests), following the
 existing per-endpoint fixture/cleanup convention (`tests/database/
 test_api_dungeon.py`, `test_api_quests_list.py`) rather than a new shared
-fixture or harness:
+fixture or harness. Rewritten as part of the pre-merge correction in §3 —
+every test that exercised the removed discovery-gating rule was replaced
+with one proving the corrected rule instead, per the review's own
+required regression list:
 
 - Access control: non-member 404, capless-member 403.
-- Basic listing (a GM sees ungated locations) and a legitimate empty
-  search (`items: []`, `next_cursor: null`, `200`).
+- Basic listing (a plain `campaign.view` member sees ordinary locations)
+  and a legitimate empty search (`items: []`, `next_cursor: null`, `200`).
+- **A `canon.edit` holder and a plain `campaign.view` member see identical
+  results** for a shared type — direct regression proof that the removed
+  `canon.edit`/discovery escape hatch is gone, not merely inactive.
 - Type filtering: `entity_type=dungeon_area` returns only the one
   dungeon-area fixture row.
 - Text search: case-insensitive match over both `canonical_name` and
@@ -236,37 +248,39 @@ fixture or harness:
   (`limit=1` twice): no gap, no duplicate, and the UUID tie-break produces
   the smaller id first.
 - Inaccessible-record exclusion *before* pagination: three same-type
-  locations, the alphabetically-middle one discovery-gated and
-  undiscovered, `limit=2` returns exactly the two accessible ones with no
-  further page — proving the gated row never consumes a page slot.
+  locations, the alphabetically-middle one denied for one member's own
+  membership via a `campaign.view` resource grant, `limit=2` returns
+  exactly the two accessible ones with no further page — proving the
+  denied row never consumes a page slot (the only exclusion mechanism
+  left after §3's correction).
 - A per-location `campaign.view` resource-grant deny hiding a location for
-  the targeted member only (a different member, the GM, still sees it).
-- Non-GM discovery/perspective filtering: absent without an authorized
-  party perspective, present once the caller's authorized party has
-  discovered it (a same-type, ungated sibling location stays visible
-  throughout, isolating the assertion to the gated row specifically).
-- GM canonical visibility: a GM sees the gated location with no discovery
-  recorded at all.
-- Parent/breadcrumb non-disclosure: a GM sees a visible parent's id/name;
-  a non-GM caller sees `null`/`null` for the identical child when its
-  parent is itself gated and undiscovered; the same GM sees the real
-  parent id/name once it independently qualifies as canonically
-  authorized.
+  the targeted member only (a different member still sees it).
+- **Undiscovered lore does not hide a location:** an otherwise-visible
+  location with an undiscovered `knowledge.knowledge_items` row naming it
+  still appears for a plain member with no perspective at all.
+- **An unrelated party's discovery has no effect:** a location whose one
+  associated claim *has* been discovered by a party with no relationship
+  to the requesting user appears identically to one whose claim has not
+  been discovered — proving visibility here no longer depends on
+  knowledge/discovery state in either direction.
+- Parent/breadcrumb non-disclosure: a member sees a visible parent's
+  id/name; a resource-grant deny on the parent blanks both fields for the
+  targeted member only, while a different member still sees the real
+  parent id/name for the identical child.
 - Malformed cursor (not valid base64, and valid base64 but not the
   expected JSON payload) both rejected with `400 validation_failed`.
 
 Deliberately not duplicated: dungeon-area structural-child discovery
-filtering (features/hazards/interactables/connections) and party-
-perspective authorization edge cases (foreign party, guessed UUID,
-resource-grant deny/allow via access group) are already exhaustively
-covered by `tests/database/test_api_dungeon.py`; this file proves only
-the list endpoint's own new behavior — type filtering, search, keyset
-pagination, and the location-level generalization of the existing
-discovery rule — not those paths again. No new shared fixture/harness
-code was added; `tests/factories.py` was not modified (every helper
-needed — `make_location`, `make_dungeon`, `make_dungeon_area`,
+filtering (features/hazards/interactables/connections, a real,
+schema-backed `is_hidden` mechanism genuinely unrelated to this
+correction) and party-perspective authorization edge cases (foreign
+party, guessed UUID, resource-grant deny/allow via access group) are
+already exhaustively covered by `tests/database/test_api_dungeon.py`;
+this file proves only the list endpoint's own behavior. No new shared
+fixture/harness code was added; `tests/factories.py` was not modified —
+every helper needed (`make_location`, `make_dungeon`, `make_dungeon_area`,
 `make_knowledge_item(subject_entity_id=...)`, `make_party_discovery`,
-`make_resource_grant(entity_id=...)` — already existed).
+`make_resource_grant(entity_id=...)`) already existed.
 
 ## 8. Verification
 
@@ -279,17 +293,18 @@ PASS: ruff check (0s)
 PASS: mypy src (1s)
 PASS: node --test foundry-module (1s)
 PASS: pytest tests/unit (36s)
-PASS: pytest tests/database (400s)
+PASS: pytest tests/database (401s)
 PASS: pytest tests/scenario (14s)
-PASS: alembic check (schema diff) (2s)
+PASS: alembic check (schema diff) (3s)
 All requested stages passed.
 ```
 
-`pytest tests/database` includes the 17 new tests above, plus the full
-pre-existing `test_api_dungeon.py` suite (34 tests combined, all passing)
-proving no regression to the existing dungeon-area detail route or its
-own discovery-filtering behavior. `alembic check` confirms no schema drift
-— consistent with §5's "no migration needed."
+`pytest tests/database` includes the 16 tests above, plus the full
+pre-existing `test_api_dungeon.py` suite, all passing — proving no
+regression to the existing dungeon-area detail route or its own
+discovery-filtering behavior (a real, schema-backed mechanism, genuinely
+unrelated to and unaffected by this correction). `alembic check` confirms
+no schema drift — consistent with §5's "no migration needed."
 
 ## 9. Remaining blockers
 
@@ -298,7 +313,26 @@ branch's own design surfaced directly: a general location detail route
 (anything other than `dungeon_area`) does not exist yet, so this list
 endpoint's compact cards are, for now, only fully "browse then view
 details" for dungeon areas — settlements/buildings/regions/etc. can be
-listed and searched but not yet opened. None of these require a product
+listed and searched but not yet opened. That item requires no product
 decision to resolve (unlike Knowledge browsing's six-view semantics,
-flagged in `docs/PHASE13D_BACKEND_READINESS.md`); they are direct,
+flagged in `docs/PHASE13D_BACKEND_READINESS.md`); it is direct,
 appropriately-scoped follow-up implementation work.
+
+A second item **does** require a product/design decision before any
+implementation work: whether *locations themselves* (as opposed to a
+dungeon area's structural children, which already have a real
+`is_hidden` column) should ever be discovery-gated at all, and if so,
+through what authoritative schema field. §3's correction removed a draft
+rule that answered this by overloading `knowledge.knowledge_items.
+subject_entity_id` as a stand-in "is this hidden" flag — an unsound
+inference (a knowledge item is a claim about its subject, not a flag on
+the subject) that this document's own prior revision incorrectly
+presented as already established by the dungeon-area precedent. No
+replacement mechanism was introduced in its place: every location this
+endpoint returns is visible to any `campaign.view` holder in the campaign
+except one specifically denied by a `campaign.view` resource grant. If
+product requirements later call for location-level discoverability, that
+needs an explicit convention-change proposal (docs/DATABASE_CONVENTIONS.md
+§37) introducing a real column or table for it — through the normal
+schema/design/migration/test process — not a second attempt at
+reinterpreting an existing column.

@@ -6,27 +6,22 @@ list of locations and dungeon areas.
 
 Mirrors `tests/database/test_api_dungeon.py`'s shape: `get_authenticated_
 user_id` is overridden directly, since these tests exercise campaign-
-capability enforcement, party-scoped discovery filtering, resource-grant
-overrides, and pagination — not OIDC token verification, already covered
-by `tests/database/test_api_auth.py`. `visibility_policy`-style discovery
-filtering itself (a hidden structural child requires party discovery) is
-already exhaustively covered there for the dungeon-area *detail* route;
-this file proves the identical rule generalized to `subject_entity_id` for
-the *list* route, plus everything specific to listing: type filtering,
-search, keyset pagination (including ties), and parent/breadcrumb
-non-disclosure.
+capability enforcement, per-location resource-grant overrides, and
+pagination — not OIDC token verification, already covered by
+`tests/database/test_api_auth.py`.
 
 Covers: access control (non-member 404, capless-member 403); a legitimate
 empty result; type filtering; case-insensitive name/summary search;
 deterministic keyset pagination across identically-named locations (UUID
-tie-break); an inaccessible (discovery-gated, undiscovered) location
-excluded *before* pagination rather than consuming a page slot; a
-per-location `campaign.view` resource-grant deny; non-GM discovery-gated
-visibility (absent without discovery, present once the caller's authorized
-party has discovered it); GM canonical visibility (no discovery needed);
-an inaccessible parent's id/name withheld from an otherwise-visible
-child's breadcrumb fields; and a malformed cursor mapped to the ordinary
-400 `validation_failed` contract.
+tie-break); a per-location `campaign.view` resource-grant deny excluded
+*before* pagination rather than consuming a page slot; the identical deny
+withholding an inaccessible parent's id/name from an otherwise-visible
+child's breadcrumb fields; a malformed cursor mapped to the ordinary 400
+`validation_failed` contract; and the corrected visibility rule's own
+regression coverage — an ordinary location with undiscovered lore
+attached is not hidden, and a location's visibility is unaffected by an
+unrelated party's discovery of some other claim (`dnd_ai.queries.location`'s
+own docstring has the full account of the unsound inference this replaces).
 """
 
 import base64
@@ -44,19 +39,13 @@ from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
-    make_campaign_party,
-    make_character,
-    make_character_relationship_type,
     make_dungeon,
     make_dungeon_area,
     make_knowledge_item,
     make_location,
-    make_membership_character_relationship,
     make_membership_role,
     make_party,
     make_party_discovery,
-    make_party_membership,
-    make_relationship_type_capability,
     make_resource_grant,
     make_role,
     make_role_capability,
@@ -79,9 +68,9 @@ class Fixture:
             connection, self.timeline_id, lifecycle_status_code="pending"
         )
 
-        # Always visible, no discovery gate — dungeon/dungeon_area,
-        # exercising the "positive control" breadcrumb (area's parent, the
-        # dungeon, is itself visible).
+        # Always visible — dungeon/dungeon_area, exercising the "positive
+        # control" breadcrumb (area's parent, the dungeon, is itself
+        # visible).
         self.dungeon_id = make_dungeon(connection, self.world_id, name="Shadowfen Dungeon")
         self.area_id = make_dungeon_area(connection, self.dungeon_id, name="Entrance Hall")
 
@@ -94,37 +83,60 @@ class Fixture:
             {"s": "A bustling market town.", "e": self.settlement_id},
         )
 
-        # Discovery-gated: a knowledge item names it as subject, no
-        # discovery recorded yet by default. Its parent is the (always
-        # visible) settlement above.
-        self.gated_id = make_location(
-            connection,
-            self.world_id,
-            entity_type_code="building",
-            name="Hidden Vault",
-            parent_location_id=self.settlement_id,
+        # An ordinary, otherwise-visible location with an *undiscovered*
+        # knowledge item naming it as subject — regression coverage for the
+        # corrected rule: mere lore about a location must never hide it.
+        self.lore_location_id = make_location(
+            connection, self.world_id, entity_type_code="building", name="Public Archive"
         )
-        self.gated_knowledge_id = make_knowledge_item(
+        self.lore_knowledge_id = make_knowledge_item(
             connection,
             self.world_id,
-            statement="The vault is concealed behind a false wall.",
-            subject_entity_id=self.gated_id,
+            statement="The archive keeps records dating back three centuries.",
+            subject_entity_id=self.lore_location_id,
         )
 
-        # Itself ungated (always visible), but its own parent (gated_id) is
-        # discovery-gated — the negative-control breadcrumb case.
-        self.gated_child_id = make_location(
+        # A second, otherwise-visible location whose one associated claim
+        # *has* been discovered — by a party wholly unrelated to any user
+        # in this fixture. Regression coverage: a location must not be
+        # treated any differently (more or less visible) because someone,
+        # somewhere, discovered an unrelated claim naming it — visibility
+        # here no longer depends on knowledge/discovery state at all.
+        self.sibling_location_id = make_location(
+            connection, self.world_id, entity_type_code="building", name="Old Chapel"
+        )
+        self.sibling_knowledge_id = make_knowledge_item(
             connection,
             self.world_id,
-            entity_type_code="building",
-            name="Vault Annex",
-            parent_location_id=self.gated_id,
+            statement="A minor rumor about the old chapel's bell.",
+            subject_entity_id=self.sibling_location_id,
+        )
+        self.discovery_party_id = make_party(connection, self.world_id, name="Passerby Party")
+        make_party_discovery(
+            connection,
+            self.timeline_id,
+            self.sibling_knowledge_id,
+            party_id=self.discovery_party_id,
         )
 
         # Always visible by default; a resource-grant deny targeting it is
         # created ad hoc by the one test that needs it.
         self.denied_id = make_location(
             connection, self.world_id, entity_type_code="region", name="Forbidden Marches"
+        )
+
+        # A parent whose own resource-grant deny is created ad hoc; its
+        # child is never itself denied — proves the deny blanks the
+        # breadcrumb without affecting the child's own presence.
+        self.denied_parent_id = make_location(
+            connection, self.world_id, entity_type_code="settlement", name="Hidden Settlement"
+        )
+        self.denied_parent_child_id = make_location(
+            connection,
+            self.world_id,
+            entity_type_code="building",
+            name="Watchtower",
+            parent_location_id=self.denied_parent_id,
         )
 
         # Identically-named pair, isolated by a unique entity_type/name for
@@ -136,20 +148,14 @@ class Fixture:
             connection, self.world_id, entity_type_code="district", name="Twin Peak"
         )
 
-        # Three same-type locations, alphabetically ordered, the middle one
-        # discovery-gated and undiscovered — proves exclusion happens
-        # before LIMIT is applied, not after.
+        # Three same-type locations, alphabetically ordered; the middle one
+        # is denied ad hoc by the pre-pagination-exclusion test — proves
+        # exclusion happens before LIMIT is applied, not after.
         self.zone_a_id = make_location(
             connection, self.world_id, entity_type_code="nation", name="Zone A"
         )
         self.zone_b_id = make_location(
             connection, self.world_id, entity_type_code="nation", name="Zone B"
-        )
-        make_knowledge_item(
-            connection,
-            self.world_id,
-            statement="Zone B is warded from view.",
-            subject_entity_id=self.zone_b_id,
         )
         self.zone_c_id = make_location(
             connection, self.world_id, entity_type_code="nation", name="Zone C"
@@ -161,12 +167,12 @@ class Fixture:
         canon_edit_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
-        view_knowledge_capability_id = lookup_id(
-            connection, "security", "capabilities", "capability_id", "character.view_knowledge"
-        )
         self.view_capability_id = view_capability_id
         self.canon_edit_capability_id = canon_edit_id
 
+        # Holds canon.edit in addition to campaign.view — used to prove
+        # that capability confers no special location visibility any more
+        # (the corrected rule has no GM/canonical-truth escape hatch left).
         self.gm_user_id = make_user(connection, "Location List GM")
         gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
         self.gm_membership_id = gm_membership_id
@@ -188,33 +194,6 @@ class Fixture:
         make_role_capability(connection, player_role_id, view_capability_id)
         make_membership_role(connection, player_membership_id, player_role_id)
 
-        # party_id: the player's authorized perspective (character_id is a
-        # current member, and player_user holds character.view_knowledge
-        # for it via a real relationship — the same resource-scoped shape
-        # resolve_party_perspective() requires). Discovers gated_id only —
-        # zone_b_id stays undiscovered by this party, proving filtering is
-        # per location, not an all-or-nothing party flag.
-        self.party_id = make_party(connection, self.world_id, name="The Company")
-        make_campaign_party(connection, self.campaign_id, self.party_id)
-        self.character_id = make_character(connection, self.world_id, name="Aria")
-        make_party_membership(
-            connection, self.timeline_id, self.party_id, self.character_id, self.world_time_id
-        )
-        self.relationship_type_id = make_character_relationship_type(connection)
-        make_relationship_type_capability(
-            connection, self.relationship_type_id, view_knowledge_capability_id
-        )
-        make_membership_character_relationship(
-            connection,
-            player_membership_id,
-            self.character_id,
-            self.relationship_type_id,
-            timeline_id=self.timeline_id,
-        )
-        make_party_discovery(
-            connection, self.timeline_id, self.gated_knowledge_id, party_id=self.party_id
-        )
-
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
         self.capless_user_id = make_user(connection, "Location List Capless Member")
@@ -232,16 +211,6 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         w = fixture.world_id
-        cleanup.execute(
-            text("""
-                DELETE FROM security.membership_character_relationships
-                WHERE campaign_membership_id IN (
-                    SELECT campaign_membership_id FROM security.campaign_memberships
-                    WHERE campaign_id = :c
-                )
-            """),
-            {"c": fixture.campaign_id},
-        )
         cleanup.execute(
             text("""
                 DELETE FROM security.membership_roles WHERE role_id IN (
@@ -262,7 +231,7 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             text("DELETE FROM security.roles WHERE campaign_id = :c"), {"c": fixture.campaign_id}
         )
         # security.resource_grants is created ad hoc by the resource-grant
-        # regression test below, never by the shared Fixture itself —
+        # regression tests below, never by the shared Fixture itself —
         # cleaned up here, scoped by campaign_id, before the
         # campaign_memberships row it references is removed.
         cleanup.execute(
@@ -284,14 +253,6 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             {"w": w},
         )
         cleanup.execute(
-            text("DELETE FROM campaign.party_memberships WHERE timeline_id = :t"),
-            {"t": fixture.timeline_id},
-        )
-        cleanup.execute(
-            text("DELETE FROM campaign.campaign_parties WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
-        )
-        cleanup.execute(
             text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"),
             {"c": fixture.campaign_id},
         )
@@ -299,23 +260,6 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         cleanup.execute(text("DELETE FROM campaign.timelines WHERE world_id = :w"), {"w": w})
         cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": w})
         cleanup.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": w})
-        # security.character_relationship_types is a global lookup table,
-        # not scoped by world — deleted here by id, after the
-        # membership_character_relationships row referencing it above.
-        cleanup.execute(
-            text(
-                "DELETE FROM security.character_relationship_type_capabilities "
-                "WHERE character_relationship_type_id = :rt"
-            ),
-            {"rt": fixture.relationship_type_id},
-        )
-        cleanup.execute(
-            text(
-                "DELETE FROM security.character_relationship_types "
-                "WHERE character_relationship_type_id = :rt"
-            ),
-            {"rt": fixture.relationship_type_id},
-        )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {
@@ -344,10 +288,6 @@ def _list_url(f: Fixture) -> str:
     return f"/campaigns/{f.campaign_id}/locations"
 
 
-def _player_perspective_params(f: Fixture) -> dict[str, str]:
-    return {"character_id": str(f.character_id), "party_id": str(f.party_id)}
-
-
 # ---------------------------------------------------------------------------
 # Access control
 # ---------------------------------------------------------------------------
@@ -374,10 +314,10 @@ def test_a_member_without_campaign_view_gets_forbidden(
 # ---------------------------------------------------------------------------
 
 
-def test_a_gm_sees_ungated_locations(
+def test_a_member_sees_ordinary_locations(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
-    with client_factory(f.gm_user_id) as client:
+    with client_factory(f.player_user_id) as client:
         response = client.get(_list_url(f))
     assert response.status_code == 200, response.text
     location_ids = {item["location_id"] for item in response.json()["items"]}
@@ -393,6 +333,28 @@ def test_a_legitimate_empty_search_returns_an_empty_successful_response(
     body = response.json()
     assert body["items"] == []
     assert body["next_cursor"] is None
+
+
+# ---------------------------------------------------------------------------
+# A canon.edit holder gets no special visibility (the corrected rule has no
+# GM/canonical-truth escape hatch left — see dnd_ai.queries.location's own
+# docstring)
+# ---------------------------------------------------------------------------
+
+
+def test_a_canon_edit_holder_and_a_plain_campaign_view_member_see_the_same_locations(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        gm_response = client.get(_list_url(f), params={"entity_type": "building"})
+    with client_factory(f.player_user_id) as client:
+        player_response = client.get(_list_url(f), params={"entity_type": "building"})
+    assert gm_response.status_code == 200, gm_response.text
+    assert player_response.status_code == 200, player_response.text
+    gm_ids = {item["location_id"] for item in gm_response.json()["items"]}
+    player_ids = {item["location_id"] for item in player_response.json()["items"]}
+    assert gm_ids == player_ids
+    assert {str(f.lore_location_id), str(f.sibling_location_id)} <= gm_ids
 
 
 # ---------------------------------------------------------------------------
@@ -465,20 +427,27 @@ def test_pagination_across_tied_names_is_deterministic_with_no_gaps_or_duplicate
 # ---------------------------------------------------------------------------
 
 
-def test_a_discovery_gated_undiscovered_location_does_not_consume_a_page_slot(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+def test_a_denied_location_does_not_consume_a_page_slot(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """Zone A/B/C are alphabetically ordered; Zone B is discovery-gated and
-    undiscovered by f.player_user_id's party. With limit=2, a buggy
-    implementation that filtered *after* paging would return only Zone A
-    (Zone B consuming the second slot, then dropped) or leak Zone B
-    entirely; the correct behavior returns both truly-accessible items and
-    reports no further page."""
-    with client_factory(f.player_user_id) as client:
-        response = client.get(
-            _list_url(f),
-            params={"entity_type": "nation", "limit": 2, **_player_perspective_params(f)},
+    """Zone A/B/C are alphabetically ordered; Zone B is denied for the
+    player's own membership only. With limit=2, a buggy implementation
+    that filtered *after* paging would return only Zone A (Zone B
+    consuming the second slot, then dropped) or leak Zone B entirely; the
+    correct behavior returns both truly-accessible items and reports no
+    further page."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.zone_b_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
         )
+
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_list_url(f), params={"entity_type": "nation", "limit": 2})
     assert response.status_code == 200, response.text
     body = response.json()
     assert [item["location_id"] for item in body["items"]] == [str(f.zone_a_id), str(f.zone_c_id)]
@@ -504,9 +473,7 @@ def test_a_targeted_campaign_view_deny_hides_the_location_for_that_member_only(
         )
 
     with client_factory(f.player_user_id) as client:
-        denied_response = client.get(
-            _list_url(f), params={"entity_type": "region", **_player_perspective_params(f)}
-        )
+        denied_response = client.get(_list_url(f), params={"entity_type": "region"})
     with client_factory(f.gm_user_id) as client:
         gm_response = client.get(_list_url(f), params={"entity_type": "region"})
 
@@ -517,45 +484,35 @@ def test_a_targeted_campaign_view_deny_hides_the_location_for_that_member_only(
 
 
 # ---------------------------------------------------------------------------
-# Non-GM discovery/perspective filtering vs. GM canonical visibility
+# Corrected visibility rule: knowledge/discovery state never gates a
+# location (see dnd_ai.queries.location's own docstring for the removed,
+# unsound inference this replaces)
 # ---------------------------------------------------------------------------
 
 
-def test_a_non_gm_without_a_perspective_never_sees_a_gated_location(
+def test_undiscovered_lore_about_a_visible_location_does_not_hide_it(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
-    """gated_child_id shares the same entity_type but is itself ungated, so
-    it still appears — only gated_id (discovery-gated, undiscovered by
-    this caller) must be absent."""
     with client_factory(f.player_user_id) as client:
         response = client.get(_list_url(f), params={"entity_type": "building"})
     assert response.status_code == 200, response.text
     location_ids = {item["location_id"] for item in response.json()["items"]}
-    assert str(f.gated_id) not in location_ids
-    assert str(f.gated_child_id) in location_ids
+    assert str(f.lore_location_id) in location_ids
 
 
-def test_a_non_gm_with_an_authorized_party_that_discovered_it_sees_the_gated_location(
+def test_a_locations_visibility_is_unaffected_by_an_unrelated_partys_discovery(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
+    """sibling_location_id's one associated claim has been discovered by a
+    party with no relationship whatsoever to the requesting user; it must
+    appear exactly like lore_location_id (whose claim is undiscovered) —
+    neither location's presence depends on knowledge/discovery state at
+    all any more."""
     with client_factory(f.player_user_id) as client:
-        response = client.get(
-            _list_url(f),
-            params={"entity_type": "building", **_player_perspective_params(f)},
-        )
-    assert response.status_code == 200, response.text
-    location_ids = {item["location_id"] for item in response.json()["items"]}
-    assert str(f.gated_id) in location_ids
-
-
-def test_a_gm_sees_the_gated_location_with_no_discovery_at_all(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
-) -> None:
-    with client_factory(f.gm_user_id) as client:
         response = client.get(_list_url(f), params={"entity_type": "building"})
     assert response.status_code == 200, response.text
     location_ids = {item["location_id"] for item in response.json()["items"]}
-    assert {str(f.gated_id), str(f.gated_child_id)} <= location_ids
+    assert {str(f.lore_location_id), str(f.sibling_location_id)} <= location_ids
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +520,7 @@ def test_a_gm_sees_the_gated_location_with_no_discovery_at_all(
 # ---------------------------------------------------------------------------
 
 
-def test_a_gm_sees_the_visible_parent_in_the_breadcrumb(
+def test_a_member_sees_the_visible_parent_in_the_breadcrumb(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     with client_factory(f.gm_user_id) as client:
@@ -574,29 +531,40 @@ def test_a_gm_sees_the_visible_parent_in_the_breadcrumb(
     assert item["parent_name"] == "Shadowfen Dungeon"
 
 
-def test_a_non_gm_never_sees_an_inaccessible_parent_even_for_a_visible_child(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+def test_a_denied_parent_is_withheld_from_the_breadcrumb_for_that_member_only(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """gated_child_id is itself ungated (always visible), but its parent
-    (gated_id) is discovery-gated and undiscovered by this caller — the
-    breadcrumb fields must be null, not the parent's real id/name."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.denied_parent_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+
     with client_factory(f.player_user_id) as client:
-        response = client.get(_list_url(f), params={"entity_type": "building"})
-    assert response.status_code == 200, response.text
-    item = next(i for i in response.json()["items"] if i["location_id"] == str(f.gated_child_id))
-    assert item["parent_location_id"] is None
-    assert item["parent_name"] is None
-
-
-def test_a_gm_sees_the_same_childs_parent_once_it_is_canonically_authorized(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
-) -> None:
+        denied_response = client.get(_list_url(f), params={"entity_type": "building"})
     with client_factory(f.gm_user_id) as client:
-        response = client.get(_list_url(f), params={"entity_type": "building"})
-    assert response.status_code == 200, response.text
-    item = next(i for i in response.json()["items"] if i["location_id"] == str(f.gated_child_id))
-    assert item["parent_location_id"] == str(f.gated_id)
-    assert item["parent_name"] == "Hidden Vault"
+        gm_response = client.get(_list_url(f), params={"entity_type": "building"})
+
+    assert denied_response.status_code == 200, denied_response.text
+    assert gm_response.status_code == 200, gm_response.text
+
+    denied_item = next(
+        i
+        for i in denied_response.json()["items"]
+        if i["location_id"] == str(f.denied_parent_child_id)
+    )
+    assert denied_item["parent_location_id"] is None
+    assert denied_item["parent_name"] is None
+
+    gm_item = next(
+        i for i in gm_response.json()["items"] if i["location_id"] == str(f.denied_parent_child_id)
+    )
+    assert gm_item["parent_location_id"] == str(f.denied_parent_id)
+    assert gm_item["parent_name"] == "Hidden Settlement"
 
 
 # ---------------------------------------------------------------------------

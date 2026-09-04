@@ -13,23 +13,27 @@ Authorization: requires the `campaign.view` role capability in the target
 campaign (`dnd_ai.api.access.require_campaign_capability`), the same base
 gate `dnd_ai.api.dungeon`/`.characters`/`.quests`/`.sessions` already use.
 Re-resolved fresh on every request, like every other route built on
-`require_campaign_capability`. Beyond that baseline, three further layers
-apply per row (see `dnd_ai.queries.location`'s own docstring for the full
-precedence): a per-location `campaign.view` resource-grant deny excludes
-it outright; a caller canonical-truth-authorized for a given location (a
-baseline `canon.edit` holder not specifically denied it, or one
-specifically granted `canon.edit` for it) sees it regardless of discovery;
-otherwise a location gated by a `knowledge.knowledge_items` row naming it
-(`subject_entity_id`) is included only once the caller's authorized party
-has discovered it. A caller holding baseline `canon.edit` (a GM) never
-resolves a party perspective at all — the same "GM sees canonical truth,
-not one party's subjective view" rule `dnd_ai.api.quests`/`.dungeon`
-already apply, kept consistent here so a GM is never required to hold a
-`character.view_knowledge` relationship just to browse. `character_id`/
-`party_id` are optional query parameters authorized through `dnd_ai.api.
-access.resolve_party_perspective`, identical to every other party-scoped
-read route in this package — a caller-supplied `party_id` is never trusted
-on its own, matching that function's own docstring.
+`require_campaign_capability`. Beyond that campaign-wide baseline, exactly
+one further override applies per row (see `dnd_ai.queries.location`'s own
+docstring for the full rationale): a per-location `campaign.view`
+resource-grant deny excludes it outright even for an otherwise-authorized
+caller.
+
+Corrected design note: an earlier version of this route additionally
+accepted `character_id`/`party_id` query parameters and used
+`dnd_ai.api.access.resolve_party_perspective` plus a `canon.edit`-vs-
+discovery split to gate visibility — layered on an unsound inference in
+`dnd_ai.queries.location` that the mere existence of a `knowledge.
+knowledge_items` row naming a location proved the location itself was
+hidden (see that module's own docstring for the full account of the
+defect and why it was removed). With that inference gone, there is
+nothing left in this endpoint for a viewing perspective to filter by, so
+`character_id`/`party_id` and the `canon.edit` check were removed too,
+rather than kept as accepted-but-inert parameters. If a real, schema-backed
+location discoverability mechanism is introduced later (docs/
+PHASE13D_WORLD_LOCATION_BROWSE.md §3/§9), perspective resolution belongs
+back here at that point — reusing `resolve_party_perspective` exactly as
+`dnd_ai.api.quests`/`.dungeon` already do, not a new implementation.
 
 Pagination: deterministic keyset pagination over `(lower(canonical_name),
 location_id)`, never offset-based — see `dnd_ai.queries.location`'s own
@@ -61,18 +65,16 @@ from dnd_ai.queries.location import (
 )
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability, resolve_party_perspective
+from .access import require_campaign_capability
 from .deps import get_connection
 
 router = APIRouter(tags=["locations"])
 
-# The base gate every other read endpoint in this package uses.
+# The base gate every other read endpoint in this package uses. Also the
+# only capability this endpoint's per-row visibility override is keyed on
+# — see this module's own docstring for why no second (canon.edit) layer
+# remains here.
 _LOCATION_VIEW_CAPABILITY = "campaign.view"
-
-# A caller additionally holding this (baseline, or per-location via a
-# resource grant) sees canonical truth regardless of discovery — see this
-# module's own docstring and dnd_ai.queries.location's precedence rule.
-_LOCATION_MANAGE_CAPABILITY = "canon.edit"
 
 
 # ---------------------------------------------------------------------------
@@ -112,15 +114,13 @@ class LocationListResponse(BaseModel):
     status_code=200,
 )
 def list_locations_endpoint(
-    campaign_id: uuid.UUID,
+    campaign_id: uuid.UUID,  # noqa: ARG001 — binds the URL path; require_campaign_capability's dependency reads it via FastAPI's path-parameter resolution
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_LOCATION_VIEW_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
     entity_type: str | None = None,
     q: str | None = None,
-    character_id: uuid.UUID | None = None,
-    party_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = DEFAULT_PAGE_SIZE,
 ) -> LocationListResponse:
@@ -132,21 +132,6 @@ def list_locations_endpoint(
     # this module's own docstring.
     after = None if cursor is None else decode_location_cursor(cursor)
 
-    # A caller holding baseline canon.edit (a GM) never resolves a party
-    # perspective — see this module's own docstring.
-    is_gm = access.has_capability(_LOCATION_MANAGE_CAPABILITY)
-    authorized_party_id = (
-        None
-        if is_gm
-        else resolve_party_perspective(
-            connection,
-            access=access,
-            campaign_id=campaign_id,
-            character_id=character_id,
-            party_id=party_id,
-        )
-    )
-
     # Baseline campaign.view is already established for every row by
     # require_campaign_capability above (uniform across the whole
     # campaign), so only a targeted deny can ever change that outcome for
@@ -155,19 +140,11 @@ def list_locations_endpoint(
     denied_view_entity_ids, _allowed_view_entity_ids = access.resource_grant_targets(
         _LOCATION_VIEW_CAPABILITY, field_name="entity_id"
     )
-    denied_canon_edit_entity_ids, allowed_canon_edit_entity_ids = access.resource_grant_targets(
-        _LOCATION_MANAGE_CAPABILITY, field_name="entity_id"
-    )
 
     page = list_campaign_locations(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
-        timeline_id=access.timeline_id,
-        party_id=authorized_party_id,
-        baseline_canon_edit=is_gm,
         denied_view_entity_ids=denied_view_entity_ids,
-        denied_canon_edit_entity_ids=denied_canon_edit_entity_ids,
-        allowed_canon_edit_entity_ids=allowed_canon_edit_entity_ids,
         entity_type_code=entity_type,
         search_text=q,
         after=after,
