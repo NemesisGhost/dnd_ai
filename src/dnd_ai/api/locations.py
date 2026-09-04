@@ -13,27 +13,34 @@ Authorization: requires the `campaign.view` role capability in the target
 campaign (`dnd_ai.api.access.require_campaign_capability`), the same base
 gate `dnd_ai.api.dungeon`/`.characters`/`.quests`/`.sessions` already use.
 Re-resolved fresh on every request, like every other route built on
-`require_campaign_capability`. Beyond that campaign-wide baseline, exactly
-one further override applies per row (see `dnd_ai.queries.location`'s own
-docstring for the full rationale): a per-location `campaign.view`
-resource-grant deny excludes it outright even for an otherwise-authorized
-caller.
+`require_campaign_capability`. Beyond that campaign-wide baseline, `dnd_ai.
+queries.location`'s own docstring has the full three-part per-row rule
+this route resolves the inputs for: a per-location `campaign.view`
+resource-grant deny; publication/lifecycle status (`core.entities.
+lifecycle_status_id`/`archived_at`, checked unconditionally for every
+caller); and, for authoritativeness (`canon_status_id`), a `canon.edit`
+split — a plain `campaign.view` caller sees only published (`canon`)
+locations, while a caller canonical-truth-authorized for a given location
+(baseline `canon.edit`, or a targeted `canon.edit` resource-grant allow)
+additionally sees their own in-progress definitions there.
 
-Corrected design note: an earlier version of this route additionally
-accepted `character_id`/`party_id` query parameters and used
-`dnd_ai.api.access.resolve_party_perspective` plus a `canon.edit`-vs-
-discovery split to gate visibility — layered on an unsound inference in
-`dnd_ai.queries.location` that the mere existence of a `knowledge.
+Corrected design note: an earlier version of this endpoint selected every
+`world.locations` row in the campaign's world with no regard for
+publication or canon status at all, so a plain `campaign.view` caller
+could enumerate unpublished drafts. A still-earlier version separately
+carried an unsound inference that the mere existence of a `knowledge.
 knowledge_items` row naming a location proved the location itself was
-hidden (see that module's own docstring for the full account of the
-defect and why it was removed). With that inference gone, there is
-nothing left in this endpoint for a viewing perspective to filter by, so
-`character_id`/`party_id` and the `canon.edit` check were removed too,
-rather than kept as accepted-but-inert parameters. If a real, schema-backed
-location discoverability mechanism is introduced later (docs/
-PHASE13D_WORLD_LOCATION_BROWSE.md §3/§9), perspective resolution belongs
-back here at that point — reusing `resolve_party_perspective` exactly as
-`dnd_ai.api.quests`/`.dungeon` already do, not a new implementation.
+hidden (`dnd_ai.queries.location`'s own docstring has the full account of
+both defects). The current `canon.edit` split reintroduced here is not a
+revival of that removed discovery inference — it is keyed on the real
+`core.entities.canon_status_id` column, not on knowledge-item existence or
+discovery state, and it is layered *underneath* the unconditional
+lifecycle/archival check: nothing a `canon.edit` holder is granted here
+ever exposes an archived, deleted, pending, or inactive location.
+`character_id`/`party_id` remain absent from this endpoint — there is
+still no viewing perspective for them to authorize; see docs/
+PHASE13D_WORLD_LOCATION_BROWSE.md §3/§9 for the tracked follow-up if a
+real, schema-backed location discoverability mechanism is designed later.
 
 Pagination: deterministic keyset pagination over `(lower(canonical_name),
 location_id)`, never offset-based — see `dnd_ai.queries.location`'s own
@@ -70,11 +77,16 @@ from .deps import get_connection
 
 router = APIRouter(tags=["locations"])
 
-# The base gate every other read endpoint in this package uses. Also the
-# only capability this endpoint's per-row visibility override is keyed on
-# — see this module's own docstring for why no second (canon.edit) layer
-# remains here.
+# The base gate every other read endpoint in this package uses.
 _LOCATION_VIEW_CAPABILITY = "campaign.view"
+
+# A caller additionally holding this (baseline, or per-location via a
+# resource grant) sees non-canon (draft/proposed/approved/rejected/
+# superseded/deprecated) definitions too, not only published (`canon`)
+# ones — see this module's own docstring and dnd_ai.queries.location's
+# precedence rule. Never overrides the unconditional lifecycle/archival
+# check.
+_LOCATION_MANAGE_CAPABILITY = "canon.edit"
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +100,10 @@ class LocationListItemResponse(BaseModel):
     entity_type_code: str
     summary: str | None
     # None either because this location has no parent, or because its
-    # parent exists but is not itself authorized for this caller — the two
-    # cases are indistinguishable in the response, matching every other
-    # non-disclosure rule in this codebase (dnd_ai.queries.location's own
-    # docstring, "Parent disclosure").
+    # parent exists but is not itself authorized/published for this
+    # caller — the two cases are indistinguishable in the response,
+    # matching every other non-disclosure rule in this codebase
+    # (dnd_ai.queries.location's own docstring, "Parent disclosure").
     parent_location_id: uuid.UUID | None
     parent_name: str | None
 
@@ -140,11 +152,18 @@ def list_locations_endpoint(
     denied_view_entity_ids, _allowed_view_entity_ids = access.resource_grant_targets(
         _LOCATION_VIEW_CAPABILITY, field_name="entity_id"
     )
+    baseline_canon_edit = access.has_capability(_LOCATION_MANAGE_CAPABILITY)
+    denied_canon_edit_entity_ids, allowed_canon_edit_entity_ids = access.resource_grant_targets(
+        _LOCATION_MANAGE_CAPABILITY, field_name="entity_id"
+    )
 
     page = list_campaign_locations(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
         denied_view_entity_ids=denied_view_entity_ids,
+        baseline_canon_edit=baseline_canon_edit,
+        denied_canon_edit_entity_ids=denied_canon_edit_entity_ids,
+        allowed_canon_edit_entity_ids=allowed_canon_edit_entity_ids,
         entity_type_code=entity_type,
         search_text=q,
         after=after,

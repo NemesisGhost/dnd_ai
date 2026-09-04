@@ -15,71 +15,104 @@ subtype — the same reasoning that keeps `dnd_ai.queries.dungeon.
 get_dungeon_area_view` a single query despite `world.dungeon_areas` being
 only one of several location subtypes.
 
-Audience filtering — deliberately minimal: baseline `campaign.view`
-(already enforced by `dnd_ai.api.access.require_campaign_capability`
-before this function is ever called — every caller reaching
-`list_campaign_locations` already holds it for the whole campaign) plus
-one explicit per-row override, a `campaign.view` resource-grant deny
-(`AccessContext.resource_grant_targets("campaign.view",
-field_name="entity_id")`, resolved by the caller) excluding that location
-outright even for an otherwise campaign-view-authorized caller.
-`entity_id` is a valid `security.resource_grants` target column, and a
-location's own `location_id` *is* its `entity_id` (class-table
-inheritance) — the same `resource_grant_targets`-per-list pattern
-`dnd_ai.queries.session`/`.quest` already established for
-`session_id`/`quest_id`.
+Audience filtering has three parts, all evaluated per row:
 
-Corrected design note (this module previously had a defect here): an
-earlier version additionally treated the mere *existence* of a
-`knowledge.knowledge_items` row naming a location via `subject_entity_id`
-as proof that the location itself was hidden, gating it behind
-`knowledge.party_discoveries` unless the caller held `canon.edit`. That
-inference was unsound and has been removed. A knowledge item is a claim
-*about* its subject — public lore, recorded history, an unconfirmed
-rumor, and a genuine secret are all represented identically as rows in
-that table — and a party's `knowledge.party_discoveries` row for one such
-claim proves only that the claim was learned, never that the subject
-location itself was ever hidden. Under the removed rule, attaching
-ordinary, undiscovered lore to an already-public location would have
-silently hidden that location from every non-GM caller, while a genuinely
-secret location with no knowledge item pointed at it yet (or one whose
-single associated claim happened to already be discovered) would have
-been fully exposed — the opposite of what either case should do.
+1. A per-location `campaign.view` resource-grant deny
+   (`AccessContext.resource_grant_targets("campaign.view",
+   field_name="entity_id")`, resolved by the caller) excludes that
+   location outright, even for an otherwise campaign-view-authorized
+   caller — the same `resource_grant_targets`-per-list pattern
+   `dnd_ai.queries.session`/`.quest` already established for
+   `session_id`/`quest_id`.
+2. Publication/usability status (docs/ENTITY_LIFECYCLE.md §2.1/§2.2):
+   `core.entities.lifecycle_status_id` must resolve to `active` and
+   `archived_at` must be `NULL` — a `pending`, `inactive`, `archived`, or
+   `deleted` record is excluded from this ordinary browse route
+   regardless of who is asking. Archived/deleted records remain available
+   to historical/audit/event-reference queries (§12 of that document);
+   this endpoint is deliberately not one of them, per the task's own
+   "archival/history browsing should remain separate from this ordinary
+   World Explorer route." `lifecycle_status_id` and `archived_at` are two
+   independent columns with no database `CHECK` tying them together
+   (`database/migrations/versions/004_worlds_and_entities.py`), so both
+   are checked rather than trusting either alone to imply the other.
+3. Authoritativeness (docs/ENTITY_LIFECYCLE.md §2.1): a plain
+   `campaign.view` caller sees only `canon_status_id = 'canon'` (published
+   world truth). A caller canonical-truth-authorized for that specific
+   location — baseline `canon.edit` not specifically denied it via a
+   `canon.edit` resource grant, or one specifically granted `canon.edit`
+   for it despite no baseline role — additionally sees any other canon
+   status (`draft`, `proposed`, `approved`, `rejected`, `superseded`,
+   `deprecated`) that already passed check 2 above, i.e. a GM authoring or
+   reviewing world content sees their own in-progress definitions, never
+   an archived/deleted one. This is a real, schema-backed authorization
+   split — `core.entities.canon_status_id`/`canon.edit`, not the removed
+   inference described below — resolved per row via the same deny/allow
+   id sets `dnd_ai.queries.dungeon.get_dungeon_area_view`'s own
+   `include_hidden` argument already uses for a single resource, mirrored
+   here across a list via `resource_grant_targets`.
 
-`world.locations`/`world.dungeon_areas` carry no `is_hidden` (or any other
-authoritative discoverability) column of their own today (docs/
-architecture/DATABASE_MODEL.md §9.3 only documents `is_hidden` on a
-dungeon area's own structural children — features/hazards/interactables/
-connections — never on a location itself), so this endpoint does not
-attempt to reconstruct a substitute for one from an unrelated table.
-CLAUDE.md's own domain rules already forbid the shape that shortcut would
-have needed anyway ("Knowledge is per-knower, never a global boolean. No
-`is_player_known`/`is_discovered` flags on the object itself — discovery
-and belief live in the knowledge domain, scoped to who knows it") —
-`subject_entity_id` is a knowledge-claim-subject reference, not a
-per-object visibility flag, and overloading it as one is exactly the kind
-of collapse that rule exists to prevent. If product requirements come to
-need discovery-gated *locations* themselves (as opposed to a dungeon
-area's structural children, which already have a real, dedicated column
-for this), that is an explicit schema/design decision — a real
-visibility/discoverability column or table introduced through this
-repository's convention-change, documentation, migration, and test
-process (docs/DATABASE_CONVENTIONS.md §37) — not an ad hoc reuse of a
-column that already means something else. See
-docs/PHASE13D_WORLD_LOCATION_BROWSE.md §3/§9 for the tracked follow-up;
-this module and its endpoint do not implement one.
+Corrected design note (this module has had two defects here, both fixed
+before merge):
+
+- An earlier version selected every `world.locations` row in the
+  campaign's world with no regard for `canon_status_id`, `lifecycle_
+  status_id`, or `archived_at` at all — meaning a plain `campaign.view`
+  player could enumerate unpublished drafts (in fact, every location
+  `tests.factories.make_entity()` creates defaults to `canon_status=
+  'draft'`, so the endpoint's own tests were unintentionally proving this
+  hole). Fixed by checks 2 and 3 above. `campaign.view` alone has never
+  meant "every definition in this world is visible" — it is authorization
+  to view the *campaign*, not proof that a given definition has been
+  reviewed or published, and this endpoint must not conflate the two.
+- A still-earlier version additionally treated the mere *existence* of a
+  `knowledge.knowledge_items` row naming a location via `subject_entity_id`
+  as proof that the location itself was hidden, gating it behind
+  `knowledge.party_discoveries` unless the caller held `canon.edit`. That
+  inference was unsound and has been removed, and is not reintroduced by
+  the fix above: check 3's `canon.edit` split is keyed on the real
+  `canon_status_id` column, never on knowledge-item existence or
+  discovery state. A knowledge item is a claim *about* its subject —
+  public lore, recorded history, an unconfirmed rumor, and a genuine
+  secret are all represented identically as rows in that table — and a
+  party's `knowledge.party_discoveries` row for one such claim proves only
+  that the claim was learned, never that the subject location itself was
+  ever hidden. `world.locations`/`world.dungeon_areas` carry no
+  `is_hidden` (or any other authoritative discoverability) column of
+  their own today (docs/architecture/DATABASE_MODEL.md §9.3 only
+  documents `is_hidden` on a dungeon area's own structural children —
+  features/hazards/interactables/connections — never on a location
+  itself), so this endpoint does not attempt to reconstruct a substitute
+  for one from an unrelated table. CLAUDE.md's own domain rules already
+  forbid the shape that shortcut would have needed anyway ("Knowledge is
+  per-knower, never a global boolean. No `is_player_known`/`is_discovered`
+  flags on the object itself — discovery and belief live in the knowledge
+  domain, scoped to who knows it") — `subject_entity_id` is a
+  knowledge-claim-subject reference, not a per-object visibility flag.
+  If product requirements come to need discovery-gated *locations*
+  themselves (as opposed to a dungeon area's structural children, which
+  already have a real, dedicated column for this), that is an explicit
+  schema/design decision — a real visibility/discoverability column or
+  table introduced through this repository's convention-change,
+  documentation, migration, and test process (docs/DATABASE_CONVENTIONS.md
+  §37) — not an ad hoc reuse of a column that already means something
+  else. See docs/PHASE13D_WORLD_LOCATION_BROWSE.md §3/§9 for the tracked
+  follow-up; this module and its endpoint do not implement one.
 
 Parent disclosure: a location's `parent_location_id`/parent name are
 included only when the *parent* independently passes the identical
-per-row deny check — an inaccessible parent is never revealed through this
-endpoint's own breadcrumb field, even for an otherwise-visible child. Only
-one level of parent is resolved (no ancestor chain, no graph-expansion
-API); the portal can request the parent's own row directly (by
-`parent_location_id`, once visible) if it wants to walk further up.
+per-row rule (deny, lifecycle/archival, and canon-status checks alike) —
+an inaccessible, unpublished, or archived parent is never revealed
+through this endpoint's own breadcrumb field, even for an
+otherwise-visible child. Only one level of parent is resolved (no
+ancestor chain, no graph-expansion API); the portal can request the
+parent's own row directly (by `parent_location_id`, once visible) if it
+wants to walk further up.
 
 This module is framework-free and performs no authorization decisions of
-its own: `denied_view_entity_ids` must already be a resolved/authorized
-decision by the time it reaches here, exactly like every other query
+its own: `denied_view_entity_ids`, `baseline_canon_edit`, and the two
+`canon.edit`-targeted id sets must already be resolved/authorized
+decisions by the time they reach here, exactly like every other query
 module in this package.
 """
 
@@ -162,13 +195,36 @@ def decode_location_cursor(cursor: str) -> tuple[str, uuid.UUID]:
 
 
 # Shared by the main row's own visibility and its parent's — see this
-# module's docstring for why this is the whole rule (baseline campaign.view
-# is already guaranteed by the caller before this function runs; only a
-# targeted deny can change that outcome for one specific location).
-# {entity_id_expr} is always an internal SQL literal supplied by
-# list_campaign_locations below, never user-controlled.
+# module's docstring for the full three-part rule. {entity_id_expr} is
+# always an internal SQL literal supplied by list_campaign_locations below,
+# never user-controlled. The publication/canon-status check is a
+# correlated EXISTS against core.entities/core.lifecycle_statuses/core.
+# canon_statuses rather than a direct join against an already-aliased row,
+# so the identical template applies unchanged to both the main row
+# (e.entity_id) and the parent row (pe.entity_id).
 _VISIBLE_PREDICATE = """
-    NOT ({entity_id_expr} = ANY(CAST(:denied_view AS uuid[])))
+    (
+        NOT ({entity_id_expr} = ANY(CAST(:denied_view AS uuid[])))
+        AND EXISTS (
+            SELECT 1
+            FROM core.entities pub
+            JOIN core.lifecycle_statuses pub_ls
+              ON pub_ls.lifecycle_status_id = pub.lifecycle_status_id
+            JOIN core.canon_statuses pub_cs
+              ON pub_cs.canon_status_id = pub.canon_status_id
+            WHERE pub.entity_id = {entity_id_expr}
+              AND pub_ls.code = 'active'
+              AND pub.archived_at IS NULL
+              AND (
+                    pub_cs.code = 'canon'
+                    OR (
+                        (:baseline_canon_edit
+                         AND NOT ({entity_id_expr} = ANY(CAST(:denied_canon_edit AS uuid[]))))
+                        OR {entity_id_expr} = ANY(CAST(:allowed_canon_edit AS uuid[]))
+                    )
+              )
+        )
+    )
 """
 
 _VALID_CODE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -179,13 +235,17 @@ def list_campaign_locations(
     *,
     world_id: uuid.UUID,
     denied_view_entity_ids: frozenset[uuid.UUID],
+    baseline_canon_edit: bool,
+    denied_canon_edit_entity_ids: frozenset[uuid.UUID],
+    allowed_canon_edit_entity_ids: frozenset[uuid.UUID],
     entity_type_code: str | None,
     search_text: str | None,
     after: tuple[str, uuid.UUID] | None,
     limit: int,
 ) -> LocationListPage:
     """Every `world.locations` row in `world_id` visible to the caller (see
-    this module's docstring for the deny-override rule), optionally
+    this module's docstring for the full three-part rule — resource-grant
+    deny, publication/lifecycle status, and canon-status), optionally
     filtered by `entity_type_code` and/or a case-insensitive `search_text`
     substring match against `canonical_name`/`summary`, ordered by
     `(lower(canonical_name), location_id)` ascending and keyset-paginated
@@ -208,12 +268,15 @@ def list_campaign_locations(
     non-disclosure rule).
 
     This function is framework-free and performs no authorization of its
-    own — see this module's docstring for what `denied_view_entity_ids`
+    own — see this module's docstring for what every keyword argument here
     must already be by the time it reaches this function."""
     conditions = ["e.world_id = :world"]
     params: dict[str, object] = {
         "world": world_id,
         "denied_view": list(denied_view_entity_ids),
+        "baseline_canon_edit": baseline_canon_edit,
+        "denied_canon_edit": list(denied_canon_edit_entity_ids),
+        "allowed_canon_edit": list(allowed_canon_edit_entity_ids),
     }
 
     if entity_type_code is not None and _VALID_CODE.match(entity_type_code):

@@ -101,20 +101,38 @@ def make_entity(
     world_id: uuid.UUID,
     entity_type_id: uuid.UUID,
     name: str = "Test Entity",
+    *,
+    canon_status_code: str = "draft",
+    lifecycle_status_code: str = "active",
+    archived_at: datetime | None = None,
 ) -> uuid.UUID:
+    """canon_status_code/lifecycle_status_code default to 'draft'/'active' —
+    an entity is trivial to create but not yet authoritative or reviewed by
+    default (docs/ENTITY_LIFECYCLE.md §2.1/§2.2), matching how a real
+    creation command would leave it absent an explicit publish step. A test
+    exercising publish-only or archival visibility rules must pass the
+    status it actually needs rather than relying on this default — see
+    tests/database/test_api_locations_list.py for the pattern.
+    archived_at is independent of lifecycle_status_code (core.entities has
+    no CHECK tying them together — dnd_ai.queries.location's own docstring
+    treats both as required-consistent signals for the same reason), so a
+    caller exercising the "archived_at set without a matching lifecycle
+    status" edge case may pass one without the other."""
     value = connection.execute(
         text("""
             INSERT INTO core.entities
-                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id)
-            VALUES (:world, :etype, :name, :canon, :lifecycle)
+                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id,
+                 archived_at)
+            VALUES (:world, :etype, :name, :canon, :lifecycle, :archived_at)
             RETURNING entity_id
         """),
         {
             "world": world_id,
             "etype": entity_type_id,
             "name": name,
-            "canon": status_id(connection, "canon_statuses", "draft"),
-            "lifecycle": status_id(connection, "lifecycle_statuses", "active"),
+            "canon": status_id(connection, "canon_statuses", canon_status_code),
+            "lifecycle": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
+            "archived_at": archived_at,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
@@ -939,6 +957,9 @@ def make_location(
     parent_location_id: uuid.UUID | None = None,
     entity_type_code: str = "location",
     name: str = "Test Location",
+    canon_status_code: str = "draft",
+    lifecycle_status_code: str = "active",
+    archived_at: datetime | None = None,
 ) -> uuid.UUID:
     """A core.entities row plus its world.locations row. Returns the shared
     UUID (the location_id, same as the entity_id).
@@ -947,11 +968,25 @@ def make_location(
     'building', 'dungeon', or 'dungeon_area' when the caller also needs to
     insert the corresponding subtype row — core.enforce_entity_subtype()
     rejects that subtype row otherwise.
+
+    canon_status_code/lifecycle_status_code/archived_at forward to
+    make_entity — see that function's own docstring for why the defaults
+    ('draft'/'active'/None) are deliberately not "visible to an ordinary
+    campaign.view caller," and why a visibility test must pass an explicit
+    status rather than rely on them.
     """
     location_type_id = lookup_id(
         connection, "core", "entity_types", "entity_type_id", entity_type_code
     )
-    location_id = make_entity(connection, world_id, location_type_id, name=name)
+    location_id = make_entity(
+        connection,
+        world_id,
+        location_type_id,
+        name=name,
+        canon_status_code=canon_status_code,
+        lifecycle_status_code=lifecycle_status_code,
+        archived_at=archived_at,
+    )
     connection.execute(
         text("""
             INSERT INTO world.locations (location_id, parent_location_id)
@@ -968,6 +1003,8 @@ def make_dungeon(
     *,
     parent_location_id: uuid.UUID | None = None,
     name: str = "Test Dungeon",
+    canon_status_code: str = "draft",
+    lifecycle_status_code: str = "active",
 ) -> uuid.UUID:
     """A location plus its world.dungeons row. Returns the shared UUID."""
     dungeon_id = make_location(
@@ -976,6 +1013,8 @@ def make_dungeon(
         parent_location_id=parent_location_id,
         entity_type_code="dungeon",
         name=name,
+        canon_status_code=canon_status_code,
+        lifecycle_status_code=lifecycle_status_code,
     )
     connection.execute(
         text("INSERT INTO world.dungeons (dungeon_id) VALUES (:d)"), {"d": dungeon_id}
@@ -988,6 +1027,8 @@ def make_dungeon_area(
     dungeon_id: uuid.UUID,
     *,
     name: str = "Test Area",
+    canon_status_code: str = "draft",
+    lifecycle_status_code: str = "active",
 ) -> uuid.UUID:
     """A dungeon area belonging to the given dungeon. Returns the shared UUID.
 
@@ -1002,6 +1043,8 @@ def make_dungeon_area(
         world_id,
         parent_location_id=dungeon_id,
         entity_type_code="dungeon_area",
+        canon_status_code=canon_status_code,
+        lifecycle_status_code=lifecycle_status_code,
         name=name,
     )
     connection.execute(
