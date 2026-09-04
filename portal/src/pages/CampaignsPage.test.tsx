@@ -1,16 +1,10 @@
 import {
-  fireEvent,
   render,
   screen,
   within,
 } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
-import {
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest"
+import { describe, expect, it } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignsPage } from "./CampaignsPage"
 
@@ -33,7 +27,6 @@ describe("CampaignsPage", () => {
             selected_campaign_id: null,
             campaigns: [],
           }}
-          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -60,7 +53,6 @@ describe("CampaignsPage", () => {
       <MemoryRouter>
         <CampaignsPage
           bootstrap={sessionBootstrapFixture}
-          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -85,7 +77,7 @@ describe("CampaignsPage", () => {
     ).toBeInTheDocument()
 
     expect(
-      within(link).getByText("Currently selected"),
+      within(link).getByText("Default campaign"),
     ).toBeInTheDocument()
   })
 
@@ -104,7 +96,6 @@ describe("CampaignsPage", () => {
               },
             ],
           }}
-          onCampaignSelect={() => { }}
         />
       </MemoryRouter>,
     )
@@ -114,36 +105,11 @@ describe("CampaignsPage", () => {
     })
 
     expect(
-      within(link).getByText(
-        "No timeline selected",
-      ),
+      within(link).getByText("No timeline selected"),
     ).toBeInTheDocument()
 
     expect(
-      within(link).queryByText(
-        "Currently selected",
-      ),
+      within(link).queryByText("Default campaign"),
     ).not.toBeInTheDocument()
-  })
-
-  it("refreshes the session when a campaign is selected", () => {
-    const onCampaignSelect = vi.fn()
-
-    render(
-      <MemoryRouter>
-        <CampaignsPage
-          bootstrap={sessionBootstrapFixture}
-          onCampaignSelect={onCampaignSelect}
-        />
-      </MemoryRouter>,
-    )
-
-    const campaignLink = screen.getByRole("link", {
-      name: /Mundivita/,
-    })
-
-    fireEvent.click(campaignLink)
-
-    expect(onCampaignSelect).toHaveBeenCalledTimes(1)
   })
 })

@@ -4,10 +4,11 @@ import type { SessionBootstrap } from "../types/bootstrap"
 
 interface CampaignsPageProps {
   bootstrap: SessionBootstrap
-  onCampaignSelect: () => void
 }
 
-export function CampaignsPage({ bootstrap, onCampaignSelect }: CampaignsPageProps) {
+export function CampaignsPage({
+  bootstrap,
+}: CampaignsPageProps) {
   if (bootstrap.campaigns.length === 0) {
     return (
       <main className="app-main">
@@ -34,16 +35,17 @@ export function CampaignsPage({ bootstrap, onCampaignSelect }: CampaignsPageProp
               <Link
                 className="campaign-selection__link"
                 to={`/app/${campaign.campaign_id}/home`}
-                onClick={onCampaignSelect}
               >
                 <h2>{campaign.campaign_name}</h2>
+
                 <p>
                   {campaign.timeline_name ??
                     "No timeline selected"}
                 </p>
+
                 {campaign.campaign_id ===
                   bootstrap.selected_campaign_id && (
-                    <span>Currently selected</span>
+                    <span>Default campaign</span>
                   )}
               </Link>
             </li>

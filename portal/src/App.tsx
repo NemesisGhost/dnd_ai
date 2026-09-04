@@ -35,11 +35,8 @@ function App() {
           path="/campaigns"
           element={
             <AuthenticatedSessionBoundary>
-              {(bootstrap, reload) => (
-                <CampaignsPage
-                  bootstrap={bootstrap}
-                  onCampaignSelect={reload}
-                />
+              {(bootstrap) => (
+                <CampaignsPage bootstrap={bootstrap} />
               )}
             </AuthenticatedSessionBoundary>
           }

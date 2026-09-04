@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest"
 import App from "./App"
-import { SessionProvider } from "./context/SessionProvider"
+import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
 import {
   useSessionBootstrap,
@@ -40,9 +40,9 @@ beforeEach(() => {
 function renderAppAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <SessionProvider>
+      <RouteSessionProvider>
         <App />
-      </SessionProvider>
+      </RouteSessionProvider>
     </MemoryRouter>,
   )
 }
@@ -107,6 +107,12 @@ describe("portal routing", () => {
         name: "Access",
       }),
     ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Change campaign",
+      }),
+    ).toHaveAttribute("href", "/campaigns")
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {
