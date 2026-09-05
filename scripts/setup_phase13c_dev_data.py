@@ -8,6 +8,26 @@ per timeline), one already-existing local account authorized on both
 campaigns, and two characters selectable as that account's perspective in
 the first campaign.
 
+Also supports the Phase 13D character Current State live-verification
+checkpoint: both characters carry deterministic `campaign.character_state`
+on Phase13C Timeline A (Character A partially hurt with temporary HP,
+exhaustion, and death saves recorded; Character B at a full, all-zero
+baseline), and Character A additionally carries one fixture-owned
+`campaign.character_conditions` row (`poisoned`) and one fixture-owned
+`campaign.character_resources` row (`spell_slot`, 2/3) — see the
+`_CHARACTER_A_STATE`/`_CHARACTER_B_STATE`/`_CONDITION_*`/`_RESOURCE_*`
+constants below. Character B deliberately gets neither, so the portal's
+empty-conditions/empty-resources states are also exercisable. These three
+kinds of row are reconciled (reset to the documented values), not merely
+created-once: a live-testing session against this fixture is expected to
+change them via the real `dnd_ai.commands.character_state` commands (taking
+damage, spending a spell slot, ...), and re-running this script resets
+them back to the documented starting point for the next session — see
+`_ensure_character_state`/`_ensure_character_condition`/
+`_ensure_character_resource` below, and `_Summary.add` for how a
+reconciling update is distinguished from a plain create/reuse in this
+script's own summary output.
+
 Not a general-purpose seeding framework — every name and shape here is
 specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`
 constants below), and nothing about this script generalizes to seeding
@@ -72,6 +92,16 @@ inserted row's shape mirrors tests/factories.py's `make_world`/
 `make_timeline`/`make_character` exactly (schema, required columns,
 lookup-code resolution), not a reinvention of it.
 
+`campaign.character_state`/`.character_conditions`/`.character_resources`
+are also inserted (and, on a later run, reconciled) directly, the same
+"initial development state" reasoning: `dnd_ai.commands.character_state`
+exists, but every command there mutates an *already-tracked* row (it has
+no notion of first establishing one) and would require fabricating a
+narrative event this fixture data was never actually caused by — exactly
+what the task this script supports says not to do. Every inserted/
+reconciled row's shape mirrors tests/factories.py's `make_character_state`/
+`make_character_condition`/`make_character_resource` exactly.
+
 One notable, pre-existing gap this script works around rather than papers
 over: `security.character_relationship_type_capabilities` (the table
 `dnd_ai.domain.access.resolve_access_context`'s own character-capability
@@ -134,6 +164,41 @@ _CREATED_CHANGE_ACTION = "created"
 
 
 @dataclass(frozen=True)
+class _CharacterStateFixture:
+    current_hit_points: int
+    maximum_hit_points: int
+    temporary_hit_points: int
+    exhaustion_level: int
+    death_save_successes: int
+    death_save_failures: int
+
+
+_CHARACTER_A_STATE = _CharacterStateFixture(
+    current_hit_points=6,
+    maximum_hit_points=12,
+    temporary_hit_points=2,
+    exhaustion_level=1,
+    death_save_successes=1,
+    death_save_failures=0,
+)
+_CHARACTER_B_STATE = _CharacterStateFixture(
+    current_hit_points=20,
+    maximum_hit_points=20,
+    temporary_hit_points=0,
+    exhaustion_level=0,
+    death_save_successes=0,
+    death_save_failures=0,
+)
+
+_CONDITION_CODE = "poisoned"
+_CONDITION_SOURCE_DESCRIPTION = "Phase 13D portal development fixture"
+
+_RESOURCE_CODE = "spell_slot"
+_RESOURCE_CURRENT_AMOUNT = 2
+_RESOURCE_MAXIMUM_AMOUNT = 3
+
+
+@dataclass(frozen=True)
 class _UserInfo:
     user_id: uuid.UUID
     display_name: str
@@ -145,8 +210,30 @@ class _UserInfo:
 class _Summary:
     lines: list[str] = field(default_factory=list)
 
-    def add(self, *, created: bool, label: str, record_id: uuid.UUID | str) -> None:
-        verb = "created" if created else "reused (already existed)"
+    def add(
+        self,
+        *,
+        created: bool,
+        label: str,
+        record_id: uuid.UUID | str,
+        changed: bool = False,
+    ) -> None:
+        """`changed` only ever matters when `created` is False: it
+        distinguishes an already-matching row (plain "reused") from one
+        this run just reset back to the fixture's documented values
+        ("reconciled") — see `_ensure_character_state`/
+        `_ensure_character_condition`/`_ensure_character_resource`, the
+        only callers that ever pass it. Every other call site here never
+        reconciles an existing row (it either matches by construction —
+        the fixture's own fixed name/slug — or is left untouched), so
+        omitting `changed` keeps their unchanged "created"/"reused"
+        behavior exactly as before."""
+        if created:
+            verb = "created"
+        elif changed:
+            verb = "reconciled (updated to match fixture)"
+        else:
+            verb = "reused (already existed)"
         self.lines.append(f"  [{verb}] {label}: {record_id}")
 
 
@@ -529,6 +616,284 @@ def _get_or_create_character(
     return entity_id
 
 
+def _ensure_character_state(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_label: str,
+    state: _CharacterStateFixture,
+) -> None:
+    """Create-or-reconcile `campaign.character_state` for `character_id` on
+    `timeline_id`: inserted if absent, reset to `state`'s exact values if
+    present but different (e.g. after a live-testing session adjusted HP
+    via the real commands), left untouched (and reported as "reused") if
+    already matching. Direct insert/update, no narrative event — see this
+    module's own docstring for why that is correct here rather than a gap."""
+    existing = (
+        connection.execute(
+            text("""
+                SELECT current_hit_points, maximum_hit_points, temporary_hit_points,
+                       exhaustion_level, death_save_successes, death_save_failures
+                FROM campaign.character_state
+                WHERE timeline_id = :timeline AND character_id = :character
+            """),
+            {"timeline": timeline_id, "character": character_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+    label = f"character state: {character_label}"
+    params = {
+        "timeline": timeline_id,
+        "character": character_id,
+        "current": state.current_hit_points,
+        "maximum": state.maximum_hit_points,
+        "temporary": state.temporary_hit_points,
+        "exhaustion": state.exhaustion_level,
+        "successes": state.death_save_successes,
+        "failures": state.death_save_failures,
+    }
+
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO campaign.character_state
+                    (timeline_id, character_id, current_hit_points, maximum_hit_points,
+                     temporary_hit_points, exhaustion_level, death_save_successes,
+                     death_save_failures)
+                VALUES (:timeline, :character, :current, :maximum, :temporary, :exhaustion,
+                        :successes, :failures)
+            """),
+            params,
+        )
+        summary.add(created=True, label=label, record_id=character_id)
+        return
+
+    matches = (
+        existing["current_hit_points"] == state.current_hit_points
+        and existing["maximum_hit_points"] == state.maximum_hit_points
+        and existing["temporary_hit_points"] == state.temporary_hit_points
+        and existing["exhaustion_level"] == state.exhaustion_level
+        and existing["death_save_successes"] == state.death_save_successes
+        and existing["death_save_failures"] == state.death_save_failures
+    )
+    if matches:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+
+    connection.execute(
+        text("""
+            UPDATE campaign.character_state
+            SET current_hit_points = :current, maximum_hit_points = :maximum,
+                temporary_hit_points = :temporary, exhaustion_level = :exhaustion,
+                death_save_successes = :successes, death_save_failures = :failures,
+                updated_at = now()
+            WHERE timeline_id = :timeline AND character_id = :character
+        """),
+        params,
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_id)
+
+
+def _resolve_condition_id(
+    connection: Connection, *, ruleset_version_id: uuid.UUID, code: str
+) -> uuid.UUID:
+    """`rules.conditions.code` is unique only per `ruleset_version_id` — an
+    unscoped lookup by code alone could resolve an arbitrary row from an
+    unrelated ruleset, the same reasoning `dnd_ai.commands.character_state`'s
+    own docstring gives for taking `condition_id` rather than a bare code."""
+    condition_id = connection.execute(
+        text(
+            "SELECT condition_id FROM rules.conditions "
+            "WHERE ruleset_version_id = :ruleset_version AND code = :code"
+        ),
+        {"ruleset_version": ruleset_version_id, "code": code},
+    ).scalar()
+    if condition_id is None:
+        raise SystemExit(
+            f"expected an existing rules.conditions row (code={code!r}) for ruleset version "
+            f"{ruleset_version_id} — none found. Seed database/seeds/rules.conditions.yaml "
+            "before running this fixture; this script only reuses existing rules content."
+        )
+    assert isinstance(condition_id, uuid.UUID)
+    return condition_id
+
+
+def _ensure_character_condition(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_label: str,
+    condition_id: uuid.UUID,
+    condition_code: str,
+    source_description: str,
+) -> None:
+    """Create-or-reconcile the single fixture-owned `campaign.
+    character_conditions` row for `character_id`/`condition_id` on
+    `timeline_id` — reset to `source_description` if the row exists with a
+    different one (e.g. removed and reapplied during live testing with a
+    different note), left untouched if already matching. Does not touch any
+    other condition a character may have picked up during live testing —
+    only this fixture's own exact `(timeline_id, character_id,
+    condition_id)` row."""
+    existing = (
+        connection.execute(
+            text("""
+                SELECT source_description FROM campaign.character_conditions
+                WHERE timeline_id = :timeline AND character_id = :character
+                  AND condition_id = :condition
+            """),
+            {"timeline": timeline_id, "character": character_id, "condition": condition_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+    label = f"condition {condition_code!r}: {character_label}"
+
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO campaign.character_conditions
+                    (timeline_id, character_id, condition_id, source_description)
+                VALUES (:timeline, :character, :condition, :source)
+            """),
+            {
+                "timeline": timeline_id,
+                "character": character_id,
+                "condition": condition_id,
+                "source": source_description,
+            },
+        )
+        summary.add(created=True, label=label, record_id=character_id)
+        return
+
+    if existing["source_description"] == source_description:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+
+    connection.execute(
+        text("""
+            UPDATE campaign.character_conditions
+            SET source_description = :source
+            WHERE timeline_id = :timeline AND character_id = :character
+              AND condition_id = :condition
+        """),
+        {
+            "timeline": timeline_id,
+            "character": character_id,
+            "condition": condition_id,
+            "source": source_description,
+        },
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_id)
+
+
+def _resolve_resource_definition_id(
+    connection: Connection, *, ruleset_version_id: uuid.UUID, code: str
+) -> uuid.UUID:
+    """`rules.resource_definitions.code` is unique only per
+    `ruleset_version_id` — the same scoping `_resolve_condition_id` applies,
+    for the same reason."""
+    resource_definition_id = connection.execute(
+        text(
+            "SELECT resource_definition_id FROM rules.resource_definitions "
+            "WHERE ruleset_version_id = :ruleset_version AND code = :code"
+        ),
+        {"ruleset_version": ruleset_version_id, "code": code},
+    ).scalar()
+    if resource_definition_id is None:
+        raise SystemExit(
+            f"expected an existing rules.resource_definitions row (code={code!r}) for ruleset "
+            f"version {ruleset_version_id} — none found. Seed "
+            "database/seeds/rules.resource_definitions.yaml before running this fixture; this "
+            "script only reuses existing rules content."
+        )
+    assert isinstance(resource_definition_id, uuid.UUID)
+    return resource_definition_id
+
+
+def _ensure_character_resource(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_label: str,
+    resource_definition_id: uuid.UUID,
+    resource_code: str,
+    current_amount: int,
+    maximum_amount: int,
+) -> None:
+    """Create-or-reconcile the single fixture-owned `campaign.
+    character_resources` row for `character_id`/`resource_definition_id` on
+    `timeline_id` — reset to `current_amount`/`maximum_amount` if the row
+    exists with different amounts (e.g. a spell slot spent during live
+    testing), left untouched if already matching."""
+    existing = (
+        connection.execute(
+            text("""
+                SELECT current_amount, maximum_amount FROM campaign.character_resources
+                WHERE timeline_id = :timeline AND character_id = :character
+                  AND resource_definition_id = :resource
+            """),
+            {
+                "timeline": timeline_id,
+                "character": character_id,
+                "resource": resource_definition_id,
+            },
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+    label = f"resource {resource_code!r}: {character_label}"
+    params = {
+        "timeline": timeline_id,
+        "character": character_id,
+        "resource": resource_definition_id,
+        "current": current_amount,
+        "maximum": maximum_amount,
+    }
+
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO campaign.character_resources
+                    (timeline_id, character_id, resource_definition_id, current_amount,
+                     maximum_amount)
+                VALUES (:timeline, :character, :resource, :current, :maximum)
+            """),
+            params,
+        )
+        summary.add(created=True, label=label, record_id=character_id)
+        return
+
+    matches = (
+        existing["current_amount"] == current_amount
+        and existing["maximum_amount"] == maximum_amount
+    )
+    if matches:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+
+    connection.execute(
+        text("""
+            UPDATE campaign.character_resources
+            SET current_amount = :current, maximum_amount = :maximum, updated_at = now()
+            WHERE timeline_id = :timeline AND character_id = :character
+              AND resource_definition_id = :resource
+        """),
+        params,
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_id)
+
+
 def _ensure_character_relationship(
     connection: Connection,
     summary: _Summary,
@@ -675,6 +1040,52 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         character_label=_CHARACTER_B_NAME,
         world_id=world_id,
         actor_user_id=user.user_id,
+    )
+
+    _ensure_character_state(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        state=_CHARACTER_A_STATE,
+    )
+    _ensure_character_state(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        character_id=character_b_id,
+        character_label=_CHARACTER_B_NAME,
+        state=_CHARACTER_B_STATE,
+    )
+
+    condition_id = _resolve_condition_id(
+        connection, ruleset_version_id=ruleset_version_id, code=_CONDITION_CODE
+    )
+    _ensure_character_condition(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        condition_id=condition_id,
+        condition_code=_CONDITION_CODE,
+        source_description=_CONDITION_SOURCE_DESCRIPTION,
+    )
+
+    resource_definition_id = _resolve_resource_definition_id(
+        connection, ruleset_version_id=ruleset_version_id, code=_RESOURCE_CODE
+    )
+    _ensure_character_resource(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        resource_definition_id=resource_definition_id,
+        resource_code=_RESOURCE_CODE,
+        current_amount=_RESOURCE_CURRENT_AMOUNT,
+        maximum_amount=_RESOURCE_MAXIMUM_AMOUNT,
     )
 
     return summary
