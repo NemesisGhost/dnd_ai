@@ -56,6 +56,29 @@ hidden mechanical properties regardless of identification state — see
 `dnd_ai.queries.inventory`'s own docstring for why identification is
 otherwise resolved only from the holder's own perspective, never an
 arbitrary caller-supplied knower.
+
+Phase 13D added a third sub-resource:
+`GET /campaigns/{campaign_id}/characters/{character_id}/sheet`
+(`dnd_ai.queries.character_sheet.get_character_sheet_view`). This closes the
+documented backend gap (docs/PHASE13D_BACKEND_READINESS.md) blocking the
+portal's Character workspace Sheet panel (docs/UI_DESIGN.md §5.5): the
+existing `GET .../characters/{character_id}` response deliberately stays
+Overview/Current-State-shaped (unchanged by this addition, for backward
+compatibility, and because it is also part of the bounded Foundry-facing
+surface — see `_ENCOUNTER_READ_SCOPE` above) rather than growing a large
+nested mechanical-build payload onto it. The sheet route requires the same
+*full* character-view tier `get_character_inventory_endpoint` requires
+(`resolve_character_view_tier` returning `False` is insufficient here too,
+for the identical reason: a full mechanical build is not summary-shaped
+data), reusing `resolve_character_view_tier` rather than any new
+authorization path, and — like inventory — does not opt into Foundry
+access (`allow_foundry_access` omitted): it is portal-only until a
+documented requirement demands otherwise. See `dnd_ai.queries.
+character_sheet`'s own docstring for the active-build resolution rule
+(`campaign.character_state.character_build_id` only, never a caller
+input, the newest build, or a guess) and `docs/
+PHASE13D_CHARACTER_SHEET_BACKEND.md` for the full response contract, raw-
+vs-derived field policy, and known data-model limitations.
 """
 
 import uuid
@@ -67,6 +90,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.character_sheet import get_character_sheet_view
 from dnd_ai.queries.inventory import get_inventory_view
 
 from ._shared import timeline_world_id
@@ -148,6 +172,149 @@ class InventoryItemResponse(BaseModel):
     # None unless identification_level allows it (or the caller holds
     # canon.edit) — see dnd_ai.queries.inventory's own docstring.
     properties: dict[str, Any] | None
+
+
+class CharacterSheetClassLevelResponse(BaseModel):
+    class_id: uuid.UUID
+    class_code: str
+    class_display_name: str
+    level: int
+    hit_die: int
+    subclass_id: uuid.UUID | None
+    subclass_code: str | None
+    subclass_display_name: str | None
+
+
+class CharacterSheetAbilityScoreResponse(BaseModel):
+    ability_id: uuid.UUID
+    ability_code: str
+    ability_display_name: str
+    score: int
+    # None only for an unsupported (non-dnd5e) ruleset — see dnd_ai.queries.
+    # character_sheet's own docstring.
+    modifier: int | None
+
+
+class CharacterSheetSkillResponse(BaseModel):
+    skill_id: uuid.UUID
+    code: str
+    display_name: str
+    governing_ability_code: str
+    # None if the build has no character_ability_scores row for the
+    # governing ability, or the ruleset is unsupported.
+    governing_ability_modifier: int | None
+    is_proficient: bool
+    is_expertise: bool
+    bonus: int | None
+    passive_score: int | None
+
+
+class CharacterSheetSavingThrowResponse(BaseModel):
+    ability_id: uuid.UUID
+    ability_code: str
+    ability_display_name: str
+    ability_modifier: int | None
+    is_proficient: bool
+    bonus: int | None
+
+
+class CharacterSheetProficiencyResponse(BaseModel):
+    proficiency_type_code: str
+    proficiency_type_display_name: str
+    target_label: str
+    is_expertise: bool
+
+
+class CharacterSheetFeatureResponse(BaseModel):
+    feature_id: uuid.UUID
+    code: str
+    display_name: str
+    description: str | None
+    granted_at_level: int | None
+    # "class" | "subclass" | "species" | "other" — see dnd_ai.queries.
+    # character_sheet.FeatureView's own docstring.
+    source_category: str
+
+
+class CharacterSheetSpellResponse(BaseModel):
+    spell_id: uuid.UUID
+    code: str
+    display_name: str
+    level: int
+    school: str | None
+    casting_time: str | None
+    range: str | None
+    duration: str | None
+    description: str | None
+    damage_type_code: str | None
+    damage_type_display_name: str | None
+    # Independent associations — never require is_prepared to imply
+    # is_known (see dnd_ai.queries.character_sheet's own docstring).
+    is_known: bool
+    is_prepared: bool
+
+
+class CharacterSheetSpellcastingProfileResponse(BaseModel):
+    character_spellcasting_profile_id: uuid.UUID
+    class_id: uuid.UUID | None
+    class_code: str | None
+    class_display_name: str | None
+    spellcasting_ability_id: uuid.UUID
+    spellcasting_ability_code: str
+    spellcasting_ability_display_name: str
+    spellcasting_ability_modifier: int | None
+    spell_attack_bonus: int | None
+    spell_save_dc: int | None
+    spells: list[CharacterSheetSpellResponse]
+
+
+class CharacterSheetLanguageResponse(BaseModel):
+    language_id: uuid.UUID
+    code: str
+    display_name: str
+
+
+class CharacterSheetSenseResponse(BaseModel):
+    sense_type: str
+    range_feet: int
+
+
+class CharacterSheetMovementResponse(BaseModel):
+    movement_type: str
+    speed_feet: int
+
+
+class CharacterSheetResponse(BaseModel):
+    character_id: uuid.UUID
+    name: str
+    species_code: str
+    species_display_name: str
+    size_category: str
+    # None/empty below when the character has no active build selected on
+    # this timeline (campaign.character_state.character_build_id IS NULL)
+    # — a legitimate, successful "no active build" result, not an error.
+    # See dnd_ai.queries.character_sheet's own docstring.
+    character_build_id: uuid.UUID | None
+    build_label: str | None
+    ruleset_code: str | None
+    ruleset_display_name: str | None
+    ruleset_version_id: uuid.UUID | None
+    ruleset_version_label: str | None
+    total_level: int
+    proficiency_bonus: int | None
+    class_levels: list[CharacterSheetClassLevelResponse]
+    ability_scores: list[CharacterSheetAbilityScoreResponse]
+    skills: list[CharacterSheetSkillResponse]
+    saving_throws: list[CharacterSheetSavingThrowResponse]
+    other_proficiencies: list[CharacterSheetProficiencyResponse]
+    features: list[CharacterSheetFeatureResponse]
+    spellcasting_profiles: list[CharacterSheetSpellcastingProfileResponse]
+    # Character-level, not build-owned — populated regardless of whether an
+    # active build exists. See dnd_ai.queries.character_sheet's own
+    # docstring.
+    languages: list[CharacterSheetLanguageResponse]
+    senses: list[CharacterSheetSenseResponse]
+    movements: list[CharacterSheetMovementResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -286,3 +453,164 @@ def get_character_inventory_endpoint(
         )
         for item in items
     ]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/characters/{character_id}/sheet",
+    response_model=CharacterSheetResponse,
+    status_code=200,
+)
+def get_character_sheet_endpoint(
+    character_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_CHARACTER_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> CharacterSheetResponse:
+    if not resolve_character_view_tier(access, character_id=character_id):
+        # The summary tier alone is not enough to see the mechanical sheet
+        # — see this module's docstring. Raised identically to "neither
+        # capability held," which resolve_character_view_tier itself
+        # already raises for that case.
+        raise CharacterViewNotAuthorizedError(
+            f"user {access.user_id} holds only the summary tier for character {character_id}, "
+            "insufficient for the sheet"
+        )
+
+    view = get_character_sheet_view(
+        connection,
+        character_id=character_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+    )
+
+    return CharacterSheetResponse(
+        character_id=view.character_id,
+        name=view.name,
+        species_code=view.species_code,
+        species_display_name=view.species_display_name,
+        size_category=view.size_category,
+        character_build_id=view.character_build_id,
+        build_label=view.build_label,
+        ruleset_code=view.ruleset_code,
+        ruleset_display_name=view.ruleset_display_name,
+        ruleset_version_id=view.ruleset_version_id,
+        ruleset_version_label=view.ruleset_version_label,
+        total_level=view.total_level,
+        proficiency_bonus=view.proficiency_bonus,
+        class_levels=[
+            CharacterSheetClassLevelResponse(
+                class_id=c.class_id,
+                class_code=c.class_code,
+                class_display_name=c.class_display_name,
+                level=c.level,
+                hit_die=c.hit_die,
+                subclass_id=c.subclass_id,
+                subclass_code=c.subclass_code,
+                subclass_display_name=c.subclass_display_name,
+            )
+            for c in view.class_levels
+        ],
+        ability_scores=[
+            CharacterSheetAbilityScoreResponse(
+                ability_id=a.ability_id,
+                ability_code=a.ability_code,
+                ability_display_name=a.ability_display_name,
+                score=a.score,
+                modifier=a.modifier,
+            )
+            for a in view.ability_scores
+        ],
+        skills=[
+            CharacterSheetSkillResponse(
+                skill_id=s.skill_id,
+                code=s.code,
+                display_name=s.display_name,
+                governing_ability_code=s.governing_ability_code,
+                governing_ability_modifier=s.governing_ability_modifier,
+                is_proficient=s.is_proficient,
+                is_expertise=s.is_expertise,
+                bonus=s.bonus,
+                passive_score=s.passive_score,
+            )
+            for s in view.skills
+        ],
+        saving_throws=[
+            CharacterSheetSavingThrowResponse(
+                ability_id=st.ability_id,
+                ability_code=st.ability_code,
+                ability_display_name=st.ability_display_name,
+                ability_modifier=st.ability_modifier,
+                is_proficient=st.is_proficient,
+                bonus=st.bonus,
+            )
+            for st in view.saving_throws
+        ],
+        other_proficiencies=[
+            CharacterSheetProficiencyResponse(
+                proficiency_type_code=p.proficiency_type_code,
+                proficiency_type_display_name=p.proficiency_type_display_name,
+                target_label=p.target_label,
+                is_expertise=p.is_expertise,
+            )
+            for p in view.other_proficiencies
+        ],
+        features=[
+            CharacterSheetFeatureResponse(
+                feature_id=f.feature_id,
+                code=f.code,
+                display_name=f.display_name,
+                description=f.description,
+                granted_at_level=f.granted_at_level,
+                source_category=f.source_category,
+            )
+            for f in view.features
+        ],
+        spellcasting_profiles=[
+            CharacterSheetSpellcastingProfileResponse(
+                character_spellcasting_profile_id=p.character_spellcasting_profile_id,
+                class_id=p.class_id,
+                class_code=p.class_code,
+                class_display_name=p.class_display_name,
+                spellcasting_ability_id=p.spellcasting_ability_id,
+                spellcasting_ability_code=p.spellcasting_ability_code,
+                spellcasting_ability_display_name=p.spellcasting_ability_display_name,
+                spellcasting_ability_modifier=p.spellcasting_ability_modifier,
+                spell_attack_bonus=p.spell_attack_bonus,
+                spell_save_dc=p.spell_save_dc,
+                spells=[
+                    CharacterSheetSpellResponse(
+                        spell_id=sp.spell_id,
+                        code=sp.code,
+                        display_name=sp.display_name,
+                        level=sp.level,
+                        school=sp.school,
+                        casting_time=sp.casting_time,
+                        range=sp.range,
+                        duration=sp.duration,
+                        description=sp.description,
+                        damage_type_code=sp.damage_type_code,
+                        damage_type_display_name=sp.damage_type_display_name,
+                        is_known=sp.is_known,
+                        is_prepared=sp.is_prepared,
+                    )
+                    for sp in p.spells
+                ],
+            )
+            for p in view.spellcasting_profiles
+        ],
+        languages=[
+            CharacterSheetLanguageResponse(
+                language_id=lang.language_id, code=lang.code, display_name=lang.display_name
+            )
+            for lang in view.languages
+        ],
+        senses=[
+            CharacterSheetSenseResponse(sense_type=s.sense_type, range_feet=s.range_feet)
+            for s in view.senses
+        ],
+        movements=[
+            CharacterSheetMovementResponse(movement_type=m.movement_type, speed_feet=m.speed_feet)
+            for m in view.movements
+        ],
+    )

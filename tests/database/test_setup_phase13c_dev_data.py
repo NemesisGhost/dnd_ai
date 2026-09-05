@@ -21,6 +21,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.domain.passwords import hash_password
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 from dnd_ai.queries.character import get_character_view
+from dnd_ai.queries.character_sheet import get_character_sheet_view
 from tests.factories import make_user
 
 
@@ -246,3 +247,99 @@ def test_rerun_reconciles_character_a_state_condition_and_resource_after_drift(
         "Phase 13D portal development fixture"
     )
     assert view_a.resources is not None and view_a.resources[0].current_amount == 2
+
+
+def test_character_a_and_b_sheets_match_the_documented_fixture(db_connection: Connection) -> None:
+    """Covers the Phase 13D Sheet-panel checkpoint this fixture supports:
+    Character A's fully populated multiclass build and Character B's
+    legitimate minimal build, both read back through the real, tier-
+    filtered `get_character_sheet_view()` query the portal's Sheet-panel
+    endpoint itself uses — not a re-implementation of it. Runs `_run()`
+    twice first, the same idempotency proof every other checkpoint in this
+    module already applies to its own rows."""
+    user_id = _make_local_account(db_connection, display_name="Dev Tester Three")
+
+    first = _run(db_connection, user_id=user_id)
+    assert first.lines, "first run should have created every record"
+    assert all("[created]" in line for line in first.lines), first.lines
+
+    second = _run(db_connection, user_id=user_id)
+    assert all("[reused" in line for line in second.lines), second.lines
+    assert len(second.lines) == len(first.lines)
+
+    timeline_a_id, world_id, character_a_id, character_b_id = _resolve_campaign_a_characters(
+        db_connection, user_id=user_id
+    )
+
+    sheet_a = get_character_sheet_view(
+        db_connection,
+        character_id=character_a_id,
+        timeline_id=timeline_a_id,
+        expected_world_id=world_id,
+    )
+    assert sheet_a.character_build_id is not None
+    assert sheet_a.ruleset_code == "dnd5e"
+    assert sheet_a.total_level == 3  # fighter 2 + wizard 1
+    assert sheet_a.proficiency_bonus == 2
+    assert {c.class_code for c in sheet_a.class_levels} == {"fighter", "wizard"}
+    fighter_level = next(c for c in sheet_a.class_levels if c.class_code == "fighter")
+    assert fighter_level.level == 2
+    assert fighter_level.subclass_code == "champion"
+    assert len(sheet_a.ability_scores) == 6
+
+    athletics = next(s for s in sheet_a.skills if s.code == "athletics")
+    assert athletics.is_proficient is True
+    assert athletics.is_expertise is False
+    perception = next(s for s in sheet_a.skills if s.code == "perception")
+    assert perception.is_proficient is True
+    assert perception.is_expertise is True
+
+    strength_save = next(st for st in sheet_a.saving_throws if st.ability_code == "strength")
+    assert strength_save.is_proficient is True
+
+    other_proficiency_labels = {p.target_label for p in sheet_a.other_proficiencies}
+    assert other_proficiency_labels == {"Martial Weapons", "Heavy Armor"}
+
+    feature_codes = {f.code for f in sheet_a.features}
+    assert feature_codes == {"second_wind", "wizard_spellcasting"}
+
+    assert len(sheet_a.spellcasting_profiles) == 1
+    profile = sheet_a.spellcasting_profiles[0]
+    assert profile.class_code == "wizard"
+    spells_by_code = {s.code: s for s in profile.spells}
+    assert spells_by_code["fire_bolt"].is_known is True
+    assert spells_by_code["mage_hand"].is_known is True
+    assert spells_by_code["magic_missile"].is_known is True
+    assert spells_by_code["magic_missile"].is_prepared is True
+    assert spells_by_code["cure_wounds"].is_known is False
+    assert spells_by_code["cure_wounds"].is_prepared is True
+
+    assert [lang.code for lang in sheet_a.languages] == ["common"]
+    assert [(s.sense_type, s.range_feet) for s in sheet_a.senses] == [("darkvision", 60)]
+    assert [(m.movement_type, m.speed_feet) for m in sheet_a.movements] == [("walk", 30)]
+
+    sheet_b = get_character_sheet_view(
+        db_connection,
+        character_id=character_b_id,
+        timeline_id=timeline_a_id,
+        expected_world_id=world_id,
+    )
+    assert sheet_b.character_build_id is not None
+    assert sheet_b.total_level == 1
+    assert {c.class_code for c in sheet_b.class_levels} == {"fighter"}
+    assert {a.ability_code for a in sheet_b.ability_scores} == {
+        "strength",
+        "dexterity",
+        "constitution",
+    }
+    assert sheet_b.other_proficiencies == ()
+    assert sheet_b.features == ()
+    assert sheet_b.spellcasting_profiles == ()
+    assert sheet_b.languages == ()
+    assert sheet_b.senses == ()
+    assert [(m.movement_type, m.speed_feet) for m in sheet_b.movements] == [("walk", 30)]
+    # Every ruleset skill/saving throw still appears (the complete-list
+    # contract), just non-proficient — Character B has no
+    # character_proficiencies rows at all.
+    assert all(not s.is_proficient for s in sheet_b.skills)
+    assert all(not st.is_proficient for st in sheet_b.saving_throws)

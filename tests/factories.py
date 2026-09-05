@@ -51,6 +51,74 @@ def lookup_id(connection: Connection, schema: str, table: str, pk: str, code: st
     return value
 
 
+def ruleset_content_id(
+    connection: Connection,
+    schema: str,
+    table: str,
+    pk: str,
+    ruleset_version_id: uuid.UUID,
+    code: str,
+) -> uuid.UUID:
+    """Look up a ruleset-version-scoped rules content row by code — unique
+    only per ruleset_version_id, not globally, unlike lookup_id above. For
+    tests that reuse already-seeded rules content (e.g. the real dnd5e/2024
+    ruleset, seeded by migration 022 — see use_dnd5e_ruleset) instead of
+    inserting a row that would collide with an existing one."""
+    value = connection.execute(
+        text(f"SELECT {pk} FROM {schema}.{table} WHERE ruleset_version_id = :v AND code = :c"),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID), (
+        f"seeded {schema}.{table} row {code!r} missing for ruleset version {ruleset_version_id}"
+    )
+    return value
+
+
+def use_dnd5e_ruleset(connection: Connection, world_id: uuid.UUID) -> uuid.UUID:
+    """Associates world_id with the already-migrated, already-seeded
+    'dnd5e' ruleset (migration 022) and returns its current
+    ruleset_version_id — for tests that need dnd_ai.domain.
+    character_calculations.supports_ruleset() to recognize a build's
+    ruleset. Never creates a second 'dnd5e' row (rules.rulesets.code is
+    globally unique via ux_rulesets_code) or duplicates its seeded content
+    (rules.*.code is unique per ruleset_version_id, not globally) — callers
+    needing dnd5e-scoped rules content should look it up with
+    ruleset_content_id instead of inserting a new row with the same code."""
+    ruleset_id = connection.execute(
+        text("SELECT ruleset_id FROM rules.rulesets WHERE code = 'dnd5e'")
+    ).scalar()
+    assert isinstance(ruleset_id, uuid.UUID), "expected the seeded 'dnd5e' ruleset (migration 022)"
+    connection.execute(
+        text(
+            "INSERT INTO rules.world_rulesets (world_id, ruleset_id) VALUES (:w, :r) "
+            "ON CONFLICT DO NOTHING"
+        ),
+        {"w": world_id, "r": ruleset_id},
+    )
+    ruleset_version_id = connection.execute(
+        text(
+            "SELECT ruleset_version_id FROM rules.ruleset_versions "
+            "WHERE ruleset_id = :r AND is_current"
+        ),
+        {"r": ruleset_id},
+    ).scalar()
+    assert isinstance(ruleset_version_id, uuid.UUID)
+    return ruleset_version_id
+
+
+def subclass_id_for_class(connection: Connection, class_id: uuid.UUID, code: str) -> uuid.UUID:
+    """rules.subclasses.code is unique per class_id, not per ruleset
+    version — scoped accordingly, unlike ruleset_content_id above."""
+    value = connection.execute(
+        text("SELECT subclass_id FROM rules.subclasses WHERE class_id = :class_id AND code = :c"),
+        {"class_id": class_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID), (
+        f"seeded rules.subclasses row {code!r} missing for class {class_id}"
+    )
+    return value
+
+
 def make_world(connection: Connection, slug: str = "test-world") -> uuid.UUID:
     value = connection.execute(
         text("""
@@ -719,6 +787,170 @@ def make_skill(
     return value
 
 
+def make_damage_type(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "fire"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.damage_types (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING damage_type_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_proficiency_type(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    code: str = "skill",
+    target_kind: str = "skill",
+) -> uuid.UUID:
+    """target_kind must be 'skill', 'saving_throw', or 'free_text' — the
+    vocabulary character.enforce_proficiency_target_kind() (revision 029)
+    checks a character_proficiencies row against."""
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.proficiency_types
+                (ruleset_version_id, code, display_name, target_kind)
+            VALUES (:v, :c, :c, :target_kind)
+            RETURNING proficiency_type_id
+        """),
+        {"v": ruleset_version_id, "c": code, "target_kind": target_kind},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_language(
+    connection: Connection, ruleset_version_id: uuid.UUID, code: str = "common"
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.languages (ruleset_version_id, code, display_name)
+            VALUES (:v, :c, :c)
+            RETURNING language_id
+        """),
+        {"v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_class(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    code: str = "fighter",
+    hit_die: int = 10,
+    primary_ability_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.classes
+                (ruleset_version_id, code, display_name, hit_die, primary_ability_id)
+            VALUES (:v, :c, :c, :hit_die, :ability)
+            RETURNING class_id
+        """),
+        {"v": ruleset_version_id, "c": code, "hit_die": hit_die, "ability": primary_ability_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_subclass(
+    connection: Connection,
+    class_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+    *,
+    code: str = "champion",
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.subclasses (class_id, ruleset_version_id, code, display_name)
+            VALUES (:class_id, :v, :c, :c)
+            RETURNING subclass_id
+        """),
+        {"class_id": class_id, "v": ruleset_version_id, "c": code},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_feature(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    code: str = "second_wind",
+    class_id: uuid.UUID | None = None,
+    subclass_id: uuid.UUID | None = None,
+    species_id: uuid.UUID | None = None,
+    granted_at_level: int | None = None,
+    description: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.features
+                (ruleset_version_id, class_id, subclass_id, species_id, code, display_name,
+                 description, granted_at_level)
+            VALUES (:v, :class_id, :subclass_id, :species_id, :c, :c, :description, :level)
+            RETURNING feature_id
+        """),
+        {
+            "v": ruleset_version_id,
+            "class_id": class_id,
+            "subclass_id": subclass_id,
+            "species_id": species_id,
+            "c": code,
+            "description": description,
+            "level": granted_at_level,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_spell(
+    connection: Connection,
+    ruleset_version_id: uuid.UUID,
+    *,
+    code: str = "fire_bolt",
+    level: int = 0,
+    school: str | None = "evocation",
+    casting_time: str | None = None,
+    spell_range: str | None = None,
+    duration: str | None = None,
+    description: str | None = None,
+    damage_type_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO rules.spells
+                (ruleset_version_id, code, display_name, level, school, casting_time, range,
+                 duration, description, damage_type_id)
+            VALUES (:v, :c, :c, :level, :school, :casting_time, :range, :duration, :description,
+                    :damage_type)
+            RETURNING spell_id
+        """),
+        {
+            "v": ruleset_version_id,
+            "c": code,
+            "level": level,
+            "school": school,
+            "casting_time": casting_time,
+            "range": spell_range,
+            "duration": duration,
+            "description": description,
+            "damage_type": damage_type_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_character(
     connection: Connection,
     world_id: uuid.UUID,
@@ -755,6 +987,202 @@ def make_character(
         {"c": character_id, "s": species_id, "size": size_category},
     )
     return character_id
+
+
+def make_character_build(
+    connection: Connection,
+    character_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+    *,
+    label: str | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO character.character_builds (character_id, ruleset_version_id, label)
+            VALUES (:character, :v, :label)
+            RETURNING character_build_id
+        """),
+        {"character": character_id, "v": ruleset_version_id, "label": label},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_ability_score(
+    connection: Connection, character_build_id: uuid.UUID, ability_id: uuid.UUID, score: int
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO character.character_ability_scores (character_build_id, ability_id, score)
+            VALUES (:build, :ability, :score)
+        """),
+        {"build": character_build_id, "ability": ability_id, "score": score},
+    )
+
+
+def make_character_class_level(
+    connection: Connection,
+    character_build_id: uuid.UUID,
+    class_id: uuid.UUID,
+    level: int,
+    *,
+    subclass_id: uuid.UUID | None = None,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO character.character_class_levels
+                (character_build_id, class_id, level, subclass_id)
+            VALUES (:build, :class_id, :level, :subclass_id)
+        """),
+        {
+            "build": character_build_id,
+            "class_id": class_id,
+            "level": level,
+            "subclass_id": subclass_id,
+        },
+    )
+
+
+def make_character_proficiency(
+    connection: Connection,
+    character_build_id: uuid.UUID,
+    proficiency_type_id: uuid.UUID,
+    *,
+    skill_id: uuid.UUID | None = None,
+    saving_throw_ability_id: uuid.UUID | None = None,
+    target_label: str | None = None,
+    is_expertise: bool = False,
+) -> uuid.UUID:
+    """Exactly one of skill_id/saving_throw_ability_id/target_label must be
+    set, matching proficiency_type_id's own target_kind (character.
+    enforce_proficiency_target_kind(), revision 029) and the table's own
+    documented shape."""
+    value = connection.execute(
+        text("""
+            INSERT INTO character.character_proficiencies
+                (character_build_id, proficiency_type_id, skill_id, saving_throw_ability_id,
+                 target_label, is_expertise)
+            VALUES (:build, :type, :skill, :saving_throw, :target_label, :expertise)
+            RETURNING character_proficiency_id
+        """),
+        {
+            "build": character_build_id,
+            "type": proficiency_type_id,
+            "skill": skill_id,
+            "saving_throw": saving_throw_ability_id,
+            "target_label": target_label,
+            "expertise": is_expertise,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_feature(
+    connection: Connection, character_build_id: uuid.UUID, feature_id: uuid.UUID
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO character.character_features (character_build_id, feature_id)
+            VALUES (:build, :feature)
+        """),
+        {"build": character_build_id, "feature": feature_id},
+    )
+
+
+def make_character_spellcasting_profile(
+    connection: Connection,
+    character_build_id: uuid.UUID,
+    spellcasting_ability_id: uuid.UUID,
+    *,
+    class_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    value = connection.execute(
+        text("""
+            INSERT INTO character.character_spellcasting_profiles
+                (character_build_id, class_id, spellcasting_ability_id)
+            VALUES (:build, :class_id, :ability)
+            RETURNING character_spellcasting_profile_id
+        """),
+        {"build": character_build_id, "class_id": class_id, "ability": spellcasting_ability_id},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_character_known_spell(
+    connection: Connection, character_spellcasting_profile_id: uuid.UUID, spell_id: uuid.UUID
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO character.character_known_spells
+                (character_spellcasting_profile_id, spell_id)
+            VALUES (:profile, :spell)
+        """),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    )
+
+
+def make_character_prepared_spell(
+    connection: Connection, character_spellcasting_profile_id: uuid.UUID, spell_id: uuid.UUID
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO character.character_prepared_spells
+                (character_spellcasting_profile_id, spell_id)
+            VALUES (:profile, :spell)
+        """),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    )
+
+
+def make_character_language(
+    connection: Connection, character_id: uuid.UUID, language_id: uuid.UUID
+) -> None:
+    """character.character_languages is character-level, not build-owned —
+    see dnd_ai.queries.character_sheet's own docstring for why that
+    distinction matters."""
+    connection.execute(
+        text("""
+            INSERT INTO character.character_languages (character_id, language_id)
+            VALUES (:character, :language)
+        """),
+        {"character": character_id, "language": language_id},
+    )
+
+
+def make_character_sense(
+    connection: Connection,
+    character_id: uuid.UUID,
+    *,
+    sense_type: str = "darkvision",
+    range_feet: int = 60,
+) -> None:
+    """character.character_senses is character-level, not build-owned."""
+    connection.execute(
+        text("""
+            INSERT INTO character.character_senses (character_id, sense_type, range_feet)
+            VALUES (:character, :sense_type, :range_feet)
+        """),
+        {"character": character_id, "sense_type": sense_type, "range_feet": range_feet},
+    )
+
+
+def make_character_movement(
+    connection: Connection,
+    character_id: uuid.UUID,
+    *,
+    movement_type: str = "walk",
+    speed_feet: int = 30,
+) -> None:
+    """character.character_movements is character-level, not build-owned."""
+    connection.execute(
+        text("""
+            INSERT INTO character.character_movements (character_id, movement_type, speed_feet)
+            VALUES (:character, :movement_type, :speed_feet)
+        """),
+        {"character": character_id, "movement_type": movement_type, "speed_feet": speed_feet},
+    )
 
 
 def make_ruleset_for_world(
@@ -2650,18 +3078,26 @@ def make_character_state(
     *,
     current_hit_points: int = 10,
     maximum_hit_points: int = 10,
+    character_build_id: uuid.UUID | None = None,
 ) -> None:
+    """character_build_id selects the character's active build on this
+    timeline (campaign.character_state.character_build_id) — see dnd_ai.
+    queries.character_sheet's own docstring for why this is the sole
+    active-build resolution rule. None (the default) leaves no active
+    build selected, matching every prior caller's expectation."""
     connection.execute(
         text("""
             INSERT INTO campaign.character_state
-                (timeline_id, character_id, current_hit_points, maximum_hit_points)
-            VALUES (:timeline, :character, :current, :maximum)
+                (timeline_id, character_id, current_hit_points, maximum_hit_points,
+                 character_build_id)
+            VALUES (:timeline, :character, :current, :maximum, :build)
         """),
         {
             "timeline": timeline_id,
             "character": character_id,
             "current": current_hit_points,
             "maximum": maximum_hit_points,
+            "build": character_build_id,
         },
     )
 

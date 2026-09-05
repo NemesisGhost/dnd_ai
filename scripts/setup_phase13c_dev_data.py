@@ -28,6 +28,27 @@ them back to the documented starting point for the next session — see
 reconciling update is distinguished from a plain create/reuse in this
 script's own summary output.
 
+Also supports the Phase 13D character Sheet-panel live-verification
+checkpoint: Character A carries a fully populated `character.
+character_builds` (a multiclass Fighter/Wizard build with a subclass,
+every ability score, a proficient and an expertise skill, a proficient
+saving throw, two free-text proficiencies, two granted features, and a
+spellcasting profile with independent known/prepared spells) plus one
+language, one sense, and one movement mode; Character B carries a
+legitimate *minimal* build (one class level, three of six ability scores,
+one movement mode, and no proficiencies/features/spellcasting/languages/
+senses at all) — see the "Phase 13D Sheet-panel fixture" constants block
+below for the exact content and `_ensure_character_sheet_fixture` for how
+it is created/reconciled. Both builds are selected as each character's
+*active* build on Phase13C Timeline A via `campaign.character_state.
+character_build_id` (`_ensure_active_build_selection`) — never a "current"
+flag on the build itself, matching `dnd_ai.queries.character_sheet`'s own
+documented active-build resolution rule. Every `rules.*` id this fixture
+references (classes, subclasses, features, spells, abilities, skills,
+proficiency types, languages) is looked up by code against the already-
+seeded dnd5e/2024 content (migration 022) — this fixture creates no
+`rules.*` rows of its own.
+
 Not a general-purpose seeding framework — every name and shape here is
 specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`
 constants below), and nothing about this script generalizes to seeding
@@ -196,6 +217,69 @@ _CONDITION_SOURCE_DESCRIPTION = "Phase 13D portal development fixture"
 _RESOURCE_CODE = "spell_slot"
 _RESOURCE_CURRENT_AMOUNT = 2
 _RESOURCE_MAXIMUM_AMOUNT = 3
+
+# ---------------------------------------------------------------------------
+# Phase 13D character Sheet-panel live-verification fixture data.
+#
+# Character A ("Fighter 2 / Wizard 1", champion subclass) exercises every
+# populated sheet section this fixture can build from already-seeded rules
+# content (migration 022's dnd5e/2024 content — no new rules.* rows are
+# created here, only referenced by code): all six ability scores, a
+# multiclass build with a subclass, a proficient skill, an expertise skill
+# (a fixture liberty — nothing in this schema restricts expertise to
+# specific classes), a proficient saving throw, a free-text weapon and
+# armor proficiency, two granted features (one per class), one language,
+# one sense, one movement mode, and a spellcasting profile with both
+# known-only and prepared-only spells (proving the two associations are
+# independent, per character.character_known_spells/_prepared_spells' own
+# documented shape).
+#
+# Character B ("Fighter 1") exercises a legitimate *minimal* sheet: an
+# active build with only three of six ability scores (so a skill/saving
+# throw governed by an absent ability renders its documented "ability
+# score missing" null-modifier state), one class level, and exactly one
+# populated collection (movement) — every other build-owned and character-
+# level collection (proficiencies, features, spellcasting, languages,
+# senses) is deliberately left empty.
+# ---------------------------------------------------------------------------
+
+_BUILD_LABEL = "Phase13D Dev Build"
+
+_CHARACTER_A_CLASS_CODE = "fighter"
+_CHARACTER_A_CLASS_LEVEL = 2
+_CHARACTER_A_SUBCLASS_CODE = "champion"
+_CHARACTER_A_SECOND_CLASS_CODE = "wizard"
+_CHARACTER_A_SECOND_CLASS_LEVEL = 1
+
+_CHARACTER_A_ABILITY_SCORES = {
+    "strength": 16,
+    "dexterity": 13,
+    "constitution": 14,
+    "intelligence": 12,
+    "wisdom": 10,
+    "charisma": 8,
+}
+_CHARACTER_B_ABILITY_SCORES = {"strength": 12, "dexterity": 14, "constitution": 13}
+
+_CHARACTER_A_PROFICIENT_SKILL_CODE = "athletics"
+_CHARACTER_A_EXPERTISE_SKILL_CODE = "perception"
+_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE = "strength"
+_CHARACTER_A_WEAPON_PROFICIENCY_LABEL = "Martial Weapons"
+_CHARACTER_A_ARMOR_PROFICIENCY_LABEL = "Heavy Armor"
+
+_CHARACTER_A_FEATURE_CODES = ("second_wind", "wizard_spellcasting")
+
+_CHARACTER_A_LANGUAGE_CODE = "common"
+_CHARACTER_A_SENSE_TYPE = "darkvision"
+_CHARACTER_A_SENSE_RANGE_FEET = 60
+_CHARACTER_A_MOVEMENT_TYPE = "walk"
+_CHARACTER_A_MOVEMENT_SPEED_FEET = 30
+_CHARACTER_B_MOVEMENT_TYPE = "walk"
+_CHARACTER_B_MOVEMENT_SPEED_FEET = 30
+
+_CHARACTER_A_SPELLCASTING_ABILITY_CODE = "intelligence"
+_CHARACTER_A_KNOWN_SPELL_CODES = ("fire_bolt", "mage_hand", "magic_missile")
+_CHARACTER_A_PREPARED_SPELL_CODES = ("magic_missile", "cure_wounds")
 
 
 @dataclass(frozen=True)
@@ -894,6 +978,587 @@ def _ensure_character_resource(
     summary.add(created=False, changed=True, label=label, record_id=character_id)
 
 
+# ---------------------------------------------------------------------------
+# Phase 13D Sheet-panel fixture: character builds and their ruleset-scoped
+# content. Every rules.* id resolved below is looked up by code against the
+# already-seeded dnd5e/2024 content (migration 022) — this fixture creates
+# no rules.* rows of its own, matching this module's own "only reuses
+# existing ruleset/rules content" convention (see _get_ruleset's docstring).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_ruleset_code_id(
+    connection: Connection, table: str, pk_column: str, *, ruleset_version_id: uuid.UUID, code: str
+) -> uuid.UUID:
+    """A pre-seeded rules.<table> row's id, resolved by code scoped to
+    ruleset_version_id (code is unique only per ruleset version, not
+    globally — the same scoping every other rules.* lookup in this script
+    already applies)."""
+    value = connection.execute(
+        text(
+            f"SELECT {pk_column} FROM rules.{table} "
+            "WHERE ruleset_version_id = :ruleset_version AND code = :code"
+        ),
+        {"ruleset_version": ruleset_version_id, "code": code},
+    ).scalar()
+    if value is None:
+        raise SystemExit(
+            f"expected an existing rules.{table} row (code={code!r}) for ruleset version "
+            f"{ruleset_version_id} — none found. Seed database/seeds/rules.{table}.yaml before "
+            "running this fixture; this script only reuses existing rules content."
+        )
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _resolve_subclass_id(connection: Connection, *, class_id: uuid.UUID, code: str) -> uuid.UUID:
+    """rules.subclasses.code is unique per class_id, not per ruleset
+    version — scoped accordingly, unlike every other rules.* lookup here."""
+    value = connection.execute(
+        text(
+            "SELECT subclass_id FROM rules.subclasses WHERE class_id = :class_id AND code = :code"
+        ),
+        {"class_id": class_id, "code": code},
+    ).scalar()
+    if value is None:
+        raise SystemExit(
+            f"expected an existing rules.subclasses row (code={code!r}) for class {class_id} — "
+            "none found. Seed database/seeds/rules.subclasses.yaml before running this fixture."
+        )
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _ensure_character_build(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_id: uuid.UUID,
+    character_label: str,
+    ruleset_version_id: uuid.UUID,
+) -> uuid.UUID:
+    """The fixture's one build per character, identified by its fixed
+    _BUILD_LABEL (character_builds carries no other natural key)."""
+    existing = connection.execute(
+        text(
+            "SELECT character_build_id FROM character.character_builds "
+            "WHERE character_id = :character AND label = :label"
+        ),
+        {"character": character_id, "label": _BUILD_LABEL},
+    ).scalar()
+    label = f"build {_BUILD_LABEL!r}: {character_label}"
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label=label, record_id=existing)
+        return existing
+
+    build_id = connection.execute(
+        text("""
+            INSERT INTO character.character_builds (character_id, ruleset_version_id, label)
+            VALUES (:character, :ruleset_version, :label)
+            RETURNING character_build_id
+        """),
+        {"character": character_id, "ruleset_version": ruleset_version_id, "label": _BUILD_LABEL},
+    ).scalar()
+    assert isinstance(build_id, uuid.UUID)
+    summary.add(created=True, label=label, record_id=build_id)
+    return build_id
+
+
+def _ensure_character_ability_score(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    ability_id: uuid.UUID,
+    ability_code: str,
+    score: int,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT score FROM character.character_ability_scores "
+            "WHERE character_build_id = :build AND ability_id = :ability"
+        ),
+        {"build": character_build_id, "ability": ability_id},
+    ).scalar()
+    label = f"ability score {ability_code!r} ({score}): {character_label}"
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO character.character_ability_scores
+                    (character_build_id, ability_id, score)
+                VALUES (:build, :ability, :score)
+            """),
+            {"build": character_build_id, "ability": ability_id, "score": score},
+        )
+        summary.add(created=True, label=label, record_id=character_build_id)
+        return
+    if existing == score:
+        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text("""
+            UPDATE character.character_ability_scores SET score = :score, updated_at = now()
+            WHERE character_build_id = :build AND ability_id = :ability
+        """),
+        {"build": character_build_id, "ability": ability_id, "score": score},
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_class_level(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    class_id: uuid.UUID,
+    class_code: str,
+    level: int,
+    subclass_id: uuid.UUID | None = None,
+) -> None:
+    existing = (
+        connection.execute(
+            text("""
+                SELECT level, subclass_id FROM character.character_class_levels
+                WHERE character_build_id = :build AND class_id = :class_id
+            """),
+            {"build": character_build_id, "class_id": class_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    label = f"class level {class_code!r} {level}: {character_label}"
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO character.character_class_levels
+                    (character_build_id, class_id, level, subclass_id)
+                VALUES (:build, :class_id, :level, :subclass_id)
+            """),
+            {
+                "build": character_build_id,
+                "class_id": class_id,
+                "level": level,
+                "subclass_id": subclass_id,
+            },
+        )
+        summary.add(created=True, label=label, record_id=character_build_id)
+        return
+    if existing["level"] == level and existing["subclass_id"] == subclass_id:
+        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text("""
+            UPDATE character.character_class_levels
+            SET level = :level, subclass_id = :subclass_id, updated_at = now()
+            WHERE character_build_id = :build AND class_id = :class_id
+        """),
+        {
+            "build": character_build_id,
+            "class_id": class_id,
+            "level": level,
+            "subclass_id": subclass_id,
+        },
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_skill_proficiency(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    proficiency_type_id: uuid.UUID,
+    skill_id: uuid.UUID,
+    skill_code: str,
+    is_expertise: bool,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT is_expertise FROM character.character_proficiencies "
+            "WHERE character_build_id = :build AND skill_id = :skill"
+        ),
+        {"build": character_build_id, "skill": skill_id},
+    ).scalar()
+    label = f"skill proficiency {skill_code!r} (expertise={is_expertise}): {character_label}"
+    if existing is None:
+        connection.execute(
+            text("""
+                INSERT INTO character.character_proficiencies
+                    (character_build_id, proficiency_type_id, skill_id, is_expertise)
+                VALUES (:build, :type, :skill, :expertise)
+            """),
+            {
+                "build": character_build_id,
+                "type": proficiency_type_id,
+                "skill": skill_id,
+                "expertise": is_expertise,
+            },
+        )
+        summary.add(created=True, label=label, record_id=character_build_id)
+        return
+    if existing == is_expertise:
+        summary.add(created=False, changed=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text(
+            "UPDATE character.character_proficiencies SET is_expertise = :expertise "
+            "WHERE character_build_id = :build AND skill_id = :skill"
+        ),
+        {"build": character_build_id, "skill": skill_id, "expertise": is_expertise},
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_saving_throw_proficiency(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    proficiency_type_id: uuid.UUID,
+    ability_id: uuid.UUID,
+    ability_code: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_proficiencies "
+            "WHERE character_build_id = :build AND saving_throw_ability_id = :ability"
+        ),
+        {"build": character_build_id, "ability": ability_id},
+    ).scalar()
+    label = f"saving throw proficiency {ability_code!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO character.character_proficiencies
+                (character_build_id, proficiency_type_id, saving_throw_ability_id)
+            VALUES (:build, :type, :ability)
+        """),
+        {"build": character_build_id, "type": proficiency_type_id, "ability": ability_id},
+    )
+    summary.add(created=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_free_text_proficiency(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    proficiency_type_id: uuid.UUID,
+    target_label: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_proficiencies "
+            "WHERE character_build_id = :build AND target_label = :target_label"
+        ),
+        {"build": character_build_id, "target_label": target_label},
+    ).scalar()
+    label = f"proficiency {target_label!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO character.character_proficiencies
+                (character_build_id, proficiency_type_id, target_label)
+            VALUES (:build, :type, :target_label)
+        """),
+        {"build": character_build_id, "type": proficiency_type_id, "target_label": target_label},
+    )
+    summary.add(created=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_feature(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    feature_id: uuid.UUID,
+    feature_code: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_features "
+            "WHERE character_build_id = :build AND feature_id = :feature"
+        ),
+        {"build": character_build_id, "feature": feature_id},
+    ).scalar()
+    label = f"feature {feature_code!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_build_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO character.character_features (character_build_id, feature_id)
+            VALUES (:build, :feature)
+        """),
+        {"build": character_build_id, "feature": feature_id},
+    )
+    summary.add(created=True, label=label, record_id=character_build_id)
+
+
+def _ensure_character_spellcasting_profile(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_build_id: uuid.UUID,
+    character_label: str,
+    class_id: uuid.UUID,
+    spellcasting_ability_id: uuid.UUID,
+) -> uuid.UUID:
+    existing = connection.execute(
+        text(
+            "SELECT character_spellcasting_profile_id FROM character.character_spellcasting_profiles "
+            "WHERE character_build_id = :build AND class_id = :class_id"
+        ),
+        {"build": character_build_id, "class_id": class_id},
+    ).scalar()
+    label = f"spellcasting profile: {character_label}"
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label=label, record_id=existing)
+        return existing
+    profile_id = connection.execute(
+        text("""
+            INSERT INTO character.character_spellcasting_profiles
+                (character_build_id, class_id, spellcasting_ability_id)
+            VALUES (:build, :class_id, :ability)
+            RETURNING character_spellcasting_profile_id
+        """),
+        {"build": character_build_id, "class_id": class_id, "ability": spellcasting_ability_id},
+    ).scalar()
+    assert isinstance(profile_id, uuid.UUID)
+    summary.add(created=True, label=label, record_id=profile_id)
+    return profile_id
+
+
+def _ensure_character_known_spell(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_spellcasting_profile_id: uuid.UUID,
+    character_label: str,
+    spell_id: uuid.UUID,
+    spell_code: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_known_spells "
+            "WHERE character_spellcasting_profile_id = :profile AND spell_id = :spell"
+        ),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    ).scalar()
+    label = f"known spell {spell_code!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_spellcasting_profile_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO character.character_known_spells
+                (character_spellcasting_profile_id, spell_id)
+            VALUES (:profile, :spell)
+        """),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    )
+    summary.add(created=True, label=label, record_id=character_spellcasting_profile_id)
+
+
+def _ensure_character_prepared_spell(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_spellcasting_profile_id: uuid.UUID,
+    character_label: str,
+    spell_id: uuid.UUID,
+    spell_code: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_prepared_spells "
+            "WHERE character_spellcasting_profile_id = :profile AND spell_id = :spell"
+        ),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    ).scalar()
+    label = f"prepared spell {spell_code!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_spellcasting_profile_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO character.character_prepared_spells
+                (character_spellcasting_profile_id, spell_id)
+            VALUES (:profile, :spell)
+        """),
+        {"profile": character_spellcasting_profile_id, "spell": spell_id},
+    )
+    summary.add(created=True, label=label, record_id=character_spellcasting_profile_id)
+
+
+def _ensure_character_language(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_id: uuid.UUID,
+    character_label: str,
+    language_id: uuid.UUID,
+    language_code: str,
+) -> None:
+    """character.character_languages is character-level, not build-owned —
+    keyed by character_id alone, matching dnd_ai.queries.character_sheet's
+    own documented distinction."""
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM character.character_languages "
+            "WHERE character_id = :character AND language_id = :language"
+        ),
+        {"character": character_id, "language": language_id},
+    ).scalar()
+    label = f"language {language_code!r}: {character_label}"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=character_id)
+        return
+    connection.execute(
+        text(
+            "INSERT INTO character.character_languages (character_id, language_id) "
+            "VALUES (:character, :language)"
+        ),
+        {"character": character_id, "language": language_id},
+    )
+    summary.add(created=True, label=label, record_id=character_id)
+
+
+def _ensure_character_sense(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_id: uuid.UUID,
+    character_label: str,
+    sense_type: str,
+    range_feet: int,
+) -> None:
+    """character.character_senses is character-level, not build-owned."""
+    existing = connection.execute(
+        text(
+            "SELECT range_feet FROM character.character_senses "
+            "WHERE character_id = :character AND sense_type = :sense_type"
+        ),
+        {"character": character_id, "sense_type": sense_type},
+    ).scalar()
+    label = f"sense {sense_type!r} ({range_feet} ft): {character_label}"
+    if existing is None:
+        connection.execute(
+            text(
+                "INSERT INTO character.character_senses (character_id, sense_type, range_feet) "
+                "VALUES (:character, :sense_type, :range_feet)"
+            ),
+            {"character": character_id, "sense_type": sense_type, "range_feet": range_feet},
+        )
+        summary.add(created=True, label=label, record_id=character_id)
+        return
+    if existing == range_feet:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+    connection.execute(
+        text(
+            "UPDATE character.character_senses SET range_feet = :range_feet "
+            "WHERE character_id = :character AND sense_type = :sense_type"
+        ),
+        {"character": character_id, "sense_type": sense_type, "range_feet": range_feet},
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_id)
+
+
+def _ensure_character_movement(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    character_id: uuid.UUID,
+    character_label: str,
+    movement_type: str,
+    speed_feet: int,
+) -> None:
+    """character.character_movements is character-level, not build-owned."""
+    existing = connection.execute(
+        text(
+            "SELECT speed_feet FROM character.character_movements "
+            "WHERE character_id = :character AND movement_type = :movement_type"
+        ),
+        {"character": character_id, "movement_type": movement_type},
+    ).scalar()
+    label = f"movement {movement_type!r} ({speed_feet} ft): {character_label}"
+    if existing is None:
+        connection.execute(
+            text(
+                "INSERT INTO character.character_movements "
+                "(character_id, movement_type, speed_feet) "
+                "VALUES (:character, :movement_type, :speed_feet)"
+            ),
+            {"character": character_id, "movement_type": movement_type, "speed_feet": speed_feet},
+        )
+        summary.add(created=True, label=label, record_id=character_id)
+        return
+    if existing == speed_feet:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+    connection.execute(
+        text(
+            "UPDATE character.character_movements SET speed_feet = :speed_feet "
+            "WHERE character_id = :character AND movement_type = :movement_type"
+        ),
+        {"character": character_id, "movement_type": movement_type, "speed_feet": speed_feet},
+    )
+    summary.add(created=False, changed=True, label=label, record_id=character_id)
+
+
+def _ensure_active_build_selection(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    character_label: str,
+    character_build_id: uuid.UUID,
+) -> None:
+    """Selects character_build_id as the active build for character_id on
+    timeline_id — campaign.character_state.character_build_id is the sole
+    active-build resolution rule (dnd_ai.queries.character_sheet's own
+    docstring); this fixture's own campaign.character_state row already
+    exists by the time this runs (_ensure_character_state, above)."""
+    existing = connection.execute(
+        text(
+            "SELECT character_build_id FROM campaign.character_state "
+            "WHERE timeline_id = :timeline AND character_id = :character"
+        ),
+        {"timeline": timeline_id, "character": character_id},
+    ).scalar()
+    label = f"active build selection: {character_label}"
+    if existing == character_build_id:
+        summary.add(created=False, changed=False, label=label, record_id=character_id)
+        return
+    # existing is NULL the first time this fixture runs (_ensure_character_
+    # state never sets character_build_id) — selecting a build for the
+    # first time is this row's "creation" from the fixture's point of view,
+    # not a reconciliation of a previously-wrong value.
+    was_unset = existing is None
+    connection.execute(
+        text("""
+            UPDATE campaign.character_state SET character_build_id = :build, updated_at = now()
+            WHERE timeline_id = :timeline AND character_id = :character
+        """),
+        {"timeline": timeline_id, "character": character_id, "build": character_build_id},
+    )
+    summary.add(created=was_unset, changed=not was_unset, label=label, record_id=character_id)
+
+
 def _ensure_character_relationship(
     connection: Connection,
     summary: _Summary,
@@ -1088,7 +1753,329 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         maximum_amount=_RESOURCE_MAXIMUM_AMOUNT,
     )
 
+    _ensure_character_sheet_fixture(
+        connection,
+        summary,
+        ruleset_version_id=ruleset_version_id,
+        timeline_id=timeline_a_id,
+        character_a_id=character_a_id,
+        character_b_id=character_b_id,
+    )
+
     return summary
+
+
+def _ensure_character_sheet_fixture(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    ruleset_version_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    character_a_id: uuid.UUID,
+    character_b_id: uuid.UUID,
+) -> None:
+    """Phase 13D character Sheet-panel live-verification data — see this
+    module's own constants block above ("Phase 13D Sheet-panel fixture")
+    for what each character ends up exercising and why."""
+    ability_ids = {
+        code: _resolve_ruleset_code_id(
+            connection, "abilities", "ability_id", ruleset_version_id=ruleset_version_id, code=code
+        )
+        for code in {
+            *_CHARACTER_A_ABILITY_SCORES,
+            *_CHARACTER_B_ABILITY_SCORES,
+        }
+    }
+
+    # --- Character A: populated build ---------------------------------
+    build_a_id = _ensure_character_build(
+        connection,
+        summary,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        ruleset_version_id=ruleset_version_id,
+    )
+    for ability_code, score in _CHARACTER_A_ABILITY_SCORES.items():
+        _ensure_character_ability_score(
+            connection,
+            summary,
+            character_build_id=build_a_id,
+            character_label=_CHARACTER_A_NAME,
+            ability_id=ability_ids[ability_code],
+            ability_code=ability_code,
+            score=score,
+        )
+
+    fighter_class_id = _resolve_ruleset_code_id(
+        connection,
+        "classes",
+        "class_id",
+        ruleset_version_id=ruleset_version_id,
+        code=_CHARACTER_A_CLASS_CODE,
+    )
+    champion_subclass_id = _resolve_subclass_id(
+        connection, class_id=fighter_class_id, code=_CHARACTER_A_SUBCLASS_CODE
+    )
+    wizard_class_id = _resolve_ruleset_code_id(
+        connection,
+        "classes",
+        "class_id",
+        ruleset_version_id=ruleset_version_id,
+        code=_CHARACTER_A_SECOND_CLASS_CODE,
+    )
+    _ensure_character_class_level(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        class_id=fighter_class_id,
+        class_code=_CHARACTER_A_CLASS_CODE,
+        level=_CHARACTER_A_CLASS_LEVEL,
+        subclass_id=champion_subclass_id,
+    )
+    _ensure_character_class_level(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        class_id=wizard_class_id,
+        class_code=_CHARACTER_A_SECOND_CLASS_CODE,
+        level=_CHARACTER_A_SECOND_CLASS_LEVEL,
+    )
+
+    skill_proficiency_type_id = _resolve_ruleset_code_id(
+        connection,
+        "proficiency_types",
+        "proficiency_type_id",
+        ruleset_version_id=ruleset_version_id,
+        code="skill",
+    )
+    saving_throw_proficiency_type_id = _resolve_ruleset_code_id(
+        connection,
+        "proficiency_types",
+        "proficiency_type_id",
+        ruleset_version_id=ruleset_version_id,
+        code="saving_throw",
+    )
+    weapon_proficiency_type_id = _resolve_ruleset_code_id(
+        connection,
+        "proficiency_types",
+        "proficiency_type_id",
+        ruleset_version_id=ruleset_version_id,
+        code="weapon",
+    )
+    armor_proficiency_type_id = _resolve_ruleset_code_id(
+        connection,
+        "proficiency_types",
+        "proficiency_type_id",
+        ruleset_version_id=ruleset_version_id,
+        code="armor",
+    )
+
+    proficient_skill_id = _resolve_ruleset_code_id(
+        connection,
+        "skills",
+        "skill_id",
+        ruleset_version_id=ruleset_version_id,
+        code=_CHARACTER_A_PROFICIENT_SKILL_CODE,
+    )
+    _ensure_character_skill_proficiency(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        proficiency_type_id=skill_proficiency_type_id,
+        skill_id=proficient_skill_id,
+        skill_code=_CHARACTER_A_PROFICIENT_SKILL_CODE,
+        is_expertise=False,
+    )
+    expertise_skill_id = _resolve_ruleset_code_id(
+        connection,
+        "skills",
+        "skill_id",
+        ruleset_version_id=ruleset_version_id,
+        code=_CHARACTER_A_EXPERTISE_SKILL_CODE,
+    )
+    _ensure_character_skill_proficiency(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        proficiency_type_id=skill_proficiency_type_id,
+        skill_id=expertise_skill_id,
+        skill_code=_CHARACTER_A_EXPERTISE_SKILL_CODE,
+        is_expertise=True,
+    )
+    _ensure_character_saving_throw_proficiency(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        proficiency_type_id=saving_throw_proficiency_type_id,
+        ability_id=ability_ids[_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE],
+        ability_code=_CHARACTER_A_PROFICIENT_SAVING_THROW_CODE,
+    )
+    _ensure_character_free_text_proficiency(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        proficiency_type_id=weapon_proficiency_type_id,
+        target_label=_CHARACTER_A_WEAPON_PROFICIENCY_LABEL,
+    )
+    _ensure_character_free_text_proficiency(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        proficiency_type_id=armor_proficiency_type_id,
+        target_label=_CHARACTER_A_ARMOR_PROFICIENCY_LABEL,
+    )
+
+    for feature_code in _CHARACTER_A_FEATURE_CODES:
+        feature_id = _resolve_ruleset_code_id(
+            connection,
+            "features",
+            "feature_id",
+            ruleset_version_id=ruleset_version_id,
+            code=feature_code,
+        )
+        _ensure_character_feature(
+            connection,
+            summary,
+            character_build_id=build_a_id,
+            character_label=_CHARACTER_A_NAME,
+            feature_id=feature_id,
+            feature_code=feature_code,
+        )
+
+    profile_id = _ensure_character_spellcasting_profile(
+        connection,
+        summary,
+        character_build_id=build_a_id,
+        character_label=_CHARACTER_A_NAME,
+        class_id=wizard_class_id,
+        spellcasting_ability_id=ability_ids[_CHARACTER_A_SPELLCASTING_ABILITY_CODE],
+    )
+    for spell_code in _CHARACTER_A_KNOWN_SPELL_CODES:
+        spell_id = _resolve_ruleset_code_id(
+            connection,
+            "spells",
+            "spell_id",
+            ruleset_version_id=ruleset_version_id,
+            code=spell_code,
+        )
+        _ensure_character_known_spell(
+            connection,
+            summary,
+            character_spellcasting_profile_id=profile_id,
+            character_label=_CHARACTER_A_NAME,
+            spell_id=spell_id,
+            spell_code=spell_code,
+        )
+    for spell_code in _CHARACTER_A_PREPARED_SPELL_CODES:
+        spell_id = _resolve_ruleset_code_id(
+            connection,
+            "spells",
+            "spell_id",
+            ruleset_version_id=ruleset_version_id,
+            code=spell_code,
+        )
+        _ensure_character_prepared_spell(
+            connection,
+            summary,
+            character_spellcasting_profile_id=profile_id,
+            character_label=_CHARACTER_A_NAME,
+            spell_id=spell_id,
+            spell_code=spell_code,
+        )
+
+    language_id = _resolve_ruleset_code_id(
+        connection,
+        "languages",
+        "language_id",
+        ruleset_version_id=ruleset_version_id,
+        code=_CHARACTER_A_LANGUAGE_CODE,
+    )
+    _ensure_character_language(
+        connection,
+        summary,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        language_id=language_id,
+        language_code=_CHARACTER_A_LANGUAGE_CODE,
+    )
+    _ensure_character_sense(
+        connection,
+        summary,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        sense_type=_CHARACTER_A_SENSE_TYPE,
+        range_feet=_CHARACTER_A_SENSE_RANGE_FEET,
+    )
+    _ensure_character_movement(
+        connection,
+        summary,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        movement_type=_CHARACTER_A_MOVEMENT_TYPE,
+        speed_feet=_CHARACTER_A_MOVEMENT_SPEED_FEET,
+    )
+    _ensure_active_build_selection(
+        connection,
+        summary,
+        timeline_id=timeline_id,
+        character_id=character_a_id,
+        character_label=_CHARACTER_A_NAME,
+        character_build_id=build_a_id,
+    )
+
+    # --- Character B: legitimate minimal build -------------------------
+    build_b_id = _ensure_character_build(
+        connection,
+        summary,
+        character_id=character_b_id,
+        character_label=_CHARACTER_B_NAME,
+        ruleset_version_id=ruleset_version_id,
+    )
+    for ability_code, score in _CHARACTER_B_ABILITY_SCORES.items():
+        _ensure_character_ability_score(
+            connection,
+            summary,
+            character_build_id=build_b_id,
+            character_label=_CHARACTER_B_NAME,
+            ability_id=ability_ids[ability_code],
+            ability_code=ability_code,
+            score=score,
+        )
+    _ensure_character_class_level(
+        connection,
+        summary,
+        character_build_id=build_b_id,
+        character_label=_CHARACTER_B_NAME,
+        class_id=fighter_class_id,
+        class_code=_CHARACTER_A_CLASS_CODE,
+        level=1,
+    )
+    # Deliberately no proficiencies, features, or spellcasting profile for
+    # Character B — see this module's constants-block comment above for
+    # why that is a legitimate minimal state, not an oversight.
+    _ensure_character_movement(
+        connection,
+        summary,
+        character_id=character_b_id,
+        character_label=_CHARACTER_B_NAME,
+        movement_type=_CHARACTER_B_MOVEMENT_TYPE,
+        speed_feet=_CHARACTER_B_MOVEMENT_SPEED_FEET,
+    )
+    _ensure_active_build_selection(
+        connection,
+        summary,
+        timeline_id=timeline_id,
+        character_id=character_b_id,
+        character_label=_CHARACTER_B_NAME,
+        character_build_id=build_b_id,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
