@@ -13,9 +13,11 @@ import {
 import App from "./App"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
-import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import { useCampaignSessions } from "./hooks/useCampaignSessions"
 import { useCampaignSummary } from "./hooks/useCampaignSummary"
 import { useCharacter } from "./hooks/useCharacter"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import type { CampaignSessionListItem } from "./types/campaignSession"
 import type { CampaignSummary } from "./types/campaignSummary"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
@@ -30,19 +32,42 @@ vi.mock("./hooks/useCharacter", () => ({
   useCharacter: vi.fn(),
 }))
 
+vi.mock("./hooks/useCampaignSessions", () => ({
+  useCampaignSessions: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
 
-const useCampaignSummaryMock = vi.mocked(useCampaignSummary)
+const useCampaignSummaryMock = vi.mocked(
+  useCampaignSummary,
+)
 
-const useCharacterMock = vi.mocked(useCharacter)
+const useCharacterMock = vi.mocked(
+  useCharacter,
+)
+
+const useCampaignSessionsMock = vi.mocked(
+  useCampaignSessions,
+)
 
 const emptyCampaignSummary = {
   current_session: null,
   previous_session_recap: null,
   recent_events: [],
 } satisfies CampaignSummary
+
+const campaignSessions = [
+  {
+    session_id: "session-2",
+    session_number: 2,
+    title: "Most Recent Session",
+    status_code: "completed",
+    started_at: "2026-02-01T18:00:00Z",
+    ended_at: "2026-02-01T22:00:00Z",
+  },
+] satisfies CampaignSessionListItem[]
 
 beforeEach(() => {
   useSessionBootstrapMock.mockReset()
@@ -70,6 +95,16 @@ beforeEach(() => {
   useCharacterMock.mockReturnValue({
     state: {
       status: "unavailable",
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignSessionsMock.mockReset()
+
+  useCampaignSessionsMock.mockReturnValue({
+    state: {
+      status: "success",
+      sessions: campaignSessions,
     },
     retry: vi.fn(),
   })
@@ -197,5 +232,40 @@ describe("portal routing", () => {
         name: "Character unavailable",
       }),
     ).toBeInTheDocument()
+  })
+
+  it("routes Sessions through the campaign sessions boundary", () => {
+    renderAppAt("/app/mundivita/sessions")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Sessions",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCampaignSessionsMock,
+    ).toHaveBeenCalledWith("mundivita")
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Sessions",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("table", {
+        name: "Sessions",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Most Recent Session",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/sessions/session-2",
+    )
   })
 })

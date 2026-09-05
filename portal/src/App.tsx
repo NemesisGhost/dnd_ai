@@ -7,6 +7,7 @@ import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoun
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 
 function App() {
   return (
@@ -82,12 +83,7 @@ function App() {
 
           <Route
             path="sessions"
-            element={
-              <PlaceholderPage
-                title="Sessions"
-                description="Session history and summaries will appear here."
-              />
-            }
+            element={<CampaignSessionsPage />}
           />
 
           <Route
