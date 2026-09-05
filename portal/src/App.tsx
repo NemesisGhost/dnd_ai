@@ -6,6 +6,7 @@ import { LoginPage } from "./pages/LoginPage"
 import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
+import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
 
 function App() {
   return (
@@ -66,12 +67,7 @@ function App() {
 
           <Route
             path="characters"
-            element={
-              <PlaceholderPage
-                title="Characters"
-                description="Authorized player and non-player character information will appear here."
-              />
-            }
+            element={<CampaignCharactersPage />}
           />
 
           <Route

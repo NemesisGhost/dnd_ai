@@ -15,6 +15,7 @@ import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 import { useCampaignSummary } from "./hooks/useCampaignSummary"
+import { useCharacter } from "./hooks/useCharacter"
 import type { CampaignSummary } from "./types/campaignSummary"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
@@ -25,11 +26,17 @@ vi.mock("./hooks/useCampaignSummary", () => ({
   useCampaignSummary: vi.fn(),
 }))
 
+vi.mock("./hooks/useCharacter", () => ({
+  useCharacter: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
 
 const useCampaignSummaryMock = vi.mocked(useCampaignSummary)
+
+const useCharacterMock = vi.mocked(useCharacter)
 
 const emptyCampaignSummary = {
   current_session: null,
@@ -54,6 +61,15 @@ beforeEach(() => {
     state: {
       status: "success",
       summary: emptyCampaignSummary,
+    },
+    retry: vi.fn(),
+  })
+
+  useCharacterMock.mockReset()
+
+  useCharacterMock.mockReturnValue({
+    state: {
+      status: "unavailable",
     },
     retry: vi.fn(),
   })
@@ -158,5 +174,28 @@ describe("portal routing", () => {
         name: "Campaign",
       }),
     ).not.toBeInTheDocument()
+  })
+
+  it("routes Characters to the selected character workspace", () => {
+    renderAppAt("/app/mundivita/characters")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Characters",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCharacterMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Character unavailable",
+      }),
+    ).toBeInTheDocument()
   })
 })
