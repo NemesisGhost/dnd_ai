@@ -724,7 +724,7 @@ That column had no application writer for `character_conditions`/`.character_res
 
 Primary tables:
 
-- `campaign.character_state` — includes `character_build_id UUID FK NULL` to `character.character_builds` (§7.4), the active build for this character *on this timeline*; must belong to the same character as the state row (enforced by trigger)
+- `campaign.character_state` — includes `character_build_id UUID FK NULL` to `character.character_builds` (§7.4), the active build for this character *on this timeline*; must belong to the same character as the state row (enforced by trigger). A branched timeline with no local row here has not diverged (§9 in docs/ENTITY_LIFECYCLE.md's own branching rules) and is not "no active build" — `dnd_ai.queries.character_build_resolution.resolve_effective_character_build_id()` resolves the branch-effective value application-side: the timeline's own row if present, else the latest `narrative.event_effects` row (§12) for this component within `campaign.effective_events(timeline_id)` (§6's branch-bounded event history, reused rather than reimplemented), else an ancestor's administrative (event-less) row, walked one `parent_timeline_id` level at a time. This is a read-side convention over the existing tables/functions, not a schema change; see docs/PHASE13D_CHARACTER_SHEET_BACKEND.md §2.1 for the full resolution order and its one documented limitation.
 - `campaign.character_conditions`
 - `campaign.character_resources`
 - `campaign.character_inventory` — a character-centric read index over `item_ownership`/`inventory_entries` (§11); the source of truth stays with the item-level tables, this is the "what is this character carrying right now" view

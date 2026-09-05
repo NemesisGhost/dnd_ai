@@ -10,8 +10,12 @@ build is *active* on a given timeline is timeline state
 (`campaign.character_state.character_build_id`, docs/architecture/
 DATABASE_MODEL.md §7.4/§17) — never a property of the build itself, a
 caller-supplied build id, the newest build, or an arbitrary pick among
-several. This module resolves exactly that chain for one character on one
-timeline and assembles the full mechanical sheet from it.
+several. A timeline that has not itself diverged has no local
+`character_state` row at all; `dnd_ai.queries.character_build_resolution.
+resolve_effective_character_build_id()` resolves the branch-effective value
+in that case (see its own docstring for the exact resolution order and a
+documented schema limitation). This module resolves that chain for one
+character on one timeline and assembles the full mechanical sheet from it.
 
 `character.character_languages`/`.character_senses`/`.character_movements`
 are character-level records, not build-owned — they are fetched by
@@ -41,9 +45,10 @@ has no `character_ability_scores` row in this build, or any proficiency-
 gated bonus when the build has no class levels at all (no total level, so
 no proficiency bonus to add).
 
-No active build (`campaign.character_state.character_build_id IS NULL`, or
-no `campaign.character_state` row at all for this character/timeline) is a
-legitimate, successful state, not an error: `get_character_sheet_view()`
+No active build — `campaign.character_state.character_build_id IS NULL` on
+`timeline_id` itself, or no build resolvable anywhere in its branch
+ancestry — is a legitimate, successful state, not an error:
+`get_character_sheet_view()`
 still returns a full `CharacterSheetView` identifying the character, with
 every build-owned field/collection at its documented "no build" value
 (`character_build_id`/`build_label`/`ruleset_*` all `None`, `total_level`
@@ -75,6 +80,7 @@ from dnd_ai.domain.character_calculations import (
     total_level as calculate_total_level,
 )
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.queries.character_build_resolution import resolve_effective_character_build_id
 
 
 class CharacterSheetNotFoundError(DomainAuthorizationError):
@@ -299,13 +305,16 @@ def get_character_sheet_view(
 ) -> CharacterSheetView:
     """The active-build mechanical sheet for `character_id` on
     `timeline_id`, resolved via `campaign.character_state.
-    character_build_id` alone — never the newest build, an arbitrary pick,
-    a caller-supplied build id, or an inference from the campaign's general
-    ruleset (see this module's own docstring). Raises
-    `CharacterSheetNotFoundError` for a nonexistent character or one
-    belonging to a different world than `expected_world_id` (always the
-    caller's own resolved-timeline world — `dnd_ai.api._shared.
-    timeline_world_id`, never caller-supplied)."""
+    character_build_id` — for `timeline_id` itself, or, when it has not
+    diverged, the branch-effective value inherited from its ancestry (see
+    `dnd_ai.queries.character_build_resolution.
+    resolve_effective_character_build_id`'s own docstring for the full
+    resolution order and its documented limitation) — never the newest
+    build, an arbitrary pick, a caller-supplied build id, or an inference
+    from the campaign's general ruleset. Raises `CharacterSheetNotFoundError`
+    for a nonexistent character or one belonging to a different world than
+    `expected_world_id` (always the caller's own resolved-timeline world —
+    `dnd_ai.api._shared.timeline_world_id`, never caller-supplied)."""
     identity_row = (
         connection.execute(
             text("""
@@ -332,13 +341,9 @@ def get_character_sheet_view(
     senses = _fetch_senses(connection, character_id)
     movements = _fetch_movements(connection, character_id)
 
-    character_build_id = connection.execute(
-        text("""
-            SELECT character_build_id FROM campaign.character_state
-            WHERE timeline_id = :timeline AND character_id = :character
-        """),
-        {"timeline": timeline_id, "character": character_id},
-    ).scalar()
+    character_build_id = resolve_effective_character_build_id(
+        connection, character_id=character_id, timeline_id=timeline_id
+    )
 
     if character_build_id is None:
         return CharacterSheetView(

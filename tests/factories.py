@@ -1828,13 +1828,22 @@ def make_event_effect(
     target_quest_objective_id: uuid.UUID | None = None,
     target_relationship_id: uuid.UUID | None = None,
     target_component: str = "status",
+    previous_value: object = None,
+    new_value: object = None,
 ) -> uuid.UUID:
+    """previous_value/new_value are JSON-encoded exactly like every real
+    command in dnd_ai.commands does (e.g. json.dumps(str(some_uuid)) for a
+    UUID-valued component) — callers pass an already-JSON-able Python value
+    (str/int/bool/None/dict/list), not a pre-serialized string, mirroring
+    that convention. Used by tests exercising branch-effective-history
+    reconstruction (tests/database/test_query_character_sheet.py) to
+    construct realistic event-linked state changes."""
     value = connection.execute(
         text("""
             INSERT INTO narrative.event_effects
                 (event_id, target_entity_id, target_quest_objective_id, target_relationship_id,
-                 target_component)
-            VALUES (:event, :entity, :objective, :relationship, :component)
+                 target_component, previous_value, new_value)
+            VALUES (:event, :entity, :objective, :relationship, :component, :previous, :new)
             RETURNING event_effect_id
         """),
         {
@@ -1843,6 +1852,8 @@ def make_event_effect(
             "objective": target_quest_objective_id,
             "relationship": target_relationship_id,
             "component": target_component,
+            "previous": json.dumps(previous_value) if previous_value is not None else None,
+            "new": json.dumps(new_value) if new_value is not None else None,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

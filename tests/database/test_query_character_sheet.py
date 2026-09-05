@@ -42,6 +42,8 @@ from tests.factories import (
     make_character_state,
     make_class,
     make_damage_type,
+    make_event,
+    make_event_effect,
     make_feature,
     make_language,
     make_proficiency_type,
@@ -52,6 +54,7 @@ from tests.factories import (
     make_subclass,
     make_timeline,
     make_world,
+    make_world_time,
     use_dnd5e_ruleset,
 )
 
@@ -183,12 +186,17 @@ def test_active_build_is_resolved_from_character_state_not_the_newest_or_an_arbi
     assert view.build_label == "older"
 
 
-def test_different_timelines_select_different_builds_for_the_same_character(
+def test_unrelated_timelines_select_independent_builds_for_the_same_character(
     db_connection: Connection,
     world_id: uuid.UUID,
     character_id: uuid.UUID,
     ruleset_version_id: uuid.UUID,
 ) -> None:
+    """Two timelines with no ancestry relationship to each other at all
+    (neither is the other's `parent_timeline_id`) — proves independent
+    timeline-scoped state, not branch inheritance. See the
+    `test_branch_*`/`test_multi_level_ancestry_*` tests below for the
+    branch-effective resolution this does not exercise."""
     timeline_a_id = make_timeline(db_connection, world_id, name="Timeline A")
     timeline_b_id = make_timeline(db_connection, world_id, name="Timeline B")
 
@@ -217,6 +225,254 @@ def test_different_timelines_select_different_builds_for_the_same_character(
     assert view_b.character_build_id == build_b_id
     assert view_a.build_label == "build-a"
     assert view_b.build_label == "build-b"
+
+
+def test_branch_child_with_no_local_state_inherits_the_parents_administrative_build(
+    db_connection: Connection,
+    world_id: uuid.UUID,
+    character_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+) -> None:
+    """A child timeline that has not itself diverged (no local
+    campaign.character_state row) must not report "no active build" —
+    it must resolve the same build its parent had selected as of the
+    branch point (dnd_ai.queries.character_build_resolution)."""
+    parent_timeline_id = make_timeline(db_connection, world_id, name="Parent", is_primary=True)
+    build_a_id = make_character_build(db_connection, character_id, ruleset_version_id, label="a")
+    make_character_state(
+        db_connection, parent_timeline_id, character_id, character_build_id=build_a_id
+    )
+
+    branch_world_time_id = make_world_time(db_connection, world_id, 100)
+    child_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Child",
+        parent_timeline_id=parent_timeline_id,
+        branch_world_time_id=branch_world_time_id,
+    )
+
+    view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=child_timeline_id,
+        expected_world_id=world_id,
+    )
+    assert view.character_build_id == build_a_id
+
+
+def test_branch_child_does_not_see_a_parent_build_change_made_after_the_branch(
+    db_connection: Connection,
+    world_id: uuid.UUID,
+    character_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+) -> None:
+    """The exact leak this resolver must never produce: a parent that
+    switches builds after a child has already branched off it must not be
+    visible to that child — leaked post-branch history would otherwise
+    defeat "timelines only inherit parent history up to their branch
+    point" (CLAUDE.md rule 7)."""
+    parent_timeline_id = make_timeline(db_connection, world_id, name="Parent", is_primary=True)
+    build_a_id = make_character_build(db_connection, character_id, ruleset_version_id, label="a")
+    build_b_id = make_character_build(db_connection, character_id, ruleset_version_id, label="b")
+
+    before_branch_time_id = make_world_time(db_connection, world_id, 10)
+    select_a_event_id = make_event(
+        db_connection, world_id, parent_timeline_id, before_branch_time_id
+    )
+    make_event_effect(
+        db_connection,
+        select_a_event_id,
+        target_entity_id=character_id,
+        target_component="character_build_id",
+        new_value=str(build_a_id),
+    )
+
+    branch_world_time_id = make_world_time(db_connection, world_id, 20)
+    child_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Child",
+        parent_timeline_id=parent_timeline_id,
+        branch_world_time_id=branch_world_time_id,
+    )
+
+    after_branch_time_id = make_world_time(db_connection, world_id, 30)
+    select_b_event_id = make_event(
+        db_connection, world_id, parent_timeline_id, after_branch_time_id
+    )
+    make_event_effect(
+        db_connection,
+        select_b_event_id,
+        target_entity_id=character_id,
+        target_component="character_build_id",
+        previous_value=str(build_a_id),
+        new_value=str(build_b_id),
+    )
+    make_character_state(
+        db_connection, parent_timeline_id, character_id, character_build_id=build_b_id
+    )
+
+    child_view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=child_timeline_id,
+        expected_world_id=world_id,
+    )
+    parent_view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=parent_timeline_id,
+        expected_world_id=world_id,
+    )
+    assert child_view.character_build_id == build_a_id
+    assert parent_view.character_build_id == build_b_id
+
+
+def test_branch_child_selecting_its_own_build_stays_independent_of_the_parent(
+    db_connection: Connection,
+    world_id: uuid.UUID,
+    character_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+) -> None:
+    parent_timeline_id = make_timeline(db_connection, world_id, name="Parent", is_primary=True)
+    build_b_id = make_character_build(db_connection, character_id, ruleset_version_id, label="b")
+    build_c_id = make_character_build(db_connection, character_id, ruleset_version_id, label="c")
+    make_character_state(
+        db_connection, parent_timeline_id, character_id, character_build_id=build_b_id
+    )
+
+    branch_world_time_id = make_world_time(db_connection, world_id, 100)
+    child_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Child",
+        parent_timeline_id=parent_timeline_id,
+        branch_world_time_id=branch_world_time_id,
+    )
+    # The child has diverged: it selects its own build, independent of the
+    # parent's continued evolution — local state must win once diverged.
+    make_character_state(
+        db_connection, child_timeline_id, character_id, character_build_id=build_c_id
+    )
+
+    child_view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=child_timeline_id,
+        expected_world_id=world_id,
+    )
+    parent_view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=parent_timeline_id,
+        expected_world_id=world_id,
+    )
+    assert child_view.character_build_id == build_c_id
+    assert parent_view.character_build_id == build_b_id
+
+
+def test_multi_level_ancestry_applies_each_timelines_own_branch_cutoff(
+    db_connection: Connection,
+    world_id: uuid.UUID,
+    character_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+) -> None:
+    """Grandparent -> parent -> child, neither parent nor child ever
+    diverging. The grandchild must inherit the grandparent's build, and the
+    bound applied to the grandparent's own history must be the PARENT's
+    branch point (10), not the grandchild's own, more permissive branch
+    point (15) — mirroring campaign.effective_events()'s own "the next
+    level's cutoff is this ancestor's own branch point" rule. A grandparent
+    build change at sort_key 12 (after the parent's cutoff of 10, but before
+    the child's cutoff of 15) must NOT be visible to the child."""
+    grandparent_timeline_id = make_timeline(
+        db_connection, world_id, name="Grandparent", is_primary=True
+    )
+    build_a_id = make_character_build(db_connection, character_id, ruleset_version_id, label="a")
+    build_z_id = make_character_build(db_connection, character_id, ruleset_version_id, label="z")
+
+    select_a_time_id = make_world_time(db_connection, world_id, 5)
+    select_a_event_id = make_event(
+        db_connection, world_id, grandparent_timeline_id, select_a_time_id
+    )
+    make_event_effect(
+        db_connection,
+        select_a_event_id,
+        target_entity_id=character_id,
+        target_component="character_build_id",
+        new_value=str(build_a_id),
+    )
+
+    parent_branch_time_id = make_world_time(db_connection, world_id, 10)
+    parent_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Parent",
+        parent_timeline_id=grandparent_timeline_id,
+        branch_world_time_id=parent_branch_time_id,
+    )
+
+    # A later grandparent change, after the parent's own branch point —
+    # must be invisible to both the parent and the child.
+    select_z_time_id = make_world_time(db_connection, world_id, 12)
+    select_z_event_id = make_event(
+        db_connection, world_id, grandparent_timeline_id, select_z_time_id
+    )
+    make_event_effect(
+        db_connection,
+        select_z_event_id,
+        target_entity_id=character_id,
+        target_component="character_build_id",
+        previous_value=str(build_a_id),
+        new_value=str(build_z_id),
+    )
+
+    child_branch_time_id = make_world_time(db_connection, world_id, 15)
+    child_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Child",
+        parent_timeline_id=parent_timeline_id,
+        branch_world_time_id=child_branch_time_id,
+    )
+
+    child_view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=child_timeline_id,
+        expected_world_id=world_id,
+    )
+    assert child_view.character_build_id == build_a_id
+
+
+def test_a_stateless_branch_ancestry_still_returns_the_empty_sheet(
+    db_connection: Connection,
+    world_id: uuid.UUID,
+    character_id: uuid.UUID,
+) -> None:
+    """A child branched from a root timeline where neither has ever
+    selected a build (no row, no events anywhere in the ancestry) must
+    still return the documented "no active build" empty sheet, never a
+    404/500 — the walk must terminate cleanly at the root."""
+    root_timeline_id = make_timeline(db_connection, world_id, name="Root", is_primary=True)
+    branch_world_time_id = make_world_time(db_connection, world_id, 100)
+    child_timeline_id = make_timeline(
+        db_connection,
+        world_id,
+        name="Child",
+        parent_timeline_id=root_timeline_id,
+        branch_world_time_id=branch_world_time_id,
+    )
+
+    view = get_character_sheet_view(
+        db_connection,
+        character_id=character_id,
+        timeline_id=child_timeline_id,
+        expected_world_id=world_id,
+    )
+    assert view.character_build_id is None
+    assert view.class_levels == ()
 
 
 def test_a_nonexistent_character_is_rejected(
