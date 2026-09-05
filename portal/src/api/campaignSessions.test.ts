@@ -6,10 +6,12 @@ import {
     vi,
 } from "vitest"
 import type {
+    CampaignSessionDetail,
     CampaignSessionListItem,
 } from "../types/campaignSession"
 import {
     CampaignSessionsRequestError,
+    fetchCampaignSession,
     fetchCampaignSessions,
 } from "./campaignSessions"
 
@@ -31,6 +33,29 @@ const sessionsFixture: CampaignSessionListItem[] = [
         ended_at: "2026-08-23T22:00:00Z",
     },
 ]
+
+const sessionDetailFixture = {
+    session_id: "session-12",
+    session_number: 12,
+    title: "The Glass Ossuary",
+    status_code: "ended",
+    started_at: "2026-08-30T18:00:00Z",
+    ended_at: "2026-08-30T22:00:00Z",
+    summary: "The party entered the dormant facility.",
+    start_world_time_id: "world-time-start",
+    end_world_time_id: "world-time-end",
+    events: [
+        {
+            event_id: "event-1",
+            name: "Entered the Ossuary",
+            summary: "The party crossed the sealed threshold.",
+            event_type_code: "discovery",
+            event_status_code: "resolved",
+            world_time_id: "world-time-event",
+            details: "The dormant transit system began responding.",
+        },
+    ],
+} satisfies CampaignSessionDetail
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -157,5 +182,73 @@ describe("fetchCampaignSessions", () => {
                 signal: controller.signal,
             }),
         )
+    })
+})
+
+describe("fetchCampaignSession", () => {
+    it("returns the authorized session detail", async () => {
+        const controller = new AbortController()
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify(sessionDetailFixture),
+                {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                },
+            ),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await expect(
+            fetchCampaignSession(
+                "campaign/a b",
+                "session/c d",
+                controller.signal,
+            ),
+        ).resolves.toEqual(sessionDetailFixture)
+
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/campaigns/campaign%2Fa%20b/sessions/session%2Fc%20d",
+            {
+                method: "GET",
+                headers: {
+                    Accept: "application/json",
+                },
+                cache: "no-store",
+                signal: controller.signal,
+            },
+        )
+    })
+
+    it("throws the same typed error for a missing or inaccessible session", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(null, {
+                status: 404,
+            }),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        const request = fetchCampaignSession(
+            "campaign-a",
+            "unavailable-session",
+        )
+
+        await expect(request).rejects.toBeInstanceOf(
+            CampaignSessionsRequestError,
+        )
+
+        await expect(request).rejects.toMatchObject({
+            name: "CampaignSessionsRequestError",
+            status: 404,
+            message:
+                "Campaign sessions request failed with status 404",
+        })
     })
 })

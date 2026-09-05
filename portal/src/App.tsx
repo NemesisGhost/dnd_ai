@@ -8,6 +8,7 @@ import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
+import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 
 function App() {
   return (
@@ -84,6 +85,11 @@ function App() {
           <Route
             path="sessions"
             element={<CampaignSessionsPage />}
+          />
+
+          <Route
+            path="sessions/:sessionId"
+            element={<CampaignSessionDetailPage />}
           />
 
           <Route

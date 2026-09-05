@@ -17,8 +17,10 @@ import { useCampaignSessions } from "./hooks/useCampaignSessions"
 import { useCampaignSummary } from "./hooks/useCampaignSummary"
 import { useCharacter } from "./hooks/useCharacter"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
-import type { CampaignSessionListItem } from "./types/campaignSession"
+import type { CampaignSessionDetail, CampaignSessionListItem, } from "./types/campaignSession"
 import type { CampaignSummary } from "./types/campaignSummary"
+import { useCampaignSession } from "./hooks/useCampaignSession"
+
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -34,6 +36,10 @@ vi.mock("./hooks/useCharacter", () => ({
 
 vi.mock("./hooks/useCampaignSessions", () => ({
   useCampaignSessions: vi.fn(),
+}))
+
+vi.mock("./hooks/useCampaignSession", () => ({
+  useCampaignSession: vi.fn(),
 }))
 
 const useSessionBootstrapMock = vi.mocked(
@@ -52,6 +58,10 @@ const useCampaignSessionsMock = vi.mocked(
   useCampaignSessions,
 )
 
+const useCampaignSessionMock = vi.mocked(
+  useCampaignSession,
+)
+
 const emptyCampaignSummary = {
   current_session: null,
   previous_session_recap: null,
@@ -68,6 +78,19 @@ const campaignSessions = [
     ended_at: "2026-02-01T22:00:00Z",
   },
 ] satisfies CampaignSessionListItem[]
+
+const campaignSessionDetail = {
+  session_id: "session-detail",
+  session_number: 12,
+  title: "The Glass Ossuary",
+  status_code: "ended",
+  started_at: "2026-08-30T18:00:00Z",
+  ended_at: "2026-08-30T22:00:00Z",
+  summary: "The party entered the dormant facility.",
+  start_world_time_id: "world-time-start",
+  end_world_time_id: "world-time-end",
+  events: [],
+} satisfies CampaignSessionDetail
 
 beforeEach(() => {
   useSessionBootstrapMock.mockReset()
@@ -105,6 +128,16 @@ beforeEach(() => {
     state: {
       status: "success",
       sessions: campaignSessions,
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignSessionMock.mockReset()
+
+  useCampaignSessionMock.mockReturnValue({
+    state: {
+      status: "success",
+      session: campaignSessionDetail,
     },
     retry: vi.fn(),
   })
@@ -266,6 +299,50 @@ describe("portal routing", () => {
     ).toHaveAttribute(
       "href",
       "/app/mundivita/sessions/session-2",
+    )
+  })
+
+  it("routes a session ID through the session-detail boundary", () => {
+    renderAppAt(
+      "/app/mundivita/sessions/session-detail",
+    )
+
+    expect(
+      useCampaignSessionMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "session-detail",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "The Glass Ossuary",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText(
+        "The party entered the dormant facility.",
+      ),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Back to sessions",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/sessions",
+    )
+
+    expect(
+      screen.getByRole("link", {
+        name: "Sessions",
+      }),
+    ).toHaveAttribute(
+      "aria-current",
+      "page",
     )
   })
 })
