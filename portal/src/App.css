@@ -387,3 +387,41 @@
 .hit-points-meter__label--filled {
   color: #ffffff;
 }
+
+.sortable-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sortable-table th,
+.sortable-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #bcccdc;
+}
+
+.sortable-table th {
+  color: #52667a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sortable-table__sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.sortable-table__sort-button:hover {
+  color: #243447;
+}
