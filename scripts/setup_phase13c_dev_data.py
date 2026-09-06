@@ -49,10 +49,66 @@ proficiency types, languages) is looked up by code against the already-
 seeded dnd5e/2024 content (migration 022) — this fixture creates no
 `rules.*` rows of its own.
 
+Also supports the Phase 13D Sessions list/detail live-verification
+checkpoint (docs/UI_DESIGN.md §5.7-§5.8, read back through the real
+`GET /campaigns/{id}/sessions` and `.../sessions/{id}` endpoints). Campaign
+A gets three fixture-owned `campaign.sessions` rows — see
+`_CAMPAIGN_A_SESSIONS`:
+
+  #1 "The Sealed Descent" and #2 "The Warden's Bargain": completed
+  sessions (`lifecycle_status = active` + a non-null `started_at`/
+  `ended_at`; `core.lifecycle_statuses` has no "ended" code and
+  `end_session` represents ending with `ended_at`, not a lifecycle
+  transition), each with a recap and two linked `recorded`
+  `narrative.events`. #2's timestamps are later than #1's so the list's
+  newest-first ordering is visible. In #1 the two events' chronological
+  order (by `core.world_times.sort_key`, which the detail query's
+  `ORDER BY wt.sort_key, e.created_at` sorts on) is the reverse of their
+  alphabetical name order, so the owner can confirm the portal preserves
+  backend order instead of re-sorting.
+
+  #3: `lifecycle_status = pending`, `title`/`started_at`/`ended_at`/
+  `summary` all NULL, and no linked events — the portal's "Session 3"
+  fallback heading, "Not recorded" timestamps, and neutral empty
+  recap/events states, plus null-timestamps-sort-last in the list.
+
+Campaign B gets one completed fixture-owned session ("Smoke Over
+Hollowmere", `_CAMPAIGN_B_SESSIONS`) with one linked event. It exists so
+the owner can take its session id and request it under Campaign A's URL:
+the API must return the same non-disclosing "unavailable" response as a
+nonexistent session. The exact id and the ready-made cross-campaign
+request are printed in the "Session fixture quick reference" block at the
+end of every run.
+
+Sessions are reconciled like the character rows above: `campaign.sessions`
+carries no immutability trigger, so title, summary, lifecycle, timestamps
+and the world-time endpoint ids are reset to the documented values on
+every re-run (a live-testing session may legitimately have ended a session
+or revised a recap). Their world times and linked events are *not*
+reconciled because the schema makes them immutable: `core.world_times.
+sort_key` is frozen once set (revision 030), and a linked event is
+`recorded` and therefore immutable (docs/ENTITY_LIFECYCLE.md §15 — content
+frozen, only `recorded -> voided/corrected`, no deletion). That
+immutability *is* the guarantee — nothing a live-testing session can do
+will move an event or change its content — so a re-run only
+create-or-reuses those rows by their (frozen) label/name. If a fixture
+event was voided or repointed during testing, or a non-fixture row has
+taken a fixture world-time label, the script aborts with guidance rather
+than attempting an impossible in-place fix — see `_ensure_session`/
+`_ensure_session_event`/`_get_or_create_world_time`.
+
+Each fixture event is inserted directly at `recorded` rather than through
+`dnd_ai.commands.events.record_event`: that command has no parameter for
+the event's short `summary` (the portal's Session-detail Summary column),
+which this fixture must populate. Every other column is set exactly as its
+`_insert_event_row` would — this is the same "mirror the command's row
+shape where the command itself doesn't fit" boundary the world/timeline/
+character inserts below already document.
+
 Not a general-purpose seeding framework — every name and shape here is
-specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`
-constants below), and nothing about this script generalizes to seeding
-arbitrary content.
+specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`/
+`_CAMPAIGN_A_SESSIONS`/`_CAMPAIGN_B_SESSIONS` constants below), and nothing
+about this script generalizes to seeding arbitrary content.
 
 Connects using the same resolution the running API itself uses
 (`dnd_ai.config.settings.database_url`) — never a hardcoded connection
@@ -150,6 +206,7 @@ import argparse
 import sys
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy import Connection, create_engine, text
 
@@ -281,6 +338,186 @@ _CHARACTER_A_SPELLCASTING_ABILITY_CODE = "intelligence"
 _CHARACTER_A_KNOWN_SPELL_CODES = ("fire_bolt", "mage_hand", "magic_missile")
 _CHARACTER_A_PREPARED_SPELL_CODES = ("magic_missile", "cure_wounds")
 
+# --------------------------------------------------------------------------
+# Phase 13D Sessions list/detail live-verification fixtures
+# --------------------------------------------------------------------------
+# Deterministic sessions and linked narrative events for the portal's
+# Sessions list (docs/UI_DESIGN.md §5.7) and Session detail (§5.8) screens,
+# read back by the owner through the real `GET /campaigns/{id}/sessions`
+# and `GET /campaigns/{id}/sessions/{id}` endpoints (dnd_ai.queries.session).
+#
+# Lifecycle status: `core.lifecycle_statuses` has no "completed"/"ended"
+# code — its vocabulary is pending/active/inactive/archived/deleted, and
+# dnd_ai.commands.sessions.end_session is explicit that an ended session is
+# represented by `ended_at IS NOT NULL`, not a lifecycle transition (the
+# row stays `active`). So the two finished sessions carry `active` + a
+# non-null `ended_at`; the not-yet-started session carries `pending` and
+# no timestamps. Those are the schema-supported codes, not invented ones.
+#
+# Event ordering: the session-detail query sorts linked events by
+# `ORDER BY wt.sort_key, e.created_at` (dnd_ai.queries.session). Each event
+# gets its own `core.world_times` row with a deliberately chosen sort_key,
+# and in Session 1 the chronological order (by sort_key) is the reverse of
+# the events' alphabetical name order — so a live tester can confirm the
+# portal preserves the backend's order instead of re-sorting the table.
+_SESSION_SORT_KEY_BASE = 13_000_000
+_SESSION_WORLD_TIME_LABEL_PREFIX = "Phase13D session fixture"
+
+
+@dataclass(frozen=True)
+class _SessionEventFixture:
+    """One `narrative.events` row linked to a fixture session.
+
+    `summary` lands on the event's inherited `core.entities.summary` (the
+    portal's event Summary column); `details` on `narrative.events.details`
+    (the Details column). `world_time_offset` is added to
+    `_SESSION_SORT_KEY_BASE` to get the event's `core.world_times.sort_key`
+    — the value the detail query actually orders on.
+    """
+
+    name: str
+    summary: str
+    details: str
+    event_type_code: str
+    world_time_offset: int
+
+
+@dataclass(frozen=True)
+class _SessionFixture:
+    """One `campaign.sessions` row plus its linked events. `title=None`
+    models the not-yet-titled session the portal renders as `Session
+    <number>`; `started_at=None`/`ended_at=None`/`summary=None` model its
+    empty timing/recap states. `*_world_time_offset` is `None` for that
+    same session (no fictional-time endpoints) and an int offset from
+    `_SESSION_SORT_KEY_BASE` otherwise.
+    """
+
+    session_number: int
+    title: str | None
+    summary: str | None
+    lifecycle_status_code: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    start_world_time_offset: int | None
+    end_world_time_offset: int | None
+    events: tuple[_SessionEventFixture, ...]
+
+    @property
+    def portal_heading(self) -> str:
+        """What the portal shows as the session's H1 — its title, or the
+        `Session <number>` fallback when untitled."""
+        return self.title if self.title is not None else f"Session {self.session_number}"
+
+
+def _fixture_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    assert parsed.tzinfo is not None, "fixture timestamps must be timezone-aware"
+    return parsed
+
+
+_CAMPAIGN_A_SESSIONS: tuple[_SessionFixture, ...] = (
+    _SessionFixture(
+        session_number=1,
+        title="The Sealed Descent",
+        summary=(
+            "The party forced the ossuary doors, ignored Tolek's warning, and woke the first "
+            "warden when they breached the lantern chamber."
+        ),
+        lifecycle_status_code="active",
+        started_at=_fixture_timestamp("2026-01-10T18:00:00+00:00"),
+        ended_at=_fixture_timestamp("2026-01-10T22:30:00+00:00"),
+        start_world_time_offset=10,
+        end_world_time_offset=20,
+        events=(
+            _SessionEventFixture(
+                name="Tolek's Warning Unheeded",
+                summary=(
+                    "Tolek's letter begging the party to turn back was read aloud and dismissed."
+                ),
+                details=(
+                    "Read at the threshold before anyone stepped inside. The party voted to "
+                    "proceed and Tolek's courier left without an answer."
+                ),
+                event_type_code="session_narrative",
+                world_time_offset=12,
+            ),
+            _SessionEventFixture(
+                name="Lantern Chamber Breached",
+                summary="Forcing the warded lantern chamber woke the first warden.",
+                details=(
+                    "Two of the three binding glyphs were disarmed; the third discharged and the "
+                    "warden rose. This happened after Tolek's warning even though it sorts before "
+                    "it alphabetically."
+                ),
+                event_type_code="mechanism_activated",
+                world_time_offset=15,
+            ),
+        ),
+    ),
+    _SessionFixture(
+        session_number=2,
+        title="The Warden's Bargain",
+        summary=(
+            "Negotiation with the head warden bought the party passage past the antechamber, "
+            "moments before grave-hounds sprang at the third vault."
+        ),
+        lifecycle_status_code="active",
+        started_at=_fixture_timestamp("2026-01-24T18:00:00+00:00"),
+        ended_at=_fixture_timestamp("2026-01-24T23:15:00+00:00"),
+        start_world_time_offset=30,
+        end_world_time_offset=40,
+        events=(
+            _SessionEventFixture(
+                name="Vault Antechamber Mapped",
+                summary="The party charted the antechamber and its four sealed side-vaults.",
+                details="A full sketch of the antechamber and its vault seals went into the records.",
+                event_type_code="location_discovered",
+                world_time_offset=32,
+            ),
+            _SessionEventFixture(
+                name="Ambush at the Third Vault",
+                summary="Grave-hounds sprang the instant the third vault seal cracked.",
+                details="Two hounds were put down and one fled deeper; the seal stayed half open.",
+                event_type_code="session_narrative",
+                world_time_offset=36,
+            ),
+        ),
+    ),
+    _SessionFixture(
+        session_number=3,
+        title=None,
+        summary=None,
+        lifecycle_status_code="pending",
+        started_at=None,
+        ended_at=None,
+        start_world_time_offset=None,
+        end_world_time_offset=None,
+        events=(),
+    ),
+)
+
+_CAMPAIGN_B_SESSIONS: tuple[_SessionFixture, ...] = (
+    _SessionFixture(
+        session_number=1,
+        title="Smoke Over Hollowmere",
+        summary="The Timeline B party answered the beacon and reached Hollowmere already ablaze.",
+        lifecycle_status_code="active",
+        started_at=_fixture_timestamp("2026-02-07T19:00:00+00:00"),
+        ended_at=_fixture_timestamp("2026-02-07T22:00:00+00:00"),
+        start_world_time_offset=50,
+        end_world_time_offset=60,
+        events=(
+            _SessionEventFixture(
+                name="Beacon Fire Answered",
+                summary="The party rode through the night the signal fire was lit.",
+                details="They reached the ridge above Hollowmere by dawn and saw the smoke column.",
+                event_type_code="session_narrative",
+                world_time_offset=52,
+            ),
+        ),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class _UserInfo:
@@ -293,6 +530,14 @@ class _UserInfo:
 @dataclass
 class _Summary:
     lines: list[str] = field(default_factory=list)
+    # A human-readable quick reference (session/event ids, portal headings,
+    # the cross-campaign test hint) printed after `lines` in both preview
+    # and apply mode — see `_note_session`/`main`. Never carries a
+    # created/reused/reconciled verb; that stays in `lines`.
+    report: list[str] = field(default_factory=list)
+
+    def note(self, line: str) -> None:
+        self.report.append(line)
 
     def add(
         self,
@@ -978,15 +1223,6 @@ def _ensure_character_resource(
     summary.add(created=False, changed=True, label=label, record_id=character_id)
 
 
-# ---------------------------------------------------------------------------
-# Phase 13D Sheet-panel fixture: character builds and their ruleset-scoped
-# content. Every rules.* id resolved below is looked up by code against the
-# already-seeded dnd5e/2024 content (migration 022) — this fixture creates
-# no rules.* rows of its own, matching this module's own "only reuses
-# existing ruleset/rules content" convention (see _get_ruleset's docstring).
-# ---------------------------------------------------------------------------
-
-
 def _resolve_ruleset_code_id(
     connection: Connection, table: str, pk_column: str, *, ruleset_version_id: uuid.UUID, code: str
 ) -> uuid.UUID:
@@ -1559,6 +1795,437 @@ def _ensure_active_build_selection(
     summary.add(created=was_unset, changed=not was_unset, label=label, record_id=character_id)
 
 
+def _get_or_create_world_time(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    label: str,
+    sort_key: int,
+) -> uuid.UUID:
+    """Create-or-reuse one fixture-owned `core.world_times` row, located by
+    its distinctive `(world_id, label)` — `core.world_times` has no natural
+    key, so the fixture's own fixed label is what makes this idempotent.
+    `core.world_times.sort_key` is immutable once set (revision 030,
+    `core.enforce_immutable_columns`), so this never reconciles a drifted
+    row: event ordering is guaranteed stable by the schema, and a row found
+    under the fixture's label with a *different* sort_key means a non-fixture
+    row has taken that label — ambiguous, so it aborts. `year` is derived
+    from the offset only to satisfy `ck_world_times_year_or_label`; nothing
+    reads it."""
+    existing = (
+        connection.execute(
+            text(
+                "SELECT world_time_id, sort_key FROM core.world_times "
+                "WHERE world_id = :world AND label = :label"
+            ),
+            {"world": world_id, "label": label},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    report_label = f"world time {label!r}"
+
+    if existing is None:
+        precision_id = lookup_id(
+            connection, "core", "world_time_precisions", "world_time_precision_id", "exact"
+        )
+        world_time_id = connection.execute(
+            text("""
+                INSERT INTO core.world_times
+                    (world_id, world_time_precision_id, year, label, sort_key)
+                VALUES (:world, :precision, :year, :label, :sort_key)
+                RETURNING world_time_id
+            """),
+            {
+                "world": world_id,
+                "precision": precision_id,
+                "year": 1000 + (sort_key - _SESSION_SORT_KEY_BASE),
+                "label": label,
+                "sort_key": sort_key,
+            },
+        ).scalar()
+        assert isinstance(world_time_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=world_time_id)
+        return world_time_id
+
+    world_time_id = existing["world_time_id"]
+    assert isinstance(world_time_id, uuid.UUID)
+    if existing["sort_key"] != sort_key:
+        raise SystemExit(
+            f"world time {label!r} ({world_time_id}) already exists with sort_key "
+            f"{existing['sort_key']}, not the fixture's {sort_key}. core.world_times.sort_key is "
+            "immutable (revision 030), so a non-fixture row is using the fixture's label — "
+            "investigate before re-running."
+        )
+    summary.add(created=False, changed=False, label=report_label, record_id=world_time_id)
+    return world_time_id
+
+
+def _session_world_time_label(campaign_name: str, session_number: int, slot: str) -> str:
+    return f"{_SESSION_WORLD_TIME_LABEL_PREFIX}: {campaign_name} session {session_number} {slot}"
+
+
+def _ensure_session(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_name: str,
+    world_id: uuid.UUID,
+    fixture: _SessionFixture,
+) -> uuid.UUID:
+    """Create-or-reconcile one fixture-owned `campaign.sessions` row,
+    located by `(campaign_id, session_number)` in the fixture's own
+    campaign. That campaign is created by this script, and a fresh campaign
+    has no sessions, so a row at one of the fixture's own session numbers
+    (1-3 for Campaign A, 1 for Campaign B) is fixture-owned by
+    construction. title/summary/lifecycle/started_at/ended_at and the
+    world-time endpoints are all reconciled: `campaign.sessions` carries no
+    immutability trigger, and a live-testing session may legitimately have
+    ended a session or revised its recap through the real commands.
+
+    Aborts rather than guessing if a row at this number carries a
+    `source_id` — an imported/externally-sourced session is never
+    something this fixture creates."""
+    start_world_time_id = (
+        _get_or_create_world_time(
+            connection,
+            summary,
+            world_id=world_id,
+            label=_session_world_time_label(campaign_name, fixture.session_number, "start"),
+            sort_key=_SESSION_SORT_KEY_BASE + fixture.start_world_time_offset,
+        )
+        if fixture.start_world_time_offset is not None
+        else None
+    )
+    end_world_time_id = (
+        _get_or_create_world_time(
+            connection,
+            summary,
+            world_id=world_id,
+            label=_session_world_time_label(campaign_name, fixture.session_number, "end"),
+            sort_key=_SESSION_SORT_KEY_BASE + fixture.end_world_time_offset,
+        )
+        if fixture.end_world_time_offset is not None
+        else None
+    )
+
+    lifecycle_status_id = lookup_id(
+        connection,
+        "core",
+        "lifecycle_statuses",
+        "lifecycle_status_id",
+        fixture.lifecycle_status_code,
+    )
+
+    report_label = f"session {campaign_name} #{fixture.session_number} {fixture.portal_heading!r}"
+    params = {
+        "campaign": campaign_id,
+        "number": fixture.session_number,
+        "lifecycle": lifecycle_status_id,
+        "title": fixture.title,
+        "summary": fixture.summary,
+        "started": fixture.started_at,
+        "ended": fixture.ended_at,
+        "start_wt": start_world_time_id,
+        "end_wt": end_world_time_id,
+    }
+
+    existing = (
+        connection.execute(
+            text("""
+                SELECT session_id, source_id, title, summary, lifecycle_status_id,
+                       started_at, ended_at, start_world_time_id, end_world_time_id
+                FROM campaign.sessions
+                WHERE campaign_id = :campaign AND session_number = :number
+            """),
+            {"campaign": campaign_id, "number": fixture.session_number},
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+    if existing is None:
+        session_id = connection.execute(
+            text("""
+                INSERT INTO campaign.sessions
+                    (campaign_id, session_number, lifecycle_status_id, title, summary,
+                     started_at, ended_at, start_world_time_id, end_world_time_id)
+                VALUES (:campaign, :number, :lifecycle, :title, :summary, :started, :ended,
+                        :start_wt, :end_wt)
+                RETURNING session_id
+            """),
+            params,
+        ).scalar()
+        assert isinstance(session_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=session_id)
+        return session_id
+
+    session_id = existing["session_id"]
+    assert isinstance(session_id, uuid.UUID)
+    if existing["source_id"] is not None:
+        raise SystemExit(
+            f"session #{fixture.session_number} in {campaign_name!r} ({session_id}) has a "
+            "source_id — it was imported from elsewhere, not created by this fixture. Refusing "
+            "to reconcile it rather than overwrite non-fixture data."
+        )
+
+    matches = (
+        existing["title"] == fixture.title
+        and existing["summary"] == fixture.summary
+        and existing["lifecycle_status_id"] == lifecycle_status_id
+        and existing["started_at"] == fixture.started_at
+        and existing["ended_at"] == fixture.ended_at
+        and existing["start_world_time_id"] == start_world_time_id
+        and existing["end_world_time_id"] == end_world_time_id
+    )
+    if matches:
+        summary.add(created=False, changed=False, label=report_label, record_id=session_id)
+        return session_id
+
+    connection.execute(
+        text("""
+            UPDATE campaign.sessions
+            SET lifecycle_status_id = :lifecycle, title = :title, summary = :summary,
+                started_at = :started, ended_at = :ended, start_world_time_id = :start_wt,
+                end_world_time_id = :end_wt
+            WHERE session_id = :session
+        """),
+        {**params, "session": session_id},
+    )
+    summary.add(created=False, changed=True, label=report_label, record_id=session_id)
+    return session_id
+
+
+def _ensure_session_event(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    campaign_name: str,
+    session_id: uuid.UUID,
+    session_number: int,
+    position: int,
+    fixture: _SessionEventFixture,
+) -> uuid.UUID:
+    """Create-or-reuse one fixture-owned `recorded` `narrative.events` row
+    (entity + event pair), located by `(world_id, canonical_name)` among
+    event-typed entities — an event's name is frozen once recorded, so it
+    is a stable key. Created directly at `recorded` rather than through
+    `dnd_ai.commands.events.record_event` because that command has no
+    parameter for the event's short `summary` (the portal's Session-detail
+    Summary column), which this fixture must populate; every other column
+    is set exactly as `_insert_event_row` would.
+
+    A `recorded` event is immutable by schema design (docs/ENTITY_LIFECYCLE.md
+    §15 — content frozen, only `recorded -> voided/corrected` allowed, no
+    deletion), and its chronological position is frozen too
+    (`core.world_times.sort_key` is immutable, revision 030). That schema
+    guarantee *is* the reconciliation story for these rows: nothing a
+    live-testing session can do will change an event's content or its order,
+    so a re-run only create-or-reuses each event by its (frozen) name. If a
+    fixture event was voided or repointed during testing, or its frozen
+    content no longer matches, this aborts with guidance rather than
+    attempting an impossible in-place fix."""
+    world_time_id = _get_or_create_world_time(
+        connection,
+        summary,
+        world_id=world_id,
+        label=_session_world_time_label(
+            campaign_name, session_number, f"event {position} ({fixture.name})"
+        ),
+        sort_key=_SESSION_SORT_KEY_BASE + fixture.world_time_offset,
+    )
+
+    event_type_id = lookup_id(
+        connection, "narrative", "event_types", "event_type_id", fixture.event_type_code
+    )
+    event_entity_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "event")
+
+    report_label = (
+        f"session event {campaign_name} #{session_number} (chronological #{position}) "
+        f"{fixture.name!r}"
+    )
+
+    existing = (
+        connection.execute(
+            text("""
+                SELECT e.event_id, e.session_id, e.event_type_id, e.world_time_id, e.details,
+                       ce.summary, es.code AS status_code
+                FROM core.entities ce
+                JOIN narrative.events e ON e.event_id = ce.entity_id
+                JOIN narrative.event_statuses es ON es.event_status_id = e.event_status_id
+                WHERE ce.world_id = :world AND ce.canonical_name = :name
+                  AND ce.entity_type_id = :etype
+            """),
+            {"world": world_id, "name": fixture.name, "etype": event_entity_type_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+    if existing is None:
+        canon_status_id = lookup_id(
+            connection, "core", "canon_statuses", "canon_status_id", "canon"
+        )
+        active_status_id = lookup_id(
+            connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
+        )
+        recorded_status_id = lookup_id(
+            connection, "narrative", "event_statuses", "event_status_id", "recorded"
+        )
+        event_id = connection.execute(
+            text("""
+                INSERT INTO core.entities
+                    (world_id, entity_type_id, canonical_name, summary, canon_status_id,
+                     lifecycle_status_id)
+                VALUES (:world, :etype, :name, :summary, :canon, :lifecycle)
+                RETURNING entity_id
+            """),
+            {
+                "world": world_id,
+                "etype": event_entity_type_id,
+                "name": fixture.name,
+                "summary": fixture.summary,
+                "canon": canon_status_id,
+                "lifecycle": active_status_id,
+            },
+        ).scalar()
+        assert isinstance(event_id, uuid.UUID)
+        connection.execute(
+            text("""
+                INSERT INTO narrative.events
+                    (event_id, timeline_id, campaign_id, session_id, event_type_id,
+                     event_status_id, world_time_id, details)
+                VALUES (:id, :timeline, :campaign, :session, :etype, :status, :world_time,
+                        :details)
+            """),
+            {
+                "id": event_id,
+                "timeline": timeline_id,
+                "campaign": campaign_id,
+                "session": session_id,
+                "etype": event_type_id,
+                "status": recorded_status_id,
+                "world_time": world_time_id,
+                "details": fixture.details,
+            },
+        )
+        summary.add(created=True, label=report_label, record_id=event_id)
+        return event_id
+
+    event_id = existing["event_id"]
+    assert isinstance(event_id, uuid.UUID)
+
+    if existing["status_code"] == "voided":
+        raise SystemExit(
+            f"fixture event {fixture.name!r} ({event_id}) is voided. A recorded/voided event is "
+            "immutable (docs/ENTITY_LIFECYCLE.md §15) and cannot be restored by this fixture — "
+            "rename or void-and-replace it, or recreate the dev database, then re-run."
+        )
+    if existing["session_id"] != session_id:
+        raise SystemExit(
+            f"fixture event {fixture.name!r} ({event_id}) is linked to session "
+            f"{existing['session_id']}, not the fixture's session {session_id}. A recorded "
+            "event's session_id is frozen and cannot be reconciled — rename or replace the "
+            "row, then re-run."
+        )
+
+    drifted = (
+        existing["summary"] != fixture.summary
+        or existing["details"] != fixture.details
+        or existing["event_type_id"] != event_type_id
+        or existing["world_time_id"] != world_time_id
+    )
+    if drifted:
+        raise SystemExit(
+            f"fixture event {fixture.name!r} ({event_id}) exists as a recorded event whose "
+            "frozen content no longer matches the fixture. Recorded events are immutable "
+            "(docs/ENTITY_LIFECYCLE.md §15), so this cannot be reset in place — recreate the "
+            "dev database, or void-and-rename the row, then re-run."
+        )
+
+    summary.add(created=False, changed=False, label=report_label, record_id=event_id)
+    return event_id
+
+
+def _note_session(
+    summary: _Summary,
+    *,
+    fixture: _SessionFixture,
+    session_id: uuid.UUID,
+    event_ids: list[uuid.UUID],
+) -> None:
+    if fixture.title is not None:
+        title_desc = repr(fixture.portal_heading)
+    else:
+        title_desc = f"untitled (portal shows {fixture.portal_heading!r})"
+
+    if fixture.started_at is None:
+        timing = "no start/end timestamps"
+    else:
+        assert fixture.ended_at is not None
+        timing = f"{fixture.started_at.isoformat()} -> {fixture.ended_at.isoformat()}"
+
+    if event_ids:
+        events_desc = "events, chronological order: " + ", ".join(str(e) for e in event_ids)
+    else:
+        events_desc = "no linked events"
+
+    summary.note(
+        f"  #{fixture.session_number} {title_desc}  {session_id}  "
+        f"[{fixture.lifecycle_status_code}; {timing}; {events_desc}]"
+    )
+
+
+def _ensure_campaign_sessions(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_name: str,
+    timeline_id: uuid.UUID,
+    world_id: uuid.UUID,
+    fixtures: tuple[_SessionFixture, ...],
+) -> dict[int, uuid.UUID]:
+    """Reconcile every session fixture for one campaign and append its
+    quick-reference block to `summary.report`. Returns
+    `{session_number: session_id}` so the caller can name a specific
+    session (Campaign B's, for the cross-campaign test hint)."""
+    summary.note(f"{campaign_name}:")
+    session_ids: dict[int, uuid.UUID] = {}
+    for fixture in fixtures:
+        session_id = _ensure_session(
+            connection,
+            summary,
+            campaign_id=campaign_id,
+            campaign_name=campaign_name,
+            world_id=world_id,
+            fixture=fixture,
+        )
+        session_ids[fixture.session_number] = session_id
+        event_ids = [
+            _ensure_session_event(
+                connection,
+                summary,
+                world_id=world_id,
+                timeline_id=timeline_id,
+                campaign_id=campaign_id,
+                campaign_name=campaign_name,
+                session_id=session_id,
+                session_number=fixture.session_number,
+                position=position,
+                fixture=event_fixture,
+            )
+            for position, event_fixture in enumerate(fixture.events, start=1)
+        ]
+        _note_session(summary, fixture=fixture, session_id=session_id, event_ids=event_ids)
+    return session_ids
+
+
 def _ensure_character_relationship(
     connection: Connection,
     summary: _Summary,
@@ -1658,7 +2325,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         name=_CAMPAIGN_A_NAME,
         user=user,
     )
-    _get_or_create_campaign(
+    campaign_b_id, _campaign_b_membership_id = _get_or_create_campaign(
         connection,
         summary,
         timeline_id=timeline_b_id,
@@ -1760,6 +2427,33 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         timeline_id=timeline_a_id,
         character_a_id=character_a_id,
         character_b_id=character_b_id,
+    )
+
+    _ensure_campaign_sessions(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_name=_CAMPAIGN_A_NAME,
+        timeline_id=timeline_a_id,
+        world_id=world_id,
+        fixtures=_CAMPAIGN_A_SESSIONS,
+    )
+    campaign_b_session_ids = _ensure_campaign_sessions(
+        connection,
+        summary,
+        campaign_id=campaign_b_id,
+        campaign_name=_CAMPAIGN_B_NAME,
+        timeline_id=timeline_b_id,
+        world_id=world_id,
+        fixtures=_CAMPAIGN_B_SESSIONS,
+    )
+
+    summary.note("")
+    summary.note(
+        "Cross-campaign / invalid-id manual test: request "
+        f"GET /campaigns/{campaign_a_id}/sessions/{campaign_b_session_ids[1]} "
+        "(Campaign B's session under Campaign A's URL). The API must return the same "
+        "non-disclosing 'unavailable' response as a nonexistent session id."
     )
 
     return summary
@@ -2118,6 +2812,9 @@ def main(argv: list[str] | None = None) -> int:
             transaction.rollback()
 
     print("\n".join(summary.lines))
+    if summary.report:
+        print("\n-- Session fixture quick reference (for manual portal verification) --")
+        print("\n".join(summary.report))
     if args.apply:
         print("\nAPPLIED - changes committed.")
         _print_bootstrap_verification(user_id=args.user_id)
