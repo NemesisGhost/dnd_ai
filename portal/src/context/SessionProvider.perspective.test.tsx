@@ -11,7 +11,7 @@ import {
   it,
   vi,
 } from "vitest"
-import { CampaignContextBar } from "../components/CampaignContextBar"
+import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "../hooks/useSessionBootstrap"
 import { AuthenticatedSessionBoundary } from "../layouts/AuthenticatedSessionBoundary"
@@ -71,7 +71,7 @@ function TestPortal() {
             return currentCampaign === undefined
               ? null
               : (
-                <CampaignContextBar
+                <CampaignContextPanel
                   campaign={currentCampaign}
                 />
               )
@@ -100,9 +100,10 @@ describe("SessionProvider perspective integration", () => {
     const { rerender } = render(<TestPortal />)
 
     expect(
-      screen.getByText("No character selected", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as No character selected",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
 
     fireEvent.change(
@@ -134,8 +135,8 @@ describe("SessionProvider perspective integration", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole("region", {
-        name: "Current campaign context",
+      screen.queryByRole("combobox", {
+        name: "Character perspective",
       }),
     ).not.toBeInTheDocument()
 
@@ -156,9 +157,10 @@ describe("SessionProvider perspective integration", () => {
     ).toHaveValue("character-b")
 
     expect(
-      screen.getByText("Character B", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as Character B",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
   })
 
@@ -218,9 +220,10 @@ describe("SessionProvider perspective integration", () => {
     ).toHaveValue("character-a")
 
     expect(
-      screen.getByText("Character A", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as Character A",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
 
     expect(
@@ -230,9 +233,10 @@ describe("SessionProvider perspective integration", () => {
     ).not.toBeInTheDocument()
 
     expect(
-      screen.queryByText("Character B", {
-        selector: "dd",
-      }),
+      screen.queryByText(
+        "Campaign context: Mundivita — Viewing as Character B",
+        { selector: "summary" },
+      ),
     ).not.toBeInTheDocument()
   })
 })

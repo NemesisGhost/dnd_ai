@@ -1,6 +1,7 @@
 import {
   render,
   screen,
+  within,
 } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import {
@@ -272,7 +273,9 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
+      within(
+        screen.getByRole("navigation", { name: "Campaign" }),
+      ).getByRole("link", {
         name: "Change campaign",
       }),
     ).toHaveAttribute("href", "/campaigns")

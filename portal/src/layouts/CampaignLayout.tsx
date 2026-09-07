@@ -1,6 +1,6 @@
 import { Outlet, useParams } from 'react-router'
 import { AppNavigation } from '../components/AppNavigation'
-import { CampaignContextBar } from '../components/CampaignContextBar'
+import { CampaignContextPanel } from '../components/CampaignContextPanel'
 import PlaceholderPage from '../pages/PlaceholderPage'
 import type { SessionBootstrap } from '../types/bootstrap'
 
@@ -31,16 +31,18 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
 
   return (
     <>
-      <CampaignContextBar campaign={campaign} />
-
       <AppNavigation
         campaignId={campaign.campaign_id}
         askEnabled={bootstrap.features.ask}
         showAccess={showAccess}
       />
 
-      <main className="app-main">
-        <Outlet />
+      <main className="app-main campaign-workspace">
+        <CampaignContextPanel campaign={campaign} />
+
+        <div className="campaign-workspace__content">
+          <Outlet />
+        </div>
       </main>
     </>
   )

@@ -2,6 +2,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react"
 import {
   MemoryRouter,
@@ -18,7 +19,7 @@ vi.mock("../context/SessionContext", () => ({
   useSession: vi.fn(),
 }))
 vi.mock("../context/CharacterPerspectiveContext", () => ({
-  usePerspective: vi.fn(),
+    usePerspective: vi.fn(),
 }))
 
 const useSessionMock = vi.mocked(useSession)
@@ -85,6 +86,12 @@ describe("CampaignSessionBoundary", () => {
         name: "Campaign",
       }),
     ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Character perspective",
+      }),
+    ).not.toBeInTheDocument()
   })
 
   it("redirects an unauthenticated user to login", () => {
@@ -106,6 +113,12 @@ describe("CampaignSessionBoundary", () => {
     expect(
       screen.queryByRole("navigation", {
         name: "Campaign",
+      }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Character perspective",
       }),
     ).not.toBeInTheDocument()
   })
@@ -139,6 +152,12 @@ describe("CampaignSessionBoundary", () => {
       }),
     ).not.toBeInTheDocument()
 
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Character perspective",
+      }),
+    ).not.toBeInTheDocument()
+
     fireEvent.click(
       screen.getByRole("button", {
         name: "Try again",
@@ -148,7 +167,7 @@ describe("CampaignSessionBoundary", () => {
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
-  it("renders authorized campaign content when authenticated", () => {
+  it("renders the authorized campaign workspace when authenticated", () => {
     useSessionMock.mockReturnValue({
       state: {
         status: "authenticated",
@@ -165,14 +184,45 @@ describe("CampaignSessionBoundary", () => {
       }),
     ).toBeInTheDocument()
 
+    const main = screen.getByRole("main")
+
     expect(
-      screen.getByRole("heading", {
+      within(main).getByRole("heading", {
         name: "Campaign home",
       }),
     ).toBeInTheDocument()
 
     expect(
-      screen.getByText("Mundivita"),
+      within(main).getByText(
+        "Campaign context: Mundivita — Viewing as Ixamarra",
+        {
+          selector: "summary",
+        },
+      ),
     ).toBeInTheDocument()
+
+    expect(
+      within(main).getByText(
+        "Primary Timeline",
+      ),
+    ).toBeInTheDocument()
+
+    expect(
+      within(main).getByRole("combobox", {
+        name: "Character perspective",
+      }),
+    ).toHaveValue("character-ixamarra")
+
+    expect(
+      within(main).getByRole("link", {
+        name: "Change campaign",
+      }),
+    ).toHaveAttribute("href", "/campaigns")
+
+    expect(
+      screen.queryByRole("region", {
+        name: "Current campaign context",
+      }),
+    ).not.toBeInTheDocument()
   })
 })
