@@ -83,6 +83,23 @@ dungeon`'s exactly — see `dnd_ai.queries.quest`'s own docstring for how
 read: no idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
 
+Campaign exposure (Phase 13D live-verification correction). Quest
+*definitions* (`narrative.quests`) are world canon with no `campaign_id`,
+and one world hosts many campaign timelines — so "same world" is *not*
+"exposed to this campaign." The detail route passes
+`get_quest_view(..., require_campaign_tracking=True, include_all_parties=
+access.has_capability(_QUEST_MANAGE_CAPABILITY))`: the quest is fetchable
+only when a qualifying `campaign.quest_state` row exists on the route
+campaign's exact `timeline_id`, under the *same* timeline/party audience
+rule `list_quests_endpoint` feeds `list_campaign_quests` (a GM — baseline
+`canon.edit`, no quest target — counts any party's row on that timeline; a
+non-GM only a campaign-wide row or their own authorized `party_id`'s). A
+same-world quest tracked only on another campaign's timeline, only for an
+unauthorized party, or not tracked at all raises `QuestNotFoundError` →
+the identical fixed non-disclosing 404 as a nonexistent or cross-world
+quest. List and detail therefore apply one shared tracking rule and can
+never disagree on which quests an audience may see.
+
 Phase 13D backend-readiness workstream added `GET /campaigns/
 {campaign_id}/quests` (`dnd_ai.queries.quest.list_campaign_quests`) — the
 list the portal's Home dashboard ("active quests") and a Quests screen
@@ -318,6 +335,18 @@ def get_quest_endpoint(
         )
     )
 
+    # Whether this quest is even *exposed* to the route's campaign is
+    # established by qualifying campaign.quest_state on the campaign's exact
+    # timeline — quests are world canon with no campaign_id, and one world
+    # hosts many campaign timelines. is_gm here is the baseline canon.edit
+    # check (no quest target), identical to list_quests_endpoint's own
+    # include_all_parties input, so list and detail apply one tracking/
+    # audience rule: a GM sees a quest tracked through any party on the
+    # timeline; a non-GM only one tracked campaign-wide or through their
+    # own authorized party perspective. A same-world quest tracked only on
+    # another campaign's timeline returns the standard non-disclosing 404.
+    is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
+
     view = get_quest_view(
         connection,
         quest_id=quest_id,
@@ -325,6 +354,8 @@ def get_quest_endpoint(
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         party_id=authorized_party_id,
         include_hidden=include_hidden,
+        require_campaign_tracking=True,
+        include_all_parties=is_gm,
     )
 
     return QuestResponse(

@@ -109,12 +109,15 @@ lookup vocabularies used, and the visibility semantics:
 
 Campaign B gets one fixture-owned quest ("Chart the Sunken Marches",
 `_CAMPAIGN_B_QUEST`) with a stage and objective, tracked on Timeline B.
-`list_campaign_quests` is timeline-scoped so it never surfaces in Campaign
-A's list; `get_quest_view` gates only on world, and both campaigns share
-one world here, so requesting it under Campaign A's URL currently returns
-the quest definition rather than a non-disclosing 404 — a pre-existing
-detail-endpoint gap the module comment above `_CAMPAIGN_A_QUESTS` explains
-in full. Not fixed here (the task forbids changing the quest API).
+Both `list_campaign_quests` and `get_quest_view` are now timeline/audience
+scoped through one shared rule (`dnd_ai.queries.quest.
+_QUEST_STATE_MATCHES_AUDIENCE`): this quest never surfaces in Campaign A's
+list, and requesting its id under Campaign A's URL raises
+`QuestNotFoundError` → the same non-disclosing 404 a nonexistent quest
+produces, even though both campaigns share one world. The database/query
+verification block requests it exactly that way and prints the real
+result — see the module comment above `_CAMPAIGN_B_QUEST` and
+`_print_quest_verification`.
 
 Quests, stages, objectives, and their `campaign.quest_state`/
 `.objective_state` rows are inserted directly and, on a re-run, the
@@ -578,30 +581,27 @@ _CAMPAIGN_B_SESSIONS: tuple[_SessionFixture, ...] = (
 #
 # Campaign B quest ("Chart the Sunken Marches", `_CAMPAIGN_B_QUEST`): one
 # stage, one objective, a campaign-wide `campaign.quest_state` row on
-# Timeline B. Its purpose is cross-campaign non-disclosure testing. Note
-# what the current production implementation actually guarantees here, and
-# what it does not:
+# Timeline B. Its purpose is cross-campaign non-disclosure testing, and it
+# reproduces the exact shape that exposed the Phase 13D detail-disclosure
+# defect: one world, two timelines, one campaign per timeline, Campaign B's
+# quest state only on Timeline B.
 #
-#   - `list_campaign_quests` is strictly timeline-scoped, so this quest
+#   - `list_campaign_quests` is timeline/audience scoped, so this quest
 #     never appears in Campaign A's list — verified, and asserted by the
 #     focused tests.
-#   - `get_quest_view` (the detail query) gates ONLY on world, not
-#     timeline or campaign (`narrative.quests` is world canon and carries
-#     no `campaign_id`; `dnd_ai.api.quests`' own docstring records the
-#     absence of a per-campaign ownership check). Campaign A and Campaign B
-#     share one world in this fixture (one "Phase13C Dev World", two
-#     timelines — the existing structure the Sessions fixture also relies
-#     on), so requesting this quest's id under Campaign A's URL currently
-#     returns HTTP 200 with the quest definition rather than the
-#     non-disclosing 404 a nonexistent quest id produces. Full parity would
-#     require either a second world for Campaign B (which cannot be
-#     reconciled onto a dev database that already ran an earlier version of
-#     this script — Campaign B's recorded session events are immutable and
-#     world-pinned) or an API change to scope quest detail by
-#     timeline/campaign (out of scope — the task forbids changing the quest
-#     API contract). The verification block prints the actual result of
-#     both requests so a live tester sees the real behavior, and the
-#     completion report flags the detail-endpoint gap.
+#   - `get_quest_view`, called by `get_quest_endpoint` with
+#     `require_campaign_tracking=True` and `include_all_parties=<account
+#     holds baseline canon.edit>`, now applies the *same* shared
+#     timeline/party audience rule (`dnd_ai.queries.quest.
+#     _QUEST_STATE_MATCHES_AUDIENCE`). `narrative.quests` is still world
+#     canon with no `campaign_id`, but campaign exposure is established by
+#     a qualifying `campaign.quest_state` row on the campaign's exact
+#     timeline — and Campaign B's quest has none on Timeline A. So
+#     requesting this quest's id under Campaign A's URL raises
+#     `QuestNotFoundError` → the identical non-disclosing 404 a nonexistent
+#     quest id produces. The verification block requests it exactly that
+#     way and prints the real result so a live tester sees the behavior
+#     directly; the focused query/API tests assert it.
 
 _QUEST_A_ACTIVE_NAME = "Restore the Glass Ossuary"
 _QUEST_A_COMPLETED_NAME = "Gather the Hollow Verses"
@@ -2870,12 +2870,14 @@ def _note_quest_reference_block(
     )
     n("")
     n(
-        "Note on the cross-campaign request: the quest LIST endpoint is timeline-scoped and "
-        f"does NOT include {_CAMPAIGN_B_QUEST_NAME!r} in Campaign A. The DETAIL endpoint "
-        "currently returns the quest definition (HTTP 200) rather than a non-disclosing 404, "
-        "because quests are world canon with no campaign_id and both campaigns share one "
-        "world in this fixture. See the module docstring; this is flagged as a known "
-        "detail-endpoint gap, not fixed here (the task forbids changing the quest API)."
+        "Note on the cross-campaign request: the quest LIST endpoint is timeline/audience "
+        f"scoped and does NOT include {_CAMPAIGN_B_QUEST_NAME!r} in Campaign A. The DETAIL "
+        "endpoint applies the same shared tracking rule, so requesting Campaign B's quest id "
+        "under Campaign A returns the standard non-disclosing 404 (identical to a nonexistent "
+        "quest) — quests are world canon with no campaign_id, but campaign exposure requires "
+        "a qualifying campaign.quest_state row on the campaign's exact timeline, and Campaign "
+        "B's quest has none on Timeline A. See the module docstring and the query verification "
+        "block below."
     )
 
 
@@ -3012,6 +3014,8 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
             expected_world_id=world_a,
             party_id=None,
             include_hidden=is_gm,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
         )
         glass_view_non_gm = get_quest_view(
             connection,
@@ -3020,6 +3024,8 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
             expected_world_id=world_a,
             party_id=None,
             include_hidden=False,
+            require_campaign_tracking=True,
+            include_all_parties=False,
         )
 
         empty = next(i for i in a_list if i.name == _QUEST_A_COMPLETED_NAME)
@@ -3030,10 +3036,17 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
             expected_world_id=world_a,
             party_id=None,
             include_hidden=is_gm,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
         )
 
         b_quest = next(i for i in b_list if i.name == _CAMPAIGN_B_QUEST_NAME)
         cross_in_a_list = any(i.quest_id == b_quest.quest_id for i in a_list)
+        # The exact shape that exposed the Phase 13D disclosure defect: one
+        # world, two timelines, one campaign per timeline, Campaign B's
+        # quest state only on Timeline B, requested through Campaign A's
+        # resolved timeline/audience — mirroring get_quest_endpoint's own
+        # call (require_campaign_tracking=True, include_all_parties=is_gm).
         try:
             cross_view = get_quest_view(
                 connection,
@@ -3042,11 +3055,13 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
                 expected_world_id=world_a,
                 party_id=None,
                 include_hidden=is_gm,
+                require_campaign_tracking=True,
+                include_all_parties=is_gm,
             )
             cross_detail_result = (
                 f"RETURNED quest {cross_view.name!r} "
                 f"(status={cross_view.status_code!r}, {len(cross_view.stages)} stage(s)) -- "
-                "NOT a non-disclosing result; see the module docstring"
+                "UNEXPECTED: a same-world/other-timeline quest must be non-disclosing"
             )
         except QuestNotFoundError:
             cross_detail_result = "raised QuestNotFoundError (API -> non-disclosing 404)"
@@ -3059,6 +3074,8 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
                 expected_world_id=world_a,
                 party_id=None,
                 include_hidden=is_gm,
+                require_campaign_tracking=True,
+                include_all_parties=is_gm,
             )
             nonexistent_result = "did NOT raise (unexpected)"
         except QuestNotFoundError:

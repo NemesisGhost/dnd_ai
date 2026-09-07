@@ -26,7 +26,7 @@ UI_DESIGN.md bullet for every screen.
 | Home | `GET /auth/session` (bootstrap), `GET /campaigns/{id}/summary`, `GET /campaigns/{id}/quests` (new), `GET /campaigns/{id}/knowledge/{id}` | `dnd_ai.queries.bootstrap.get_session_bootstrap`, `.summary.get_campaign_summary_view`, `.quest.list_campaign_quests` | Yes, for the recap/current-session/quest sections. "Recent discoveries" (knowledge) has no list endpoint yet — see §3. |
 | World | `GET /campaigns/{id}/dungeon-areas/{id}`, `/characters/{id}`, `/organizations/{id}`, `/relationships/{id}` (all detail-by-id) | `dnd_ai.queries.dungeon`, `.character`, `.organization`, `.relationship` | No. Every one of these is a detail-by-id read; nothing lists or searches locations, NPCs, organizations, or items. See §3 (primary blocker). |
 | Characters | `GET /auth/session` (character_perspectives), `GET /campaigns/{id}/characters/{id}`, `.../inventory` | `dnd_ai.queries.bootstrap`, `.character`, `.inventory` | Yes. The character selector is the bootstrap response's own `character_perspectives`; detail/inventory already exist and are already audience-filtered. |
-| Quests | `GET /campaigns/{id}/quests` (new), `GET /campaigns/{id}/quests/{id}` | `dnd_ai.queries.quest.list_campaign_quests` (new), `.get_quest_view` | Yes, after this workstream. Detail already existed; the list was the missing piece — see §4. |
+| Quests | `GET /campaigns/{id}/quests` (new), `GET /campaigns/{id}/quests/{id}` | `dnd_ai.queries.quest.list_campaign_quests` (new), `.get_quest_view` | Yes, after this workstream. The list was the missing piece; the detail route's cross-campaign scoping was corrected during Phase 13D live verification — see §4.2. |
 | Sessions | `GET /campaigns/{id}/sessions` (new), `GET /campaigns/{id}/sessions/{id}` (new) | `dnd_ai.queries.session` (new module) | Yes, for recap/status/timing/linked-events. Participants, locations visited, and per-session character/relationship/inventory changes are deferred — see §4. |
 | Knowledge | `GET /campaigns/{id}/knowledge/{id}` (detail-by-id only) | `dnd_ai.queries.knowledge.get_knowledge_view` | No. The six portal views (known/rumors/recent/private/party-shared/public/sources) have no list endpoint. See §3. |
 
@@ -61,6 +61,10 @@ not modified:
    never distinguish the three. `resource_grant_targets`/`has_capability`
    with a resource-target keyword apply the same deny-overrides-allow-
    overrides-baseline precedence per resource everywhere it's used.
+   (Exception found later: the quest **detail** route enforced only the
+   *world*, not the campaign timeline — a same-world quest from another
+   campaign's timeline leaked through. Corrected in the Phase 13D
+   live-verification pass; see §4.2.)
 5. **Stable response models.** Every route already returns a typed
    Pydantic model; nothing here is a loosely-typed passthrough of internal
    query dataclasses.
@@ -162,9 +166,11 @@ Added:
 ### 4.2 Quests had no way to enumerate a campaign's tracked quests
 
 `GET /campaigns/{id}/quests/{quest_id}` (detail) already existed and was
-already correctly audience-filtered, but nothing could produce the
+audience-filtered at the objective level, but nothing could produce the
 `quest_id` to call it with — the portal's Home dashboard ("active quests")
-and a Quests screen both need a list.
+and a Quests screen both need a list. (The detail route's *top-level*
+campaign scoping had a defect corrected during live verification — see the
+**Phase 13D live-verification correction** at the end of this section.)
 
 Added:
 
@@ -220,18 +226,62 @@ defects, both fixed before merge:
    caller's own perspective (canonical for a GM, own-party-or-campaign-wide
    otherwise)"**, not merely "every quest with a campaign-wide row."
 
+**Phase 13D live-verification correction.** Live verification found that
+`get_quest_view` (the detail query) established campaign exposure only from
+the quest's *world* — `quest_id` exists and `world_id == expected_world_id`
+— and then, when no `campaign.quest_state` row matched the requested
+timeline, returned the world-scoped quest definition with a null status
+instead of treating it as unavailable. Quest *definitions* are world canon
+with no `campaign_id` (`docs/architecture/DATABASE_MODEL.md` §14), and one
+world hosts many campaign timelines, so "same world" is **not** "exposed
+to this campaign": `GET /campaigns/{campaign_a}/quests/{campaign_b_quest}`
+returned Campaign B's quest name, stages, and objectives while inside
+Campaign A, even though the same quest never appeared in Campaign A's list
+(the list is timeline/audience scoped). List and detail authorization
+disagreed.
+
+Fix: campaign exposure is now established the same way for both routes — a
+qualifying `campaign.quest_state` row on the campaign's **exact
+`timeline_id`**, under the one shared audience predicate
+`dnd_ai.queries.quest._QUEST_STATE_MATCHES_AUDIENCE` (campaign-wide row,
+the caller's own authorized `party_id`'s row, or — for a GM, baseline
+`canon.edit` with no quest target — any party's row on that timeline).
+`get_quest_endpoint` passes `get_quest_view(...,
+require_campaign_tracking=True, include_all_parties=access.has_capability(
+"canon.edit"))`; the AI context/proposal callers
+(`dnd_ai.domain.context_assembly`, `dnd_ai.commands.ai_proposals`)
+deliberately do not opt in, since they draw quests from
+`narrative.quest_participants`, not campaign tracking. A same-world quest
+tracked only on another campaign's timeline, only for an unauthorized
+party, or not tracked at all now raises the same fixed non-disclosing 404
+as a nonexistent or cross-world quest — no response-body difference
+reveals which condition occurred. `scripts/setup_phase13c_dev_data.py`'s
+read-only production-query verification now actually performs the
+cross-campaign lookup (previously it printed the expected URL and the
+then-current leaking behavior).
+
 ## 5. Files changed
 
 - `src/dnd_ai/queries/session.py` (new)
 - `src/dnd_ai/api/sessions.py` (list/detail routes added; docstring updated)
 - `src/dnd_ai/queries/quest.py` (`list_campaign_quests` added, then
-  corrected per §4.2: `include_all_parties`/`denied_quest_ids`)
+  corrected per §4.2: `include_all_parties`/`denied_quest_ids`; then the
+  live-verification correction: shared `_QUEST_STATE_MATCHES_AUDIENCE`
+  predicate, `get_quest_view` `require_campaign_tracking`/
+  `include_all_parties`)
 - `src/dnd_ai/api/quests.py` (list route added; detail route hardened with
-  a quest-scoped `campaign.view` check; docstrings updated)
+  a quest-scoped `campaign.view` check; then `require_campaign_tracking`
+  wired into `get_quest_endpoint`; docstrings updated)
 - `tests/database/test_api_sessions_query.py` (new)
 - `tests/database/test_api_quests_list.py` (new, then extended per §4.2)
 - `tests/database/test_api_quests_query.py` (extended per §4.2: the
   detail-route `campaign.view` deny regression)
+- `tests/database/test_api_quests_campaign_scope.py` (new — the
+  live-verification cross-campaign disclosure regression, query + API)
+- `tests/database/test_setup_phase13c_dev_data.py` (cross-campaign quest
+  test updated to assert the now-non-disclosing behavior)
+- `scripts/setup_phase13c_dev_data.py` (verification block + prose: the
+  cross-campaign lookup is now really exercised)
 - `docs/PHASE13D_BACKEND_READINESS.md` (this file)
 - `docs/PLAN.md` (Phase 13 status paragraph — one sentence noting the
   session/quest read-side addition; see §7)
@@ -272,6 +322,21 @@ convention (`tests/database/test_api_organizations_query.py`,
   the quest under test — deliberately kept separate from this file's
   existing targeted-`canon.edit` tests (§4.2: two independent checks, easy
   to conflate).
+- **`tests/database/test_api_quests_campaign_scope.py`** (18 tests — the
+  live-verification correction): one world / two timelines / one campaign
+  per timeline, Campaign B's quest state only on Timeline B. Both the real
+  FastAPI route and the real `get_quest_view`/`list_campaign_quests`
+  queries are exercised (no mocked repository results). Covers: a tracked
+  quest returns normally; Campaign B's quest is unavailable through
+  Campaign A (same world, different timeline) and still normal under
+  Campaign B; cross-world, untracked, and party-scoped-for-another-party
+  quests unavailable; a campaign-wide row makes a quest visible; a GM sees
+  a party-tracked quest across parties; a quest-specific `campaign.view`
+  deny stays unavailable; objective-level `visibility_policy` filtering is
+  unchanged after the top-level check; every rejection path returns the
+  identical fixed `(code, message)` with no quest/stage/objective detail;
+  and list/detail agree (a quest excluded from an audience's list is not
+  directly fetchable by that audience).
 
 Deliberately not duplicated: `visibility_policy` filtering,
 resource-grant overrides for quest-detail `include_hidden`, and

@@ -1015,18 +1015,18 @@ def test_production_visibility_filtering_is_preserved(db_connection: Connection)
 def test_the_campaign_b_quest_is_not_disclosed_through_campaign_a_list(
     db_connection: Connection,
 ) -> None:
-    """Item 10: the quest LIST endpoint is timeline-scoped, so Campaign B's
-    quest never appears in Campaign A's list — the disclosure path the
-    portal actually uses (it only ever has quest ids the list gave it).
+    """Item 10: the exact shape that exposed the Phase 13D detail-disclosure
+    defect — one world, two timelines, one campaign per timeline, Campaign
+    B's quest state only on Timeline B, requested through Campaign A.
 
-    The DETAIL query (`get_quest_view`) currently gates only on world, and
-    both fixture campaigns share one world, so requesting Campaign B's quest
-    id under Campaign A's timeline returns the quest definition rather than
-    the `QuestNotFoundError` a nonexistent id raises. That is asserted here
-    as the *documented current behavior*, not endorsed — see the script
-    module docstring and the completion report: full parity would need a
-    second world for Campaign B (unreconcilable onto an existing dev
-    database) or a quest-API change (out of scope)."""
+    Both the LIST query (timeline/audience scoped) and the DETAIL query
+    (`get_quest_view(..., require_campaign_tracking=True)`, the way
+    `get_quest_endpoint` calls it) now apply the one shared tracking rule,
+    so Campaign B's quest neither appears in Campaign A's list nor is
+    directly fetchable through Campaign A — it raises the same
+    `QuestNotFoundError` a nonexistent id does. This is the script's own
+    read-only production-query verification, exercised here as a real
+    regression test rather than a printed expectation."""
     user_id = _make_local_account(db_connection, display_name="Quest Cross Campaign Tester")
     _run(db_connection, user_id=user_id)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
@@ -1051,16 +1051,40 @@ def test_the_campaign_b_quest_is_not_disclosed_through_campaign_a_list(
             expected_world_id=world_a,
             party_id=None,
             include_hidden=True,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
         )
 
-    # Documented current behavior: the same-world detail query still returns it.
-    cross = get_quest_view(
+    # The fix: a same-world quest tracked only on Campaign B's timeline is
+    # not fetchable through Campaign A — identical non-disclosing result.
+    with pytest.raises(QuestNotFoundError):
+        get_quest_view(
+            db_connection,
+            quest_id=b_quest_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=True,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
+        )
+
+    # ...while under Campaign B's own timeline it still resolves normally.
+    assert campaign_b.timeline_id is not None
+    world_b = db_connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": campaign_b.timeline_id},
+    ).scalar()
+    assert isinstance(world_b, uuid.UUID)
+    cross_ok = get_quest_view(
         db_connection,
         quest_id=b_quest_id,
-        timeline_id=campaign_a.timeline_id,
-        expected_world_id=world_a,
+        timeline_id=campaign_b.timeline_id,
+        expected_world_id=world_b,
         party_id=None,
         include_hidden=True,
+        require_campaign_tracking=True,
+        include_all_parties=is_gm,
     )
-    assert cross.name == _QUEST_B
-    assert cross.status_code is None  # no quest_state on Campaign A's timeline
+    assert cross_ok.name == _QUEST_B
+    assert cross_ok.status_code == "active"
