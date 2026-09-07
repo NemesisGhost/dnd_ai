@@ -146,6 +146,7 @@ class Fixture:
             connection, "security", "capabilities", "capability_id", "character.view_knowledge"
         )
         self.view_capability_id = view_capability_id
+        self.canon_edit_capability_id = canon_edit_id
 
         # Campaign A GM: campaign.view + canon.edit (baseline, no target).
         self.gm_a_user_id = make_user(connection, "Scope GM A")
@@ -166,6 +167,7 @@ class Fixture:
         player_a_membership_id = make_campaign_membership(
             connection, self.campaign_a_id, self.player_a_user_id
         )
+        self.player_a_membership_id = player_a_membership_id
         player_a_role_id = make_role(
             connection, campaign_id=self.campaign_a_id, code=f"player_a_{uuid.uuid4().hex[:8]}"
         )
@@ -564,6 +566,116 @@ def test_a_non_member_still_gets_not_found(
     with client_factory(f.outsider_user_id) as client:
         response = client.get(_detail_url(f.campaign_a_id, f.quest_a_id))
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Quest-targeted canon.edit semantics (follow-up correction).
+#
+# A quest-targeted canon.edit grant decides `include_hidden` (objective
+# visibility for that one quest) ONLY — it never widens tracking exposure
+# (`include_all_parties`, which stays tied to *baseline* canon.edit). So a
+# non-GM holding only such an allow still resolves an authorized party
+# perspective and sees exactly what `list_quests_endpoint` shows them for
+# the same character_id/party_id; another party's privately-tracked quest
+# stays a non-disclosing 404.
+# ---------------------------------------------------------------------------
+
+
+def _grant_quest_canon_edit(
+    engine: Engine, f: Fixture, quest_id: uuid.UUID, *, effect: str = "allow"
+) -> None:
+    with engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_a_id,
+            f.canon_edit_capability_id,
+            quest_id=quest_id,
+            grantee_campaign_membership_id=f.player_a_membership_id,
+            effect=effect,
+        )
+
+
+def test_targeted_canon_edit_allow_non_gm_sees_own_party_tracked_quest(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """quest_party_1 is tracked only through Party One's own row. The
+    player is authorized for Party One, so with (character_id, party_id)
+    supplied the detail route resolves that perspective and returns it —
+    the targeted canon.edit allow only adds full objective visibility."""
+    _grant_quest_canon_edit(postgres_engine, f, f.quest_party_1_id)
+    with client_factory(f.player_a_user_id) as client:
+        response = client.get(
+            _detail_url(f.campaign_a_id, f.quest_party_1_id),
+            params={"character_id": str(f.character_id), "party_id": str(f.party_1_id)},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["quest_id"] == str(f.quest_party_1_id)
+
+
+def test_targeted_canon_edit_allow_list_and_detail_agree_for_own_party_quest(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    _grant_quest_canon_edit(postgres_engine, f, f.quest_party_1_id)
+    params = {"character_id": str(f.character_id), "party_id": str(f.party_1_id)}
+    with client_factory(f.player_a_user_id) as client:
+        listed = client.get(f"/campaigns/{f.campaign_a_id}/quests", params=params)
+        assert listed.status_code == 200, listed.text
+        listed_ids = {item["quest_id"] for item in listed.json()}
+        detail = client.get(_detail_url(f.campaign_a_id, f.quest_party_1_id), params=params)
+
+    assert str(f.quest_party_1_id) in listed_ids
+    assert detail.status_code == 200, detail.text
+    # And still agree the other way: quest_party_2 (Party Two's private
+    # tracking) is neither listed nor fetchable for this caller.
+    assert str(f.quest_party_2_id) not in listed_ids
+
+
+def test_targeted_canon_edit_allow_does_not_reach_another_partys_private_quest(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """quest_party_2 is tracked only through Party Two's row. Granting the
+    Party-One player a quest-targeted canon.edit allow for it does NOT let
+    them fetch it — the chosen semantics keep tracking exposure tied to an
+    authorized party perspective, and Party One is the only one they hold."""
+    _grant_quest_canon_edit(postgres_engine, f, f.quest_party_2_id)
+    params = {"character_id": str(f.character_id), "party_id": str(f.party_1_id)}
+    with client_factory(f.player_a_user_id) as client:
+        detail = client.get(_detail_url(f.campaign_a_id, f.quest_party_2_id), params=params)
+        listed = client.get(f"/campaigns/{f.campaign_a_id}/quests", params=params)
+    assert detail.status_code == 404
+    assert str(f.quest_party_2_id) not in {item["quest_id"] for item in listed.json()}
+
+
+def test_targeted_canon_edit_allow_reveals_all_objectives_on_a_campaign_wide_quest(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The existing targeted-allow behaviour: a campaign-wide quest the
+    caller can already see, with a targeted canon.edit allow, returns every
+    objective regardless of `visibility_policy` (`include_hidden`)."""
+    _grant_quest_canon_edit(postgres_engine, f, f.quest_a_id)
+    with client_factory(f.player_a_user_id) as client:
+        response = client.get(_detail_url(f.campaign_a_id, f.quest_a_id))
+    assert response.status_code == 200, response.text
+    objective_ids = {
+        o["quest_objective_id"] for stage in response.json()["stages"] for o in stage["objectives"]
+    }
+    assert str(f.gm_only_objective_id) in objective_ids
+    assert str(f.visible_objective_id) in objective_ids
+
+
+def test_targeted_canon_edit_allow_without_a_perspective_still_needs_tracking(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """With no character_id/party_id supplied, the targeted-allow non-GM
+    resolves no perspective (`include_all_parties` stays False), so a quest
+    tracked only through a party is still a non-disclosing 404 — exactly as
+    the list would omit it for the same request."""
+    _grant_quest_canon_edit(postgres_engine, f, f.quest_party_1_id)
+    with client_factory(f.player_a_user_id) as client:
+        detail = client.get(_detail_url(f.campaign_a_id, f.quest_party_1_id))
+        listed = client.get(f"/campaigns/{f.campaign_a_id}/quests")
+    assert detail.status_code == 404
+    assert str(f.quest_party_1_id) not in {item["quest_id"] for item in listed.json()}
 
 
 # ---------------------------------------------------------------------------

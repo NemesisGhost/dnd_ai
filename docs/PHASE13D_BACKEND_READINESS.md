@@ -260,6 +260,28 @@ read-only production-query verification now actually performs the
 cross-campaign lookup (previously it printed the expected URL and the
 then-current leaking behavior).
 
+**Quest-targeted `canon.edit` semantics (follow-up correction).** A review
+of the fix above found one residual list/detail disagreement: a non-GM
+holding only a quest-*targeted* `canon.edit` allow got `include_hidden=True`,
+which the detail route used to also skip `resolve_party_perspective` — but
+`include_all_parties` stayed `False` (it is derived from *baseline*
+`canon.edit`). For a quest tracked only through that caller's own
+authorized party, `get_quest_view` then received `party_id=None` and 404'd,
+while `list_quests_endpoint` (which resolves the perspective) listed it.
+
+Resolved by fixing the intended semantics explicitly: **a quest-targeted
+`canon.edit` grant affects objective visibility (`include_hidden`) only —
+it never widens tracking exposure.** `include_all_parties` stays tied to
+baseline `canon.edit` (campaign-wide GM standing) for both list and detail.
+`get_quest_endpoint` now skips the party perspective only for a baseline GM
+*in good standing for the quest* (`is_gm and include_hidden` — i.e. no
+quest-targeted `canon.edit` deny); a targeted-allow non-GM, and a baseline
+GM specifically denied `canon.edit` for the quest, both resolve an
+authorized party perspective. `canon.edit` target precedence is intact: a
+targeted deny still strips `include_hidden` from a baseline GM. Another
+party's privately-tracked quest remains a non-disclosing 404 for a
+targeted-allow holder — the chosen semantics do not permit reaching it.
+
 ## 5. Files changed
 
 - `src/dnd_ai/queries/session.py` (new)
@@ -271,7 +293,9 @@ then-current leaking behavior).
   `include_all_parties`)
 - `src/dnd_ai/api/quests.py` (list route added; detail route hardened with
   a quest-scoped `campaign.view` check; then `require_campaign_tracking`
-  wired into `get_quest_endpoint`; docstrings updated)
+  wired into `get_quest_endpoint`; then the quest-targeted `canon.edit`
+  semantics correction — party perspective resolved for a targeted-allow
+  non-GM; docstrings updated)
 - `tests/database/test_api_sessions_query.py` (new)
 - `tests/database/test_api_quests_list.py` (new, then extended per §4.2)
 - `tests/database/test_api_quests_query.py` (extended per §4.2: the
@@ -322,7 +346,7 @@ convention (`tests/database/test_api_organizations_query.py`,
   the quest under test — deliberately kept separate from this file's
   existing targeted-`canon.edit` tests (§4.2: two independent checks, easy
   to conflate).
-- **`tests/database/test_api_quests_campaign_scope.py`** (18 tests — the
+- **`tests/database/test_api_quests_campaign_scope.py`** (23 tests — the
   live-verification correction): one world / two timelines / one campaign
   per timeline, Campaign B's quest state only on Timeline B. Both the real
   FastAPI route and the real `get_quest_view`/`list_campaign_quests`
@@ -336,7 +360,13 @@ convention (`tests/database/test_api_organizations_query.py`,
   unchanged after the top-level check; every rejection path returns the
   identical fixed `(code, message)` with no quest/stage/objective detail;
   and list/detail agree (a quest excluded from an audience's list is not
-  directly fetchable by that audience).
+  directly fetchable by that audience). The quest-targeted `canon.edit`
+  semantics correction adds 5 more: a non-GM holding only a quest-targeted
+  `canon.edit` allow can fetch a quest tracked only through their own
+  authorized party (detail and list agree for the same
+  `character_id`/`party_id`); the same allow reveals every objective on a
+  campaign-wide quest (`include_hidden`); and another party's
+  privately-tracked quest stays a non-disclosing 404 even with that allow.
 
 Deliberately not duplicated: `visibility_policy` filtering,
 resource-grant overrides for quest-detail `include_hidden`, and
