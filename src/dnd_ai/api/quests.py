@@ -83,6 +83,36 @@ dungeon`'s exactly — see `dnd_ai.queries.quest`'s own docstring for how
 read: no idempotency key, no `audit.change_log` row, for the same reasons
 `dnd_ai.api.dungeon`'s read endpoint has neither.
 
+Campaign exposure (Phase 13D live-verification correction). Quest
+*definitions* (`narrative.quests`) are world canon with no `campaign_id`,
+and one world hosts many campaign timelines — so "same world" is *not*
+"exposed to this campaign." The detail route passes
+`get_quest_view(..., require_campaign_tracking=True, include_all_parties=
+access.has_capability(_QUEST_MANAGE_CAPABILITY))`: the quest is fetchable
+only when a qualifying `campaign.quest_state` row exists on the route
+campaign's exact `timeline_id`, under the *same* timeline/party audience
+rule `list_quests_endpoint` feeds `list_campaign_quests` (a GM — baseline
+`canon.edit`, no quest target — counts any party's row on that timeline; a
+non-GM only a campaign-wide row or their own authorized `party_id`'s). A
+same-world quest tracked only on another campaign's timeline, only for an
+unauthorized party, or not tracked at all raises `QuestNotFoundError` →
+the identical fixed non-disclosing 404 as a nonexistent or cross-world
+quest. List and detail therefore apply one shared tracking rule and can
+never disagree on which quests an audience may see.
+
+`include_all_parties` is tied to *baseline* `canon.edit` only. A
+quest-*targeted* `canon.edit` grant decides `include_hidden` (objective
+visibility for that one quest) and nothing else — it does not widen
+tracking exposure. So a caller holding only a targeted `canon.edit` allow
+still resolves an authorized party perspective and sees exactly the quests
+their own party (plus campaign-wide) tracks — the same set
+`list_quests_endpoint` shows them for the same `character_id`/`party_id`.
+Another party's privately-tracked quest stays a non-disclosing 404 for
+that caller. A baseline GM specifically *denied* `canon.edit` for a quest
+keeps baseline `include_all_parties` (they are still the campaign's GM)
+but loses `include_hidden` and resolves a party perspective for status —
+`canon.edit` target precedence intact.
+
 Phase 13D backend-readiness workstream added `GET /campaigns/
 {campaign_id}/quests` (`dnd_ai.queries.quest.list_campaign_quests`) — the
 list the portal's Home dashboard ("active quests") and a Quests screen
@@ -305,10 +335,36 @@ def get_quest_endpoint(
         # quest at all.
         raise NotFoundError()
 
+    # Two independent capability dimensions, never conflated:
+    #
+    # * include_hidden — the quest-*targeted* canon.edit check (honors a
+    #   per-quest security.resource_grants allow/deny). Decides ONLY whether
+    #   every objective is returned regardless of visibility_policy.
+    # * is_gm — the *baseline* canon.edit check (no quest target), the same
+    #   input list_quests_endpoint feeds to include_all_parties. Decides
+    #   whether the caller sees canonical, all-party quest tracking/status
+    #   and therefore resolves no party perspective at all.
+    #
+    # Quest-scoped canon.edit deliberately does NOT widen tracking exposure
+    # (include_all_parties): a caller holding only a quest-targeted
+    # canon.edit *allow* is a non-GM for tracking/status and still resolves
+    # an authorized party perspective — otherwise, for a quest tracked only
+    # through that caller's own party, list_quests_endpoint (which resolves
+    # the perspective) would include the quest while this route 404'd it,
+    # breaking the shared list/detail eligibility guarantee. See
+    # docs/PHASE13D_BACKEND_READINESS.md §4.2.
     include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)
+    is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
+
+    # A party perspective is skipped only for a baseline GM in good standing
+    # for this quest (no quest-targeted canon.edit deny) — mirroring
+    # list_quests_endpoint's "a GM never resolves a party perspective".
+    # Everyone else — a plain viewer, a targeted-allow non-GM, or a baseline
+    # GM specifically denied canon.edit for this quest — resolves one.
+    resolves_canonical_view = is_gm and include_hidden
     authorized_party_id = (
         None
-        if include_hidden
+        if resolves_canonical_view
         else resolve_party_perspective(
             connection,
             access=access,
@@ -325,6 +381,8 @@ def get_quest_endpoint(
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         party_id=authorized_party_id,
         include_hidden=include_hidden,
+        require_campaign_tracking=True,
+        include_all_parties=is_gm,
     )
 
     return QuestResponse(
