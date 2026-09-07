@@ -14,13 +14,19 @@ import App from "./App"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
 import { useCampaignSessions } from "./hooks/useCampaignSessions"
-import { useCampaignSummary } from "./hooks/useCampaignSummary"
-import { useCharacter } from "./hooks/useCharacter"
-import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
-import type { CampaignSessionDetail, CampaignSessionListItem, } from "./types/campaignSession"
-import type { CampaignSummary } from "./types/campaignSummary"
 import { useCampaignSession } from "./hooks/useCampaignSession"
-
+import { useCampaignSummary } from "./hooks/useCampaignSummary"
+import { useCampaignQuests } from "./hooks/useCampaignQuests"
+import { useCharacter } from "./hooks/useCharacter"
+import { useQuest } from "./hooks/useQuest"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import type {
+  CampaignSessionDetail,
+  CampaignSessionListItem,
+} from "./types/campaignSession"
+import type {
+  CampaignSummary,
+} from "./types/campaignSummary"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -42,6 +48,14 @@ vi.mock("./hooks/useCampaignSession", () => ({
   useCampaignSession: vi.fn(),
 }))
 
+vi.mock("./hooks/useCampaignQuests", () => ({
+  useCampaignQuests: vi.fn(),
+}))
+
+vi.mock("./hooks/useQuest", () => ({
+  useQuest: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
@@ -60,6 +74,14 @@ const useCampaignSessionsMock = vi.mocked(
 
 const useCampaignSessionMock = vi.mocked(
   useCampaignSession,
+)
+
+const useCampaignQuestsMock = vi.mocked(
+  useCampaignQuests,
+)
+
+const useQuestMock = vi.mocked(
+  useQuest,
 )
 
 const emptyCampaignSummary = {
@@ -91,6 +113,21 @@ const campaignSessionDetail = {
   end_world_time_id: "world-time-end",
   events: [],
 } satisfies CampaignSessionDetail
+
+const campaignQuests = [
+  {
+    quest_id: "quest-detail",
+    name: "Restore the Glass Ossuary",
+    status_code: "active",
+  },
+]
+
+const campaignQuestDetail = {
+  quest_id: "quest-detail",
+  name: "Restore the Glass Ossuary",
+  status_code: "active",
+  stages: [],
+}
 
 beforeEach(() => {
   useSessionBootstrapMock.mockReset()
@@ -138,6 +175,26 @@ beforeEach(() => {
     state: {
       status: "success",
       session: campaignSessionDetail,
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignQuestsMock.mockReset()
+
+  useCampaignQuestsMock.mockReturnValue({
+    state: {
+      status: "success",
+      quests: campaignQuests,
+    },
+    retry: vi.fn(),
+  })
+
+  useQuestMock.mockReset()
+
+  useQuestMock.mockReturnValue({
+    state: {
+      status: "success",
+      quest: campaignQuestDetail,
     },
     retry: vi.fn(),
   })
@@ -265,6 +322,102 @@ describe("portal routing", () => {
         name: "Character unavailable",
       }),
     ).toBeInTheDocument()
+  })
+
+  it("routes Quests through the selected character perspective", () => {
+    renderAppAt("/app/mundivita/quests")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Quests",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCampaignQuestsMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Quests",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Restore the Glass Ossuary",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/quests/quest-detail",
+    )
+  })
+
+  it("routes a quest ID through the quest-detail boundary", () => {
+    renderAppAt(
+      "/app/mundivita/quests/quest-detail",
+    )
+
+    expect(
+      useQuestMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "quest-detail",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Restore the Glass Ossuary",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText("Status: active"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Back to quests",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/quests",
+    )
+
+    expect(
+      screen.getByRole("link", {
+        name: "Quests",
+      }),
+    ).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+  })
+
+  it("uses the campaign fallback for an unknown quest subroute", () => {
+    renderAppAt(
+      "/app/mundivita/quests/quest-detail/unknown",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Campaign page not found",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      useCampaignQuestsMock,
+    ).not.toHaveBeenCalled()
+
+    expect(
+      useQuestMock,
+    ).not.toHaveBeenCalled()
   })
 
   it("routes Sessions through the campaign sessions boundary", () => {

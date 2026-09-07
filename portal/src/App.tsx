@@ -7,6 +7,8 @@ import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoun
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
+import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 
@@ -14,7 +16,9 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 className="app-header__title">D&amp;D AI Portal</h1>
+        <h1 className="app-header__title">
+          D&amp;D AI Portal
+        </h1>
       </header>
 
       <Routes>
@@ -50,7 +54,10 @@ function App() {
           path="/app/:campaignId"
           element={<CampaignSessionBoundary />}
         >
-          <Route index element={<Navigate to="home" replace />} />
+          <Route
+            index
+            element={<Navigate to="home" replace />}
+          />
 
           <Route
             path="home"
@@ -74,12 +81,12 @@ function App() {
 
           <Route
             path="quests"
-            element={
-              <PlaceholderPage
-                title="Quests"
-                description="Known active and completed quests will appear here."
-              />
-            }
+            element={<CampaignQuestsPage />}
+          />
+
+          <Route
+            path="quests/:questId"
+            element={<CampaignQuestDetailPage />}
           />
 
           <Route
