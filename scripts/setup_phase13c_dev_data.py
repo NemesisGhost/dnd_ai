@@ -84,10 +84,57 @@ which this fixture must populate. Every other column is set exactly as its
 shape where the command itself doesn't fit" boundary the world/timeline/
 character inserts below already document.
 
+Also supports the Phase 13D Quest list/detail live-verification checkpoint
+(the portal's read-only `GET /campaigns/{id}/quests` and
+`.../quests/{quest_id}` screens, read back through
+`dnd_ai.queries.quest.list_campaign_quests`/`get_quest_view`). Campaign A
+gets three fixture-owned quests — see `_CAMPAIGN_A_QUESTS` and the long
+comment above that constant for the full rationale, the exact supported
+lookup vocabularies used, and the visibility semantics:
+
+  "Restore the Glass Ossuary" (active): three stages whose alphabetical
+  order is the reverse of their `sequence_number` order (so the owner can
+  confirm the portal keeps the backend's order), objectives exercising
+  required/optional, both `automatic` and `gm_confirmed` completion modes,
+  completed/current/untracked objective statuses, set and null
+  descriptions, a quantity requirement and none, several objectives under
+  one stage, a stage with no objectives, plus a `hidden_until_discovered`
+  (stateless) and a `gm_only` objective that a non-GM audience would not
+  see. "Gather the Hollow Verses" (completed): no stages — the completed
+  badge and the neutral empty-stage state. "Wake the Tide Beneath Vheil":
+  tracked only through one party's own `campaign.quest_state` row, so the
+  owner (a GM) sees it listed with a NULL resolved status — the one
+  legitimate way the production query yields a null quest status for this
+  account.
+
+Campaign B gets one fixture-owned quest ("Chart the Sunken Marches",
+`_CAMPAIGN_B_QUEST`) with a stage and objective, tracked on Timeline B.
+Both `list_campaign_quests` and `get_quest_view` are now timeline/audience
+scoped through one shared rule (`dnd_ai.queries.quest.
+_QUEST_STATE_MATCHES_AUDIENCE`): this quest never surfaces in Campaign A's
+list, and requesting its id under Campaign A's URL raises
+`QuestNotFoundError` → the same non-disclosing 404 a nonexistent quest
+produces, even though both campaigns share one world. The database/query
+verification block requests it exactly that way and prints the real
+result — see the module comment above `_CAMPAIGN_B_QUEST` and
+`_print_quest_verification`.
+
+Quests, stages, objectives, and their `campaign.quest_state`/
+`.objective_state` rows are inserted directly and, on a re-run, the
+mutable portal-visible columns (including each fixture-owned state row's
+status) are reconciled — no quest table carries an immutability trigger,
+`dnd_ai.commands.quests.advance_objective` only advances an already-tracked
+objective and needs a narrative event this fixture data never caused, and
+`tests/factories.py` already documents "pre-campaign / world content has
+no authoring command" as the standing boundary. `last_event_id` on a
+reconciled state row is left untouched (a live-testing advance may have
+set it to a real recorded event; only the status matters to the portal).
+
 Not a general-purpose seeding framework — every name and shape here is
 specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`/
-`_CAMPAIGN_A_SESSIONS`/`_CAMPAIGN_B_SESSIONS` constants below), and nothing
-about this script generalizes to seeding arbitrary content.
+`_CAMPAIGN_A_SESSIONS`/`_CAMPAIGN_B_SESSIONS`/`_CAMPAIGN_A_QUESTS`/
+`_CAMPAIGN_B_QUEST` constants below), and nothing about this script
+generalizes to seeding arbitrary content.
 
 Connects using the same resolution the running API itself uses
 (`dnd_ai.config.settings.database_url`) — never a hardcoded connection
@@ -195,6 +242,7 @@ from dnd_ai.commands.access_grants import grant_character_relationship
 from dnd_ai.commands.campaigns import create_campaign, grant_timeline_bootstrap
 from dnd_ai.config import settings
 from dnd_ai.queries.bootstrap import get_session_bootstrap
+from dnd_ai.queries.quest import QuestNotFoundError, get_quest_view, list_campaign_quests
 
 _COMMAND_NAME = "scripts.setup_phase13c_dev_data"
 
@@ -434,6 +482,319 @@ _CAMPAIGN_B_SESSIONS: tuple[_SessionFixture, ...] = (
     ),
 )
 
+# --------------------------------------------------------------------------
+# Phase 13D Quest list/detail live-verification fixtures
+# --------------------------------------------------------------------------
+# Deterministic quests, stages, objectives, and timeline-scoped state for
+# the portal's read-only Quest list (`GET /campaigns/{id}/quests`,
+# `dnd_ai.queries.quest.list_campaign_quests`) and Quest detail
+# (`GET /campaigns/{id}/quests/{quest_id}`, `dnd_ai.queries.quest.
+# get_quest_view`) screens, read back by the owner through those real
+# endpoints.
+#
+# Supported vocabularies (all taken from the production schema — migrations
+# 073/074 — never invented here):
+#
+#   quest status (campaign.quest_statuses):      unavailable, available,
+#                                                active, suspended,
+#                                                completed, failed, abandoned
+#   stage type (narrative.quest_stages.          sequential, optional,
+#     stage_type CHECK):                         conditional, mutually_exclusive
+#   objective type (narrative.objective_types):  reach_location, acquire_item,
+#                                                defeat_entity, protect_entity,
+#                                                activate_mechanism,
+#                                                discover_knowledge,
+#                                                persuade_npc, survive_condition,
+#                                                complete_before_deadline, other
+#   requirement level (narrative.quest_          required, optional, hidden
+#     objectives.requirement_level CHECK):
+#   completion mode (…completion_mode CHECK):    automatic, gm_confirmed
+#   visibility policy (…visibility_policy CHECK): visible, hidden_until_active,
+#                                                hidden_until_discovered, gm_only
+#   objective status (campaign.objective_        hidden, available, active,
+#     statuses):                                 completed, failed, skipped,
+#                                                superseded
+#
+# A quest is only listed by `list_campaign_quests` if it has at least one
+# `campaign.quest_state` row on the timeline (docs/PHASE13D_BACKEND_
+# READINESS.md §5). So every fixture quest that must appear in the portal's
+# list gets a `campaign.quest_state` row:
+#
+#   - "Restore the Glass Ossuary": one campaign-wide row (party_id NULL),
+#     status 'active' — the detailed quest.
+#   - "Gather the Hollow Verses": one campaign-wide row, status 'completed',
+#     and NO stages — exercises the completed-status badge and the portal's
+#     neutral empty-stage state.
+#   - "Wake the Tide Beneath Vheil": tracked ONLY through one party's own
+#     `campaign.quest_state` row (party_id set, no campaign-wide row). For
+#     the supplied account — a campaign owner / GM — `list_campaign_quests`
+#     runs with `include_all_parties=True` and `party_id=None`, so this
+#     quest IS listed (a GM sees every tracked quest across every party) but
+#     its status resolves to NULL (no campaign-wide row, and the GM resolves
+#     no party perspective). This is the one legitimate way the production
+#     query yields a null quest status for this account — `campaign.quest_
+#     state.quest_status_id` itself is NOT NULL, so a campaign-wide row can
+#     never carry a null status. Exercises the portal's null-status
+#     rendering and null-sorts-last behavior.
+#
+# Stage ordering: `get_quest_view` returns stages `ORDER BY sequence_number,
+# quest_stage_id`. "Restore the Glass Ossuary"'s three stage names are
+# deliberately chosen so alphabetical order ("Aftermath…", "Reassemble…",
+# "The Warden's Vigil") is the reverse of sequence order (1 "The Warden's
+# Vigil", 2 "Reassemble the Reliquary", 3 "Aftermath in the Nave") — a live
+# tester can confirm the portal preserves the backend's order rather than
+# re-sorting.
+#
+# Objective visibility for the supplied account: the account holds
+# `canon.edit` in Campaign A (every campaign owner does — migration 085), so
+# `get_quest_endpoint` sets `include_hidden=True` and `get_quest_view`
+# returns EVERY objective regardless of `visibility_policy`, and resolves
+# NO party perspective (`authorized_party_id=None`). The fixture still
+# includes a `hidden_until_discovered` objective with no state row and a
+# `gm_only` objective specifically so the difference is real data — a
+# non-GM player perspective would NOT see those two — but this script
+# cannot prove their absence for THIS account without weakening its
+# authority, which the task forbids. The database/query verification block
+# calls `get_quest_view` with the real inputs for this account
+# (`include_hidden=True`) and also, separately, with `include_hidden=False`
+# to show the filtered (non-GM-audience) result, and prints both — see
+# `_print_quest_verification`.
+#
+# Reconciliation: `narrative.quest_stages`/`.quest_objectives` and
+# `campaign.quest_state`/`.objective_state` carry no immutability trigger,
+# and a live-testing session is expected to advance objectives (via the
+# real `POST …/quests/objectives/{id}/advance` command, which also records
+# a `narrative.events` row and sets `last_event_id`). So a re-run reconciles
+# the mutable, portal-visible columns back to the documented values —
+# stage `sequence_number`/`stage_type`/`description`; objective
+# `requirement_level`/`completion_mode`/`visibility_policy`/`description`/
+# `quantity_required`/`objective_type_id`; and the `quest_status_id`/
+# `objective_status_id` of each fixture-owned state row — and leaves
+# `last_event_id` untouched (the causing event, if any, is real recorded
+# history and only the status matters to the portal). Fixture quests,
+# stages, and objectives are located by their own fixed names (a quest by
+# `(world_id, canonical_name)` among `quest`-typed entities); a name found
+# on a non-`quest` entity, on a `quest` entity with no `narrative.quests`
+# row, or on more than one entity at once is treated as a collision with
+# non-fixture/incompatible data and aborts with guidance rather than
+# guessing ownership.
+#
+# Campaign B quest ("Chart the Sunken Marches", `_CAMPAIGN_B_QUEST`): one
+# stage, one objective, a campaign-wide `campaign.quest_state` row on
+# Timeline B. Its purpose is cross-campaign non-disclosure testing, and it
+# reproduces the exact shape that exposed the Phase 13D detail-disclosure
+# defect: one world, two timelines, one campaign per timeline, Campaign B's
+# quest state only on Timeline B.
+#
+#   - `list_campaign_quests` is timeline/audience scoped, so this quest
+#     never appears in Campaign A's list — verified, and asserted by the
+#     focused tests.
+#   - `get_quest_view`, called by `get_quest_endpoint` with
+#     `require_campaign_tracking=True` and `include_all_parties=<account
+#     holds baseline canon.edit>`, now applies the *same* shared
+#     timeline/party audience rule (`dnd_ai.queries.quest.
+#     _QUEST_STATE_MATCHES_AUDIENCE`). `narrative.quests` is still world
+#     canon with no `campaign_id`, but campaign exposure is established by
+#     a qualifying `campaign.quest_state` row on the campaign's exact
+#     timeline — and Campaign B's quest has none on Timeline A. So
+#     requesting this quest's id under Campaign A's URL raises
+#     `QuestNotFoundError` → the identical non-disclosing 404 a nonexistent
+#     quest id produces. The verification block requests it exactly that
+#     way and prints the real result so a live tester sees the behavior
+#     directly; the focused query/API tests assert it.
+
+_QUEST_A_ACTIVE_NAME = "Restore the Glass Ossuary"
+_QUEST_A_COMPLETED_NAME = "Gather the Hollow Verses"
+_QUEST_A_NULL_STATUS_NAME = "Wake the Tide Beneath Vheil"
+_CAMPAIGN_B_QUEST_NAME = "Chart the Sunken Marches"
+
+# The party that carries "Wake the Tide Beneath Vheil"'s only quest_state
+# row (see the module comment above). Created in Campaign A's world and
+# associated with Campaign A via campaign.campaign_parties — no party
+# membership rows, since the supplied account never resolves a party
+# perspective for quests anyway (it is a GM).
+_QUEST_A_PARTY_NAME = "The Ashen Vigil"
+
+
+@dataclass(frozen=True)
+class _ObjectiveFixture:
+    """One `narrative.quest_objectives` row plus, optionally, its
+    `campaign.objective_state` row. `objective_status_code=None` means no
+    state row at all — the portal's "no tracked status yet" rendering, and
+    (for `hidden_until_discovered`/`gm_only`) the audience-filtered-out
+    case. `description=None` and `quantity_required=None` are the schema's
+    real nullable states."""
+
+    name: str
+    objective_type_code: str
+    requirement_level: str
+    completion_mode: str
+    visibility_policy: str
+    description: str | None
+    quantity_required: int | None
+    objective_status_code: str | None
+
+
+@dataclass(frozen=True)
+class _StageFixture:
+    name: str
+    sequence_number: int
+    stage_type: str
+    description: str | None
+    objectives: tuple[_ObjectiveFixture, ...]
+
+
+@dataclass(frozen=True)
+class _QuestFixture:
+    """One `narrative.quests` entity plus its stages/objectives and its
+    `campaign.quest_state` tracking. `campaign_wide_status_code=None` with
+    `party_scoped_status_code` set is the "listed for a GM but null status"
+    case (see the module comment); exactly one of the two is expected to be
+    set for a quest that must appear in the portal's list."""
+
+    name: str
+    campaign_wide_status_code: str | None
+    party_scoped_status_code: str | None
+    stages: tuple[_StageFixture, ...]
+
+
+_GLASS_OSSUARY_OBJECTIVES_STAGE_1: tuple[_ObjectiveFixture, ...] = (
+    _ObjectiveFixture(
+        name="Light the three vigil lanterns",
+        objective_type_code="activate_mechanism",
+        requirement_level="required",
+        completion_mode="automatic",
+        visibility_policy="visible",
+        description=(
+            "Every lantern in the antechamber must burn before the wardens unseal the inner doors."
+        ),
+        quantity_required=3,
+        objective_status_code="completed",
+    ),
+    _ObjectiveFixture(
+        name="Answer the warden's challenge",
+        objective_type_code="persuade_npc",
+        requirement_level="required",
+        completion_mode="gm_confirmed",
+        visibility_policy="visible",
+        description=None,
+        quantity_required=None,
+        objective_status_code="active",
+    ),
+    _ObjectiveFixture(
+        name="Recover the sexton's iron key",
+        objective_type_code="acquire_item",
+        requirement_level="optional",
+        completion_mode="automatic",
+        visibility_policy="visible",
+        description="Optional: the sexton's key opens the reliquary vault without forcing the seals.",
+        quantity_required=None,
+        objective_status_code=None,
+    ),
+)
+
+_GLASS_OSSUARY_OBJECTIVES_STAGE_2: tuple[_ObjectiveFixture, ...] = (
+    _ObjectiveFixture(
+        name="Set the ossuary keystone",
+        objective_type_code="other",
+        requirement_level="required",
+        completion_mode="automatic",
+        visibility_policy="visible",
+        description="The keystone must be seated before any relic is returned to its niche.",
+        quantity_required=None,
+        objective_status_code="active",
+    ),
+    _ObjectiveFixture(
+        name="Catalogue the recovered relics",
+        objective_type_code="other",
+        requirement_level="optional",
+        completion_mode="gm_confirmed",
+        visibility_policy="hidden_until_discovered",
+        description=None,
+        quantity_required=5,
+        objective_status_code=None,
+    ),
+    _ObjectiveFixture(
+        name="Brief Archivist Vell in private",
+        objective_type_code="persuade_npc",
+        requirement_level="required",
+        completion_mode="automatic",
+        visibility_policy="gm_only",
+        description="GM-only: Vell must hear of the breach before the players report it publicly.",
+        quantity_required=None,
+        objective_status_code=None,
+    ),
+)
+
+_CAMPAIGN_A_QUESTS: tuple[_QuestFixture, ...] = (
+    _QuestFixture(
+        name=_QUEST_A_ACTIVE_NAME,
+        campaign_wide_status_code="active",
+        party_scoped_status_code=None,
+        stages=(
+            _StageFixture(
+                name="The Warden's Vigil",
+                sequence_number=1,
+                stage_type="sequential",
+                description="Earn the wardens' leave to enter the ossuary proper.",
+                objectives=_GLASS_OSSUARY_OBJECTIVES_STAGE_1,
+            ),
+            _StageFixture(
+                name="Reassemble the Reliquary",
+                sequence_number=2,
+                stage_type="sequential",
+                description="Rebuild the shattered reliquary from the recovered fragments.",
+                objectives=_GLASS_OSSUARY_OBJECTIVES_STAGE_2,
+            ),
+            _StageFixture(
+                name="Aftermath in the Nave",
+                sequence_number=3,
+                stage_type="optional",
+                description="Optional follow-up once the reliquary is whole.",
+                objectives=(),
+            ),
+        ),
+    ),
+    _QuestFixture(
+        name=_QUEST_A_COMPLETED_NAME,
+        campaign_wide_status_code="completed",
+        party_scoped_status_code=None,
+        stages=(),
+    ),
+    _QuestFixture(
+        name=_QUEST_A_NULL_STATUS_NAME,
+        campaign_wide_status_code=None,
+        party_scoped_status_code="active",
+        stages=(),
+    ),
+)
+
+_CAMPAIGN_B_QUEST: _QuestFixture = _QuestFixture(
+    name=_CAMPAIGN_B_QUEST_NAME,
+    campaign_wide_status_code="active",
+    party_scoped_status_code=None,
+    stages=(
+        _StageFixture(
+            name="Sound the Shallows",
+            sequence_number=1,
+            stage_type="sequential",
+            description="Chart a safe passage across the tidal flats.",
+            objectives=(
+                _ObjectiveFixture(
+                    name="Map the tidal causeway",
+                    objective_type_code="reach_location",
+                    requirement_level="required",
+                    completion_mode="automatic",
+                    visibility_policy="visible",
+                    description="Walk the causeway at low tide and record the safe line.",
+                    quantity_required=None,
+                    objective_status_code="active",
+                ),
+            ),
+        ),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class _UserInfo:
@@ -451,9 +812,16 @@ class _Summary:
     # and apply mode — see `_note_session`/`main`. Never carries a
     # created/reused/reconciled verb; that stays in `lines`.
     report: list[str] = field(default_factory=list)
+    # The same kind of quick reference, for the Phase 13D quest fixtures —
+    # printed under its own header (see `main`). Kept separate from
+    # `report` only so the two blocks stay visually distinct in the output.
+    quest_report: list[str] = field(default_factory=list)
 
     def note(self, line: str) -> None:
         self.report.append(line)
+
+    def note_quest(self, line: str) -> None:
+        self.quest_report.append(line)
 
     def add(
         self,
@@ -1570,6 +1938,574 @@ def _ensure_campaign_sessions(
     return session_ids
 
 
+# --------------------------------------------------------------------------
+# Phase 13D Quest list/detail fixtures
+# --------------------------------------------------------------------------
+
+
+def _objective_visible_to_non_gm(objective: _ObjectiveFixture) -> bool:
+    """Whether the production quest-detail query returns this objective to a
+    non-GM audience (`include_hidden=False`) — mirrors
+    `dnd_ai.queries.quest.get_quest_view`'s own WHERE clause exactly:
+    `visible` always; `hidden_until_active`/`hidden_until_discovered` only
+    once a `campaign.objective_state` row exists; `gm_only` never. Used only
+    to describe the fixture in the quick-reference/verification output — the
+    real filtering is always done by the real query, never re-derived for
+    an actual access decision."""
+    if objective.visibility_policy == "visible":
+        return True
+    if objective.visibility_policy in ("hidden_until_active", "hidden_until_discovered"):
+        return objective.objective_status_code is not None
+    return False
+
+
+def _get_or_create_party(
+    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, name: str
+) -> uuid.UUID:
+    """Create-or-reuse one fixture-owned `campaign.parties` row, located by
+    its distinctive `(world_id, name)`. No party-membership rows are
+    created: the supplied account is a campaign owner / GM and never
+    resolves a party perspective for quests (`get_quest_endpoint` forces
+    `authorized_party_id=None` for a `canon.edit` holder), so this party
+    exists only to carry the one party-scoped `campaign.quest_state` row
+    that gives `_QUEST_A_NULL_STATUS_NAME` a null resolved status in the
+    portal's list (see the module comment)."""
+    existing = (
+        connection.execute(
+            text("SELECT party_id FROM campaign.parties WHERE world_id = :world AND name = :name"),
+            {"world": world_id, "name": name},
+        )
+        .scalars()
+        .all()
+    )
+    if len(existing) > 1:
+        raise SystemExit(
+            f"more than one campaign.parties row named {name!r} in world {world_id} — "
+            "ambiguous, refusing to guess which is the fixture's. Investigate before re-running."
+        )
+    if existing:
+        party_id = existing[0]
+        assert isinstance(party_id, uuid.UUID)
+        summary.add(created=False, label=f"party {name!r}", record_id=party_id)
+        return party_id
+    party_id = connection.execute(
+        text(
+            "INSERT INTO campaign.parties (world_id, name) VALUES (:world, :name) RETURNING party_id"
+        ),
+        {"world": world_id, "name": name},
+    ).scalar()
+    assert isinstance(party_id, uuid.UUID)
+    summary.add(created=True, label=f"party {name!r}", record_id=party_id)
+    return party_id
+
+
+def _ensure_campaign_party(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    party_id: uuid.UUID,
+    party_name: str,
+) -> None:
+    existing = connection.execute(
+        text("SELECT 1 FROM campaign.campaign_parties WHERE campaign_id = :c AND party_id = :p"),
+        {"c": campaign_id, "p": party_id},
+    ).scalar()
+    label = f"campaign/party association ({party_name!r})"
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=f"{campaign_id}/{party_id}")
+        return
+    connection.execute(
+        text("INSERT INTO campaign.campaign_parties (campaign_id, party_id) VALUES (:c, :p)"),
+        {"c": campaign_id, "p": party_id},
+    )
+    summary.add(created=True, label=label, record_id=f"{campaign_id}/{party_id}")
+
+
+def _get_or_create_quest(
+    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, name: str
+) -> uuid.UUID:
+    """Create-or-reuse one fixture-owned `narrative.quests` entity, located
+    by `(world_id, canonical_name)` among `quest`-typed entities. A name
+    found on more than one entity, on a non-`quest` entity, or on a `quest`
+    entity with no `narrative.quests` subtype row is treated as a collision
+    with non-fixture/incompatible data and aborts with guidance rather than
+    guessing ownership (the task's own rule). Direct insert — there is no
+    production authoring command for a quest entity yet (same boundary
+    `tests/factories.py`'s `make_quest` documents), and the row shape
+    mirrors it exactly."""
+    rows = (
+        connection.execute(
+            text("""
+                SELECT e.entity_id, et.code AS entity_type_code,
+                       (q.quest_id IS NOT NULL) AS has_quest_row
+                FROM core.entities e
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                LEFT JOIN narrative.quests q ON q.quest_id = e.entity_id
+                WHERE e.world_id = :world AND e.canonical_name = :name
+            """),
+            {"world": world_id, "name": name},
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) > 1:
+        raise SystemExit(
+            f"more than one core.entities row named {name!r} in world {world_id} — a name "
+            "collision with non-fixture data. Refusing to guess which is the fixture's quest; "
+            "rename or remove the conflicting row, then re-run."
+        )
+    if rows:
+        row = rows[0]
+        entity_id = row["entity_id"]
+        assert isinstance(entity_id, uuid.UUID)
+        if row["entity_type_code"] != "quest" or not row["has_quest_row"]:
+            detail = (
+                f"is a {row['entity_type_code']!r} entity"
+                if row["entity_type_code"] != "quest"
+                else "is a 'quest' entity with no narrative.quests subtype row"
+            )
+            raise SystemExit(
+                f"an entity named {name!r} already exists in world {world_id} but {detail} — "
+                "incompatible with this fixture's quest. Rename or remove it, then re-run."
+            )
+        summary.add(created=False, label=f"quest {name!r}", record_id=entity_id)
+        return entity_id
+
+    quest_type_id = lookup_id(connection, "core", "entity_types", "entity_type_id", "quest")
+    canon_status_id = lookup_id(connection, "core", "canon_statuses", "canon_status_id", "canon")
+    active_status_id = lookup_id(
+        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
+    )
+    entity_id = connection.execute(
+        text("""
+            INSERT INTO core.entities
+                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id)
+            VALUES (:world, :etype, :name, :canon, :lifecycle)
+            RETURNING entity_id
+        """),
+        {
+            "world": world_id,
+            "etype": quest_type_id,
+            "name": name,
+            "canon": canon_status_id,
+            "lifecycle": active_status_id,
+        },
+    ).scalar()
+    assert isinstance(entity_id, uuid.UUID)
+    connection.execute(
+        text("INSERT INTO narrative.quests (quest_id) VALUES (:id)"), {"id": entity_id}
+    )
+    summary.add(created=True, label=f"quest {name!r}", record_id=entity_id)
+    return entity_id
+
+
+def _ensure_quest_stage(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    quest_id: uuid.UUID,
+    quest_name: str,
+    fixture: _StageFixture,
+) -> uuid.UUID:
+    """Create-or-reconcile one fixture-owned `narrative.quest_stages` row,
+    located by `(quest_id, name)` on the fixture's own quest. `sequence_
+    number`, `stage_type`, and `description` are reconciled — the table has
+    no immutability trigger and the portal renders all three."""
+    report_label = f"quest stage {quest_name!r} / {fixture.name!r} (seq {fixture.sequence_number})"
+    existing = (
+        connection.execute(
+            text("""
+                SELECT quest_stage_id, sequence_number, stage_type, description
+                FROM narrative.quest_stages
+                WHERE quest_id = :quest AND name = :name
+            """),
+            {"quest": quest_id, "name": fixture.name},
+        )
+        .mappings()
+        .all()
+    )
+    if len(existing) > 1:
+        raise SystemExit(
+            f"more than one narrative.quest_stages row named {fixture.name!r} on quest "
+            f"{quest_name!r} — ambiguous, refusing to guess which is the fixture's."
+        )
+    params = {
+        "quest": quest_id,
+        "name": fixture.name,
+        "seq": fixture.sequence_number,
+        "type": fixture.stage_type,
+        "description": fixture.description,
+    }
+    if not existing:
+        stage_id = connection.execute(
+            text("""
+                INSERT INTO narrative.quest_stages
+                    (quest_id, name, sequence_number, stage_type, description)
+                VALUES (:quest, :name, :seq, :type, :description)
+                RETURNING quest_stage_id
+            """),
+            params,
+        ).scalar()
+        assert isinstance(stage_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=stage_id)
+        return stage_id
+
+    row = existing[0]
+    stage_id = row["quest_stage_id"]
+    assert isinstance(stage_id, uuid.UUID)
+    matches = (
+        row["sequence_number"] == fixture.sequence_number
+        and row["stage_type"] == fixture.stage_type
+        and row["description"] == fixture.description
+    )
+    if matches:
+        summary.add(created=False, changed=False, label=report_label, record_id=stage_id)
+        return stage_id
+    connection.execute(
+        text("""
+            UPDATE narrative.quest_stages
+            SET sequence_number = :seq, stage_type = :type, description = :description
+            WHERE quest_stage_id = :id
+        """),
+        {**params, "id": stage_id},
+    )
+    summary.add(created=False, changed=True, label=report_label, record_id=stage_id)
+    return stage_id
+
+
+def _ensure_quest_objective(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    quest_stage_id: uuid.UUID,
+    quest_name: str,
+    stage_name: str,
+    fixture: _ObjectiveFixture,
+) -> uuid.UUID:
+    """Create-or-reconcile one fixture-owned `narrative.quest_objectives`
+    row, located by `(quest_stage_id, name)`. Every portal-visible column —
+    `objective_type_id`, `requirement_level`, `completion_mode`,
+    `visibility_policy`, `description`, `quantity_required` — is reconciled;
+    the table has no immutability trigger. `completion_rule` is left NULL
+    (the fixture needs no structured completion metadata), matching
+    `tests/factories.py`'s `make_quest_objective` default."""
+    report_label = f"quest objective {quest_name!r} / {stage_name!r} / {fixture.name!r}"
+    objective_type_id = lookup_id(
+        connection, "narrative", "objective_types", "objective_type_id", fixture.objective_type_code
+    )
+    existing = (
+        connection.execute(
+            text("""
+                SELECT quest_objective_id, objective_type_id, requirement_level, completion_mode,
+                       visibility_policy, description, quantity_required
+                FROM narrative.quest_objectives
+                WHERE quest_stage_id = :stage AND name = :name
+            """),
+            {"stage": quest_stage_id, "name": fixture.name},
+        )
+        .mappings()
+        .all()
+    )
+    if len(existing) > 1:
+        raise SystemExit(
+            f"more than one narrative.quest_objectives row named {fixture.name!r} on stage "
+            f"{stage_name!r} of quest {quest_name!r} — ambiguous, refusing to guess."
+        )
+    params = {
+        "stage": quest_stage_id,
+        "name": fixture.name,
+        "otype": objective_type_id,
+        "requirement": fixture.requirement_level,
+        "completion": fixture.completion_mode,
+        "visibility": fixture.visibility_policy,
+        "description": fixture.description,
+        "quantity": fixture.quantity_required,
+    }
+    if not existing:
+        objective_id = connection.execute(
+            text("""
+                INSERT INTO narrative.quest_objectives
+                    (quest_stage_id, objective_type_id, name, requirement_level, completion_mode,
+                     visibility_policy, description, quantity_required)
+                VALUES (:stage, :otype, :name, :requirement, :completion, :visibility,
+                        :description, :quantity)
+                RETURNING quest_objective_id
+            """),
+            params,
+        ).scalar()
+        assert isinstance(objective_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=objective_id)
+        return objective_id
+
+    row = existing[0]
+    objective_id = row["quest_objective_id"]
+    assert isinstance(objective_id, uuid.UUID)
+    matches = (
+        row["objective_type_id"] == objective_type_id
+        and row["requirement_level"] == fixture.requirement_level
+        and row["completion_mode"] == fixture.completion_mode
+        and row["visibility_policy"] == fixture.visibility_policy
+        and row["description"] == fixture.description
+        and row["quantity_required"] == fixture.quantity_required
+    )
+    if matches:
+        summary.add(created=False, changed=False, label=report_label, record_id=objective_id)
+        return objective_id
+    connection.execute(
+        text("""
+            UPDATE narrative.quest_objectives
+            SET objective_type_id = :otype, requirement_level = :requirement,
+                completion_mode = :completion, visibility_policy = :visibility,
+                description = :description, quantity_required = :quantity
+            WHERE quest_objective_id = :id
+        """),
+        {**params, "id": objective_id},
+    )
+    summary.add(created=False, changed=True, label=report_label, record_id=objective_id)
+    return objective_id
+
+
+def _ensure_quest_state(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    quest_name: str,
+    party_id: uuid.UUID | None,
+    party_label: str | None,
+    status_code: str,
+) -> None:
+    """Create-or-reconcile one fixture-owned `campaign.quest_state` row for
+    `(timeline_id, quest_id, party_id)` — located by exactly that triple
+    (the table's own partial unique indexes). Only `quest_status_id` is
+    reconciled; `last_event_id` is left untouched (a live-testing advance
+    may have set it to a real recorded event, and only the status matters
+    to the portal). `last_event_id` is NULL on a fresh insert — the
+    "administrative/import-driven change with no causing event" case
+    `campaign.enforce_state_event_timeline()` explicitly allows."""
+    scope = "campaign-wide" if party_id is None else f"party {party_label!r}"
+    report_label = f"quest state {quest_name!r} ({scope}) -> {status_code!r}"
+    status_id = lookup_id(connection, "campaign", "quest_statuses", "quest_status_id", status_code)
+    existing = (
+        connection.execute(
+            text("""
+                SELECT quest_state_id, quest_status_id
+                FROM campaign.quest_state
+                WHERE timeline_id = :timeline AND quest_id = :quest
+                  AND party_id IS NOT DISTINCT FROM :party
+            """),
+            {"timeline": timeline_id, "quest": quest_id, "party": party_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if existing is None:
+        state_id = connection.execute(
+            text("""
+                INSERT INTO campaign.quest_state
+                    (timeline_id, quest_id, party_id, quest_status_id)
+                VALUES (:timeline, :quest, :party, :status)
+                RETURNING quest_state_id
+            """),
+            {"timeline": timeline_id, "quest": quest_id, "party": party_id, "status": status_id},
+        ).scalar()
+        assert isinstance(state_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=state_id)
+        return
+    state_id = existing["quest_state_id"]
+    assert isinstance(state_id, uuid.UUID)
+    if existing["quest_status_id"] == status_id:
+        summary.add(created=False, changed=False, label=report_label, record_id=state_id)
+        return
+    connection.execute(
+        text(
+            "UPDATE campaign.quest_state SET quest_status_id = :status, updated_at = now() "
+            "WHERE quest_state_id = :id"
+        ),
+        {"status": status_id, "id": state_id},
+    )
+    summary.add(created=False, changed=True, label=report_label, record_id=state_id)
+
+
+def _ensure_objective_state(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    quest_objective_id: uuid.UUID,
+    objective_label: str,
+    party_id: uuid.UUID | None,
+    status_code: str,
+) -> None:
+    """Create-or-reconcile one fixture-owned `campaign.objective_state` row
+    for `(timeline_id, quest_objective_id, party_id)` — same contract as
+    `_ensure_quest_state`, reconciling only `objective_status_id`."""
+    report_label = f"objective state {objective_label} -> {status_code!r}"
+    status_id = lookup_id(
+        connection, "campaign", "objective_statuses", "objective_status_id", status_code
+    )
+    existing = (
+        connection.execute(
+            text("""
+                SELECT objective_state_id, objective_status_id
+                FROM campaign.objective_state
+                WHERE timeline_id = :timeline AND quest_objective_id = :objective
+                  AND party_id IS NOT DISTINCT FROM :party
+            """),
+            {"timeline": timeline_id, "objective": quest_objective_id, "party": party_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if existing is None:
+        state_id = connection.execute(
+            text("""
+                INSERT INTO campaign.objective_state
+                    (timeline_id, quest_objective_id, party_id, objective_status_id)
+                VALUES (:timeline, :objective, :party, :status)
+                RETURNING objective_state_id
+            """),
+            {
+                "timeline": timeline_id,
+                "objective": quest_objective_id,
+                "party": party_id,
+                "status": status_id,
+            },
+        ).scalar()
+        assert isinstance(state_id, uuid.UUID)
+        summary.add(created=True, label=report_label, record_id=state_id)
+        return
+    state_id = existing["objective_state_id"]
+    assert isinstance(state_id, uuid.UUID)
+    if existing["objective_status_id"] == status_id:
+        summary.add(created=False, changed=False, label=report_label, record_id=state_id)
+        return
+    connection.execute(
+        text(
+            "UPDATE campaign.objective_state SET objective_status_id = :status, updated_at = now() "
+            "WHERE objective_state_id = :id"
+        ),
+        {"status": status_id, "id": state_id},
+    )
+    summary.add(created=False, changed=True, label=report_label, record_id=state_id)
+
+
+def _note_quest(summary: _Summary, *, quest: _QuestFixture, quest_id: uuid.UUID) -> None:
+    if quest.campaign_wide_status_code is not None:
+        status_desc = f"status {quest.campaign_wide_status_code!r} (campaign-wide)"
+    elif quest.party_scoped_status_code is not None:
+        status_desc = (
+            f"status null for the owner (tracked only by party "
+            f"{_QUEST_A_PARTY_NAME!r} as {quest.party_scoped_status_code!r})"
+        )
+    else:
+        status_desc = "not tracked on this timeline"
+
+    if quest.stages:
+        ordered = sorted(quest.stages, key=lambda s: (s.sequence_number, s.name))
+        stage_desc = "stages in sequence order: " + ", ".join(
+            f"{s.name!r} (seq {s.sequence_number})" for s in ordered
+        )
+    else:
+        stage_desc = "no stages"
+
+    summary.note_quest(f"  {quest.name!r}  {quest_id}  [{status_desc}; {stage_desc}]")
+
+    for stage in sorted(quest.stages, key=lambda s: (s.sequence_number, s.name)):
+        if not stage.objectives:
+            summary.note_quest(f"      stage {stage.name!r}: no objectives")
+            continue
+        for objective in stage.objectives:
+            audience = (
+                "any campaign.view holder"
+                if _objective_visible_to_non_gm(objective)
+                else "canon.edit (GM) audience only"
+            )
+            qty = (
+                f", quantity {objective.quantity_required}"
+                if objective.quantity_required is not None
+                else ""
+            )
+            status = objective.objective_status_code or "no tracked status"
+            summary.note_quest(
+                f"      objective {objective.name!r}: {objective.requirement_level}/"
+                f"{objective.completion_mode}, visibility {objective.visibility_policy} "
+                f"({audience}), status {status}{qty}"
+            )
+
+
+def _ensure_campaign_quests(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_name: str,
+    timeline_id: uuid.UUID,
+    world_id: uuid.UUID,
+    quests: tuple[_QuestFixture, ...],
+    party_id: uuid.UUID | None = None,
+) -> dict[str, uuid.UUID]:
+    """Reconcile every quest fixture for one campaign and append its
+    quick-reference block to `summary.quest_report`. Returns
+    `{quest_name: quest_id}` for the caller's own reference block."""
+    summary.note_quest(f"{campaign_name}:")
+    quest_ids: dict[str, uuid.UUID] = {}
+    for quest in quests:
+        quest_id = _get_or_create_quest(connection, summary, world_id=world_id, name=quest.name)
+        quest_ids[quest.name] = quest_id
+        for stage in quest.stages:
+            stage_id = _ensure_quest_stage(
+                connection, summary, quest_id=quest_id, quest_name=quest.name, fixture=stage
+            )
+            for objective in stage.objectives:
+                objective_id = _ensure_quest_objective(
+                    connection,
+                    summary,
+                    quest_stage_id=stage_id,
+                    quest_name=quest.name,
+                    stage_name=stage.name,
+                    fixture=objective,
+                )
+                if objective.objective_status_code is not None:
+                    _ensure_objective_state(
+                        connection,
+                        summary,
+                        timeline_id=timeline_id,
+                        quest_objective_id=objective_id,
+                        objective_label=f"{quest.name} / {objective.name}",
+                        party_id=None,
+                        status_code=objective.objective_status_code,
+                    )
+        if quest.campaign_wide_status_code is not None:
+            _ensure_quest_state(
+                connection,
+                summary,
+                timeline_id=timeline_id,
+                quest_id=quest_id,
+                quest_name=quest.name,
+                party_id=None,
+                party_label=None,
+                status_code=quest.campaign_wide_status_code,
+            )
+        if quest.party_scoped_status_code is not None:
+            assert party_id is not None, (
+                "a party-scoped quest fixture requires a party — this is a bug in the fixture wiring"
+            )
+            _ensure_quest_state(
+                connection,
+                summary,
+                timeline_id=timeline_id,
+                quest_id=quest_id,
+                quest_name=quest.name,
+                party_id=party_id,
+                party_label=_QUEST_A_PARTY_NAME,
+                status_code=quest.party_scoped_status_code,
+            )
+        _note_quest(summary, quest=quest, quest_id=quest_id)
+    return quest_ids
+
+
 def _ensure_character_relationship(
     connection: Connection,
     summary: _Summary,
@@ -1791,7 +2727,158 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         "non-disclosing 'unavailable' response as a nonexistent session id."
     )
 
+    # ----------------------------------------------------------------------
+    # Phase 13D quest list/detail fixtures
+    # ----------------------------------------------------------------------
+    quest_party_id = _get_or_create_party(
+        connection, summary, world_id=world_id, name=_QUEST_A_PARTY_NAME
+    )
+    _ensure_campaign_party(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        party_id=quest_party_id,
+        party_name=_QUEST_A_PARTY_NAME,
+    )
+    campaign_a_quest_ids = _ensure_campaign_quests(
+        connection,
+        summary,
+        campaign_name=_CAMPAIGN_A_NAME,
+        timeline_id=timeline_a_id,
+        world_id=world_id,
+        quests=_CAMPAIGN_A_QUESTS,
+        party_id=quest_party_id,
+    )
+    campaign_b_quest_ids = _ensure_campaign_quests(
+        connection,
+        summary,
+        campaign_name=_CAMPAIGN_B_NAME,
+        timeline_id=timeline_b_id,
+        world_id=world_id,
+        quests=(_CAMPAIGN_B_QUEST,),
+    )
+
+    _note_quest_reference_block(
+        summary,
+        campaign_a_id=campaign_a_id,
+        campaign_b_id=campaign_b_id,
+        character_a_id=character_a_id,
+        character_b_id=character_b_id,
+        campaign_a_quest_ids=campaign_a_quest_ids,
+        campaign_b_quest_id=campaign_b_quest_ids[_CAMPAIGN_B_QUEST_NAME],
+    )
+
     return summary
+
+
+def _glass_ossuary_stage_names_in_order() -> list[str]:
+    active = next(q for q in _CAMPAIGN_A_QUESTS if q.name == _QUEST_A_ACTIVE_NAME)
+    return [s.name for s in sorted(active.stages, key=lambda s: (s.sequence_number, s.name))]
+
+
+def _glass_ossuary_visible_objectives(*, non_gm: bool) -> list[str]:
+    active = next(q for q in _CAMPAIGN_A_QUESTS if q.name == _QUEST_A_ACTIVE_NAME)
+    return [
+        o.name
+        for stage in active.stages
+        for o in stage.objectives
+        if (not non_gm) or _objective_visible_to_non_gm(o)
+    ]
+
+
+def _note_quest_reference_block(
+    summary: _Summary,
+    *,
+    campaign_a_id: uuid.UUID,
+    campaign_b_id: uuid.UUID,
+    character_a_id: uuid.UUID,
+    character_b_id: uuid.UUID,
+    campaign_a_quest_ids: dict[str, uuid.UUID],
+    campaign_b_quest_id: uuid.UUID,
+) -> None:
+    """The task's "quest fixture reference" block — IDs, the expected
+    ordered stage names, which objectives the real API returns for the
+    supplied account vs. a non-GM audience, and ready-to-use request paths.
+    Every "expected" line here describes what the real production query
+    should return; it is not itself proof. `main()` runs the real queries
+    after an applied run (`_print_quest_verification`) and prints that
+    separately, clearly labelled as database/query verification — never as
+    an HTTP result."""
+    n = summary.note_quest
+    n("")
+    n(f"Campaign A id:  {campaign_a_id}")
+    n(f"Campaign B id:  {campaign_b_id}")
+    n(f"Character A id: {character_a_id}")
+    n(f"Character B id: {character_b_id}")
+    n("")
+    n("Fixture quests:")
+    for name, quest_id in campaign_a_quest_ids.items():
+        n(f"  [Campaign A] {name!r}: {quest_id}")
+    n(f"  [Campaign B] {_CAMPAIGN_B_QUEST_NAME!r}: {campaign_b_quest_id}")
+    n("")
+    n(
+        f"{_QUEST_A_ACTIVE_NAME!r} expected stage order (backend order, NOT alphabetical): "
+        + " -> ".join(repr(s) for s in _glass_ossuary_stage_names_in_order())
+    )
+    n(
+        f"{_QUEST_A_ACTIVE_NAME!r} objectives the real API returns for the supplied account "
+        "(campaign owner / GM, include_hidden=True): "
+        + ", ".join(repr(o) for o in _glass_ossuary_visible_objectives(non_gm=False))
+    )
+    n(
+        f"{_QUEST_A_ACTIVE_NAME!r} objectives a non-GM player perspective would see "
+        "(include_hidden=False): "
+        + ", ".join(repr(o) for o in _glass_ossuary_visible_objectives(non_gm=True))
+        + " -- the gm_only and stateless hidden_until_discovered objectives are filtered out "
+        "for that audience; this account holds canon.edit, so it is NOT filtered for the "
+        "supplied user, and this script does not weaken that authority to prove otherwise."
+    )
+    n("")
+    n("Ready-to-use request paths (cookie-authenticated HTTP -- run these yourself; this")
+    n("script never performs them and never claims one passed):")
+    n(
+        f"  Campaign A quest list (Character A):   GET /campaigns/{campaign_a_id}/quests?character_id={character_a_id}"
+    )
+    n(
+        f"  Campaign A quest list (Character B):   GET /campaigns/{campaign_a_id}/quests?character_id={character_b_id}"
+    )
+    n(
+        f"  {_QUEST_A_ACTIVE_NAME!r} detail (Character A): "
+        f"GET /campaigns/{campaign_a_id}/quests/{campaign_a_quest_ids[_QUEST_A_ACTIVE_NAME]}"
+        f"?character_id={character_a_id}"
+    )
+    n(
+        f"  {_QUEST_A_ACTIVE_NAME!r} detail (Character B): "
+        f"GET /campaigns/{campaign_a_id}/quests/{campaign_a_quest_ids[_QUEST_A_ACTIVE_NAME]}"
+        f"?character_id={character_b_id}"
+    )
+    n(
+        f"  empty-stage quest detail:              "
+        f"GET /campaigns/{campaign_a_id}/quests/{campaign_a_quest_ids[_QUEST_A_COMPLETED_NAME]}"
+    )
+    n(
+        f"  null-status quest detail:              "
+        f"GET /campaigns/{campaign_a_id}/quests/{campaign_a_quest_ids[_QUEST_A_NULL_STATUS_NAME]}"
+    )
+    n(
+        f"  cross-campaign (Campaign B quest under Campaign A): "
+        f"GET /campaigns/{campaign_a_id}/quests/{campaign_b_quest_id}"
+    )
+    n(
+        f"  nonexistent quest (baseline for the above): "
+        f"GET /campaigns/{campaign_a_id}/quests/{uuid.uuid4()}"
+    )
+    n("")
+    n(
+        "Note on the cross-campaign request: the quest LIST endpoint is timeline/audience "
+        f"scoped and does NOT include {_CAMPAIGN_B_QUEST_NAME!r} in Campaign A. The DETAIL "
+        "endpoint applies the same shared tracking rule, so requesting Campaign B's quest id "
+        "under Campaign A returns the standard non-disclosing 404 (identical to a nonexistent "
+        "quest) — quests are world canon with no campaign_id, but campaign exposure requires "
+        "a qualifying campaign.quest_state row on the campaign's exact timeline, and Campaign "
+        "B's quest has none on Timeline A. See the module docstring and the query verification "
+        "block below."
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1837,9 +2924,13 @@ def main(argv: list[str] | None = None) -> int:
     if summary.report:
         print("\n-- Session fixture quick reference (for manual portal verification) --")
         print("\n".join(summary.report))
+    if summary.quest_report:
+        print("\n-- Quest fixture quick reference (for manual portal verification) --")
+        print("\n".join(summary.quest_report))
     if args.apply:
         print("\nAPPLIED - changes committed.")
         _print_bootstrap_verification(user_id=args.user_id)
+        _print_quest_verification(user_id=args.user_id)
     else:
         print("\nPREVIEW ONLY - every change above was rolled back. Re-run with --apply to write.")
     return 0
@@ -1868,6 +2959,172 @@ def _print_bootstrap_verification(*, user_id: uuid.UUID) -> None:
             f"roles={campaign.roles} capabilities={campaign.capabilities} "
             f"perspectives=[{perspectives}]"
         )
+
+
+def _print_quest_verification(*, user_id: uuid.UUID) -> None:
+    """Re-opens a fresh, read-only connection and runs the REAL production
+    quest list/detail query functions (`dnd_ai.queries.quest.
+    list_campaign_quests` / `get_quest_view`) with the real audience/access
+    inputs they require for the supplied account — never a re-implementation
+    of the visibility rules. This is database/query verification, not the
+    browser/cookie-authenticated HTTP path; it does not by itself prove the
+    `/campaigns/{id}/quests[...]` endpoints behave identically over HTTP.
+
+    The supplied account is a campaign owner and therefore holds
+    `canon.edit` in Campaign A, so `get_quest_endpoint` would run with
+    `include_hidden=True` and resolve no party perspective. This function
+    calls `get_quest_view` both that way (the real inputs for this account)
+    and, separately, with `include_hidden=False` to show the non-GM-audience
+    result — testing "both character perspectives" produces the identical
+    result for this account because its `canon.edit` authority does not
+    change when a `character_id` query parameter does, and that is stated
+    explicitly below rather than pretended otherwise."""
+    engine = create_engine(_database_url())
+    with engine.connect() as connection:
+        connection.execute(text("SET default_transaction_read_only = on"))
+        view = get_session_bootstrap(connection, user_id=user_id)
+        campaign_a = next(c for c in view.campaigns if c.campaign_name == _CAMPAIGN_A_NAME)
+        campaign_b = next(c for c in view.campaigns if c.campaign_name == _CAMPAIGN_B_NAME)
+        assert campaign_a.timeline_id is not None and campaign_b.timeline_id is not None
+        is_gm = "canon.edit" in campaign_a.capabilities
+        world_a = connection.execute(
+            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+            {"t": campaign_a.timeline_id},
+        ).scalar()
+        assert isinstance(world_a, uuid.UUID)
+
+        a_list = list_campaign_quests(
+            connection,
+            timeline_id=campaign_a.timeline_id,
+            party_id=None,
+            include_all_parties=is_gm,
+        )
+        b_list = list_campaign_quests(
+            connection,
+            timeline_id=campaign_b.timeline_id,
+            party_id=None,
+            include_all_parties=is_gm,
+        )
+
+        glass = next(i for i in a_list if i.name == _QUEST_A_ACTIVE_NAME)
+        glass_view = get_quest_view(
+            connection,
+            quest_id=glass.quest_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=is_gm,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
+        )
+        glass_view_non_gm = get_quest_view(
+            connection,
+            quest_id=glass.quest_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=False,
+            require_campaign_tracking=True,
+            include_all_parties=False,
+        )
+
+        empty = next(i for i in a_list if i.name == _QUEST_A_COMPLETED_NAME)
+        empty_view = get_quest_view(
+            connection,
+            quest_id=empty.quest_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=is_gm,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
+        )
+
+        b_quest = next(i for i in b_list if i.name == _CAMPAIGN_B_QUEST_NAME)
+        cross_in_a_list = any(i.quest_id == b_quest.quest_id for i in a_list)
+        # The exact shape that exposed the Phase 13D disclosure defect: one
+        # world, two timelines, one campaign per timeline, Campaign B's
+        # quest state only on Timeline B, requested through Campaign A's
+        # resolved timeline/audience — mirroring get_quest_endpoint's own
+        # call (require_campaign_tracking=True, include_all_parties=is_gm).
+        try:
+            cross_view = get_quest_view(
+                connection,
+                quest_id=b_quest.quest_id,
+                timeline_id=campaign_a.timeline_id,
+                expected_world_id=world_a,
+                party_id=None,
+                include_hidden=is_gm,
+                require_campaign_tracking=True,
+                include_all_parties=is_gm,
+            )
+            cross_detail_result = (
+                f"RETURNED quest {cross_view.name!r} "
+                f"(status={cross_view.status_code!r}, {len(cross_view.stages)} stage(s)) -- "
+                "UNEXPECTED: a same-world/other-timeline quest must be non-disclosing"
+            )
+        except QuestNotFoundError:
+            cross_detail_result = "raised QuestNotFoundError (API -> non-disclosing 404)"
+
+        try:
+            get_quest_view(
+                connection,
+                quest_id=uuid.uuid4(),
+                timeline_id=campaign_a.timeline_id,
+                expected_world_id=world_a,
+                party_id=None,
+                include_hidden=is_gm,
+                require_campaign_tracking=True,
+                include_all_parties=is_gm,
+            )
+            nonexistent_result = "did NOT raise (unexpected)"
+        except QuestNotFoundError:
+            nonexistent_result = "raised QuestNotFoundError (API -> non-disclosing 404)"
+
+    print("\n-- Quest production-query verification (database/query only, NOT HTTP) --")
+    print(f"account holds canon.edit in Campaign A: {is_gm} (include_all_parties/include_hidden)")
+    print(
+        "Campaign A list (list_campaign_quests): "
+        + ", ".join(f"{i.name!r}={i.status_code!r}" for i in a_list)
+    )
+    a_list_names = [i.name for i in a_list]
+    print(
+        "  ordering matches production contract (canonical_name ASC): "
+        f"{a_list_names == sorted(a_list_names)}"
+    )
+    print(
+        f"  {_QUEST_A_NULL_STATUS_NAME!r} present with null status: "
+        f"{any(i.name == _QUEST_A_NULL_STATUS_NAME and i.status_code is None for i in a_list)}"
+    )
+    print(
+        f"{_QUEST_A_ACTIVE_NAME!r} stage order (get_quest_view): "
+        + " -> ".join(f"{s.name!r}(seq {s.sequence_number})" for s in glass_view.stages)
+    )
+    print(
+        "  stage order preserved (sequence, not alphabetical): "
+        f"{[s.name for s in glass_view.stages] == _glass_ossuary_stage_names_in_order()}"
+    )
+    print(
+        f"{_QUEST_A_ACTIVE_NAME!r} objectives for THIS account (include_hidden=True): "
+        + ", ".join(repr(o.name) for st in glass_view.stages for o in st.objectives)
+    )
+    print(
+        f"{_QUEST_A_ACTIVE_NAME!r} objectives for a non-GM audience (include_hidden=False): "
+        + ", ".join(repr(o.name) for st in glass_view_non_gm.stages for o in st.objectives)
+        + " -- the difference is the gm_only + stateless hidden_until_discovered objectives; "
+        "this account's canon.edit authority is unchanged by any character_id parameter, so "
+        "both character perspectives yield the include_hidden=True result for this user."
+    )
+    print(
+        f"{_QUEST_A_COMPLETED_NAME!r} (empty-stage quest) via get_quest_view: "
+        f"status={empty_view.status_code!r}, stages={empty_view.stages!r}"
+    )
+    print(
+        f"Campaign B quest {_CAMPAIGN_B_QUEST_NAME!r} in Campaign A's list: {cross_in_a_list} "
+        "(must be False -- timeline-scoped non-disclosure holds for the list)"
+    )
+    print(f"Campaign B quest requested under Campaign A (get_quest_view): {cross_detail_result}")
+    print(f"nonexistent quest id (get_quest_view): {nonexistent_result}")
 
 
 if __name__ == "__main__":
