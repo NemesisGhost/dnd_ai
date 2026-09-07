@@ -79,6 +79,15 @@ The shared header contains:
 
 Changing perspective refreshes the page from the server. It is not a client-only filter over previously downloaded data.
 
+### 4.1 Reusable presentation primitives
+
+Two distinct, reusable `portal/src/components` primitives support the screens below rather than each screen inventing its own layout:
+
+- **`CampaignContextPanel`** answers "what campaign context and viewing perspective am I using?" It presents World, Campaign, Time, and Viewing-as dimensions in that order, showing only dimensions backed by real authorized data, and reuses the established character-perspective context/selector rather than introducing a second perspective state. It collapses behind a native disclosure control on narrow screens and is meant for a right-hand column or the shared shell.
+- **`InfoBox`** answers "what are the important facts about the entity on this page?" It is a generic, Wiki-style label/value panel (title, optional subtitle/image/status, label/value sections, related links) with no built-in knowledge of any entity type; per-entity wrappers (e.g. `CampaignInfoBox`) translate an authorized domain record into the generic model and are responsible for authorization-safe field selection.
+
+These two concepts are kept separate deliberately: context describes the viewer's current vantage point, while an infobox describes the subject of the page. Neither infers access, filters hidden records, or exposes internal identifiers or authorization metadata — that remains the server's responsibility.
+
 ## 5. Core screens
 
 ### 5.1 Login and invitation
