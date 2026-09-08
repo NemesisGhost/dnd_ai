@@ -6,7 +6,7 @@ interface CharacterSelection {
     userId: string
     browserSessionId: string | null
     campaignId: string
-    characterId: string
+    characterId: string | null
 }
 
 export function useCharacterPerspective({
@@ -34,14 +34,17 @@ export function useCharacterPerspective({
             return null
         }
 
-        const requestedCharacterId =
+        const selectionMatchesCurrentSession =
             selection !== null &&
-                selection.userId === bootstrap.user.user_id &&
-                selection.browserSessionId ===
-                bootstrap.browser_session_id &&
-                selection.campaignId === campaignId
+            selection.userId === bootstrap.user.user_id &&
+            selection.browserSessionId ===
+            bootstrap.browser_session_id &&
+            selection.campaignId === campaignId
+
+        const requestedCharacterId =
+            selectionMatchesCurrentSession
                 ? selection.characterId
-                : null
+                : undefined
 
         return resolveSelectedCharacterId(
             campaign,
@@ -51,7 +54,7 @@ export function useCharacterPerspective({
 
     function selectCharacter(
         campaignId: string,
-        characterId: string,
+        characterId: string | null,
     ): void {
         if (state.status !== "authenticated") {
             return
@@ -64,13 +67,18 @@ export function useCharacterPerspective({
                 candidate.campaign_id === campaignId,
         )
 
-        if (
-            campaign === undefined ||
-            !campaign.character_perspectives.some(
+        if (campaign === undefined) {
+            return
+        }
+
+        const requestedCharacterIsAuthorized =
+            characterId === null ||
+            campaign.character_perspectives.some(
                 (character) =>
                     character.character_id === characterId,
             )
-        ) {
+
+        if (!requestedCharacterIsAuthorized) {
             return
         }
 

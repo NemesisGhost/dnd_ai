@@ -1,25 +1,22 @@
-import {
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import type { ComponentProps } from "react"
-import { MemoryRouter } from "react-router"
 import {
+  beforeEach,
   describe,
   expect,
   it,
   vi,
 } from "vitest"
-import {
-  CharacterPerspectiveContext,
-} from "../context/CharacterPerspectiveContext"
-import type {
-  CampaignContext,
-} from "../types/bootstrap"
-import {
-  CampaignContextPanel,
-} from "./CampaignContextPanel"
+import type { CampaignContext } from "../types/bootstrap"
+import { CampaignContextPanel } from "./CampaignContextPanel"
+
+const { useCharacterMock } = vi.hoisted(() => ({
+  useCharacterMock: vi.fn(),
+}))
+
+vi.mock("../hooks/useCharacter", () => ({
+  useCharacter: useCharacterMock,
+}))
 
 const baseCampaign = {
   campaign_id: "campaign-secret-id",
@@ -28,199 +25,202 @@ const baseCampaign = {
   timeline_name: "Primary Timeline",
   roles: ["campaign_owner"],
   character_perspectives: [
-    {
-      character_id: "character-a",
-      character_name: "Ixamarra",
-    },
+    { character_id: "character-a", character_name: "Ixamarra" },
+    { character_id: "character-b", character_name: "Corvane" },
   ],
   selected_character_id: "character-a",
   capabilities: [],
 } satisfies CampaignContext
 
+const otherCampaign = {
+  ...baseCampaign,
+  campaign_id: "campaign-other-id",
+  campaign_name: "Second World",
+  timeline_name: null,
+} satisfies CampaignContext
+
 function renderPanel(
-  campaign: CampaignContext,
-  overrides: Partial<
-    ComponentProps<typeof CampaignContextPanel>
-  > = {},
-  selectedCharacterId: string | null = null,
-  selectCharacter = vi.fn(),
+  overrides: Partial<ComponentProps<typeof CampaignContextPanel>> = {},
 ) {
-  return render(
-    <MemoryRouter>
-      <CharacterPerspectiveContext.Provider
-        value={{
-          getSelectedCharacterId: () =>
-            selectedCharacterId,
-          selectCharacter,
-        }}
-      >
-        <CampaignContextPanel
-          campaign={campaign}
-          {...overrides}
-        />
-      </CharacterPerspectiveContext.Provider>
-    </MemoryRouter>,
-  )
+  const props: ComponentProps<typeof CampaignContextPanel> = {
+    campaign: baseCampaign,
+    campaigns: [baseCampaign, otherCampaign],
+    selectedCharacterId: null,
+    onSelectCampaign: vi.fn(),
+    onSelectCharacter: vi.fn(),
+    ...overrides,
+  }
+
+  return { props, ...render(<CampaignContextPanel {...props} />) }
 }
 
+beforeEach(() => {
+  useCharacterMock.mockReset()
+  useCharacterMock.mockReturnValue({
+    state: { status: "unavailable" },
+    retry: vi.fn(),
+  })
+})
+
 describe("CampaignContextPanel", () => {
-  it("renders the campaign and timeline dimensions", () => {
-    renderPanel(baseCampaign)
+  it("renders the four hierarchy sections in order", () => {
+    renderPanel()
 
-    expect(
-      screen.getByText("Campaign"),
-    ).toBeInTheDocument()
+    const headings = screen
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent)
 
-    expect(
-      screen.getAllByText("Mundivita").length,
-    ).toBeGreaterThan(0)
+    expect(headings).toEqual([
+      "World",
+      "Campaign",
+      "Timeline",
+      "Character",
+    ])
+  })
 
-    expect(
-      screen.getByText("Timeline"),
-    ).toBeInTheDocument()
+  it("shows World as a read-only value with no control", () => {
+    renderPanel()
 
-    expect(
-      screen.getByText("Primary Timeline"),
-    ).toBeInTheDocument()
+    const world = screen
+      .getByRole("heading", { name: "World" })
+      .closest("section") as HTMLElement
 
+    expect(within(world).getByText("Not available")).toBeInTheDocument()
     expect(
-      screen.queryByText("World"),
-    ).not.toBeInTheDocument()
-
-    expect(
-      screen.queryByText("Time"),
+      within(world).queryByRole("combobox"),
     ).not.toBeInTheDocument()
   })
 
-  it("uses neutral wording when no timeline is selected", () => {
+  it("shows Timeline as a disabled control carrying the current value", () => {
+    renderPanel()
+
+    const timeline = screen.getByRole("combobox", { name: "Timeline" })
+    expect(timeline).toBeDisabled()
+    expect(timeline).toHaveTextContent("Primary Timeline")
+  })
+
+  it("shows the neutral timeline value when none is set", () => {
+    renderPanel({ campaign: otherCampaign })
+
+    expect(
+      screen.getByRole("combobox", { name: "Timeline" }),
+    ).toHaveTextContent("No timeline selected")
+  })
+
+  it("lists every campaign and reports a change", () => {
+    const onSelectCampaign = vi.fn()
+    renderPanel({ onSelectCampaign })
+
+    const campaignSelect = screen.getByRole("combobox", {
+      name: "Campaign",
+    })
+    expect(campaignSelect).toHaveValue("campaign-secret-id")
+    expect(
+      within(campaignSelect).getAllByRole("option"),
+    ).toHaveLength(2)
+
+    fireEvent.change(campaignSelect, {
+      target: { value: "campaign-other-id" },
+    })
+
+    expect(onSelectCampaign).toHaveBeenCalledWith("campaign-other-id")
+  })
+
+  it("does not report a change when the current campaign is re-selected", () => {
+    const onSelectCampaign = vi.fn()
+    renderPanel({ onSelectCampaign })
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Campaign" }),
+      { target: { value: "campaign-secret-id" } },
+    )
+
+    expect(onSelectCampaign).not.toHaveBeenCalled()
+  })
+
+  it("reflects the selected character and reports perspective changes", () => {
+    const onSelectCharacter = vi.fn()
     renderPanel({
-      ...baseCampaign,
-      timeline_id: null,
-      timeline_name: null,
+      selectedCharacterId: "character-a",
+      onSelectCharacter,
     })
 
-    expect(
-      screen.getByText("Timeline"),
-    ).toBeInTheDocument()
-
-    expect(
-      screen.getByText("No timeline selected"),
-    ).toBeInTheDocument()
-  })
-
-  it("renders World and Time when real values are supplied", () => {
-    renderPanel(baseCampaign, {
-      worldName: "Mundus",
-      currentWorldTime: "Year 998, Spring",
+    const selector = screen.getByRole("combobox", {
+      name: "Character perspective",
     })
-
-    expect(
-      screen.getByText("World"),
-    ).toBeInTheDocument()
-
-    expect(
-      screen.getByText("Mundus"),
-    ).toBeInTheDocument()
-
-    expect(
-      screen.getByText("Time"),
-    ).toBeInTheDocument()
-
-    expect(
-      screen.getByText("Year 998, Spring"),
-    ).toBeInTheDocument()
-  })
-
-  it("labels and displays the selected character perspective", () => {
-    renderPanel(
-      baseCampaign,
-      {},
-      "character-a",
-    )
-
-    expect(
-      screen.getByText("Viewing as"),
-    ).toBeInTheDocument()
-
-    const selector = screen.getByRole(
-      "combobox",
-      {
-        name: "Character perspective",
-      },
-    )
-
     expect(selector).toHaveValue("character-a")
+
+    fireEvent.change(selector, { target: { value: "character-b" } })
+    expect(onSelectCharacter).toHaveBeenCalledWith("character-b")
+
+    fireEvent.change(selector, { target: { value: "" } })
+    expect(onSelectCharacter).toHaveBeenCalledWith(null)
   })
 
-  it("delegates character selection to the shared perspective callback", () => {
-    const selectCharacter = vi.fn()
-
-    renderPanel(
-      baseCampaign,
-      {},
-      null,
-      selectCharacter,
-    )
-
-    const selector = screen.getByRole(
-      "combobox",
-      {
-        name: "Character perspective",
+  it("renders character detail only when a character is selected", () => {
+    useCharacterMock.mockReturnValue({
+      state: {
+        status: "success",
+        character: {
+          character_id: "character-a",
+          name: "Ixamarra",
+          species_code: "elf",
+          size_category: "medium",
+          current_hit_points: null,
+          maximum_hit_points: null,
+          temporary_hit_points: null,
+          exhaustion_level: null,
+          death_save_successes: null,
+          death_save_failures: null,
+          current_location_id: null,
+          active_encounter_id: null,
+          conditions: null,
+          resources: null,
+        },
       },
-    )
-
-    fireEvent.change(selector, {
-      target: {
-        value: "character-a",
-      },
+      retry: vi.fn(),
     })
 
-    expect(selectCharacter).toHaveBeenCalledWith(
+    const { rerender, props } = renderPanel({
+      selectedCharacterId: null,
+    })
+    expect(screen.queryByText("Species")).not.toBeInTheDocument()
+
+    rerender(
+      <CampaignContextPanel
+        {...props}
+        selectedCharacterId="character-a"
+      />,
+    )
+    expect(screen.getByText("Species")).toBeInTheDocument()
+    expect(useCharacterMock).toHaveBeenCalledWith(
       "campaign-secret-id",
       "character-a",
     )
   })
 
-  it("links to the campaign-selection page", () => {
-    renderPanel(baseCampaign)
+  it("keeps the disclosure summary and open state", () => {
+    renderPanel({ selectedCharacterId: "character-a" })
 
-    expect(
-      screen.getByRole("link", {
-        name: "Change campaign",
-      }),
-    ).toHaveAttribute("href", "/campaigns")
-  })
-
-  it("exposes a labeled native disclosure control", () => {
-    renderPanel(
-      baseCampaign,
-      {},
-      "character-a",
-    )
-
-    const disclosure = screen.getByText(
+    const summary = screen.getByText(
       "Campaign context: Mundivita — Viewing as Ixamarra",
-      {
-        selector: "summary",
-      },
+      { selector: "summary" },
     )
-
-    expect(
-      disclosure.closest("details"),
-    ).toHaveAttribute("open")
+    expect(summary.closest("details")).toHaveAttribute("open")
   })
 
-  it("never displays raw campaign, timeline, or character IDs", () => {
-    renderPanel(baseCampaign)
+  it("has no campaign-selection link and never shows raw ids", () => {
+    renderPanel({ selectedCharacterId: "character-a" })
 
+    expect(
+      screen.queryByRole("link", { name: "Change campaign" }),
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByText("campaign-secret-id"),
     ).not.toBeInTheDocument()
-
     expect(
       screen.queryByText("timeline-secret-id"),
     ).not.toBeInTheDocument()
-
     expect(
       screen.queryByText("character-a"),
     ).not.toBeInTheDocument()

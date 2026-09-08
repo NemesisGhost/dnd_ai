@@ -1,32 +1,32 @@
 import { createContext, useContext } from "react"
 
 interface CharacterPerspectiveContextValue {
-    getSelectedCharacterId: (
-        campaignId: string,
-    ) => string | null
+  getSelectedCharacterId: (
+    campaignId: string,
+  ) => string | null
 
-    selectCharacter: (
-        campaignId: string,
-        characterId: string,
-    ) => void
+  selectCharacter: (
+    campaignId: string,
+    characterId: string | null,
+  ) => void
 }
 
 export const CharacterPerspectiveContext =
-    createContext<
-        CharacterPerspectiveContextValue | undefined
-    >(undefined)
+  createContext<
+    CharacterPerspectiveContextValue | undefined
+  >(undefined)
 
 export function usePerspective():
-    CharacterPerspectiveContextValue {
-    const perspective = useContext(
-        CharacterPerspectiveContext,
+  CharacterPerspectiveContextValue {
+  const perspective = useContext(
+    CharacterPerspectiveContext,
+  )
+
+  if (perspective === undefined) {
+    throw new Error(
+      "usePerspective must be used inside SessionProvider",
     )
+  }
 
-    if (perspective === undefined) {
-        throw new Error(
-            "usePerspective must be used inside SessionProvider",
-        )
-    }
-
-    return perspective
+  return perspective
 }

@@ -15,12 +15,41 @@ import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "../hooks/useSessionBootstrap"
 import { AuthenticatedSessionBoundary } from "../layouts/AuthenticatedSessionBoundary"
-import type { SessionBootstrap } from "../types/bootstrap"
+import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
+import { usePerspective } from "./CharacterPerspectiveContext"
 import { SessionProvider } from "./SessionProvider"
 
 vi.mock("../hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
 }))
+vi.mock("../hooks/useCharacter", () => ({
+  useCharacter: () => ({
+    state: { status: "unavailable" },
+    retry: vi.fn(),
+  }),
+}))
+
+// Connects the presentational panel to the real perspective context supplied
+// by SessionProvider, the way CampaignLayout does in the app.
+function ConnectedPanel({
+  campaign,
+}: {
+  campaign: CampaignContext
+}) {
+  const { getSelectedCharacterId, selectCharacter } = usePerspective()
+
+  return (
+    <CampaignContextPanel
+      campaign={campaign}
+      campaigns={[campaign]}
+      selectedCharacterId={getSelectedCharacterId(campaign.campaign_id)}
+      onSelectCampaign={() => {}}
+      onSelectCharacter={(characterId) =>
+        selectCharacter(campaign.campaign_id, characterId)
+      }
+    />
+  )
+}
 
 const useSessionBootstrapMock =
   vi.mocked(useSessionBootstrap)
@@ -71,9 +100,7 @@ function TestPortal() {
             return currentCampaign === undefined
               ? null
               : (
-                <CampaignContextPanel
-                  campaign={currentCampaign}
-                />
+                <ConnectedPanel campaign={currentCampaign} />
               )
           }}
         </AuthenticatedSessionBoundary>

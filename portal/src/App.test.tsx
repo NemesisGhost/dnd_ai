@@ -275,10 +275,16 @@ describe("portal routing", () => {
     expect(
       within(
         screen.getByRole("navigation", { name: "Campaign" }),
-      ).getByRole("link", {
+      ).queryByRole("link", {
         name: "Change campaign",
       }),
-    ).toHaveAttribute("href", "/campaigns")
+    ).not.toBeInTheDocument()
+
+    expect(
+      within(screen.getByRole("main")).getByRole("combobox", {
+        name: "Campaign",
+      }),
+    ).toHaveValue("mundivita")
 
     expect(
       screen.getByRole("heading", {

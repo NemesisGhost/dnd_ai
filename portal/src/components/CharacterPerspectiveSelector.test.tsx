@@ -98,4 +98,45 @@ describe("CharacterPerspectiveSelector", () => {
         expect(screen.getAllByRole("option")).toHaveLength(1)
         expect(onSelectCharacter).not.toHaveBeenCalled()
     })
+
+    it("reports null when campaign-wide context is selected", () => {
+        const onSelectCharacter = vi.fn()
+
+        render(
+            <CharacterPerspectiveSelector
+                perspectives={perspectives}
+                selectedCharacterId="character-a"
+                onSelectCharacter={onSelectCharacter}
+            />,
+        )
+
+        const selector = screen.getByRole(
+            "combobox",
+            {
+                name: "Character perspective",
+            },
+        )
+
+        const campaignWideOption =
+            screen.getByRole("option", {
+                name: "No character perspective selected",
+            })
+
+        expect(campaignWideOption).toBeEnabled()
+
+        fireEvent.change(selector, {
+            target: {
+                value: "",
+            },
+        })
+
+        expect(onSelectCharacter).toHaveBeenCalledTimes(1)
+        expect(onSelectCharacter).toHaveBeenCalledWith(
+            null,
+        )
+
+        // This is a controlled component. Its displayed value
+        // changes only when its parent supplies a new prop.
+        expect(selector).toHaveValue("character-a")
+    })
 })

@@ -21,6 +21,12 @@ vi.mock("../context/SessionContext", () => ({
 vi.mock("../context/CharacterPerspectiveContext", () => ({
     usePerspective: vi.fn(),
 }))
+vi.mock("../hooks/useCharacter", () => ({
+  useCharacter: () => ({
+    state: { status: "unavailable" },
+    retry: vi.fn(),
+  }),
+}))
 
 const useSessionMock = vi.mocked(useSession)
 const usePerspectiveMock = vi.mocked(usePerspective)
@@ -214,10 +220,10 @@ describe("CampaignSessionBoundary", () => {
     ).toHaveValue("character-ixamarra")
 
     expect(
-      within(main).getByRole("link", {
-        name: "Change campaign",
+      within(main).getByRole("combobox", {
+        name: "Campaign",
       }),
-    ).toHaveAttribute("href", "/campaigns")
+    ).toHaveValue("mundivita")
 
     expect(
       screen.queryByRole("region", {

@@ -243,4 +243,44 @@ describe("useCharacterPerspective", () => {
             result.current.getSelectedCharacterId("campaign-b"),
         ).toBeNull()
     })
+
+    it("clears the character without restoring the server default", () => {
+        const session = makeSession({
+            ...bootstrap,
+            campaigns: [
+                {
+                    ...campaign,
+                    selected_character_id: "character-a",
+                },
+            ],
+        })
+
+        const { result } = renderHook(
+            useCharacterPerspective,
+            {
+                initialProps: session,
+            },
+        )
+
+        expect(
+            result.current.getSelectedCharacterId(
+                "campaign-a",
+            ),
+        ).toBe("character-a")
+
+        act(() => {
+            result.current.selectCharacter(
+                "campaign-a",
+                null,
+            )
+        })
+
+        expect(session.reload).toHaveBeenCalledTimes(1)
+
+        expect(
+            result.current.getSelectedCharacterId(
+                "campaign-a",
+            ),
+        ).toBeNull()
+    })
 })

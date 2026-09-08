@@ -4,7 +4,7 @@ import type { CampaignContext } from "../types/bootstrap"
 interface CharacterPerspectiveSelectorProps {
     perspectives: CampaignContext["character_perspectives"]
     selectedCharacterId: string | null
-    onSelectCharacter: (characterId: string) => void
+    onSelectCharacter: (characterId: string | null) => void
 }
 
 export function CharacterPerspectiveSelector({
@@ -13,7 +13,7 @@ export function CharacterPerspectiveSelector({
     onSelectCharacter,
 }: CharacterPerspectiveSelectorProps) {
     const selectId = useId()
-
+    
     const hasPerspectives = perspectives.length > 0
 
     return (
@@ -26,13 +26,20 @@ export function CharacterPerspectiveSelector({
                 id={selectId}
                 value={selectedCharacterId ?? ""}
                 disabled={!hasPerspectives}
-                onChange={(event) =>
-                    onSelectCharacter(event.currentTarget.value)
-                }
+                onChange={(event) => {
+                    const value = event.currentTarget.value
+
+                    onSelectCharacter(
+                        value === "" ? null : value,
+                    )
+                }}
             >
-                <option value="" disabled>
+                <option
+                    value=""
+                    disabled={!hasPerspectives}
+                >
                     {hasPerspectives
-                        ? "Select a character"
+                        ? "No character perspective selected"
                         : "No character perspectives available"}
                 </option>
 

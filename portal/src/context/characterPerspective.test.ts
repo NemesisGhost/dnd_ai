@@ -69,7 +69,16 @@ describe("resolveSelectedCharacterId", () => {
         } satisfies CampaignContext
 
         expect(
-            resolveSelectedCharacterId(campaign, null),
+            resolveSelectedCharacterId(campaign, undefined),
+        ).toBeNull()
+    })
+
+    it("preserves an explicit campaign-wide selection", () => {
+        expect(
+            resolveSelectedCharacterId(
+                fixtureCampaign,
+                null,
+            ),
         ).toBeNull()
     })
 })
