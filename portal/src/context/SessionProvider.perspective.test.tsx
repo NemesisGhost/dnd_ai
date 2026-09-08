@@ -128,7 +128,7 @@ describe("SessionProvider perspective integration", () => {
 
     expect(
       screen.getByText(
-        "Campaign context: Mundivita — Viewing as No character selected",
+        "Campaign context: Mundivita — Viewing as No character perspective selected",
         { selector: "summary" },
       ),
     ).toBeInTheDocument()

@@ -125,4 +125,31 @@ describe("CampaignLayout campaign switching", () => {
       within(main).getByRole("heading", { name: "Campaign home" }),
     ).toBeInTheDocument()
   })
+
+  it("ignores a campaign outside the authorized bootstrap list", () => {
+    renderAt(
+      "/app/mundivita/quests/quest-7",
+    )
+
+    fireEvent.change(
+      screen.getByRole("combobox", {
+        name: "Campaign",
+      }),
+      {
+        target: {
+          value: "campaign-unavailable",
+        },
+      },
+    )
+
+    expect(
+      screen.getByTestId("location"),
+    ).toHaveTextContent(
+      "/app/mundivita/quests/quest-7",
+    )
+
+    expect(
+      selectCharacter,
+    ).not.toHaveBeenCalled()
+  })
 })

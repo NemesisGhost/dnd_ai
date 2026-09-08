@@ -3,12 +3,13 @@ import {
   useLocation,
   useNavigate,
   useParams,
-} from 'react-router'
-import { AppNavigation } from '../components/AppNavigation'
-import { CampaignContextPanel } from '../components/CampaignContextPanel'
-import { usePerspective } from '../context/CharacterPerspectiveContext'
-import PlaceholderPage from '../pages/PlaceholderPage'
-import type { SessionBootstrap } from '../types/bootstrap'
+} from "react-router"
+import { AppNavigation } from "../components/AppNavigation"
+import { CampaignContextPanel } from "../components/CampaignContextPanel"
+import { usePerspective } from "../context/CharacterPerspectiveContext"
+import PlaceholderPage from "../pages/PlaceholderPage"
+import type { SessionBootstrap } from "../types/bootstrap"
+import { buildCampaignSelectionPath } from "../utils/campaignNavigation"
 
 interface CampaignLayoutProps {
   bootstrap: SessionBootstrap
@@ -25,7 +26,7 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       (candidate) => candidate.campaign_id === campaignId,
     ) ?? null
 
-  if (!campaign) {
+  if (campaign === null) {
     return (
       <main className="app-main">
         <PlaceholderPage
@@ -36,27 +37,39 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     )
   }
 
-  // Local alias so the narrowed (non-null) value is visible inside the
-  // change handler closure below.
   const activeCampaign = campaign
   const showAccess = activeCampaign.capabilities.includes('access.manage')
-  const selectedCharacterId = getSelectedCharacterId(
-    activeCampaign.campaign_id,
-  )
+  const selectedCharacterId = getSelectedCharacterId(activeCampaign.campaign_id)
 
-  function handleSelectCampaign(nextCampaignId: string) {
+  function handleSelectCampaign(nextCampaignId: string): void {
     if (nextCampaignId === activeCampaign.campaign_id) {
       return
     }
 
-    // A higher selection changed: start the target campaign with no character
-    // rather than falling back to its server default.
-    selectCharacter(nextCampaignId, null)
+    const targetCampaign =
+      bootstrap.campaigns.find(
+        (candidate) =>
+          candidate.campaign_id ===
+          nextCampaignId,
+      )
 
-    // Preserve the current top-level section, discard any detail id below it
-    // (/app/<id>/<section>/<detail> -> /app/<next>/<section>).
-    const section = location.pathname.split('/')[3] || 'home'
-    navigate(`/app/${nextCampaignId}/${section}`)
+    if (targetCampaign === undefined) {
+      return
+    }
+
+    const destination =
+      buildCampaignSelectionPath({
+        pathname: location.pathname,
+        targetCampaign,
+        askEnabled: bootstrap.features.ask,
+      })
+
+    selectCharacter(
+      targetCampaign.campaign_id,
+      null,
+    )
+
+    navigate(destination)
   }
 
   return (

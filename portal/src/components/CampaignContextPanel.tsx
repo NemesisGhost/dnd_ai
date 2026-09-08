@@ -38,7 +38,7 @@ export function CampaignContextPanel({
   )
 
   const perspectiveName =
-    selectedCharacter?.character_name ?? "No character selected"
+    selectedCharacter?.character_name ?? "No character perspective selected"
 
   const rolesLabel =
     campaign.roles.length > 0
