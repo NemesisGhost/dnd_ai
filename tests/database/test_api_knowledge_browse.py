@@ -732,3 +732,169 @@ def test_a_generated_cursor_for_a_long_statement_is_accepted_on_the_next_page(
     second_ids = [i["knowledge_item_id"] for i in second.json()["items"]]
     assert set(first_ids).isdisjoint(second_ids)
     assert {str(f.fact_id), str(f.rumor_id)} <= set(first_ids) | set(second_ids)
+
+
+def test_a_generated_cursor_for_a_non_bmp_statement_is_accepted_on_the_next_page(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Regression (review f66441f, Medium #1): a statement whose 200-char
+    sort prefix is supplementary-plane Unicode must still produce a
+    `next_cursor` the decoder accepts — `ensure_ascii` escaping previously
+    inflated an emoji prefix past the 2048-char decode bound."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET canonical_statement = :s "
+                "WHERE knowledge_item_id IN (:a, :b)"
+            ),
+            {"s": "\U0001f409" * 200, "a": f.fact_id, "b": f.rumor_id},
+        )
+        # Null the interpretations so the sort key is the (emoji) canonical
+        # statement itself, not a short belief string.
+        connection.execute(
+            text(
+                "UPDATE campaign.party_knowledge SET interpretation = NULL WHERE timeline_id = :t"
+            ),
+            {"t": f.timeline_id},
+        )
+    params: dict[str, object] = {"view": "party_shared", **_perspective(f), "limit": 1}
+    with client_factory(f.player_user_id) as client:
+        first = client.get(_url(f), params=params)
+        assert first.status_code == 200
+        cursor = first.json()["next_cursor"]
+        assert cursor
+        second = client.get(_url(f), params={**params, "cursor": cursor})
+    assert second.status_code == 200, f"cursor len={len(cursor)}"
+    first_ids = [i["knowledge_item_id"] for i in first.json()["items"]]
+    second_ids = [i["knowledge_item_id"] for i in second.json()["items"]]
+    assert set(first_ids).isdisjoint(second_ids)
+
+
+def test_paginating_items_that_share_a_long_prefix_visits_each_exactly_once(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """When several statements share the full 200-char sort prefix, the
+    unique `knowledge_item_id` tie-breaker must still walk every row once
+    with no repeat or omission across `limit=1` pages."""
+    shared = "Z" * 260
+    ids = set()
+    with postgres_engine.begin() as connection:
+        for suffix in ("alpha", "bravo", "charlie", "delta"):
+            item_id = make_knowledge_item(
+                connection, f.world_id, knowledge_type_code="fact", statement=f"{shared}{suffix}"
+            )
+            make_party_knowledge(
+                connection, f.timeline_id, f.party_id, item_id, awareness_level="aware"
+            )
+            ids.add(str(item_id))
+    seen: list[str] = []
+    cursor: str | None = None
+    with client_factory(f.player_user_id) as client:
+        for _ in range(20):  # generous upper bound; the loop breaks itself
+            params: dict[str, object] = {"view": "known", **_perspective(f), "limit": 1}
+            if cursor:
+                params["cursor"] = cursor
+            body = client.get(_url(f), params=params).json()
+            seen.extend(i["knowledge_item_id"] for i in body["items"])
+            cursor = body["next_cursor"]
+            if cursor is None:
+                break
+    assert len(seen) == len(set(seen)), "a row was returned on more than one page"
+    assert ids <= set(seen), "a shared-prefix row was skipped"
+
+
+# ---------------------------------------------------------------------------
+# recent-view belief metadata (review f66441f, Medium #2)
+# ---------------------------------------------------------------------------
+
+
+def test_recent_character_discovery_metadata_comes_from_the_characters_own_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A character-owned discovery of an item the party *also* believes must
+    report the character's own awareness/confidence/willing_to_share, not
+    the party's — consistent with its (character) statement and scope."""
+    with postgres_engine.begin() as connection:
+        make_entity_knowledge(
+            connection,
+            f.timeline_id,
+            f.rumor_id,  # The Company already has a `rumored`/conf 30/share true belief here
+            f.character_id,
+            interpretation="My own private read on this.",
+            awareness_level="aware",
+            confidence=99,
+            willing_to_share=False,
+        )
+        make_party_discovery(
+            connection,
+            f.timeline_id,
+            f.rumor_id,
+            knower_entity_id=f.character_id,
+            discovered_at_world_time_id=f.wt_late,
+        )
+    with client_factory(f.player_user_id) as client:
+        with_party = client.get(
+            _url(f), params={"view": "recent", **_perspective(f), "limit": 100}
+        ).json()
+        without_party = client.get(
+            _url(f),
+            params={"view": "recent", "character_id": str(f.character_id), "limit": 100},
+        ).json()
+
+    def character_row(body: dict) -> dict:
+        return next(
+            i
+            for i in body["items"]
+            if i["knowledge_item_id"] == str(f.rumor_id) and i["scope"] == "character"
+        )
+
+    row = character_row(with_party)
+    assert row["statement"] == "My own private read on this."
+    assert (row["awareness_level"], row["confidence"], row["willing_to_share"]) == (
+        "aware",
+        99,
+        False,
+    )
+    # Adding/removing the (authorized) party context does not change the
+    # character discovery's own card.
+    assert character_row(without_party) == row
+
+
+def test_recent_party_discovery_null_confidence_is_not_borrowed_from_a_character_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The fixture's party belief about `fact_id` has `confidence = NULL`;
+    a character belief with a non-null confidence must not fill it in on
+    the party-owned discovery."""
+    with postgres_engine.begin() as connection:
+        make_entity_knowledge(
+            connection,
+            f.timeline_id,
+            f.fact_id,
+            f.character_id,
+            confidence=77,
+            awareness_level="suspected",
+        )
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={"view": "recent", **_perspective(f), "limit": 100}
+        ).json()
+    party_row = next(
+        i
+        for i in body["items"]
+        if i["knowledge_item_id"] == str(f.fact_id) and i["scope"] == "party"
+    )
+    assert party_row["confidence"] is None
+    assert party_row["awareness_level"] == "aware"  # the party's value, not "suspected"
+
+
+def test_gm_recent_carries_no_party_belief_metadata(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(_url(f), params={"view": "recent", "limit": 100}).json()
+    for item in body["items"]:
+        assert item["scope"] == "canonical"
+        assert item["awareness_level"] is None
+        assert item["confidence"] is None
+        assert item["willing_to_share"] is None

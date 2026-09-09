@@ -560,8 +560,11 @@ no idempotency key, no `audit.change_log` row, no mutation; same-origin
   `knowledge_type_code`, `statement` (viewer-safe: the party's/character's
   own `interpretation` when recorded, else canonical; canonical for a GM
   canonical view), `truth_status_code`/`sensitivity` (GM-only — null
-  otherwise), `awareness_level`, `confidence`, `willing_to_share`, `scope`
-  (`party`|`character`|`public`|`canonical`), `discovery_world_time_id`,
+  otherwise), `awareness_level`, `confidence`, `willing_to_share` (the
+  same belief the `statement` and `scope` came from — never mixed across
+  perspectives, nulls preserved; all null for a GM canonical view),
+  `scope` (`party`|`character`|`public`|`canonical`),
+  `discovery_world_time_id`,
   `source_event_id`, `source_interaction_id`, `subject_entity_id`
   (related-resource link). `KnowledgeListResponse` = `{items[],
   next_cursor}`.
@@ -586,24 +589,27 @@ generic entity DTO for detail.
   `(lower(left(canonical_name, 200)), entity_id)`; relationships
   `(relationship_id)`; statement-ordered knowledge views
   `(lower(left(statement, 200)), knowledge_item_id)`; `recent`
-  `(world_time.sort_key DESC NULLS LAST, party_discovery_id)`. The 200-char
-  name/statement *prefix* is the actual sort key (computed in SQL, carried
-  verbatim in the cursor): `(prefix, unique_id)` is still a strict total
-  order, so keyset paging over it never skips or repeats a row, and the
-  cursor stays small no matter how long a name (≤500 chars, migration 004)
-  or statement (≤5000 chars, migration 041) is. Records sharing a 200-char
-  prefix are ordered by their stable id.
+  `(world_time.sort_key DESC NULLS LAST, party_discovery_id)`. The 200
+  **code-point** name/statement prefix is the actual sort key (computed in
+  SQL, carried verbatim in the cursor): `(prefix, unique_id)` is still a
+  strict total order, so keyset paging over it never skips or repeats a
+  row. Records sharing a 200-code-point prefix are ordered by their stable
+  id.
 - **Cursor** (`dnd_ai.api.pagination`) — an **opaque, strictly-validated**
   base64url(JSON) token: `[version, keyset_name, [sort values]]`. Not
   signed (this app has no signing secret and does not need one): every
   decoded value is bound as a SQL parameter, never interpolated, and the
   keyset predicate only ever *narrows* an already-authorized,
   already-filtered result set. The embedded `keyset_name` binds a cursor
-  to the endpoint family that issued it. Sort-key values it carries are
-  the bounded prefixes above, so a server-issued `next_cursor` always
-  round-trips within the decoder's size bound. A malformed / tampered /
-  wrong-keyset / wrong-arity / over-long cursor → fixed **422
-  `invalid_cursor`**, non-disclosing (never echoes the value).
+  to the endpoint family that issued it. The JSON is serialized
+  `ensure_ascii=False`, so a non-ASCII sort-key code point costs its ≤4
+  UTF-8 bytes (or 6 for a JSON-escaped control char) rather than a 12-byte
+  `\uXXXX\uXXXX` surrogate pair; a 200-code-point prefix therefore encodes
+  to ≲1.7 KB in the worst case, well under the decoder's 2 KB bound, for
+  any script — **every server-issued `next_cursor` round-trips**, and
+  `encode_cursor` raises rather than emit one that would not. A malformed
+  / tampered / wrong-keyset / wrong-arity / over-long cursor → fixed
+  **422 `invalid_cursor`**, non-disclosing (never echoes the value).
 - **No total count** on any browse response (UI_DESIGN.md §9). A page
   reports only whether `next_cursor` is non-null (over-fetch `limit + 1`,
   presence of the extra row is the "has next page" signal).
@@ -621,7 +627,7 @@ generic entity DTO for detail.
 | `rumors` | `campaign.party_knowledge` (authorized party), `knowledge_type` **in** rumor/belief/misconception/theory/prophecy | the party's unsettled beliefs |
 | `party_shared` | `campaign.party_knowledge` (authorized party), every row | the party's collective knowledge (union of the two above) |
 | `character_private` | `knowledge.entity_knowledge` where `knower_entity_id` = the authorized character | that character's individual beliefs |
-| `recent` | `knowledge.party_discoveries` for the authorized party and/or character, newest discovery-world-time first; each discovery's statement resolved through *that discovery owner's own* belief | the audience's discovery stream |
+| `recent` | `knowledge.party_discoveries` for the authorized party and/or character, newest discovery-world-time first; every viewer-facing column (statement, scope, awareness/confidence/sharing) resolved through *that discovery owner's own* belief | the audience's discovery stream |
 | `public` | `knowledge.public_knowledge` on the timeline | any `campaign.view` caller — **no perspective needed** |
 
 The `known`/`rumors` split is grounded in the seeded
@@ -640,27 +646,36 @@ wall-clock window: newest visible discovery first, ordered by
 LAST**, with the immutable `party_discovery_id` as the tie-breaker.
 Discoveries with no recorded world time sort after every dated one.
 
-For a **non-GM** caller (and a GM inspecting a specific perspective) each
-discovery's `statement` is resolved through the discovery owner's *own*
-recorded belief — `campaign.party_knowledge.interpretation` for a party
-discovery, `knowledge.entity_knowledge.interpretation` for a character
-discovery — each falling back to the canonical statement only when that
-belief row records no interpretation of its own (the identical rule
-`character_private`/`party_shared` and the detail route apply). The `q`
-substring match runs against that same viewer-safe expression, so a
+For a **non-GM** caller *every* viewer-facing column of a `recent` row —
+`statement`, `scope`, `awareness_level`, `confidence`,
+`willing_to_share` — is resolved through the **discovery owner's own**
+belief: `campaign.party_knowledge` for a party-owned discovery,
+`knowledge.entity_knowledge` for a character-owned one (`scope` `party` /
+`character` accordingly). The statement falls back to the canonical text
+only when that belief records no interpretation of its own (the identical
+rule `character_private`/`party_shared`/the detail route apply); a `NULL`
+in the owning belief's metadata is preserved, never borrowed from the
+other perspective, so a card can never mix one belief's statement with
+another's confidence, and it is stable whether or not the request also
+carries the unrelated (authorized) perspective. The `q` substring match
+runs against that same viewer-safe statement expression, so a
 canonical-only search term cannot surface a distorted belief. A discovery
 whose matching belief row does not exist at all is **omitted** — `recent`
 never falls back to a bare canonical statement and never lists an item the
-matching detail route would 404 on. `scope` is `party` or `character`
-accordingly.
+matching detail route would 404 on.
 
-**GM (baseline `canon.edit`) with no perspective** sees canonical data:
-`known`/`rumors` → `knowledge.knowledge_items` in the world (with
-`truth_status`/`sensitivity`); `recent` → every discovery on the timeline
-with its canonical statement (`scope` `canonical`); `public` → the
-public-lore rows. `party_shared`/`character_private` still require the GM
-to supply an authorized party/character perspective and return an empty
-page without one. A non-GM never receives `truth_status`/`sensitivity`.
+**GM (baseline `canon.edit`)** sees the canonical statement (`scope`
+`canonical`) with **no** party/character belief metadata
+(`awareness_level`/`confidence`/`willing_to_share` are `null`) — identical
+to `known`/`rumors` canonical, which also carry `truth_status`/
+`sensitivity`. A GM who wants one perspective's belief metadata queries
+`party_shared`/`character_private` with that perspective. With no
+perspective every discovery on the timeline is in scope; with one, only
+that party's/character's. For `known`/`rumors` a GM with no perspective
+sees `knowledge.knowledge_items` in the world; `party_shared`/
+`character_private` still require the GM to supply an authorized
+party/character perspective and return an empty page without one. A non-GM
+never receives `truth_status`/`sensitivity`.
 
 ### 10.6 Perspective resolution (Phase 13D §4)
 

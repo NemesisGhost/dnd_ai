@@ -453,30 +453,50 @@ def _list_public(
     return tuple(_row_to_item(r, scope="public", gm=params["gm"] is True) for r in rows)
 
 
+def _owned_belief(party_col: str, character_col: str, *, canonical: bool = False) -> str:
+    """A SQL `CASE` that reads `party_col` for a party-owned discovery
+    (`pd.party_id IS NOT NULL`) and `character_col` for a character-owned
+    one — the single split every `_list_recent` non-GM column uses so a
+    card's statement, scope, and belief metadata all come from the same
+    belief and stay consistent. With `canonical=True` each branch falls
+    back to `ki.canonical_statement` when that belief records no value
+    (a statement column); without it a `NULL` from the owning belief is
+    preserved as `NULL` (a metadata column)."""
+    party = f"COALESCE({party_col}, ki.canonical_statement)" if canonical else party_col
+    character = f"COALESCE({character_col}, ki.canonical_statement)" if canonical else character_col
+    return f"CASE WHEN pd.party_id IS NOT NULL THEN {party} ELSE {character} END"
+
+
 def _list_recent(
     connection: Connection, params: dict[str, object]
 ) -> tuple[KnowledgeListItem, ...]:
     """`knowledge.party_discoveries` newest-first by discovery world time.
 
-    Audience: a GM (`gm` True) with **no** perspective sees every discovery
-    on the timeline with its canonical statement and ground-truth
-    metadata. Every other caller — a player, or a GM inspecting one
-    perspective — sees only the discoveries their authorized party
-    (`pd.party_id = :party_id`) or authorized character
-    (`pd.knower_entity_id = :knower_id`) made, and the statement is always
-    resolved through *that* party's / character's own recorded belief:
-    `campaign.party_knowledge.interpretation` for a party discovery,
-    `knowledge.entity_knowledge.interpretation` for a character discovery,
-    each falling back to `ki.canonical_statement` only when that belief
-    row carries no interpretation of its own (the identical rule
-    `_list_party` / `_list_character_private` and `get_knowledge_view`
-    already apply). A discovery whose matching belief row does not exist
-    at all is omitted entirely — `recent` never discloses a canonical
-    statement the private views deliberately replace, and never lists an
-    item the matching detail route would 404 on. The `q` substring match
-    runs against that same viewer-safe expression, so a canonical-only
-    search term cannot surface a distorted belief. `NULL` discovery time
-    sorts last; `pd.party_discovery_id` is the stable tie-breaker.
+    A **GM** (`gm` True) sees the canonical statement (`scope` `canonical`)
+    with no belief metadata — identical to `_list_canonical`;
+    `truth_status`/`sensitivity` are surfaced by `_row_to_item`. With no
+    perspective every discovery on the timeline is in scope; with one,
+    only that party's / character's.
+
+    **Every other caller** sees only the discoveries their authorized
+    party (`pd.party_id = :party_id`) or authorized character
+    (`pd.knower_entity_id = :knower_id`) made, and *every* viewer-facing
+    column — `statement`, `scope`, `awareness_level`, `confidence`,
+    `willing_to_share` — is resolved through the **discovery owner's own**
+    belief (`_owned_belief`): `campaign.party_knowledge` for a party
+    discovery, `knowledge.entity_knowledge` for a character discovery.
+    The statement falls back to `ki.canonical_statement` only when that
+    belief carries no interpretation of its own (the identical rule
+    `_list_party` / `_list_character_private` / `get_knowledge_view`
+    apply); a `NULL` in the owning belief's metadata is preserved, never
+    borrowed from the other perspective. A discovery whose matching belief
+    row does not exist at all is omitted entirely — `recent` never
+    discloses a canonical statement the private views deliberately
+    replace, and never lists an item the matching detail route would 404
+    on. The `q` substring match runs against that same viewer-safe
+    statement expression, so a canonical-only search term cannot surface a
+    distorted belief. `NULL` discovery time sorts last;
+    `pd.party_discovery_id` is the stable tie-breaker.
     """
     gm = params["gm"] is True
 
@@ -495,20 +515,24 @@ def _list_recent(
         )
         statement_expr = "ki.canonical_statement"
         belief_required = ""
-        awareness_expr = "COALESCE(pk.awareness_level, ek.awareness_level)"
-        confidence_expr = "COALESCE(pk.confidence, ek.confidence)"
-        share_expr = "COALESCE(pk.willing_to_share, ek.willing_to_share)"
+        # A GM canonical view carries no one party's/character's belief
+        # metadata — identical to `_list_canonical`. A GM who wants a
+        # specific perspective's `awareness`/`confidence`/`willing_to_share`
+        # asks for `party_shared`/`character_private` with that perspective.
+        awareness_expr = "NULL::text"
+        confidence_expr = "NULL::smallint"
+        share_expr = "NULL::boolean"
         scope_expr = "'canonical'"
     else:
         audience_clause = "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
-        # The viewer-safe statement is the discovery owner's *own* belief;
-        # canonical text appears only where that belief records no
-        # interpretation of its own.
-        statement_expr = (
-            "CASE WHEN pd.party_id IS NOT NULL "
-            "     THEN COALESCE(pk.interpretation, ki.canonical_statement) "
-            "     ELSE COALESCE(ek.interpretation, ki.canonical_statement) END"
-        )
+        # Every viewer-facing column is resolved through the *discovery
+        # owner's own* belief — the party's for a party discovery, the
+        # character's for a character discovery — never the other scope's,
+        # so the statement, scope, and belief metadata on a card can never
+        # contradict each other and a card is stable whether or not the
+        # request also carries the unrelated perspective. `_owned_belief`
+        # keeps that `pd.party_id IS NOT NULL` split in one place.
+        statement_expr = _owned_belief("pk.interpretation", "ek.interpretation", canonical=True)
         # A discovery with no corresponding authorized belief row is not
         # shown — keeps `recent` in agreement with the detail route and
         # avoids a canonical-statement fallback that would broaden access.
@@ -516,9 +540,9 @@ def _list_recent(
             "AND ((pd.party_id IS NOT NULL AND pk.party_knowledge_id IS NOT NULL) "
             "     OR (pd.knower_entity_id IS NOT NULL AND ek.entity_knowledge_id IS NOT NULL))"
         )
-        awareness_expr = "COALESCE(pk.awareness_level, ek.awareness_level)"
-        confidence_expr = "COALESCE(pk.confidence, ek.confidence)"
-        share_expr = "COALESCE(pk.willing_to_share, ek.willing_to_share)"
+        awareness_expr = _owned_belief("pk.awareness_level", "ek.awareness_level")
+        confidence_expr = _owned_belief("pk.confidence", "ek.confidence")
+        share_expr = _owned_belief("pk.willing_to_share", "ek.willing_to_share")
         scope_expr = "CASE WHEN pd.party_id IS NOT NULL THEN 'party' ELSE 'character' END"
 
     sql = f"""

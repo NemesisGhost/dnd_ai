@@ -400,6 +400,61 @@ def test_cursor_pages_cover_all_results_without_overlap(
         assert set(seen) == {item["entity_id"] for item in one_shot}
 
 
+def test_a_generated_cursor_for_a_non_bmp_name_is_accepted_on_the_next_page(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Regression (review f66441f, Medium #1): an entity name whose 200-char
+    sort prefix is supplementary-plane Unicode must still produce a
+    `next_cursor` the decoder accepts."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE core.entities SET canonical_name = :s "
+                "WHERE world_id = :w AND entity_id IN (:a, :b)"
+            ),
+            {"s": "\U0001f409" * 200, "w": f.world_id, "a": f.pc_id, "b": f.npc_id},
+        )
+    params = {"category": "character", "limit": 1}
+    with client_factory(f.gm_user_id) as client:
+        first = client.get(_search(f), params=params).json()
+        cursor = first["next_cursor"]
+        assert cursor
+        second = client.get(_search(f), params={**params, "cursor": cursor})
+    assert second.status_code == 200, f"cursor len={len(cursor)}"
+    first_ids = [i["entity_id"] for i in first["items"]]
+    second_ids = [i["entity_id"] for i in second.json()["items"]]
+    assert set(first_ids).isdisjoint(second_ids)
+
+
+def test_search_cursor_walks_names_that_share_a_long_prefix_exactly_once(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Several names sharing the full 200-char sort prefix must still be
+    traversed once each via the unique `entity_id` tie-breaker."""
+    shared = "Q" * 240
+    made: set[str] = set()
+    with postgres_engine.begin() as connection:
+        for suffix in ("-one", "-two", "-three"):
+            loc_id = make_location(
+                connection, f.world_id, entity_type_code="region", name=f"{shared}{suffix}"
+            )
+            made.add(str(loc_id))
+    seen: list[str] = []
+    cursor: str | None = None
+    with client_factory(f.gm_user_id) as client:
+        for _ in range(40):
+            params = {"category": "location", "limit": 1}
+            if cursor:
+                params["cursor"] = cursor
+            body = client.get(_search(f), params=params).json()
+            seen.extend(i["entity_id"] for i in body["items"])
+            cursor = body["next_cursor"]
+            if cursor is None:
+                break
+    assert len(seen) == len(set(seen)), "an entity appeared on more than one page"
+    assert made <= set(seen), "a shared-prefix entity was skipped"
+
+
 def test_invalid_cursor_is_rejected_with_422(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:

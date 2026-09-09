@@ -62,6 +62,19 @@ CursorValue = str | int | None
 # Bound for the base64 payload we will even attempt to decode — a keyset is
 # at most a handful of short scalars, so anything larger is not a cursor
 # this module ever produced.
+#
+# This bound is chosen to fit every cursor the browse endpoints can emit.
+# The only unbounded component is a text sort key, and each of those is a
+# ≤200-code-point prefix (`dnd_ai.queries.knowledge_browse.
+# _STATEMENT_SORT_PREFIX`, `dnd_ai.queries.world_explorer._NAME_SORT_PREFIX`).
+# `encode_cursor` serializes with `ensure_ascii=False`, so a non-ASCII code
+# point costs at most its 4 UTF-8 bytes (an emoji), or 6 bytes for a C0
+# control character JSON-escaped as `\uXXXX` — never the 12 bytes a
+# surrogate-pair `🐉` escape would cost. Worst case: 200 × 6 +
+# a ~40-byte `[1,"<keyset>",["…","<uuid>"]]` envelope ≈ 1240 bytes →
+# base64 ≈ 1656 chars, comfortably under this bound. `encode_cursor`
+# additionally asserts its output fits, so a regression fails loudly at
+# the server rather than handing the client a cursor `decode_cursor` 422s.
 _MAX_CURSOR_BYTES: Final = 2048
 
 # The default and hard-maximum page size shared by every browse endpoint
@@ -109,8 +122,24 @@ def encode_cursor(keyset: str, values: Sequence[object]) -> str:
             normalized.append(value)
         else:
             raise TypeError(f"cursor value {value!r} is not a str, int, UUID, or None")
-    raw = json.dumps([_CURSOR_VERSION, keyset, normalized], separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    # `ensure_ascii=False`: a non-ASCII sort-key code point travels as its
+    # UTF-8 bytes (≤4), not a `\uXXXX` escape (6) or, for a supplementary
+    # character, a `\uXXXX\uXXXX` surrogate pair (12) — which is what keeps
+    # a bounded-length text prefix within `_MAX_CURSOR_BYTES` after base64
+    # expansion regardless of script. base64 of the UTF-8 bytes is still
+    # pure ASCII on the wire.
+    raw = json.dumps(
+        [_CURSOR_VERSION, keyset, normalized], separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    if len(encoded) > _MAX_CURSOR_BYTES:
+        # Unreachable for the bounded sort-key prefixes the browse endpoints
+        # use (see `_MAX_CURSOR_BYTES`); a loud failure here beats silently
+        # returning a cursor `decode_cursor` will reject.
+        raise ValueError(
+            f"encoded cursor is {len(encoded)} chars, over the {_MAX_CURSOR_BYTES} bound"
+        )
+    return encoded
 
 
 def decode_cursor(raw: str | None, *, keyset: str, arity: int) -> tuple[CursorValue, ...] | None:

@@ -11,6 +11,7 @@ import pytest
 
 from dnd_ai.api.errors import InvalidCursorError
 from dnd_ai.api.pagination import (
+    _MAX_CURSOR_BYTES,
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     build_page,
@@ -102,6 +103,37 @@ def test_a_sql_injection_shaped_cursor_component_survives_decode_as_plain_text()
 def test_encode_rejects_a_non_scalar_value() -> None:
     with pytest.raises(TypeError):
         encode_cursor("world_entities", [{"a": 1}])
+
+
+@pytest.mark.parametrize(
+    "sort_key",
+    [
+        "\U0001f409" * 200,  # 200 supplementary-plane code points (a dragon emoji)
+        "é中ā" * 66 + "é中",  # mixed Latin-1 + CJK, 200 code points
+        "\x01\x1f" * 100,  # 200 C0 control chars — the JSON-escape-heavy worst case
+        "a" * 200,  # long ASCII
+    ],
+)
+def test_a_200_codepoint_sort_key_round_trips_within_the_size_bound(sort_key: str) -> None:
+    """A server-issued cursor for any 200-code-point sort-key prefix (the
+    `_STATEMENT_SORT_PREFIX` / `_NAME_SORT_PREFIX` bound) must both fit
+    `_MAX_CURSOR_BYTES` and decode back to the exact same value — the
+    review's Unicode finding: `ensure_ascii` escaping made emoji cursors
+    exceed the decoder limit."""
+    raw = encode_cursor(
+        "knowledge_by_statement", [sort_key, "11111111-1111-1111-1111-111111111111"]
+    )
+    assert len(raw) <= _MAX_CURSOR_BYTES
+    assert decode_cursor(raw, keyset="knowledge_by_statement", arity=2) == (
+        sort_key,
+        "11111111-1111-1111-1111-111111111111",
+    )
+
+
+def test_encode_raises_rather_than_emit_a_cursor_it_would_reject() -> None:
+    huge = "\U0001f409" * 4000
+    with pytest.raises(ValueError, match="over the"):
+        encode_cursor("knowledge_by_statement", [huge, "id"])
 
 
 # ---------------------------------------------------------------------------
