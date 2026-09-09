@@ -130,6 +130,59 @@ no authoring command" as the standing boundary. `last_event_id` on a
 reconciled state row is left untouched (a live-testing advance may have
 set it to a real recorded event; only the status matters to the portal).
 
+Also supports the Phase 13D World Explorer and Knowledge screen
+live-verification checkpoints (the portal's read-only
+`GET /campaigns/{id}/world/search`, `.../world/{locations,religions,items,
+events}/{id}`, `.../world/relationships`, `GET /campaigns/{id}/knowledge`
+and `.../knowledge/{id}` screens — docs/UI_DESIGN.md §5.4/§5.6,
+docs/PHASE13D_BACKEND_READINESS.md §10 — read back through
+`dnd_ai.queries.world_explorer` and `dnd_ai.queries.knowledge_browse`).
+See `_ensure_world_and_knowledge_fixtures` and the long block comment
+above the `_WK_*` / `_CAMPAIGN_A_LOCATIONS` / `_CAMPAIGN_A_EVENTS` /
+`_CAMPAIGN_A_KNOWLEDGE` constants for the full rationale. Campaign A gets:
+
+  A four-level containment hierarchy (continent "Auremar" -> region "The
+  Ashen Vale" -> settlement "Hollowmere" -> building "The Sunken Archive")
+  plus the dungeon "The Tidebound Crypt" and its area "The Lantern
+  Antechamber", with `campaign.location_state` on Hollowmere; one entity
+  of every World Explorer category (NPC "Archivist Sella Vane", guild "The
+  Cartographers' Guild" with a GM-only `internal_description`, government
+  "The Hollowmere Magistracy", religion "The Tidefather Communion" and its
+  lay order, a character-held item "The Warden's Lantern" and a loose item
+  "The Drowned Crown", two recorded historical events plus one `draft`
+  event only a GM may see, and a `membership` relationship between the NPC
+  and the guild); and knowledge records for every Knowledge-screen view —
+  a known fact, a rumor, a materially distorted party belief (interpretation
+  differs from canon), a recently discovered item with a fictional
+  world-time and a source event, character-private knowledge for Character
+  A and different character-private knowledge for Character B, public lore,
+  a quest-subject knowledge item, and one canonical-only secret no ordinary
+  player can reach. The knowledge party "The Lantern-Bearers" is created
+  with Character A and Character B as current members so
+  `resolve_party_perspective` authorizes the owner's `known`/`rumors`/
+  `party_shared` reads.
+
+Campaign B (Timeline B) gets one distinct location, one recorded event,
+and one public-lore knowledge item — all timeline-scoped, so they never
+surface through Campaign A's `/world/search` (events), knowledge views, or
+location state, proving cross-campaign isolation for the concerns the
+documented world-scoped visibility model can isolate. The world-canon
+location entity itself is visible in both campaigns by that model; its
+state, events, and knowledge are Campaign B only.
+
+Unlike the character-state / session / quest fixtures above, the World and
+Knowledge screens are read-only — no Phase 13D screen that consumes this
+data has a write path (docs/PHASE13D_BACKEND_READINESS.md §10.2), so a
+live-testing session cannot drift any of these rows. They are therefore
+pure create-or-reuse by their own fixed names / natural keys, with no
+reconciliation branch.
+
+`_print_world_knowledge_verification` runs the real merged query functions
+after an applied run, both as the GM's real access context resolves them
+and with the non-GM `include_ground_truth=False` + resolved-perspective
+inputs a player's request produces, and prints both — never a hand-written
+lookalike query.
+
 Not a general-purpose seeding framework — every name and shape here is
 specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`/
 `_CAMPAIGN_A_SESSIONS`/`_CAMPAIGN_B_SESSIONS`/`_CAMPAIGN_A_QUESTS`/
@@ -143,7 +196,13 @@ database the local `uvicorn dnd_ai.api.app:app` process is actually reading
 from (`DND_AI_DATABASE_URL`/`DATABASE_URL`, resolved the identical way).
 Refuses to run at all when `DND_AI_ENVIRONMENT=production` (`settings.
 environment`) — this script is a development-data convenience and must
-never be pointed at a real deployment.
+never be pointed at a real deployment. Before any mutation it also prints a
+password-redacted summary of the resolved target (host/port/database) and
+refuses a non-loopback `DATABASE_URL` host or a production-looking database
+name unless `DND_AI_ALLOW_NONLOCAL_DEV_DATA=1` acknowledges an
+intentionally non-standard but still-safe target — the developer's native
+PostgreSQL is `127.0.0.1:5432` (docs/DEVELOPMENT.md §3.1), not the Compose
+hostname `db` and not host port `5433`.
 
 Preview by default; `--apply` is required to write anything. Both modes run
 the identical sequence of checks and inserts inside one transaction —
@@ -229,20 +288,34 @@ CLI output every time it runs so it is never silently assumed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import Connection, create_engine, text
+from sqlalchemy.engine import make_url
 
+from dnd_ai.api.access import resolve_party_perspective
 from dnd_ai.api.audit import record_change_log
+from dnd_ai.api.world_explorer import resolve_world_character_visibility
 from dnd_ai.commands._shared import lookup_id
 from dnd_ai.commands.access_grants import grant_character_relationship
 from dnd_ai.commands.campaigns import create_campaign, grant_timeline_bootstrap
 from dnd_ai.config import settings
+from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.queries.bootstrap import get_session_bootstrap
+from dnd_ai.queries.knowledge_browse import KnowledgeListItem, list_knowledge
 from dnd_ai.queries.quest import QuestNotFoundError, get_quest_view, list_campaign_quests
+from dnd_ai.queries.world_explorer import (
+    WORLD_CATEGORY_TYPE_CODES,
+    WorldEntityCard,
+    WorldResourceNotFoundError,
+    get_event_view,
+    get_location_view,
+    search_world_entities,
+)
 
 _COMMAND_NAME = "scripts.setup_phase13c_dev_data"
 
@@ -796,6 +869,421 @@ _CAMPAIGN_B_QUEST: _QuestFixture = _QuestFixture(
 )
 
 
+# --------------------------------------------------------------------------
+# Phase 13D World Explorer + Knowledge screen live-verification fixtures
+# --------------------------------------------------------------------------
+# Deterministic world hierarchy, world-canon entities of every World
+# Explorer category, and knowledge records for every Knowledge-screen view,
+# read back by the owner through the real merged endpoints
+# (`GET /campaigns/{id}/world/search`, `.../world/{locations,religions,items,
+# events}/{id}`, `.../world/relationships`, `GET /campaigns/{id}/knowledge`,
+# `.../knowledge/{id}`) and their query modules
+# (`dnd_ai.queries.world_explorer`, `.knowledge_browse`, `.knowledge`).
+#
+# Everything below is READ-ONLY portal data. Unlike the character-state /
+# session / quest fixtures above, no Phase 13D screen that consumes it has a
+# write path (the World and Knowledge screens are read-only —
+# docs/PHASE13D_BACKEND_READINESS.md §10.2), so a live-testing session
+# cannot drift any of these rows. They are therefore pure create-or-reuse
+# by their own fixed names / natural keys (`_get_or_create_*`), with no
+# reconciliation branch — the same idempotency `_get_or_create_quest`
+# already relies on for a quest entity, applied throughout.
+#
+# Visibility model (owner decision, docs/PHASE13D_BACKEND_READINESS.md
+# §10.1): World Explorer mirrors the existing detail endpoints — a
+# `campaign.view` baseline, world-canon entities (locations, organizations,
+# religions, items, characters) visible to every `campaign.view` holder on
+# the world, `narrative.events` additionally timeline-scoped and
+# draft/voided-split, characters additionally gated by the
+# `character.discover`/`.view_*` tiers. So cross-campaign isolation is
+# demonstrable only for the timeline-scoped concerns — `narrative.events`,
+# and every `knowledge.*` row — which is exactly what the Campaign B block
+# below exercises. A world-canon location entity created for Campaign B's
+# scenario is visible in Campaign A's `/world/search` by that documented
+# model; its `campaign.location_state`, the events at it, and all knowledge
+# about it are Timeline B only. The verification block states this
+# explicitly rather than pretending otherwise.
+#
+# Audience: the supplied `--user-id` is the campaign owner / GM on both
+# campaigns (holds `canon.edit`), and additionally controls Character A and
+# Character B (the two `character_perspectives` the bootstrap already
+# exposes). A GM's `canon.edit` authority does not change when a
+# `character_id` query parameter does, so this one account cannot exercise
+# the *non-GM* HTTP path directly — the same limitation
+# `_print_quest_verification` already documents. `_print_world_knowledge_
+# verification` therefore calls the real query functions both as the GM
+# resolves them (`resolve_access_context` -> the real
+# `dnd_ai.api.world_explorer` / `dnd_ai.api.knowledge` resolution helpers)
+# and, separately, with the non-GM `include_ground_truth=False` +
+# resolved-party / resolved-character-knower inputs a player's request
+# would produce, and prints both — never a hand-written lookalike query.
+
+_WK_SORT_KEY_BASE = 14_000_000
+_WK_WORLD_TIME_LABEL_PREFIX = "Phase13D world/knowledge fixture"
+
+# The knowledge party (Campaign A / Timeline A). Reuses the existing Phase
+# 13 users/characters: Character A and Character B are both current members,
+# so `resolve_party_perspective` authorizes the owner to read `known` /
+# `rumors` / `party_shared` through it for either character, and the two
+# characters' `character_private` views differ.
+_WK_PARTY_NAME = "The Lantern-Bearers"
+
+
+@dataclass(frozen=True)
+class _LocationFixture:
+    """One `world.locations` row (plus the matching subtype row for a
+    settlement / building / dungeon / dungeon_area) and its children. The
+    tree is walked depth-first with `parent_location_id` threaded through,
+    so the containment hierarchy — and the World Explorer's breadcrumb
+    trail — is whatever this nesting says."""
+
+    name: str
+    entity_type_code: str
+    summary: str
+    # settlement.population / building.building_use / dungeon.danger_level —
+    # exactly one is meaningful per `entity_type_code`, the rest stay None.
+    population: int | None = None
+    building_use: str | None = None
+    danger_level: int | None = None
+    children: tuple[_LocationFixture, ...] = ()
+
+
+# Campaign A world hierarchy: continent -> region -> settlement -> building
+# (four containment levels), plus a dungeon (child of the region) with one
+# dungeon area. Names are distinct enough to exercise case-insensitive
+# search and type filtering.
+_CAMPAIGN_A_LOCATIONS = _LocationFixture(
+    name="Auremar",
+    entity_type_code="continent",
+    summary="The western continent; the Ashen Vale is its storm-battered southern coast.",
+    children=(
+        _LocationFixture(
+            name="The Ashen Vale",
+            entity_type_code="region",
+            summary="A tide-scoured coastal region of salt marsh, drowned ruins, and old crypts.",
+            children=(
+                _LocationFixture(
+                    name="Hollowmere",
+                    entity_type_code="settlement",
+                    summary="A fishing town rebuilt on the drowned ruins of an older city.",
+                    population=4200,
+                    children=(
+                        _LocationFixture(
+                            name="The Sunken Archive",
+                            entity_type_code="building",
+                            summary="Hollowmere's half-flooded library and records hall.",
+                            building_use="library and records hall",
+                        ),
+                    ),
+                ),
+                _LocationFixture(
+                    name="The Tidebound Crypt",
+                    entity_type_code="dungeon",
+                    summary="A sea-cave ossuary below the vale; its lower vault floods at high tide.",
+                    danger_level=6,
+                    children=(
+                        _LocationFixture(
+                            name="The Lantern Antechamber",
+                            entity_type_code="dungeon_area",
+                            summary="The first chamber past the crypt doors, ringed with dead lanterns.",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+# Campaign B (Timeline B) — one distinct world-canon location. See the block
+# comment above: the entity itself is world canon and appears in Campaign
+# A's search too; its state / events / knowledge are Timeline B only, and
+# those are what prove isolation.
+_CAMPAIGN_B_LOCATION = _LocationFixture(
+    name="Saltreach Harbor",
+    entity_type_code="settlement",
+    summary="A Timeline-B harbor town north of the vale; its beacon guides ships past the reefs.",
+    population=2600,
+)
+
+_HOLLOWMERE_STATE = {
+    "is_searched": True,
+    "is_destroyed": False,
+    "alarm_level": 1,
+    "condition_notes": "Docks quarter still rebuilding after the last flood tide.",
+}
+_SALTREACH_STATE = {
+    "is_searched": False,
+    "is_destroyed": False,
+    "alarm_level": 0,
+    "condition_notes": "Beacon tower reported dark for three nights running.",
+}
+
+# --- World Explorer non-location entities (Campaign A) ---------------------
+
+_NPC_NAME = "Archivist Sella Vane"
+_NPC_SPECIES_CODE = "human"
+_NPC_SUMMARY = (
+    "The Sunken Archive's senior archivist; keeps a private ledger of what leaves the stacks."
+)
+
+_GUILD_NAME = "The Cartographers' Guild"
+_GUILD_PUBLIC_DESCRIPTION = "Hollowmere's chartered guild of mapmakers and tide-readers."
+_GUILD_INTERNAL_DESCRIPTION = (
+    "GM-only: the Guild quietly sells the Magistracy advance copies of every survey it files."
+)
+
+_GOVERNMENT_NAME = "The Hollowmere Magistracy"
+_GOVERNMENT_PUBLIC_DESCRIPTION = "The elected council that governs Hollowmere and the lower vale."
+_GOVERNMENT_FORM = "elected council"
+
+_RELIGION_NAME = "The Tidefather Communion"
+_RELIGION_PANTHEON = "monolatry"
+_RELIGION_SUMMARY = (
+    "The vale's dominant faith; venerates the Tidefather, who is said to rule the drowned."
+)
+_RELIGIOUS_ORG_NAME = "The Wardens of the Tide"
+_RELIGIOUS_ORG_PUBLIC_DESCRIPTION = (
+    "The Communion's lay order; tends the crypts and the shore shrines."
+)
+
+_HELD_ITEM_NAME = "The Warden's Lantern"
+_HELD_ITEM_ORIGIN = (
+    "Recovered from the Lantern Antechamber; lights only for someone of Warden blood."
+)
+_LOOSE_ITEM_NAME = "The Drowned Crown"
+_LOOSE_ITEM_ORIGIN = "Still resting in the Tidebound Crypt's lower vault; no living claimant."
+
+
+@dataclass(frozen=True)
+class _EventFixture:
+    """One `narrative.events` row for the World Explorer historical-event
+    category. `status_code` is `recorded` for the two visible events and
+    `draft` for the one only a GM may see (the World Explorer draft/voided
+    split — docs/PHASE13D_BACKEND_READINESS.md §10.1). Participants and
+    locations are resolved by fixture name at insert time."""
+
+    name: str
+    summary: str
+    details: str
+    event_type_code: str
+    status_code: str
+    world_time_offset: int
+    participant_names: tuple[tuple[str, str], ...]  # (entity name, role code)
+    location_names: tuple[str, ...]  # occurred_at
+
+
+_CAMPAIGN_A_EVENTS: tuple[_EventFixture, ...] = (
+    _EventFixture(
+        name="The Sundering of the Vale",
+        summary="The storm-year that split the old coast road and drowned half of Aurell.",
+        details=(
+            "A season of impossible tides. The outer city went under in a night; the survivors "
+            "founded Hollowmere on the high ground above the ruin."
+        ),
+        event_type_code="other",
+        status_code="recorded",
+        world_time_offset=100,
+        participant_names=((_NPC_NAME, "witness"),),
+        location_names=("The Ashen Vale",),
+    ),
+    _EventFixture(
+        name="The Sealing of the Sluice-Gates",
+        summary="The Magistracy ordered Hollowmere's old sluice-gates welded shut.",
+        details=(
+            "Framed publicly as flood control. The Archive's copy of the order cites the salvage "
+            "levy the open gates were costing the treasury."
+        ),
+        event_type_code="other",
+        status_code="recorded",
+        world_time_offset=400,
+        participant_names=((_NPC_NAME, "witness"), (_CHARACTER_A_NAME, "actor")),
+        location_names=("Hollowmere",),
+    ),
+    _EventFixture(
+        name="The Magistrate's Secret Accord",
+        summary="GM-only draft: a private pact between the Magistracy and the Wardens of the Tide.",
+        details=(
+            "Not yet canon. Records the Magistrate agreeing to leave the lower vault undisturbed "
+            "in exchange for the Wardens' silence about the sluice-gate order."
+        ),
+        event_type_code="other",
+        status_code="draft",
+        world_time_offset=450,
+        participant_names=(),
+        location_names=("The Tidebound Crypt",),
+    ),
+)
+
+_CAMPAIGN_B_EVENT = _EventFixture(
+    name="The Darkening of the Saltreach Beacon",
+    summary="Timeline B: the harbor beacon went dark and a grain ship struck the reef.",
+    details="The beacon-keeper was later found to have been paid to let the fire die.",
+    event_type_code="other",
+    status_code="recorded",
+    world_time_offset=600,
+    participant_names=(),
+    location_names=("Saltreach Harbor",),
+)
+
+# --- Knowledge records (Campaign A / Timeline A) --------------------------
+# Every combination the Knowledge screen's views and audience-safe DTO need
+# to be visible at once. `owner` = which belief carries the row:
+#   party      -> campaign.party_knowledge for _WK_PARTY_NAME
+#   character_a -> knowledge.entity_knowledge, knower = Character A
+#   character_b -> knowledge.entity_knowledge, knower = Character B
+#   public     -> knowledge.public_knowledge on Timeline A
+#   canonical  -> knowledge_items only (no belief row) -> only a GM sees it
+# `discovered` adds a knowledge.party_discoveries row (party-owned) with a
+# fictional world time + source event, so the item appears in `recent` and
+# carries visible source provenance.
+
+
+@dataclass(frozen=True)
+class _KnowledgeFixture:
+    statement: str
+    knowledge_type_code: str
+    truth_status_code: str
+    sensitivity: str
+    owner: str
+    subject_name: str | None
+    awareness_level: str | None = None
+    confidence: int | None = None
+    interpretation: str | None = None
+    willing_to_share: bool = True
+    discovered: bool = False
+    discovery_world_time_offset: int | None = None
+    discovery_source_event_name: str | None = None
+
+
+_CAMPAIGN_A_KNOWLEDGE: tuple[_KnowledgeFixture, ...] = (
+    # known fact — settled type, no interpretation -> canonical text shown
+    _KnowledgeFixture(
+        statement="The Tidebound Crypt's lower vault floods completely at every high tide.",
+        knowledge_type_code="fact",
+        truth_status_code="true",
+        sensitivity="public",
+        owner="party",
+        subject_name="The Tidebound Crypt",
+        awareness_level="aware",
+        confidence=90,
+    ),
+    # rumor — rumor-set type
+    _KnowledgeFixture(
+        statement="A drowned king still holds court in the vault and answers to no living crown.",
+        knowledge_type_code="rumor",
+        truth_status_code="false",
+        sensitivity="public",
+        owner="party",
+        subject_name="The Tidebound Crypt",
+        awareness_level="rumored",
+        confidence=20,
+    ),
+    # materially distorted party belief — interpretation differs from canon
+    _KnowledgeFixture(
+        statement="The Magistracy sealed the sluice-gates to cut the treasury's salvage-levy losses.",
+        knowledge_type_code="secret",
+        truth_status_code="true",
+        sensitivity="restricted",
+        owner="party",
+        subject_name=_GOVERNMENT_NAME,
+        awareness_level="suspected",
+        confidence=55,
+        interpretation=(
+            "The Magistracy sealed the sluice-gates to appease the Tidefather after the Sundering."
+        ),
+        willing_to_share=False,
+    ),
+    # recently discovered — party discovery + belief, fictional timestamp,
+    # visible source provenance (discovered_via_event_id)
+    _KnowledgeFixture(
+        statement="The Sunken Archive has a sealed sub-basement below the flood line.",
+        knowledge_type_code="claim",
+        truth_status_code="partially_true",
+        sensitivity="restricted",
+        owner="party",
+        subject_name="The Sunken Archive",
+        awareness_level="aware",
+        confidence=70,
+        interpretation="Sella let slip there's a sub-basement the Magistracy had bricked over.",
+        discovered=True,
+        discovery_world_time_offset=800,
+        discovery_source_event_name="The Sealing of the Sluice-Gates",
+    ),
+    # character-private for Character A
+    _KnowledgeFixture(
+        statement="Sella Vane keeps a private ledger of everything the Magistracy removed from the Archive.",
+        knowledge_type_code="secret",
+        truth_status_code="true",
+        sensitivity="secret",
+        owner="character_a",
+        subject_name=_NPC_NAME,
+        awareness_level="aware",
+        confidence=80,
+        interpretation="Sella showed me the ledger — three crates went straight to the Magistrate's house.",
+        willing_to_share=False,
+    ),
+    # different character-private for Character B
+    _KnowledgeFixture(
+        statement="The Warden's Lantern only takes flame for someone of Warden blood.",
+        knowledge_type_code="memory",
+        truth_status_code="true",
+        sensitivity="public",
+        owner="character_b",
+        subject_name=_HELD_ITEM_NAME,
+        awareness_level="aware",
+        confidence=100,
+        interpretation="I held the lantern in the antechamber and it flared the moment I touched it.",
+    ),
+    # public lore connected to a world resource
+    _KnowledgeFixture(
+        statement="Hollowmere is built directly over the drowned ruins of the older city of Aurell.",
+        knowledge_type_code="fact",
+        truth_status_code="partially_true",
+        sensitivity="public",
+        owner="public",
+        subject_name="Hollowmere",
+        awareness_level="aware",
+    ),
+    # knowledge related to a quest (subject is the quest entity)
+    _KnowledgeFixture(
+        statement="The Glass Ossuary can only be re-consecrated at slack tide, never on the flood.",
+        knowledge_type_code="instruction",
+        truth_status_code="true",
+        sensitivity="public",
+        owner="party",
+        subject_name=_QUEST_A_ACTIVE_NAME,
+        awareness_level="aware",
+        confidence=75,
+    ),
+    # intentionally undiscovered by the ordinary player: canonical only,
+    # no party/character belief -> a GM's canonical `known` view shows it,
+    # the player's party/character views never do.
+    _KnowledgeFixture(
+        statement="The Wardens of the Tide answer to the thing in the vault, not to the Communion.",
+        knowledge_type_code="secret",
+        truth_status_code="true",
+        sensitivity="dangerous",
+        owner="canonical",
+        subject_name=_RELIGIOUS_ORG_NAME,
+    ),
+)
+
+_CAMPAIGN_B_KNOWLEDGE = _KnowledgeFixture(
+    statement="The Saltreach beacon-keeper was bribed to let the signal fire go out.",
+    knowledge_type_code="claim",
+    truth_status_code="true",
+    sensitivity="restricted",
+    owner="public",
+    subject_name="Saltreach Harbor",
+    awareness_level="aware",
+)
+
+# A visible relationship between two visible world resources: Sella Vane is
+# a member of the Cartographers' Guild.
+_WK_RELATIONSHIP_TYPE_CODE = "membership"
+_WK_RELATIONSHIP_DESCRIPTION = "Archivist Sella Vane is the Cartographers' Guild's senior member."
+
+
 @dataclass(frozen=True)
 class _UserInfo:
     user_id: uuid.UUID
@@ -816,12 +1304,18 @@ class _Summary:
     # printed under its own header (see `main`). Kept separate from
     # `report` only so the two blocks stay visually distinct in the output.
     quest_report: list[str] = field(default_factory=list)
+    # The same kind of quick reference, for the Phase 13D World Explorer +
+    # Knowledge fixtures — printed under its own header (see `main`).
+    world_report: list[str] = field(default_factory=list)
 
     def note(self, line: str) -> None:
         self.report.append(line)
 
     def note_quest(self, line: str) -> None:
         self.quest_report.append(line)
+
+    def note_world(self, line: str) -> None:
+        self.world_report.append(line)
 
     def add(
         self,
@@ -855,6 +1349,54 @@ def _require_non_production() -> None:
         print(
             "Refusing to run: DND_AI_ENVIRONMENT=production. This script is a "
             "development-data convenience and must never target a real deployment.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
+
+
+def _safe_target_summary() -> str:
+    """Host / port / database of the resolved `DATABASE_URL`, password
+    redacted — printed before any mutation so the operator can confirm the
+    target. Never returns or logs the credential."""
+    url = make_url(_database_url())
+    user = f"{url.username}@" if url.username else ""
+    return f"{url.drivername} {user}{url.host or '<none>'}:{url.port or 5432}/{url.database}"
+
+
+def _require_local_target() -> None:
+    """Refuse a remote / production-looking database. The developer's native
+    PostgreSQL is `127.0.0.1:5432` (docs/DEVELOPMENT.md §3.1); the Compose
+    database is reachable as `localhost` on the host. A non-loopback host,
+    or a database name that looks like a real deployment, aborts unless
+    `DND_AI_ALLOW_NONLOCAL_DEV_DATA=1` is set to acknowledge an
+    intentionally non-standard but still-safe target."""
+    if settings.environment not in (None, "", "local", "development", "dev", "test"):
+        print(
+            f"Refusing to run: DND_AI_ENVIRONMENT={settings.environment!r} is not a "
+            "local/development environment.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if os.environ.get("DND_AI_ALLOW_NONLOCAL_DEV_DATA") == "1":
+        return
+    url = make_url(_database_url())
+    host = (url.host or "").lower()
+    database = (url.database or "").lower()
+    if host not in _LOCAL_DB_HOSTS:
+        print(
+            f"Refusing to run: DATABASE_URL host {url.host!r} is not a loopback address. "
+            "This fixture only targets a local/self-hosted development database. Set "
+            "DND_AI_ALLOW_NONLOCAL_DEV_DATA=1 to override for a known-safe non-standard host.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if any(marker in database for marker in ("prod", "production", "live")):
+        print(
+            f"Refusing to run: DATABASE_URL database name {url.database!r} looks like a real "
+            "deployment. Set DND_AI_ALLOW_NONLOCAL_DEV_DATA=1 to override.",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -2575,6 +3117,1304 @@ def _ensure_character_relationship(
     )
 
 
+# --------------------------------------------------------------------------
+# Phase 13D World Explorer + Knowledge fixtures
+# --------------------------------------------------------------------------
+
+
+def _wk_world_time(
+    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, suffix: str, offset: int
+) -> uuid.UUID:
+    return _get_or_create_world_time(
+        connection,
+        summary,
+        world_id=world_id,
+        label=f"{_WK_WORLD_TIME_LABEL_PREFIX}: {suffix}",
+        sort_key=_WK_SORT_KEY_BASE + offset,
+    )
+
+
+def _entity_by_name(
+    connection: Connection, *, world_id: uuid.UUID, name: str
+) -> tuple[uuid.UUID, str] | None:
+    """(entity_id, entity_type_code) for a `(world_id, canonical_name)` — or
+    None. Raises if the name is used more than once in the world (a
+    collision with non-fixture data — refuse to guess)."""
+    rows = connection.execute(
+        text("""
+            SELECT e.entity_id, et.code AS type_code
+            FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.world_id = :world AND e.canonical_name = :name
+        """),
+        {"world": world_id, "name": name},
+    ).all()
+    if len(rows) > 1:
+        raise SystemExit(
+            f"more than one core.entities row named {name!r} in world {world_id} — a name "
+            "collision with non-fixture data. Rename or remove the conflicting row, then re-run."
+        )
+    if not rows:
+        return None
+    entity_id, type_code = rows[0]
+    assert isinstance(entity_id, uuid.UUID)
+    return entity_id, str(type_code)
+
+
+def _new_world_entity(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    name: str,
+    summary_text: str,
+    entity_type_code: str,
+) -> uuid.UUID:
+    """A `core.entities` row for a world-canon entity — mirrors
+    `tests.factories.make_entity` plus the `summary` this fixture needs
+    (canon + active; no `created_by_user_id`, matching `_get_or_create_quest`)."""
+    entity_type_id = lookup_id(
+        connection, "core", "entity_types", "entity_type_id", entity_type_code
+    )
+    canon_status_id = lookup_id(connection, "core", "canon_statuses", "canon_status_id", "canon")
+    active_status_id = lookup_id(
+        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
+    )
+    entity_id = connection.execute(
+        text("""
+            INSERT INTO core.entities
+                (world_id, entity_type_id, canonical_name, summary, canon_status_id,
+                 lifecycle_status_id)
+            VALUES (:world, :etype, :name, :summary, :canon, :lifecycle)
+            RETURNING entity_id
+        """),
+        {
+            "world": world_id,
+            "etype": entity_type_id,
+            "name": name,
+            "summary": summary_text,
+            "canon": canon_status_id,
+            "lifecycle": active_status_id,
+        },
+    ).scalar()
+    assert isinstance(entity_id, uuid.UUID)
+    return entity_id
+
+
+def _ensure_location_tree(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    fixture: _LocationFixture,
+    parent_location_id: uuid.UUID | None,
+) -> dict[str, uuid.UUID]:
+    """Create-or-reuse one `world.locations` row (plus its settlement /
+    building / dungeon / dungeon_area subtype row) and recurse into
+    `fixture.children`, threading `parent_location_id`. Returns
+    `{location name: location_id}` for the whole subtree."""
+    ids: dict[str, uuid.UUID] = {}
+    existing = _entity_by_name(connection, world_id=world_id, name=fixture.name)
+    if existing is not None:
+        location_id, type_code = existing
+        if type_code != fixture.entity_type_code:
+            raise SystemExit(
+                f"location {fixture.name!r} already exists as a {type_code!r} entity, not the "
+                f"fixture's {fixture.entity_type_code!r} — rename or remove it, then re-run."
+            )
+        summary.add(
+            created=False, label=f"location {fixture.name!r} ({type_code})", record_id=location_id
+        )
+    else:
+        location_id = _new_world_entity(
+            connection,
+            world_id=world_id,
+            name=fixture.name,
+            summary_text=fixture.summary,
+            entity_type_code=fixture.entity_type_code,
+        )
+        connection.execute(
+            text("INSERT INTO world.locations (location_id, parent_location_id) VALUES (:l, :p)"),
+            {"l": location_id, "p": parent_location_id},
+        )
+        if fixture.entity_type_code == "settlement":
+            connection.execute(
+                text("INSERT INTO world.settlements (settlement_id, population) VALUES (:l, :pop)"),
+                {"l": location_id, "pop": fixture.population},
+            )
+        elif fixture.entity_type_code == "building":
+            connection.execute(
+                text("INSERT INTO world.buildings (building_id, building_use) VALUES (:l, :u)"),
+                {"l": location_id, "u": fixture.building_use},
+            )
+        elif fixture.entity_type_code == "dungeon":
+            connection.execute(
+                text("INSERT INTO world.dungeons (dungeon_id, danger_level) VALUES (:l, :d)"),
+                {"l": location_id, "d": fixture.danger_level},
+            )
+        elif fixture.entity_type_code == "dungeon_area":
+            connection.execute(
+                text("INSERT INTO world.dungeon_areas (dungeon_area_id) VALUES (:l)"),
+                {"l": location_id},
+            )
+        summary.add(
+            created=True,
+            label=f"location {fixture.name!r} ({fixture.entity_type_code})",
+            record_id=location_id,
+        )
+    ids[fixture.name] = location_id
+    for child in fixture.children:
+        ids.update(
+            _ensure_location_tree(
+                connection,
+                summary,
+                world_id=world_id,
+                fixture=child,
+                parent_location_id=location_id,
+            )
+        )
+    return ids
+
+
+def _ensure_location_state(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    location_id: uuid.UUID,
+    location_name: str,
+    state: dict[str, object],
+) -> None:
+    label = f"location state: {location_name!r}"
+    existing = connection.execute(
+        text("SELECT 1 FROM campaign.location_state WHERE timeline_id = :t AND location_id = :l"),
+        {"t": timeline_id, "l": location_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=location_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO campaign.location_state
+                (timeline_id, location_id, is_searched, is_destroyed, alarm_level, condition_notes)
+            VALUES (:t, :l, :searched, :destroyed, :alarm, :notes)
+        """),
+        {
+            "t": timeline_id,
+            "l": location_id,
+            "searched": state["is_searched"],
+            "destroyed": state["is_destroyed"],
+            "alarm": state["alarm_level"],
+            "notes": state["condition_notes"],
+        },
+    )
+    summary.add(created=True, label=label, record_id=location_id)
+
+
+def _ensure_npc(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+) -> uuid.UUID:
+    existing = _entity_by_name(connection, world_id=world_id, name=_NPC_NAME)
+    if existing is not None:
+        summary.add(created=False, label=f"NPC {_NPC_NAME!r}", record_id=existing[0])
+        return existing[0]
+    species_id = connection.execute(
+        text("SELECT species_id FROM rules.species WHERE ruleset_version_id = :v AND code = :c"),
+        {"v": ruleset_version_id, "c": _NPC_SPECIES_CODE},
+    ).scalar()
+    if species_id is None:
+        raise SystemExit(
+            f"expected an existing rules.species row (code={_NPC_SPECIES_CODE!r}) for ruleset "
+            f"version {ruleset_version_id} — none found."
+        )
+    npc_id = _new_world_entity(
+        connection,
+        world_id=world_id,
+        name=_NPC_NAME,
+        summary_text=_NPC_SUMMARY,
+        entity_type_code="npc",
+    )
+    connection.execute(
+        text(
+            "INSERT INTO character.characters (character_id, species_id, size_category) "
+            "VALUES (:c, :s, :size)"
+        ),
+        {"c": npc_id, "s": species_id, "size": _CHARACTER_SIZE_CATEGORY},
+    )
+    connection.execute(text("INSERT INTO character.npcs (npc_id) VALUES (:c)"), {"c": npc_id})
+    summary.add(created=True, label=f"NPC {_NPC_NAME!r}", record_id=npc_id)
+    return npc_id
+
+
+def _ensure_organization(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    name: str,
+    summary_text: str,
+    organization_type_code: str,
+    entity_type_code: str,
+    public_description: str | None,
+    internal_description: str | None,
+    headquarters_location_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    existing = _entity_by_name(connection, world_id=world_id, name=name)
+    if existing is not None:
+        summary.add(created=False, label=f"organization {name!r}", record_id=existing[0])
+        return existing[0]
+    organization_id = _new_world_entity(
+        connection,
+        world_id=world_id,
+        name=name,
+        summary_text=summary_text,
+        entity_type_code=entity_type_code,
+    )
+    connection.execute(
+        text("""
+            INSERT INTO world.organizations
+                (organization_id, organization_type_id, headquarters_location_id,
+                 public_description, internal_description)
+            VALUES (
+                :id,
+                (SELECT organization_type_id FROM world.organization_types WHERE code = :otc),
+                :hq, :public_desc, :internal_desc
+            )
+        """),
+        {
+            "id": organization_id,
+            "otc": organization_type_code,
+            "hq": headquarters_location_id,
+            "public_desc": public_description,
+            "internal_desc": internal_description,
+        },
+    )
+    summary.add(created=True, label=f"organization {name!r}", record_id=organization_id)
+    return organization_id
+
+
+def _ensure_government(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    hq_location_id: uuid.UUID | None,
+) -> uuid.UUID:
+    org_id = _ensure_organization(
+        connection,
+        summary,
+        world_id=world_id,
+        name=_GOVERNMENT_NAME,
+        summary_text=_GOVERNMENT_PUBLIC_DESCRIPTION,
+        organization_type_code="government",
+        entity_type_code="government",
+        public_description=_GOVERNMENT_PUBLIC_DESCRIPTION,
+        internal_description=None,
+        headquarters_location_id=hq_location_id,
+    )
+    already = connection.execute(
+        text("SELECT 1 FROM world.governments WHERE government_id = :id"), {"id": org_id}
+    ).scalar()
+    if already is None:
+        connection.execute(
+            text(
+                "INSERT INTO world.governments (government_id, government_form) VALUES (:id, :form)"
+            ),
+            {"id": org_id, "form": _GOVERNMENT_FORM},
+        )
+        summary.add(created=True, label="government subtype row", record_id=org_id)
+    else:
+        summary.add(created=False, label="government subtype row", record_id=org_id)
+    return org_id
+
+
+def _ensure_religion(
+    connection: Connection, summary: _Summary, *, world_id: uuid.UUID
+) -> uuid.UUID:
+    existing = _entity_by_name(connection, world_id=world_id, name=_RELIGION_NAME)
+    if existing is not None:
+        summary.add(created=False, label=f"religion {_RELIGION_NAME!r}", record_id=existing[0])
+        return existing[0]
+    religion_id = _new_world_entity(
+        connection,
+        world_id=world_id,
+        name=_RELIGION_NAME,
+        summary_text=_RELIGION_SUMMARY,
+        entity_type_code="religion",
+    )
+    connection.execute(
+        text(
+            "INSERT INTO world.religions (religion_id, pantheon_structure) VALUES (:id, :structure)"
+        ),
+        {"id": religion_id, "structure": _RELIGION_PANTHEON},
+    )
+    summary.add(created=True, label=f"religion {_RELIGION_NAME!r}", record_id=religion_id)
+    return religion_id
+
+
+def _ensure_religious_organization(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    religion_id: uuid.UUID,
+) -> uuid.UUID:
+    org_id = _ensure_organization(
+        connection,
+        summary,
+        world_id=world_id,
+        name=_RELIGIOUS_ORG_NAME,
+        summary_text=_RELIGIOUS_ORG_PUBLIC_DESCRIPTION,
+        organization_type_code="religious_organization",
+        entity_type_code="religious_organization",
+        public_description=_RELIGIOUS_ORG_PUBLIC_DESCRIPTION,
+        internal_description=None,
+    )
+    already = connection.execute(
+        text("SELECT 1 FROM world.religious_organizations WHERE religious_organization_id = :id"),
+        {"id": org_id},
+    ).scalar()
+    if already is None:
+        connection.execute(
+            text(
+                "INSERT INTO world.religious_organizations (religious_organization_id, religion_id) "
+                "VALUES (:id, :religion)"
+            ),
+            {"id": org_id, "religion": religion_id},
+        )
+        summary.add(created=True, label="religious-organization subtype row", record_id=org_id)
+    else:
+        summary.add(created=False, label="religious-organization subtype row", record_id=org_id)
+    return org_id
+
+
+def _get_or_create_item_definition(
+    connection: Connection, summary: _Summary, *, ruleset_version_id: uuid.UUID
+) -> uuid.UUID:
+    """One shared `rules.item_definitions` row for the fixture's item
+    instances, located by its own fixed code."""
+    code = "phase13d_dev_wondrous_item"
+    existing = connection.execute(
+        text("SELECT item_definition_id FROM rules.item_definitions WHERE code = :c"),
+        {"c": code},
+    ).scalar()
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label="item definition (shared)", record_id=existing)
+        return existing
+    category_id = connection.execute(
+        text("SELECT item_category_id FROM rules.item_categories WHERE code = 'wondrous_item'")
+    ).scalar()
+    if category_id is None:
+        raise SystemExit("expected a seeded rules.item_categories row (code='wondrous_item').")
+    item_definition_id = connection.execute(
+        text("""
+            INSERT INTO rules.item_definitions
+                (ruleset_version_id, item_category_id, code, display_name, rarity,
+                 requires_attunement)
+            VALUES (:v, :cat, :code, 'Phase 13D Dev Wondrous Item', 'rare', false)
+            RETURNING item_definition_id
+        """),
+        {"v": ruleset_version_id, "cat": category_id, "code": code},
+    ).scalar()
+    assert isinstance(item_definition_id, uuid.UUID)
+    summary.add(created=True, label="item definition (shared)", record_id=item_definition_id)
+    return item_definition_id
+
+
+def _ensure_item_instance(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    name: str,
+    origin_notes: str,
+    item_definition_id: uuid.UUID,
+) -> uuid.UUID:
+    existing = _entity_by_name(connection, world_id=world_id, name=name)
+    if existing is not None:
+        summary.add(created=False, label=f"item {name!r}", record_id=existing[0])
+        return existing[0]
+    item_id = _new_world_entity(
+        connection,
+        world_id=world_id,
+        name=name,
+        summary_text=origin_notes,
+        entity_type_code="item_instance",
+    )
+    connection.execute(
+        text(
+            "INSERT INTO world.item_instances (item_instance_id, item_definition_id, origin_notes) "
+            "VALUES (:id, :def, :notes)"
+        ),
+        {"id": item_id, "def": item_definition_id, "notes": origin_notes},
+    )
+    summary.add(created=True, label=f"item {name!r}", record_id=item_id)
+    return item_id
+
+
+def _ensure_item_state(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    item_name: str,
+    charges_current: int,
+    charges_maximum: int,
+) -> None:
+    label = f"item state: {item_name!r}"
+    existing = connection.execute(
+        text("SELECT 1 FROM campaign.item_state WHERE timeline_id = :t AND item_instance_id = :i"),
+        {"t": timeline_id, "i": item_instance_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=item_instance_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO campaign.item_state
+                (timeline_id, item_instance_id, quantity, charges_current, charges_maximum)
+            VALUES (:t, :i, 1, :cur, :max)
+        """),
+        {"t": timeline_id, "i": item_instance_id, "cur": charges_current, "max": charges_maximum},
+    )
+    summary.add(created=True, label=label, record_id=item_instance_id)
+
+
+def _ensure_inventory_entry(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    item_instance_id: uuid.UUID,
+    item_name: str,
+    holder_entity_id: uuid.UUID | None,
+    location_id: uuid.UUID | None,
+) -> None:
+    where = "holder_entity_id = :h" if holder_entity_id is not None else "location_id = :l"
+    label = f"inventory entry: {item_name!r}"
+    existing = connection.execute(
+        text(
+            f"SELECT 1 FROM campaign.inventory_entries "
+            f"WHERE timeline_id = :t AND item_instance_id = :i AND {where}"
+        ),
+        {"t": timeline_id, "i": item_instance_id, "h": holder_entity_id, "l": location_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=item_instance_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO campaign.inventory_entries
+                (timeline_id, item_instance_id, holder_entity_id, location_id)
+            VALUES (:t, :i, :h, :l)
+        """),
+        {"t": timeline_id, "i": item_instance_id, "h": holder_entity_id, "l": location_id},
+    )
+    summary.add(created=True, label=label, record_id=item_instance_id)
+
+
+def _ensure_historical_event(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    fixture: _EventFixture,
+    entity_ids: dict[str, uuid.UUID],
+) -> uuid.UUID:
+    """Create-or-reuse one `narrative.events` row (recorded or draft) for
+    the World Explorer historical-event category, plus its
+    `event_participants` / `event_locations`. Located by
+    `(world_id, canonical_name)` among event-typed entities."""
+    label = f"historical event {fixture.name!r} ({fixture.status_code})"
+    existing = _entity_by_name(connection, world_id=world_id, name=fixture.name)
+    world_time_id = _wk_world_time(
+        connection,
+        summary,
+        world_id=world_id,
+        suffix=f"event {fixture.name}",
+        offset=fixture.world_time_offset,
+    )
+    if existing is not None:
+        event_id = existing[0]
+        summary.add(created=False, label=label, record_id=event_id)
+    else:
+        event_id = _new_world_entity(
+            connection,
+            world_id=world_id,
+            name=fixture.name,
+            summary_text=fixture.summary,
+            entity_type_code="event",
+        )
+        event_type_id = lookup_id(
+            connection, "narrative", "event_types", "event_type_id", fixture.event_type_code
+        )
+        status_id = lookup_id(
+            connection, "narrative", "event_statuses", "event_status_id", fixture.status_code
+        )
+        connection.execute(
+            text("""
+                INSERT INTO narrative.events
+                    (event_id, timeline_id, campaign_id, event_type_id, event_status_id,
+                     world_time_id, details)
+                VALUES (:id, :timeline, :campaign, :etype, :status, :world_time, :details)
+            """),
+            {
+                "id": event_id,
+                "timeline": timeline_id,
+                "campaign": campaign_id,
+                "etype": event_type_id,
+                "status": status_id,
+                "world_time": world_time_id,
+                "details": fixture.details,
+            },
+        )
+        for participant_name, role_code in fixture.participant_names:
+            connection.execute(
+                text("""
+                    INSERT INTO narrative.event_participants
+                        (event_id, participant_entity_id, participant_role_id)
+                    VALUES (
+                        :e, :p,
+                        (SELECT event_participant_role_id FROM narrative.event_participant_roles
+                         WHERE code = :rc)
+                    )
+                """),
+                {"e": event_id, "p": entity_ids[participant_name], "rc": role_code},
+            )
+        for location_name in fixture.location_names:
+            connection.execute(
+                text("""
+                    INSERT INTO narrative.event_locations (event_id, location_id, event_location_role)
+                    VALUES (:e, :l, 'occurred_at')
+                """),
+                {"e": event_id, "l": entity_ids[location_name]},
+            )
+        summary.add(created=True, label=label, record_id=event_id)
+    return event_id
+
+
+def _ensure_world_relationship(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    member_entity_id: uuid.UUID,
+    organization_entity_id: uuid.UUID,
+) -> uuid.UUID:
+    """One `world.relationships` row (type `membership`) between two visible
+    world resources, located by `(world_id, type, description)`."""
+    label = f"relationship {_WK_RELATIONSHIP_TYPE_CODE!r}: {_WK_RELATIONSHIP_DESCRIPTION}"
+    existing = connection.execute(
+        text("""
+            SELECT r.relationship_id
+            FROM world.relationships r
+            JOIN world.relationship_types rt ON rt.relationship_type_id = r.relationship_type_id
+            WHERE r.world_id = :w AND rt.code = :tc AND r.description = :d
+        """),
+        {"w": world_id, "tc": _WK_RELATIONSHIP_TYPE_CODE, "d": _WK_RELATIONSHIP_DESCRIPTION},
+    ).scalar()
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label=label, record_id=existing)
+        return existing
+    relationship_id = connection.execute(
+        text("""
+            INSERT INTO world.relationships (world_id, relationship_type_id, description)
+            VALUES (
+                :w,
+                (SELECT relationship_type_id FROM world.relationship_types WHERE code = :tc),
+                :d
+            )
+            RETURNING relationship_id
+        """),
+        {"w": world_id, "tc": _WK_RELATIONSHIP_TYPE_CODE, "d": _WK_RELATIONSHIP_DESCRIPTION},
+    ).scalar()
+    assert isinstance(relationship_id, uuid.UUID)
+    for entity_id, role_code in (
+        (member_entity_id, "member"),
+        (organization_entity_id, "organization"),
+    ):
+        connection.execute(
+            text("""
+                INSERT INTO world.relationship_participants
+                    (relationship_id, entity_id, participant_role_id)
+                VALUES (
+                    :r, :e,
+                    (SELECT relationship_participant_role_id FROM world.relationship_participant_roles
+                     WHERE code = :rc)
+                )
+            """),
+            {"r": relationship_id, "e": entity_id, "rc": role_code},
+        )
+    summary.add(created=True, label=label, record_id=relationship_id)
+    return relationship_id
+
+
+def _get_or_create_knowledge_item(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    fixture: _KnowledgeFixture,
+    subject_entity_id: uuid.UUID | None,
+) -> uuid.UUID:
+    """One `knowledge.knowledge_items` entity, located by
+    `(world_id, canonical_name == statement)` among knowledge-item-typed
+    entities (a knowledge item's entity name is its statement — the same
+    key `tests.factories.make_knowledge_item` uses)."""
+    label = f"knowledge item {fixture.statement[:60]!r}"
+    existing = _entity_by_name(connection, world_id=world_id, name=fixture.statement)
+    if existing is not None:
+        if existing[1] != "knowledge_item":
+            raise SystemExit(
+                f"an entity named like knowledge statement {fixture.statement[:40]!r} exists as a "
+                f"{existing[1]!r} entity — rename or remove it, then re-run."
+            )
+        summary.add(created=False, label=label, record_id=existing[0])
+        return existing[0]
+    knowledge_item_id = _new_world_entity(
+        connection,
+        world_id=world_id,
+        name=fixture.statement,
+        summary_text=fixture.statement,
+        entity_type_code="knowledge_item",
+    )
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.knowledge_items
+                (knowledge_item_id, knowledge_type_id, truth_status_id, canonical_statement,
+                 sensitivity, subject_entity_id)
+            VALUES (
+                :id,
+                (SELECT knowledge_type_id FROM knowledge.knowledge_types WHERE code = :kt),
+                (SELECT truth_status_id FROM knowledge.truth_statuses WHERE code = :ts),
+                :statement, :sensitivity, :subject
+            )
+        """),
+        {
+            "id": knowledge_item_id,
+            "kt": fixture.knowledge_type_code,
+            "ts": fixture.truth_status_code,
+            "statement": fixture.statement,
+            "sensitivity": fixture.sensitivity,
+            "subject": subject_entity_id,
+        },
+    )
+    summary.add(created=True, label=label, record_id=knowledge_item_id)
+    return knowledge_item_id
+
+
+def _ensure_party_knowledge(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    fixture: _KnowledgeFixture,
+    label: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM campaign.party_knowledge "
+            "WHERE timeline_id = :t AND party_id = :p AND knowledge_item_id = :k"
+        ),
+        {"t": timeline_id, "p": party_id, "k": knowledge_item_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=knowledge_item_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO campaign.party_knowledge
+                (timeline_id, party_id, knowledge_item_id, awareness_level, confidence,
+                 interpretation, willing_to_share)
+            VALUES (:t, :p, :k, :aware, :conf, :interp, :share)
+        """),
+        {
+            "t": timeline_id,
+            "p": party_id,
+            "k": knowledge_item_id,
+            "aware": fixture.awareness_level or "aware",
+            "conf": fixture.confidence,
+            "interp": fixture.interpretation,
+            "share": fixture.willing_to_share,
+        },
+    )
+    summary.add(created=True, label=label, record_id=knowledge_item_id)
+
+
+def _ensure_entity_knowledge(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    knower_entity_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    fixture: _KnowledgeFixture,
+    label: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM knowledge.entity_knowledge "
+            "WHERE timeline_id = :t AND knower_entity_id = :e AND knowledge_item_id = :k"
+        ),
+        {"t": timeline_id, "e": knower_entity_id, "k": knowledge_item_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=knowledge_item_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.entity_knowledge
+                (timeline_id, knowledge_item_id, knower_entity_id, awareness_level, confidence,
+                 interpretation, willing_to_share)
+            VALUES (:t, :k, :e, :aware, :conf, :interp, :share)
+        """),
+        {
+            "t": timeline_id,
+            "k": knowledge_item_id,
+            "e": knower_entity_id,
+            "aware": fixture.awareness_level or "aware",
+            "conf": fixture.confidence,
+            "interp": fixture.interpretation,
+            "share": fixture.willing_to_share,
+        },
+    )
+    summary.add(created=True, label=label, record_id=knowledge_item_id)
+
+
+def _ensure_public_knowledge(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    location_id: uuid.UUID,
+    fixture: _KnowledgeFixture,
+    label: str,
+    known_since_world_time_id: uuid.UUID | None = None,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM knowledge.public_knowledge "
+            "WHERE timeline_id = :t AND knowledge_item_id = :k AND location_id = :l"
+        ),
+        {"t": timeline_id, "k": knowledge_item_id, "l": location_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=knowledge_item_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.public_knowledge
+                (timeline_id, knowledge_item_id, location_id, awareness_level,
+                 known_since_world_time_id)
+            VALUES (:t, :k, :l, :aware, :since)
+        """),
+        {
+            "t": timeline_id,
+            "k": knowledge_item_id,
+            "l": location_id,
+            "aware": fixture.awareness_level or "aware",
+            "since": known_since_world_time_id,
+        },
+    )
+    summary.add(created=True, label=label, record_id=knowledge_item_id)
+
+
+def _ensure_party_discovery(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    discovered_at_world_time_id: uuid.UUID | None,
+    discovered_via_event_id: uuid.UUID | None,
+    label: str,
+) -> None:
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM knowledge.party_discoveries "
+            "WHERE timeline_id = :t AND party_id = :p AND knowledge_item_id = :k"
+        ),
+        {"t": timeline_id, "p": party_id, "k": knowledge_item_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=knowledge_item_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO knowledge.party_discoveries
+                (timeline_id, knowledge_item_id, party_id, discovered_at_world_time_id,
+                 discovered_via_event_id)
+            VALUES (:t, :k, :p, :at, :via)
+        """),
+        {
+            "t": timeline_id,
+            "k": knowledge_item_id,
+            "p": party_id,
+            "at": discovered_at_world_time_id,
+            "via": discovered_via_event_id,
+        },
+    )
+    summary.add(created=True, label=label, record_id=knowledge_item_id)
+
+
+def _ensure_party_membership(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    timeline_id: uuid.UUID,
+    party_id: uuid.UUID,
+    member_entity_id: uuid.UUID,
+    member_label: str,
+    effective_from_world_time_id: uuid.UUID,
+) -> None:
+    label = f"party membership: {member_label} in {_WK_PARTY_NAME!r}"
+    existing = connection.execute(
+        text("""
+            SELECT 1 FROM campaign.party_memberships
+            WHERE timeline_id = :t AND party_id = :p AND member_entity_id = :m
+              AND effective_to_world_time_id IS NULL
+        """),
+        {"t": timeline_id, "p": party_id, "m": member_entity_id},
+    ).scalar()
+    if existing is not None:
+        summary.add(created=False, label=label, record_id=member_entity_id)
+        return
+    connection.execute(
+        text("""
+            INSERT INTO campaign.party_memberships
+                (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
+            VALUES (:t, :p, :m, :from_time)
+        """),
+        {
+            "t": timeline_id,
+            "p": party_id,
+            "m": member_entity_id,
+            "from_time": effective_from_world_time_id,
+        },
+    )
+    summary.add(created=True, label=label, record_id=member_entity_id)
+
+
+def _ensure_world_and_knowledge_fixtures(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    ruleset_version_id: uuid.UUID,
+    timeline_a_id: uuid.UUID,
+    timeline_b_id: uuid.UUID,
+    campaign_a_id: uuid.UUID,
+    campaign_b_id: uuid.UUID,
+    character_a_id: uuid.UUID,
+    character_b_id: uuid.UUID,
+) -> None:
+    summary.note_world("Campaign A (Timeline A):")
+
+    # --- world hierarchy + location state -------------------------------
+    a_locations = _ensure_location_tree(
+        connection,
+        summary,
+        world_id=world_id,
+        fixture=_CAMPAIGN_A_LOCATIONS,
+        parent_location_id=None,
+    )
+    _ensure_location_state(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        location_id=a_locations["Hollowmere"],
+        location_name="Hollowmere",
+        state=_HOLLOWMERE_STATE,
+    )
+
+    # --- non-location world entities ------------------------------------
+    npc_id = _ensure_npc(
+        connection, summary, world_id=world_id, ruleset_version_id=ruleset_version_id
+    )
+    guild_id = _ensure_organization(
+        connection,
+        summary,
+        world_id=world_id,
+        name=_GUILD_NAME,
+        summary_text=_GUILD_PUBLIC_DESCRIPTION,
+        organization_type_code="guild",
+        entity_type_code="organization",
+        public_description=_GUILD_PUBLIC_DESCRIPTION,
+        internal_description=_GUILD_INTERNAL_DESCRIPTION,
+        headquarters_location_id=a_locations["The Sunken Archive"],
+    )
+    _ensure_government(
+        connection, summary, world_id=world_id, hq_location_id=a_locations["Hollowmere"]
+    )
+    religion_id = _ensure_religion(connection, summary, world_id=world_id)
+    _ensure_religious_organization(connection, summary, world_id=world_id, religion_id=religion_id)
+
+    item_definition_id = _get_or_create_item_definition(
+        connection, summary, ruleset_version_id=ruleset_version_id
+    )
+    held_item_id = _ensure_item_instance(
+        connection,
+        summary,
+        world_id=world_id,
+        name=_HELD_ITEM_NAME,
+        origin_notes=_HELD_ITEM_ORIGIN,
+        item_definition_id=item_definition_id,
+    )
+    _ensure_item_state(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        item_instance_id=held_item_id,
+        item_name=_HELD_ITEM_NAME,
+        charges_current=3,
+        charges_maximum=3,
+    )
+    _ensure_inventory_entry(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        item_instance_id=held_item_id,
+        item_name=_HELD_ITEM_NAME,
+        holder_entity_id=character_a_id,
+        location_id=None,
+    )
+    loose_item_id = _ensure_item_instance(
+        connection,
+        summary,
+        world_id=world_id,
+        name=_LOOSE_ITEM_NAME,
+        origin_notes=_LOOSE_ITEM_ORIGIN,
+        item_definition_id=item_definition_id,
+    )
+    _ensure_item_state(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        item_instance_id=loose_item_id,
+        item_name=_LOOSE_ITEM_NAME,
+        charges_current=1,
+        charges_maximum=1,
+    )
+    _ensure_inventory_entry(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        item_instance_id=loose_item_id,
+        item_name=_LOOSE_ITEM_NAME,
+        holder_entity_id=None,
+        location_id=a_locations["The Tidebound Crypt"],
+    )
+
+    # --- historical events + a relationship ----------------------------
+    entity_lookup: dict[str, uuid.UUID] = {
+        _NPC_NAME: npc_id,
+        _CHARACTER_A_NAME: character_a_id,
+        _CHARACTER_B_NAME: character_b_id,
+        **a_locations,
+    }
+    event_ids: dict[str, uuid.UUID] = {}
+    for event_fixture in _CAMPAIGN_A_EVENTS:
+        event_ids[event_fixture.name] = _ensure_historical_event(
+            connection,
+            summary,
+            world_id=world_id,
+            timeline_id=timeline_a_id,
+            campaign_id=campaign_a_id,
+            fixture=event_fixture,
+            entity_ids=entity_lookup,
+        )
+    _ensure_world_relationship(
+        connection,
+        summary,
+        world_id=world_id,
+        member_entity_id=npc_id,
+        organization_entity_id=guild_id,
+    )
+
+    # --- knowledge party + memberships --------------------------------
+    party_id = _get_or_create_party(connection, summary, world_id=world_id, name=_WK_PARTY_NAME)
+    _ensure_campaign_party(
+        connection, summary, campaign_id=campaign_a_id, party_id=party_id, party_name=_WK_PARTY_NAME
+    )
+    membership_start = _wk_world_time(
+        connection, summary, world_id=world_id, suffix="party membership start", offset=10
+    )
+    _ensure_party_membership(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        party_id=party_id,
+        member_entity_id=character_a_id,
+        member_label=_CHARACTER_A_NAME,
+        effective_from_world_time_id=membership_start,
+    )
+    _ensure_party_membership(
+        connection,
+        summary,
+        timeline_id=timeline_a_id,
+        party_id=party_id,
+        member_entity_id=character_b_id,
+        member_label=_CHARACTER_B_NAME,
+        effective_from_world_time_id=membership_start,
+    )
+
+    # --- knowledge records -------------------------------------------
+    subject_lookup: dict[str, uuid.UUID] = dict(entity_lookup)
+    subject_lookup[_GOVERNMENT_NAME] = _entity_by_name(
+        connection, world_id=world_id, name=_GOVERNMENT_NAME
+    )[0]  # type: ignore[index]
+    subject_lookup[_HELD_ITEM_NAME] = held_item_id
+    subject_lookup[_RELIGIOUS_ORG_NAME] = _entity_by_name(
+        connection, world_id=world_id, name=_RELIGIOUS_ORG_NAME
+    )[0]  # type: ignore[index]
+    quest_entity = _entity_by_name(connection, world_id=world_id, name=_QUEST_A_ACTIVE_NAME)
+    if quest_entity is not None:
+        subject_lookup[_QUEST_A_ACTIVE_NAME] = quest_entity[0]
+
+    for kf in _CAMPAIGN_A_KNOWLEDGE:
+        subject_id = subject_lookup.get(kf.subject_name) if kf.subject_name else None
+        knowledge_item_id = _get_or_create_knowledge_item(
+            connection, summary, world_id=world_id, fixture=kf, subject_entity_id=subject_id
+        )
+        label = f"{kf.owner} knowledge {kf.statement[:48]!r}"
+        if kf.owner == "party":
+            _ensure_party_knowledge(
+                connection,
+                summary,
+                timeline_id=timeline_a_id,
+                party_id=party_id,
+                knowledge_item_id=knowledge_item_id,
+                fixture=kf,
+                label=label,
+            )
+        elif kf.owner == "character_a":
+            _ensure_entity_knowledge(
+                connection,
+                summary,
+                timeline_id=timeline_a_id,
+                knower_entity_id=character_a_id,
+                knowledge_item_id=knowledge_item_id,
+                fixture=kf,
+                label=label,
+            )
+        elif kf.owner == "character_b":
+            _ensure_entity_knowledge(
+                connection,
+                summary,
+                timeline_id=timeline_a_id,
+                knower_entity_id=character_b_id,
+                knowledge_item_id=knowledge_item_id,
+                fixture=kf,
+                label=label,
+            )
+        elif kf.owner == "public":
+            _ensure_public_knowledge(
+                connection,
+                summary,
+                timeline_id=timeline_a_id,
+                knowledge_item_id=knowledge_item_id,
+                location_id=a_locations["Hollowmere"],
+                fixture=kf,
+                label=label,
+            )
+        # owner == "canonical": knowledge_items row only, no belief row.
+
+        if kf.discovered:
+            assert kf.discovery_world_time_offset is not None
+            discovery_time = _wk_world_time(
+                connection,
+                summary,
+                world_id=world_id,
+                suffix=f"discovery {kf.statement[:32]}",
+                offset=kf.discovery_world_time_offset,
+            )
+            source_event_id = (
+                event_ids.get(kf.discovery_source_event_name)
+                if kf.discovery_source_event_name
+                else None
+            )
+            _ensure_party_discovery(
+                connection,
+                summary,
+                timeline_id=timeline_a_id,
+                party_id=party_id,
+                knowledge_item_id=knowledge_item_id,
+                discovered_at_world_time_id=discovery_time,
+                discovered_via_event_id=source_event_id,
+                label=f"party discovery {kf.statement[:40]!r}",
+            )
+
+    # --- Campaign B isolation data (Timeline B) -----------------------
+    summary.note_world("")
+    summary.note_world("Campaign B (Timeline B):")
+    b_location_ids = _ensure_location_tree(
+        connection,
+        summary,
+        world_id=world_id,
+        fixture=_CAMPAIGN_B_LOCATION,
+        parent_location_id=None,
+    )
+    saltreach_id = b_location_ids["Saltreach Harbor"]
+    _ensure_location_state(
+        connection,
+        summary,
+        timeline_id=timeline_b_id,
+        location_id=saltreach_id,
+        location_name="Saltreach Harbor",
+        state=_SALTREACH_STATE,
+    )
+    _ensure_historical_event(
+        connection,
+        summary,
+        world_id=world_id,
+        timeline_id=timeline_b_id,
+        campaign_id=campaign_b_id,
+        fixture=_CAMPAIGN_B_EVENT,
+        entity_ids={"Saltreach Harbor": saltreach_id},
+    )
+    b_knowledge_id = _get_or_create_knowledge_item(
+        connection,
+        summary,
+        world_id=world_id,
+        fixture=_CAMPAIGN_B_KNOWLEDGE,
+        subject_entity_id=saltreach_id,
+    )
+    _ensure_public_knowledge(
+        connection,
+        summary,
+        timeline_id=timeline_b_id,
+        knowledge_item_id=b_knowledge_id,
+        location_id=saltreach_id,
+        fixture=_CAMPAIGN_B_KNOWLEDGE,
+        label=f"public knowledge (Campaign B) {_CAMPAIGN_B_KNOWLEDGE.statement[:40]!r}",
+    )
+
+    _note_world_knowledge_reference_block(
+        summary,
+        campaign_a_id=campaign_a_id,
+        campaign_b_id=campaign_b_id,
+        character_a_id=character_a_id,
+        character_b_id=character_b_id,
+        party_id=party_id,
+        world_entity_ids={
+            "npc": npc_id,
+            "guild": guild_id,
+            "religion": religion_id,
+            "held_item": held_item_id,
+            "loose_item": loose_item_id,
+            "building": a_locations["The Sunken Archive"],
+            "settlement": a_locations["Hollowmere"],
+            "dungeon": a_locations["The Tidebound Crypt"],
+            "dungeon_area": a_locations["The Lantern Antechamber"],
+            "saltreach": saltreach_id,
+        },
+        event_ids=event_ids,
+    )
+
+
+def _note_world_knowledge_reference_block(
+    summary: _Summary,
+    *,
+    campaign_a_id: uuid.UUID,
+    campaign_b_id: uuid.UUID,
+    character_a_id: uuid.UUID,
+    character_b_id: uuid.UUID,
+    party_id: uuid.UUID,
+    world_entity_ids: dict[str, uuid.UUID],
+    event_ids: dict[str, uuid.UUID],
+) -> None:
+    n = summary.note_world
+    n("")
+    n(f"Campaign A id:  {campaign_a_id}")
+    n(f"Campaign B id:  {campaign_b_id}")
+    n(f"Character A id: {character_a_id}")
+    n(f"Character B id: {character_b_id}")
+    n(f"{_WK_PARTY_NAME!r} party id: {party_id}  (Character A and B are current members)")
+    n("")
+    n("World Explorer fixture entities (Campaign A):")
+    n(f"  NPC {_NPC_NAME!r}: {world_entity_ids['npc']}")
+    n(f"  organization {_GUILD_NAME!r}: {world_entity_ids['guild']}")
+    n(f"  religion {_RELIGION_NAME!r}: {world_entity_ids['religion']}")
+    n(f"  settlement 'Hollowmere': {world_entity_ids['settlement']}")
+    n(f"  building 'The Sunken Archive': {world_entity_ids['building']}")
+    n(f"  dungeon 'The Tidebound Crypt': {world_entity_ids['dungeon']}")
+    n(f"  dungeon area 'The Lantern Antechamber': {world_entity_ids['dungeon_area']}")
+    n(f"  held item {_HELD_ITEM_NAME!r} (Character A): {world_entity_ids['held_item']}")
+    n(f"  loose item {_LOOSE_ITEM_NAME!r} (in the crypt): {world_entity_ids['loose_item']}")
+    n("")
+    n("Historical events (Campaign A / Timeline A):")
+    for name, event_id in event_ids.items():
+        n(f"  {name!r}: {event_id}")
+    n("  -- 'The Magistrate's Secret Accord' is a DRAFT event: a GM sees it in")
+    n("     /world/search?category=event and /world/events/{id}; a plain player does not.")
+    n("")
+    n(f"Campaign B distinct location 'Saltreach Harbor': {world_entity_ids['saltreach']}")
+    n("  -- world-canon: it also appears in Campaign A's /world/search by the documented")
+    n("     world-scoped visibility model (readiness §10.1). Its location_state, the event")
+    n("     at it, and the knowledge about it are Timeline B only and never surface in")
+    n("     Campaign A. Isolation is proven through those timeline-scoped rows.")
+    n("")
+    n("Ready-to-use request paths (cookie-authenticated HTTP -- run these yourself; this")
+    n("script never performs them and never claims one passed):")
+    n(f"  World search (all):        GET /campaigns/{campaign_a_id}/world/search")
+    n(f"  World search (case-insens): GET /campaigns/{campaign_a_id}/world/search?q=hollowmere")
+    n(
+        f"  World search (type filter): GET /campaigns/{campaign_a_id}/world/search?category=religion"
+    )
+    n(f"  World search (paginate):   GET /campaigns/{campaign_a_id}/world/search?limit=2")
+    n(
+        f"  Location + breadcrumbs:    GET /campaigns/{campaign_a_id}/world/locations/{world_entity_ids['building']}"
+    )
+    n(
+        f"  Religion detail:           GET /campaigns/{campaign_a_id}/world/religions/{world_entity_ids['religion']}"
+    )
+    n(
+        f"  Loose item detail:         GET /campaigns/{campaign_a_id}/world/items/{world_entity_ids['loose_item']}"
+    )
+    n(
+        f"  Event detail:              GET /campaigns/{campaign_a_id}/world/events/"
+        f"{event_ids.get('The Sundering of the Vale', '<id>')}"
+    )
+    n(f"  Relationships:             GET /campaigns/{campaign_a_id}/world/relationships")
+    n("")
+    n(
+        f"  Knowledge known (party):   GET /campaigns/{campaign_a_id}/knowledge?view=known&character_id={character_a_id}&party_id={party_id}"
+    )
+    n(
+        f"  Knowledge rumors:          GET /campaigns/{campaign_a_id}/knowledge?view=rumors&character_id={character_a_id}&party_id={party_id}"
+    )
+    n(
+        f"  Knowledge party_shared:    GET /campaigns/{campaign_a_id}/knowledge?view=party_shared&character_id={character_a_id}&party_id={party_id}"
+    )
+    n(
+        f"  Knowledge recent:          GET /campaigns/{campaign_a_id}/knowledge?view=recent&character_id={character_a_id}&party_id={party_id}"
+    )
+    n(
+        f"  Knowledge private (A):     GET /campaigns/{campaign_a_id}/knowledge?view=character_private&character_id={character_a_id}"
+    )
+    n(
+        f"  Knowledge private (B):     GET /campaigns/{campaign_a_id}/knowledge?view=character_private&character_id={character_b_id}"
+    )
+    n(f"  Knowledge public:          GET /campaigns/{campaign_a_id}/knowledge?view=public")
+    n(f"  Knowledge public (B only): GET /campaigns/{campaign_b_id}/knowledge?view=public")
+    n("")
+    n("  -- The distorted party belief: view=known shows the party's interpretation")
+    n("     ('...to appease the Tidefather...'); a GM (canon.edit) sees the canonical")
+    n("     statement ('...to cut the treasury's salvage-levy losses...') plus truth_status.")
+
+
 def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
     summary = _Summary()
 
@@ -2768,6 +4608,22 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         campaign_b_quest_id=campaign_b_quest_ids[_CAMPAIGN_B_QUEST_NAME],
     )
 
+    # ----------------------------------------------------------------------
+    # Phase 13D World Explorer + Knowledge fixtures
+    # ----------------------------------------------------------------------
+    _ensure_world_and_knowledge_fixtures(
+        connection,
+        summary,
+        world_id=world_id,
+        ruleset_version_id=ruleset_version_id,
+        timeline_a_id=timeline_a_id,
+        timeline_b_id=timeline_b_id,
+        campaign_a_id=campaign_a_id,
+        campaign_b_id=campaign_b_id,
+        character_a_id=character_a_id,
+        character_b_id=character_b_id,
+    )
+
     return summary
 
 
@@ -2902,10 +4758,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     _require_non_production()
+    _require_local_target()
 
     print(
         f"environment={settings.environment} mode={'APPLY' if args.apply else 'PREVIEW (no writes committed)'}"
     )
+    print(f"target database (password redacted): {_safe_target_summary()}")
 
     engine = create_engine(_database_url())
     with engine.connect() as connection:
@@ -2927,10 +4785,17 @@ def main(argv: list[str] | None = None) -> int:
     if summary.quest_report:
         print("\n-- Quest fixture quick reference (for manual portal verification) --")
         print("\n".join(summary.quest_report))
+    if summary.world_report:
+        print(
+            "\n-- World Explorer + Knowledge fixture quick reference "
+            "(for manual portal verification) --"
+        )
+        print("\n".join(summary.world_report))
     if args.apply:
         print("\nAPPLIED - changes committed.")
         _print_bootstrap_verification(user_id=args.user_id)
         _print_quest_verification(user_id=args.user_id)
+        _print_world_knowledge_verification(user_id=args.user_id)
     else:
         print("\nPREVIEW ONLY - every change above was rolled back. Re-run with --apply to write.")
     return 0
@@ -3125,6 +4990,289 @@ def _print_quest_verification(*, user_id: uuid.UUID) -> None:
     )
     print(f"Campaign B quest requested under Campaign A (get_quest_view): {cross_detail_result}")
     print(f"nonexistent quest id (get_quest_view): {nonexistent_result}")
+
+
+def _print_world_knowledge_verification(*, user_id: uuid.UUID) -> None:
+    """Re-opens a fresh, read-only connection and runs the REAL merged
+    World Explorer / Knowledge query functions
+    (`dnd_ai.queries.world_explorer.search_world_entities` /
+    `get_location_view` / `get_event_view`,
+    `dnd_ai.queries.knowledge_browse.list_knowledge`) with the access
+    inputs the real API layer resolves for them — `resolve_access_context`,
+    `resolve_world_character_visibility`, `resolve_party_perspective` — not
+    a re-implementation of the visibility rules and never a hand-written
+    lookalike query. Database/query verification only, not the
+    browser/cookie-authenticated HTTP path.
+
+    The supplied account is a GM (`canon.edit`) on both campaigns, so its
+    World Explorer search runs with `include_draft_events=True` and its
+    Knowledge reads run with `include_ground_truth=True`. Where the
+    player-facing path differs, the real query is also called with the
+    non-GM inputs a player's request resolves to (`include_ground_truth=
+    False` + the `resolve_party_perspective` / character-knower result) and
+    both are printed — the same stance `_print_quest_verification` takes."""
+    engine = create_engine(_database_url())
+    with engine.connect() as connection:
+        connection.execute(text("SET default_transaction_read_only = on"))
+        boot = get_session_bootstrap(connection, user_id=user_id)
+        campaign_a = next(c for c in boot.campaigns if c.campaign_name == _CAMPAIGN_A_NAME)
+        campaign_b = next(c for c in boot.campaigns if c.campaign_name == _CAMPAIGN_B_NAME)
+        assert campaign_a.timeline_id is not None and campaign_b.timeline_id is not None
+        world_a = connection.execute(
+            text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+            {"t": campaign_a.timeline_id},
+        ).scalar()
+        assert isinstance(world_a, uuid.UUID)
+
+        access_a = resolve_access_context(
+            connection, user_id=user_id, campaign_id=campaign_a.campaign_id
+        )
+        access_b = resolve_access_context(
+            connection, user_id=user_id, campaign_id=campaign_b.campaign_id
+        )
+        assert access_a is not None and access_b is not None
+        is_gm = access_a.has_capability("canon.edit")
+
+        character_a_id = next(
+            p.character_id
+            for p in campaign_a.character_perspectives
+            if p.character_name == _CHARACTER_A_NAME
+        )
+        character_b_id = next(
+            p.character_id
+            for p in campaign_a.character_perspectives
+            if p.character_name == _CHARACTER_B_NAME
+        )
+        party_id = connection.execute(
+            text("SELECT party_id FROM campaign.parties WHERE world_id = :w AND name = :n"),
+            {"w": world_a, "n": _WK_PARTY_NAME},
+        ).scalar()
+        assert isinstance(party_id, uuid.UUID)
+
+        all_codes = [c for codes in WORLD_CATEGORY_TYPE_CODES.values() for c in codes]
+        char_vis = resolve_world_character_visibility(access_a)
+        entity_denied, _ = access_a.resource_grant_targets("campaign.view", "entity_id")
+        event_denied_grants, _ = access_a.resource_grant_targets("campaign.view", "event_id")
+        cv_denied = entity_denied | event_denied_grants
+        draft_denied, draft_allowed = access_a.resource_grant_targets("canon.edit", "event_id")
+
+        def _search(
+            codes: list[str], *, q: str | None, include_draft: bool
+        ) -> tuple[WorldEntityCard, ...]:
+            return search_world_entities(
+                connection,
+                world_id=world_a,
+                timeline_id=campaign_a.timeline_id,  # type: ignore[arg-type]
+                category_type_codes=codes,
+                query_text=q,
+                campaign_view_denied_entity_ids=cv_denied,
+                character_visibility=char_vis,
+                include_draft_events=include_draft,
+                draft_event_allowed_ids=draft_allowed,
+                draft_event_denied_ids=draft_denied,
+                limit=100,
+                after_name=None,
+                after_entity_id=None,
+            )
+
+        every = _search(all_codes, q=None, include_draft=is_gm)
+        categories_present = sorted({c.category for c in every})
+        case_hits = [c.name for c in _search(all_codes, q="hollowmere", include_draft=is_gm)]
+        religion_only = _search(
+            list(WORLD_CATEGORY_TYPE_CODES["religion"]), q=None, include_draft=is_gm
+        )
+
+        first_two = search_world_entities(
+            connection,
+            world_id=world_a,
+            timeline_id=campaign_a.timeline_id,
+            category_type_codes=all_codes,
+            query_text=None,
+            campaign_view_denied_entity_ids=cv_denied,
+            character_visibility=char_vis,
+            include_draft_events=is_gm,
+            draft_event_allowed_ids=draft_allowed,
+            draft_event_denied_ids=draft_denied,
+            limit=2,
+            after_name=None,
+            after_entity_id=None,
+        )
+        page_two_first: str | None = None
+        if len(first_two) >= 2:
+            page_two = search_world_entities(
+                connection,
+                world_id=world_a,
+                timeline_id=campaign_a.timeline_id,
+                category_type_codes=all_codes,
+                query_text=None,
+                campaign_view_denied_entity_ids=cv_denied,
+                character_visibility=char_vis,
+                include_draft_events=is_gm,
+                draft_event_allowed_ids=draft_allowed,
+                draft_event_denied_ids=draft_denied,
+                limit=2,
+                after_name=first_two[1].name_sort,
+                after_entity_id=first_two[1].entity_id,
+            )
+            page_two_first = page_two[0].name if page_two else None
+
+        building_id = connection.execute(
+            text("SELECT entity_id FROM core.entities WHERE world_id = :w AND canonical_name = :n"),
+            {"w": world_a, "n": "The Sunken Archive"},
+        ).scalar()
+        assert isinstance(building_id, uuid.UUID)
+        crumbs = get_location_view(
+            connection,
+            location_id=building_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            denied_entity_ids=cv_denied,
+        )
+
+        saltreach_event_id = connection.execute(
+            text("SELECT entity_id FROM core.entities WHERE world_id = :w AND canonical_name = :n"),
+            {"w": world_a, "n": _CAMPAIGN_B_EVENT.name},
+        ).scalar()
+        assert isinstance(saltreach_event_id, uuid.UUID)
+        a_event_names = {c.name for c in _search(["event"], q=None, include_draft=is_gm)}
+        try:
+            get_event_view(
+                connection,
+                event_id=saltreach_event_id,
+                timeline_id=campaign_a.timeline_id,
+                expected_world_id=world_a,
+                denied_entity_ids=cv_denied,
+                include_draft=is_gm,
+                draft_allowed=False,
+                draft_denied=False,
+                character_visibility=char_vis,
+            )
+            cross_event = "RETURNED (unexpected -- must be non-disclosing across timelines)"
+        except WorldResourceNotFoundError:
+            cross_event = "raised WorldResourceNotFoundError (API -> non-disclosing 404)"
+
+        draft_name = _CAMPAIGN_A_EVENTS[2].name
+        gm_draft = {c.name for c in _search(["event"], q=None, include_draft=True)}
+        player_draft = {c.name for c in _search(["event"], q=None, include_draft=False)}
+
+        def _knowledge(
+            view: str, *, ground_truth: bool, party: uuid.UUID | None, knower: uuid.UUID | None
+        ) -> tuple[KnowledgeListItem, ...]:
+            return list_knowledge(
+                connection,
+                view=view,
+                timeline_id=campaign_a.timeline_id,  # type: ignore[arg-type]
+                world_id=world_a,
+                include_ground_truth=ground_truth,
+                authorized_party_id=party,
+                authorized_knower_id=knower,
+                query_text=None,
+                knowledge_type_code=None,
+                denied_item_ids=frozenset(),
+                limit=100,
+                after_statement=None,
+                after_time_sort=None,
+                after_record_id=None,
+            )
+
+        authorized_party = resolve_party_perspective(
+            connection,
+            access=access_a,
+            campaign_id=campaign_a.campaign_id,
+            character_id=character_a_id,
+            party_id=party_id,
+        )
+        gm_known = _knowledge("known", ground_truth=True, party=None, knower=None)
+        player_known = _knowledge("known", ground_truth=False, party=authorized_party, knower=None)
+        private_a = _knowledge(
+            "character_private", ground_truth=False, party=None, knower=character_a_id
+        )
+        private_b = _knowledge(
+            "character_private", ground_truth=False, party=None, knower=character_b_id
+        )
+        recent = _knowledge(
+            "recent", ground_truth=False, party=authorized_party, knower=character_a_id
+        )
+        public_a = _knowledge("public", ground_truth=is_gm, party=None, knower=None)
+        public_b = list_knowledge(
+            connection,
+            view="public",
+            timeline_id=campaign_b.timeline_id,
+            world_id=world_a,
+            include_ground_truth=access_b.has_capability("canon.edit"),
+            authorized_party_id=None,
+            authorized_knower_id=None,
+            query_text=None,
+            knowledge_type_code=None,
+            denied_item_ids=frozenset(),
+            limit=100,
+            after_statement=None,
+            after_time_sort=None,
+            after_record_id=None,
+        )
+
+    distorted = "sluice-gates"
+    gm_distorted = next((i for i in gm_known if distorted in i.statement.lower()), None)
+    player_distorted = next((i for i in player_known if distorted in i.statement.lower()), None)
+    canonical_only = "answer to the thing in the vault"
+
+    print(
+        "\n-- World Explorer + Knowledge production-query verification (database/query only, NOT HTTP) --"
+    )
+    print(f"account holds canon.edit in Campaign A: {is_gm}")
+    print(f"World search categories present: {categories_present} (expect all six)")
+    print(f"case-insensitive q='hollowmere' -> {case_hits} (expect 'Hollowmere' among them)")
+    print(
+        f"category=religion filter -> {[c.name for c in religion_only]} "
+        f"(all category=='religion': {all(c.category == 'religion' for c in religion_only)})"
+    )
+    print(
+        f"pagination limit=2: page-1 last = {first_two[-1].name!r}; page-2 first = {page_two_first!r} "
+        f"(distinct, no overlap: {page_two_first not in {c.name for c in first_two}})"
+    )
+    print(
+        f"breadcrumbs for 'The Sunken Archive' -> {[c.name for c in crumbs.breadcrumbs]} "
+        "(expect ['Auremar', 'The Ashen Vale', 'Hollowmere'])"
+    )
+    print(
+        f"Campaign B event {_CAMPAIGN_B_EVENT.name!r} in Campaign A event search: "
+        f"{_CAMPAIGN_B_EVENT.name in a_event_names} (must be False)"
+    )
+    print(f"Campaign B event via get_event_view under Campaign A: {cross_event}")
+    print(
+        f"draft event {draft_name!r}: GM search sees it ({draft_name in gm_draft}), "
+        f"player search does not ({draft_name not in player_draft})"
+    )
+    print(
+        f"Knowledge 'known': GM sees {len(gm_known)} items (canonical-only secret present: "
+        f"{any(canonical_only in i.statement.lower() for i in gm_known)}); "
+        f"player party-perspective sees {len(player_known)} items (canonical-only secret present: "
+        f"{any(canonical_only in i.statement.lower() for i in player_known)} -- must be False)"
+    )
+    if gm_distorted is not None and player_distorted is not None:
+        print(
+            f"distorted belief -- GM statement: {gm_distorted.statement!r} "
+            f"(truth_status={gm_distorted.truth_status_code!r}); "
+            f"player statement: {player_distorted.statement!r} "
+            f"(truth_status={player_distorted.truth_status_code!r} -- must be None)"
+        )
+    print(
+        f"character_private: A sees {sorted(i.statement[:30] for i in private_a)}; "
+        f"B sees {sorted(i.statement[:30] for i in private_b)} (disjoint: "
+        f"{not ({i.knowledge_item_id for i in private_a} & {i.knowledge_item_id for i in private_b})})"
+    )
+    recent_src = [
+        (i.statement[:30], i.discovery_world_time_id is not None, i.source_event_id is not None)
+        for i in recent
+    ]
+    print(f"recent (party+character): {recent_src} (expect a row with both provenance flags True)")
+    print(
+        f"public: Campaign A sees {len(public_a)} lore item(s) "
+        f"(Campaign-B beacon lore present: "
+        f"{any('beacon-keeper' in i.statement.lower() for i in public_a)} -- must be False); "
+        f"Campaign B sees {len(public_b)} "
+        f"(beacon lore present: {any('beacon-keeper' in i.statement.lower() for i in public_b)})"
+    )
 
 
 if __name__ == "__main__":

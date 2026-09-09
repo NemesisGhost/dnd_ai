@@ -465,14 +465,32 @@ class SessionUserResponse(BaseModel):
     display_name: str
 
 
+class PartyPerspectiveRefResponse(BaseModel):
+    party_id: uuid.UUID
+    party_name: str
+
+
 class CharacterPerspectiveResponse(BaseModel):
     character_id: uuid.UUID
     character_name: str
+    # Additive Phase 13D: the parties the portal may request a party-scoped
+    # knowledge/quest perspective through for this character (current
+    # membership on the campaign's timeline, party associated with the
+    # campaign). Empty when the character belongs to no such party.
+    authorized_parties: list[PartyPerspectiveRefResponse] = []
 
 
 class CampaignBootstrapResponse(BaseModel):
     campaign_id: uuid.UUID
     campaign_name: str
+    # The world this campaign's timeline belongs to — additive Phase 13D
+    # fields so the portal can render the World -> Timeline -> Campaign
+    # hierarchy (docs/UI_DESIGN.md §4.1/§5.2) without a second request.
+    # Resolved from the campaign's own authorized timeline; `null` only in
+    # the defensive "membership resolved but the timeline row vanished"
+    # case `get_session_bootstrap` already handles for `timeline_name`.
+    world_id: uuid.UUID | None
+    world_name: str | None
     timeline_id: uuid.UUID | None
     timeline_name: str | None
     roles: list[str]
@@ -558,6 +576,8 @@ def session_bootstrap_endpoint(
             CampaignBootstrapResponse(
                 campaign_id=campaign.campaign_id,
                 campaign_name=campaign.campaign_name,
+                world_id=campaign.world_id,
+                world_name=campaign.world_name,
                 timeline_id=campaign.timeline_id,
                 timeline_name=campaign.timeline_name,
                 roles=list(campaign.roles),
@@ -565,6 +585,12 @@ def session_bootstrap_endpoint(
                     CharacterPerspectiveResponse(
                         character_id=perspective.character_id,
                         character_name=perspective.character_name,
+                        authorized_parties=[
+                            PartyPerspectiveRefResponse(
+                                party_id=party.party_id, party_name=party.party_name
+                            )
+                            for party in perspective.authorized_parties
+                        ],
                     )
                     for perspective in campaign.character_perspectives
                 ],

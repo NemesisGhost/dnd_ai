@@ -31,6 +31,14 @@ itself already performs per campaign:
   role codes, and the bootstrap contract wants both;
 - capabilities: `AccessContext.role_capabilities` verbatim — the
   campaign-wide, role-derived capability set, never re-derived here;
+- world/timeline identity: the campaign's own `campaign.timelines` row
+  (resolved from `AccessContext.timeline_id`, never caller-supplied) and
+  that timeline's `core.worlds` row — `world_id`/`world_name`/`timeline_id`/
+  `timeline_name`, the minimum the portal needs to build the World ->
+  Timeline -> Campaign hierarchy (docs/UI_DESIGN.md §4.1/§5.2). Only worlds
+  and timelines reachable through an active membership above ever appear;
+  an unrelated world or a branch timeline the campaign is not played on is
+  never returned;
 - character perspectives: every `character_id` key of `AccessContext.
   character_capabilities` with a non-empty capability set — i.e. every
   character this membership currently holds *some* relationship-derived
@@ -64,15 +72,33 @@ from dnd_ai.domain.access import resolve_access_context
 
 
 @dataclass(frozen=True)
+class PartyPerspectiveRefView:
+    """A party the portal may legitimately request a party-scoped
+    knowledge/quest perspective through *for the character this appears
+    under* — the character is a current `campaign.party_memberships` member
+    of it on the campaign's own timeline, and the party is associated with
+    the campaign. Exactly the pair `dnd_ai.api.access.
+    resolve_party_perspective` will accept, so the portal never has to
+    guess a `party_id` (Phase 13D §4 — "do not expose parties or characters
+    the user cannot select")."""
+
+    party_id: uuid.UUID
+    party_name: str
+
+
+@dataclass(frozen=True)
 class CharacterPerspectiveView:
     character_id: uuid.UUID
     character_name: str
+    authorized_parties: tuple[PartyPerspectiveRefView, ...] = ()
 
 
 @dataclass(frozen=True)
 class CampaignBootstrapView:
     campaign_id: uuid.UUID
     campaign_name: str
+    world_id: uuid.UUID | None
+    world_name: str | None
     timeline_id: uuid.UUID | None
     timeline_name: str | None
     roles: tuple[str, ...]
@@ -157,15 +183,31 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             # bootstrap response for every other campaign.
             continue
 
+        # World and timeline for the World -> Timeline -> Campaign hierarchy
+        # the portal renders (docs/UI_DESIGN.md §4.1's CampaignContextPanel,
+        # §5.2's "world name when permitted"). Resolved from
+        # `access.timeline_id` — the campaign's own pinned timeline, already
+        # authorized by `resolve_access_context` — never from anything the
+        # caller supplied, so no world or timeline outside the user's own
+        # active memberships can appear here. One extra join, still inside
+        # the per-campaign loop that already re-resolves authorization on
+        # every request.
         timeline_row = (
             connection.execute(
-                text("SELECT name FROM campaign.timelines WHERE timeline_id = :timeline"),
+                text("""
+                    SELECT t.name AS timeline_name, w.world_id, w.name AS world_name
+                    FROM campaign.timelines t
+                    JOIN core.worlds w ON w.world_id = t.world_id
+                    WHERE t.timeline_id = :timeline
+                """),
                 {"timeline": access.timeline_id},
             )
             .mappings()
             .one_or_none()
         )
-        timeline_name = timeline_row["name"] if timeline_row is not None else None
+        timeline_name = timeline_row["timeline_name"] if timeline_row is not None else None
+        world_id = timeline_row["world_id"] if timeline_row is not None else None
+        world_name = timeline_row["world_name"] if timeline_row is not None else None
 
         role_codes = tuple(
             connection.execute(
@@ -201,10 +243,54 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                 .mappings()
                 .all()
             )
+            # Party perspectives the portal may legitimately request
+            # through each character: the character is a *current*
+            # (`effective_to_world_time_id IS NULL`) member of the party on
+            # the campaign's own timeline, and the party is associated with
+            # the campaign. This is exactly what `dnd_ai.api.access.
+            # resolve_party_perspective` re-proves per request — surfacing
+            # it here just saves the portal from guessing a `party_id`
+            # (Phase 13D §4). Only characters this membership already holds
+            # a relationship capability for reach this loop, so no party of
+            # an unrelated character is ever disclosed.
+            party_rows = (
+                connection.execute(
+                    text("""
+                        SELECT pm.member_entity_id, p.party_id, p.name AS party_name
+                        FROM campaign.party_memberships pm
+                        JOIN campaign.parties p ON p.party_id = pm.party_id
+                        JOIN campaign.campaign_parties cp
+                          ON cp.party_id = pm.party_id AND cp.campaign_id = :campaign_id
+                        WHERE pm.timeline_id = :timeline_id
+                          AND pm.member_entity_id = ANY(:ids)
+                          AND pm.effective_to_world_time_id IS NULL
+                        ORDER BY p.name, p.party_id
+                    """),
+                    {
+                        "campaign_id": campaign_id,
+                        "timeline_id": access.timeline_id,
+                        "ids": character_ids,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+            parties_by_character: dict[uuid.UUID, list[PartyPerspectiveRefView]] = {}
+            for party_row in party_rows:
+                parties_by_character.setdefault(party_row["member_entity_id"], []).append(
+                    PartyPerspectiveRefView(
+                        party_id=party_row["party_id"],
+                        party_name=party_row["party_name"],
+                    )
+                )
+
             character_perspectives = tuple(
                 CharacterPerspectiveView(
                     character_id=character_row["entity_id"],
                     character_name=character_row["canonical_name"],
+                    authorized_parties=tuple(
+                        parties_by_character.get(character_row["entity_id"], [])
+                    ),
                 )
                 for character_row in character_rows
             )
@@ -217,6 +303,8 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             CampaignBootstrapView(
                 campaign_id=campaign_id,
                 campaign_name=row["campaign_name"],
+                world_id=world_id,
+                world_name=world_name,
                 timeline_id=access.timeline_id,
                 timeline_name=timeline_name,
                 roles=role_codes,

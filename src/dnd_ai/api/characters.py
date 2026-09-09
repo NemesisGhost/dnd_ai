@@ -23,6 +23,21 @@ whether a character they have no relationship to even exists. This mirrors
 decided from the resolved `AccessContext`, not a query parameter, and never
 downgraded by a caller simply omitting one.
 
+Ahead of that tier decision both routes apply one coarser gate: an
+entity-targeted `campaign.view` `security.resource_grants` **deny** for
+this exact `character_id` (its own `core.entities.entity_id` under
+class-table inheritance) removes the character — and its inventory
+subresource — entirely, raising the same fixed, non-disclosing 404 a
+nonexistent character produces. This keeps these reused detail routes in
+agreement with the Phase 13D World Explorer search
+(`dnd_ai.api.world_explorer`), which excludes a `campaign.view`-denied
+`entity_id` in SQL before pagination, so a resource hidden from browse can
+never still be opened by its retained URL (the disclosure class the
+quest-detail route was hardened against — docs/PHASE13D_BACKEND_READINESS.md
+§4.2, §10.8). The character-view tier remains a separate, finer decision:
+it downgrades or withholds detail for callers who *are* otherwise
+entitled, and is unchanged.
+
 Cross-campaign/world character ownership: `character.characters` carries no
 `campaign_id` at all (world-scoped, like the dungeon/item/quest/
 relationship domains) — `get_character_view` itself asserts the
@@ -76,6 +91,7 @@ from .access import (
     resolve_character_view_tier,
 )
 from .deps import get_connection
+from .errors import NotFoundError
 
 router = APIRouter(tags=["characters"])
 
@@ -188,6 +204,21 @@ def get_character_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterResponse:
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        # An entity-targeted `campaign.view` resource-grant deny —
+        # indistinguishable from a nonexistent character, keeping this
+        # reused detail route in agreement with the Phase 13D World
+        # Explorer search (`dnd_ai.api.world_explorer`), which excludes a
+        # `campaign.view`-denied `entity_id` in SQL. A character's own
+        # `core.entities.entity_id` is its `character_id` (class-table
+        # inheritance), so it is a valid `security.resource_grants.
+        # entity_id` target. This deny is a coarser gate than the
+        # character-view tier below: it removes the resource entirely
+        # rather than downgrading detail. The quest/organization/dungeon
+        # detail routes were hardened the same way
+        # (docs/PHASE13D_BACKEND_READINESS.md §4.2, §10.8).
+        raise NotFoundError()
+
     include_full = resolve_character_view_tier(access, character_id=character_id)
 
     view = get_character_view(
@@ -248,6 +279,12 @@ def get_character_inventory_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> list[InventoryItemResponse]:
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        # The same entity-targeted `campaign.view` deny the character
+        # detail route honors — a subresource of a character the caller may
+        # not see must itself be indistinguishable from nonexistent.
+        raise NotFoundError()
+
     if not resolve_character_view_tier(access, character_id=character_id):
         # The summary tier alone is not enough to see inventory contents —
         # see this module's docstring. Raised identically to "neither
