@@ -89,6 +89,7 @@ from dnd_ai.queries.dungeon import get_dungeon_area_view
 from ._shared import timeline_world_id
 from .access import require_campaign_capability, resolve_party_perspective
 from .deps import get_connection
+from .errors import NotFoundError
 
 router = APIRouter(tags=["dungeon"])
 
@@ -180,6 +181,16 @@ def get_dungeon_area_endpoint(
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> DungeonAreaResponse:
+    if not access.has_capability(_DUNGEON_VIEW_CAPABILITY, entity_id=dungeon_area_id):
+        # A per-area `campaign.view` resource-grant deny — indistinguishable
+        # from a nonexistent area, keeping this route in agreement with the
+        # Phase 13D World Explorer list (`dnd_ai.api.world_explorer`), which
+        # excludes a `campaign.view`-denied `entity_id` in SQL, and with
+        # `GET /campaigns/{id}/world/locations/{id}` which honors the same
+        # deny. The quest-detail route was hardened the same way
+        # (docs/PHASE13D_BACKEND_READINESS.md §4.2).
+        raise NotFoundError()
+
     # dungeon_area_id doubles as the area's own core.entities.entity_id
     # (class-table inheritance: core.entities -> world.locations ->
     # world.dungeon_areas share one UUID — see dnd_ai.queries.dungeon.

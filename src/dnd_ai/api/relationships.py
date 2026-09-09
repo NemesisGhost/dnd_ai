@@ -113,6 +113,7 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 
 router = APIRouter(tags=["relationships"])
@@ -493,6 +494,15 @@ def get_organization_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> OrganizationResponse:
+    if not access.has_capability(_RELATIONSHIP_VIEW_CAPABILITY, entity_id=organization_id):
+        # A per-organization `campaign.view` resource-grant deny —
+        # indistinguishable from a nonexistent organization, matching the
+        # quest-detail hardening (docs/PHASE13D_BACKEND_READINESS.md §4.2)
+        # and keeping this route in agreement with the Phase 13D World
+        # Explorer list (`dnd_ai.api.world_explorer`), which excludes a
+        # `campaign.view`-denied `entity_id` in SQL.
+        raise NotFoundError()
+
     include_internal_description = access.has_capability(
         _RELATIONSHIP_MANAGE_CAPABILITY, entity_id=organization_id
     )
