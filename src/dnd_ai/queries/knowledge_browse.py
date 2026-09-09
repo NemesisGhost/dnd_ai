@@ -89,6 +89,29 @@ _STATEMENT_ORDERED_VIEWS = frozenset(
     {"known", "rumors", "party_shared", "character_private", "public"}
 )
 
+# A `canonical_statement` is up to 5000 characters (migration 041's
+# `ck_knowledge_items_statement_length`), and an `interpretation` is
+# unbounded text; carrying a whole statement in the opaque
+# `dnd_ai.api.pagination` cursor would blow past that module's size bound
+# (the review's Medium finding — a valid 2000-char statement produced a
+# `next_cursor` the decoder then rejected). The statement-ordered views
+# therefore sort by, and carry in the cursor, only a bounded lower-cased
+# *prefix* of the viewer-safe statement. `(prefix, record_id)` is still a
+# strict total order — `record_id` is unique per row — so keyset paging
+# over it never skips or repeats a row; rows sharing a 200-char prefix are
+# simply ordered by their stable id. The prefix is computed in SQL
+# (`lower(left(expr, N))`) and echoed back verbatim, so the value compared
+# on the next request is exactly the value the previous page emitted (no
+# Python-vs-Postgres `lower()` drift).
+_STATEMENT_SORT_PREFIX = 200
+
+
+def _sort_key_expr(statement_expr: str) -> str:
+    """The bounded, case-folded ordering key for a statement-ordered view —
+    see `_STATEMENT_SORT_PREFIX`. Used identically in `SELECT`, `ORDER BY`,
+    and the keyset predicate so all three agree."""
+    return f"lower(left({statement_expr}, {_STATEMENT_SORT_PREFIX}))"
+
 
 @dataclass(frozen=True)
 class KnowledgeListItem:
@@ -202,10 +225,18 @@ def _escape_like(term: str) -> str:
 _STATEMENT_CURSOR_PREDICATE = """
     (
       NOT CAST(:has_cursor AS boolean)
-      OR (lower(:__statement_expr__), :__id_expr__)
-         > (lower(CAST(:after_statement AS text)), CAST(:after_record_id AS uuid))
+      OR (:__sort_expr__, :__id_expr__)
+         > (CAST(:after_statement AS text), CAST(:after_record_id AS uuid))
     )
 """
+
+
+def _cursor_predicate(statement_expr: str, id_expr: str) -> str:
+    """The keyset `WHERE` clause for a statement-ordered view, bound to
+    that view's viewer-safe statement expression and unique record id."""
+    return _STATEMENT_CURSOR_PREDICATE.replace(
+        ":__sort_expr__", _sort_key_expr(statement_expr)
+    ).replace(":__id_expr__", id_expr)
 
 
 def _statement_filters() -> str:
@@ -227,6 +258,14 @@ def _row_to_item(r: object, *, scope: str, gm: bool) -> KnowledgeListItem:
     # subscript is always safe.
     row: dict[str, object] = dict(r)  # type: ignore[call-overload]
     statement = str(row["statement"])
+    # Statement-ordered views select the bounded sort key (`_sort_key_expr`)
+    # as `statement_sort`; `recent` orders by time and does not, so fall
+    # back to the same bounded, case-folded prefix rather than the whole
+    # statement (which `recent` never puts in its cursor anyway).
+    raw_sort = row.get("statement_sort")
+    statement_sort = (
+        str(raw_sort) if raw_sort is not None else statement.lower()[:_STATEMENT_SORT_PREFIX]
+    )
     return KnowledgeListItem(
         knowledge_item_id=row["knowledge_item_id"],  # type: ignore[arg-type]
         knowledge_type_code=str(row["knowledge_type_code"]),
@@ -241,7 +280,7 @@ def _row_to_item(r: object, *, scope: str, gm: bool) -> KnowledgeListItem:
         source_event_id=_opt_uuid(row["source_event_id"]),
         source_interaction_id=_opt_uuid(row["source_interaction_id"]),
         subject_entity_id=_opt_uuid(row["subject_entity_id"]),
-        statement_sort=statement.lower(),
+        statement_sort=statement_sort,
         time_sort=_opt_int(row["time_sort"]),
         record_id=row["record_id"],  # type: ignore[arg-type]
     )
@@ -273,11 +312,13 @@ def _list_party(
     else:  # party_shared
         type_clause = ""
     statement_expr = "COALESCE(pk.interpretation, ki.canonical_statement)"
+    sort_key = _sort_key_expr(statement_expr)
     sql = f"""
         SELECT ki.knowledge_item_id,
                ki.knowledge_item_id AS record_id,
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
+               {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
                pk.awareness_level, pk.confidence, pk.willing_to_share,
                NULL::uuid AS discovery_world_time_id,
@@ -295,12 +336,8 @@ def _list_party(
           AND e.world_id = :world_id
           {type_clause}
           {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {
-        _STATEMENT_CURSOR_PREDICATE.replace(":__statement_expr__", statement_expr).replace(
-            ":__id_expr__", "ki.knowledge_item_id"
-        )
-    }
-        ORDER BY lower({statement_expr}), ki.knowledge_item_id
+          AND {_cursor_predicate(statement_expr, "ki.knowledge_item_id")}
+        ORDER BY {sort_key}, ki.knowledge_item_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
@@ -311,11 +348,13 @@ def _list_character_private(
     connection: Connection, params: dict[str, object]
 ) -> tuple[KnowledgeListItem, ...]:
     statement_expr = "COALESCE(ek.interpretation, ki.canonical_statement)"
+    sort_key = _sort_key_expr(statement_expr)
     sql = f"""
         SELECT ki.knowledge_item_id,
                ek.entity_knowledge_id AS record_id,
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
+               {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
                ek.awareness_level, ek.confidence, ek.willing_to_share,
                wt.world_time_id AS discovery_world_time_id,
@@ -333,12 +372,8 @@ def _list_character_private(
           AND ek.knower_entity_id = :knower_id
           AND e.world_id = :world_id
           {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {
-        _STATEMENT_CURSOR_PREDICATE.replace(":__statement_expr__", statement_expr).replace(
-            ":__id_expr__", "ek.entity_knowledge_id"
-        )
-    }
-        ORDER BY lower({statement_expr}), ek.entity_knowledge_id
+          AND {_cursor_predicate(statement_expr, "ek.entity_knowledge_id")}
+        ORDER BY {sort_key}, ek.entity_knowledge_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
@@ -355,11 +390,13 @@ def _list_canonical(
     else:
         type_clause = ""
     statement_expr = "ki.canonical_statement"
+    sort_key = _sort_key_expr(statement_expr)
     sql = f"""
         SELECT ki.knowledge_item_id,
                ki.knowledge_item_id AS record_id,
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
+               {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
                NULL::text AS awareness_level, NULL::smallint AS confidence,
                NULL::boolean AS willing_to_share,
@@ -374,12 +411,8 @@ def _list_canonical(
         WHERE e.world_id = :world_id
           {type_clause}
           {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {
-        _STATEMENT_CURSOR_PREDICATE.replace(":__statement_expr__", statement_expr).replace(
-            ":__id_expr__", "ki.knowledge_item_id"
-        )
-    }
-        ORDER BY lower({statement_expr}), ki.knowledge_item_id
+          AND {_cursor_predicate(statement_expr, "ki.knowledge_item_id")}
+        ORDER BY {sort_key}, ki.knowledge_item_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
@@ -390,11 +423,13 @@ def _list_public(
     connection: Connection, params: dict[str, object]
 ) -> tuple[KnowledgeListItem, ...]:
     statement_expr = "ki.canonical_statement"
+    sort_key = _sort_key_expr(statement_expr)
     sql = f"""
         SELECT ki.knowledge_item_id,
                pub.public_knowledge_id AS record_id,
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
+               {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
                pub.awareness_level, NULL::smallint AS confidence,
                NULL::boolean AS willing_to_share,
@@ -410,12 +445,8 @@ def _list_public(
         WHERE pub.timeline_id = :timeline_id
           AND e.world_id = :world_id
           {_statement_filters().replace(":__statement_expr__", statement_expr)}
-          AND {
-        _STATEMENT_CURSOR_PREDICATE.replace(":__statement_expr__", statement_expr).replace(
-            ":__id_expr__", "pub.public_knowledge_id"
-        )
-    }
-        ORDER BY lower({statement_expr}), pub.public_knowledge_id
+          AND {_cursor_predicate(statement_expr, "pub.public_knowledge_id")}
+        ORDER BY {sort_key}, pub.public_knowledge_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
@@ -427,29 +458,79 @@ def _list_recent(
 ) -> tuple[KnowledgeListItem, ...]:
     """`knowledge.party_discoveries` newest-first by discovery world time.
 
-    Audience: a GM (`gm` True) with no perspective sees every discovery on
-    the timeline; otherwise the authorized party's discoveries
-    (`party_id = :party_id`) and/or the authorized character's own
-    (`knower_entity_id = :knower_id`). `NULL` discovery time sorts last.
+    Audience: a GM (`gm` True) with **no** perspective sees every discovery
+    on the timeline with its canonical statement and ground-truth
+    metadata. Every other caller — a player, or a GM inspecting one
+    perspective — sees only the discoveries their authorized party
+    (`pd.party_id = :party_id`) or authorized character
+    (`pd.knower_entity_id = :knower_id`) made, and the statement is always
+    resolved through *that* party's / character's own recorded belief:
+    `campaign.party_knowledge.interpretation` for a party discovery,
+    `knowledge.entity_knowledge.interpretation` for a character discovery,
+    each falling back to `ki.canonical_statement` only when that belief
+    row carries no interpretation of its own (the identical rule
+    `_list_party` / `_list_character_private` and `get_knowledge_view`
+    already apply). A discovery whose matching belief row does not exist
+    at all is omitted entirely — `recent` never discloses a canonical
+    statement the private views deliberately replace, and never lists an
+    item the matching detail route would 404 on. The `q` substring match
+    runs against that same viewer-safe expression, so a canonical-only
+    search term cannot surface a distorted belief. `NULL` discovery time
+    sorts last; `pd.party_discovery_id` is the stable tie-breaker.
     """
     gm = params["gm"] is True
-    audience_clause = (
-        "TRUE"
-        if gm and params["party_id"] is None and params["knower_id"] is None
-        else "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
-    )
-    statement_expr = (
-        "COALESCE(pk.interpretation, ki.canonical_statement)"
-        if not gm
-        else ("ki.canonical_statement")
-    )
+
+    if gm:
+        # A GM is authorized to the item's own ground truth regardless of
+        # what any party believes (the identical split `get_knowledge_view`
+        # /`_list_canonical` apply); the confidentiality boundary this
+        # function guards is strictly player-facing. With no perspective a
+        # GM sees every discovery on the timeline; with one, only that
+        # party's / character's — but still the canonical statement.
+        no_perspective = params["party_id"] is None and params["knower_id"] is None
+        audience_clause = (
+            "TRUE"
+            if no_perspective
+            else "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
+        )
+        statement_expr = "ki.canonical_statement"
+        belief_required = ""
+        awareness_expr = "COALESCE(pk.awareness_level, ek.awareness_level)"
+        confidence_expr = "COALESCE(pk.confidence, ek.confidence)"
+        share_expr = "COALESCE(pk.willing_to_share, ek.willing_to_share)"
+        scope_expr = "'canonical'"
+    else:
+        audience_clause = "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
+        # The viewer-safe statement is the discovery owner's *own* belief;
+        # canonical text appears only where that belief records no
+        # interpretation of its own.
+        statement_expr = (
+            "CASE WHEN pd.party_id IS NOT NULL "
+            "     THEN COALESCE(pk.interpretation, ki.canonical_statement) "
+            "     ELSE COALESCE(ek.interpretation, ki.canonical_statement) END"
+        )
+        # A discovery with no corresponding authorized belief row is not
+        # shown — keeps `recent` in agreement with the detail route and
+        # avoids a canonical-statement fallback that would broaden access.
+        belief_required = (
+            "AND ((pd.party_id IS NOT NULL AND pk.party_knowledge_id IS NOT NULL) "
+            "     OR (pd.knower_entity_id IS NOT NULL AND ek.entity_knowledge_id IS NOT NULL))"
+        )
+        awareness_expr = "COALESCE(pk.awareness_level, ek.awareness_level)"
+        confidence_expr = "COALESCE(pk.confidence, ek.confidence)"
+        share_expr = "COALESCE(pk.willing_to_share, ek.willing_to_share)"
+        scope_expr = "CASE WHEN pd.party_id IS NOT NULL THEN 'party' ELSE 'character' END"
+
     sql = f"""
         SELECT ki.knowledge_item_id,
                pd.party_discovery_id AS record_id,
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
                ts.code AS truth_status_code, ki.sensitivity,
-               pk.awareness_level, pk.confidence, pk.willing_to_share,
+               {awareness_expr} AS awareness_level,
+               {confidence_expr} AS confidence,
+               {share_expr} AS willing_to_share,
+               {scope_expr} AS scope,
                pd.discovered_at_world_time_id AS discovery_world_time_id,
                pd.discovered_via_event_id AS source_event_id,
                pd.discovered_via_interaction_id AS source_interaction_id,
@@ -465,14 +546,19 @@ def _list_recent(
                ON pk.timeline_id = pd.timeline_id
               AND pk.knowledge_item_id = pd.knowledge_item_id
               AND pk.party_id = :party_id
+        LEFT JOIN knowledge.entity_knowledge ek
+               ON ek.timeline_id = pd.timeline_id
+              AND ek.knowledge_item_id = pd.knowledge_item_id
+              AND ek.knower_entity_id = :knower_id
         WHERE pd.timeline_id = :timeline_id
           AND e.world_id = :world_id
           AND {audience_clause}
+          {belief_required}
           AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
           AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
           AND (
                 CAST(:like_pattern AS text) IS NULL
-                OR {statement_expr} ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+                OR ({statement_expr}) ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
               )
           AND (
             NOT CAST(:has_cursor AS boolean)
@@ -492,4 +578,4 @@ def _list_recent(
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="canonical" if gm else "party", gm=gm) for r in rows)
+    return tuple(_row_to_item(r, scope=str(r["scope"]), gm=gm) for r in rows)

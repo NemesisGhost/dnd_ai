@@ -491,10 +491,14 @@ nothing speculatively"):
 Every rejection path (nonexistent, cross-world, cross-timeline for events,
 denied) returns the identical fixed non-disclosing 404 — a caller can
 never distinguish which applied. List and detail eligibility agree because
-the same SQL predicates are reused; **the pre-existing organization-detail
-and dungeon-area-detail routes were hardened** with the targeted
-`campaign.view` deny check to preserve that agreement (the same fix the
-quest-detail route received — §4.2).
+the same SQL predicates are reused; **the pre-existing organization-detail,
+dungeon-area-detail, and character-detail (+`/inventory`) routes were
+hardened** with the entity-targeted `campaign.view` deny check to preserve
+that agreement (the same fix the quest-detail route received — §4.2). For
+characters this deny is a coarser gate applied *ahead of* the
+`character.discover`/`.view_summary`/`.view_full` tier: it removes the
+record entirely (404), where the tier only downgrades or withholds
+detail; the tier decisions themselves are unchanged.
 
 ### 10.2 Endpoint matrix
 
@@ -510,11 +514,14 @@ quest-detail route received — §4.2).
 | `GET /campaigns/{campaign_id}/knowledge` | Audience-filtered Knowledge-screen list, `?view=` | `dnd_ai.queries.knowledge_browse.list_knowledge` |
 | `GET /campaigns/{campaign_id}/knowledge/{knowledge_item_id}` | Existing single-item read — extended (backward-compatibly) for a character-private lookup and a public-lore fallback | `dnd_ai.queries.knowledge.get_knowledge_view` |
 
-Existing detail routes **reused unchanged** for their categories:
-`GET /campaigns/{id}/characters/{id}` (+`/inventory`),
+Existing detail routes **reused** for their categories:
+`GET /campaigns/{id}/characters/{id}` (+`/inventory`) (deny-hardened),
 `GET /campaigns/{id}/organizations/{id}` (deny-hardened),
 `GET /campaigns/{id}/relationships/{id}`,
-`GET /campaigns/{id}/dungeon-areas/{id}` (deny-hardened).
+`GET /campaigns/{id}/dungeon-areas/{id}` (deny-hardened). "Deny-hardened" =
+gained the entity-targeted `campaign.view` deny check so list and detail
+cannot disagree on which resources an audience may see; no other behavior
+of these routes changed.
 
 All routes: `campaign.view` required; cookie-session or bearer auth
 through the unified boundary; per-request reauthorization; no CSRF header,
@@ -576,19 +583,27 @@ generic entity DTO for detail.
   `party_id`, `q` (over the viewer-safe statement), `type`
   (`knowledge.knowledge_types.code`), `limit`, `cursor`.
 - **Ordering** — deterministic and stable: entity search
-  `(lower(canonical_name), entity_id)`; relationships `(relationship_id)`;
-  statement-ordered knowledge views `(lower(statement),
-  knowledge_item_id)`; `recent` `(world_time.sort_key DESC NULLS LAST,
-  party_discovery_id)`.
+  `(lower(left(canonical_name, 200)), entity_id)`; relationships
+  `(relationship_id)`; statement-ordered knowledge views
+  `(lower(left(statement, 200)), knowledge_item_id)`; `recent`
+  `(world_time.sort_key DESC NULLS LAST, party_discovery_id)`. The 200-char
+  name/statement *prefix* is the actual sort key (computed in SQL, carried
+  verbatim in the cursor): `(prefix, unique_id)` is still a strict total
+  order, so keyset paging over it never skips or repeats a row, and the
+  cursor stays small no matter how long a name (≤500 chars, migration 004)
+  or statement (≤5000 chars, migration 041) is. Records sharing a 200-char
+  prefix are ordered by their stable id.
 - **Cursor** (`dnd_ai.api.pagination`) — an **opaque, strictly-validated**
   base64url(JSON) token: `[version, keyset_name, [sort values]]`. Not
   signed (this app has no signing secret and does not need one): every
   decoded value is bound as a SQL parameter, never interpolated, and the
   keyset predicate only ever *narrows* an already-authorized,
   already-filtered result set. The embedded `keyset_name` binds a cursor
-  to the endpoint family that issued it. A malformed / tampered /
-  wrong-keyset / wrong-arity cursor → fixed **422 `invalid_cursor`**,
-  non-disclosing (never echoes the value).
+  to the endpoint family that issued it. Sort-key values it carries are
+  the bounded prefixes above, so a server-issued `next_cursor` always
+  round-trips within the decoder's size bound. A malformed / tampered /
+  wrong-keyset / wrong-arity / over-long cursor → fixed **422
+  `invalid_cursor`**, non-disclosing (never echoes the value).
 - **No total count** on any browse response (UI_DESIGN.md §9). A page
   reports only whether `next_cursor` is non-null (over-fetch `limit + 1`,
   presence of the extra row is the "has next page" signal).
@@ -606,7 +621,7 @@ generic entity DTO for detail.
 | `rumors` | `campaign.party_knowledge` (authorized party), `knowledge_type` **in** rumor/belief/misconception/theory/prophecy | the party's unsettled beliefs |
 | `party_shared` | `campaign.party_knowledge` (authorized party), every row | the party's collective knowledge (union of the two above) |
 | `character_private` | `knowledge.entity_knowledge` where `knower_entity_id` = the authorized character | that character's individual beliefs |
-| `recent` | `knowledge.party_discoveries` for the authorized party and/or character, newest discovery-world-time first | the audience's discovery stream |
+| `recent` | `knowledge.party_discoveries` for the authorized party and/or character, newest discovery-world-time first; each discovery's statement resolved through *that discovery owner's own* belief | the audience's discovery stream |
 | `public` | `knowledge.public_knowledge` on the timeline | any `campaign.view` caller — **no perspective needed** |
 
 The `known`/`rumors` split is grounded in the seeded
@@ -625,13 +640,27 @@ wall-clock window: newest visible discovery first, ordered by
 LAST**, with the immutable `party_discovery_id` as the tie-breaker.
 Discoveries with no recorded world time sort after every dated one.
 
+For a **non-GM** caller (and a GM inspecting a specific perspective) each
+discovery's `statement` is resolved through the discovery owner's *own*
+recorded belief — `campaign.party_knowledge.interpretation` for a party
+discovery, `knowledge.entity_knowledge.interpretation` for a character
+discovery — each falling back to the canonical statement only when that
+belief row records no interpretation of its own (the identical rule
+`character_private`/`party_shared` and the detail route apply). The `q`
+substring match runs against that same viewer-safe expression, so a
+canonical-only search term cannot surface a distorted belief. A discovery
+whose matching belief row does not exist at all is **omitted** — `recent`
+never falls back to a bare canonical statement and never lists an item the
+matching detail route would 404 on. `scope` is `party` or `character`
+accordingly.
+
 **GM (baseline `canon.edit`) with no perspective** sees canonical data:
 `known`/`rumors` → `knowledge.knowledge_items` in the world (with
-`truth_status`/`sensitivity`); `recent` → every discovery on the timeline;
-`public` → the public-lore rows. `party_shared`/`character_private` still
-require the GM to supply an authorized party/character perspective and
-return an empty page without one. A non-GM never receives
-`truth_status`/`sensitivity`.
+`truth_status`/`sensitivity`); `recent` → every discovery on the timeline
+with its canonical statement (`scope` `canonical`); `public` → the
+public-lore rows. `party_shared`/`character_private` still require the GM
+to supply an authorized party/character perspective and return an empty
+page without one. A non-GM never receives `truth_status`/`sensitivity`.
 
 ### 10.6 Perspective resolution (Phase 13D §4)
 
@@ -660,13 +689,19 @@ return an empty page without one. A non-GM never receives
   (`knower_entity_id`); any caller gets the public-lore fallback
   (`allow_public`) for an item published in `knowledge.public_knowledge` —
   so `character_private` and `public` lists agree with detail.
+- `GET /campaigns/{id}/characters/{id}` and `.../inventory` now reject an
+  entity-targeted `campaign.view` deny for that `character_id` with the
+  same fixed non-disclosing 404 the World Explorer search applies (§10.1),
+  so a character hidden from `/world/search?category=character` can no
+  longer be reopened by its retained URL. The per-character
+  `character.view_*` tier is a separate, finer decision and is unchanged.
 
 ### 10.7 World Explorer category coverage
 
 | UI_DESIGN.md §5.4 category | Covered by |
 |---|---|
 | locations and dungeons | `/world/search?category=location` (all `world.locations` kinds incl. dungeon/dungeon_area) + `/world/locations/{id}`; dungeon-area *structural children* stay on `/dungeon-areas/{id}` |
-| NPCs and player characters | `/world/search?category=character` (bare `character`, `npc`, `player_character`) + existing `/characters/{id}` |
+| NPCs and player characters | `/world/search?category=character` (bare `character`, `npc`, `player_character`) + existing `/characters/{id}` (+`/inventory`), now honoring the entity-targeted `campaign.view` deny so list and detail agree |
 | organizations, factions, governments, religions, cultures | `category=organization` (business/government/religious_organization/military_unit/political_faction) + `category=religion`; existing `/organizations/{id}` + `/world/religions/{id}`. ("cultures" — `world.cultures` was never built; no schema exists, so no endpoint — see §10.8.) |
 | items and artifacts | `category=item` + `/world/items/{id}` |
 | historical events | `category=event` + `/world/events/{id}` |
@@ -698,10 +733,16 @@ return an empty page without one. A non-GM never receives
 4. **Item detail carries state only, not ownership/inventory** (who
    currently holds it). That needs its own audience design (§9.3) and no
    §5.4 bullet requires it for the MVP.
-5. **`recent` for a character-only (no party) perspective** shows the
-   canonical statement rather than the character's own interpretation
-   (which lives in `entity_knowledge`, not `party_knowledge`). Minor;
-   `character_private` shows the interpretation.
+5. **`recent` requires a recorded belief row.** A discovery is listed only
+   when the discovery owner (party or character) has a matching
+   `campaign.party_knowledge` / `knowledge.entity_knowledge` row; the
+   statement shown is that belief's interpretation (or the canonical text
+   it points at when the belief records no distortion). A discovery with
+   no belief row is omitted rather than shown with a bare canonical
+   fallback — this keeps `recent` in agreement with the detail route but
+   means a discovery event that was never followed by a belief update does
+   not appear in the stream. (Earlier revisions of this workstream leaked
+   the canonical statement here for a character-only perspective — fixed.)
 6. **`/world/search` `q`** matches `canonical_name` + `summary` only, not
    `core.entity_names` aliases (secret/mistaken alias types would be a
    disclosure risk).
@@ -729,8 +770,10 @@ keyset index is a measured-first follow-up (DATABASE_CONVENTIONS.md
 - `src/dnd_ai/queries/knowledge.py` (`knower_entity_id`/`allow_public`)
 - `src/dnd_ai/queries/bootstrap.py`, `src/dnd_ai/api/local_auth.py`
   (`world_id`/`world_name`, `authorized_parties`)
-- `src/dnd_ai/api/relationships.py`, `src/dnd_ai/api/dungeon.py`
-  (targeted `campaign.view` deny check on the existing detail routes)
+- `src/dnd_ai/api/relationships.py`, `src/dnd_ai/api/dungeon.py`,
+  `src/dnd_ai/api/characters.py` (entity-targeted `campaign.view` deny
+  check on the existing detail routes — `characters.py` also covers
+  `.../inventory`)
 - `src/dnd_ai/api/app.py` (register `world_explorer` router)
 - `tests/database/test_api_world_explorer.py`,
   `tests/database/test_api_knowledge_browse.py` (new),

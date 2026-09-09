@@ -742,6 +742,93 @@ def test_existing_organization_detail_route_now_honors_a_targeted_deny(
         assert gm.get(f"/campaigns/{f.campaign_id}/organizations/{f.org_id}").status_code == 200
 
 
+def test_existing_character_detail_route_now_honors_an_entity_targeted_deny(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Regression for the review's High finding #2: an entity-targeted
+    `campaign.view` deny removed a character from `/world/search` but
+    `/characters/{id}` still returned 200. Summary-tier player."""
+    with client_factory(f.player_user_id) as player:
+        # Baseline: the summary-tier player can open the character.
+        assert player.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}").status_code == 200
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.pc_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as player:
+        search_ids = {
+            item["entity_id"]
+            for item in player.get(
+                _search(f), params={"category": "character", "limit": 100}
+            ).json()["items"]
+        }
+        detail = player.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}")
+    assert str(f.pc_id) not in search_ids
+    assert detail.status_code == 404
+
+
+def test_entity_targeted_deny_also_hides_character_full_tier_and_inventory(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The same deny applied to a GM (full tier + `canon.edit`) hides the
+    character detail *and* its inventory subresource; an undenied
+    character is unaffected."""
+    with client_factory(f.gm_user_id) as gm:
+        assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}").status_code == 200
+        assert (
+            gm.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}/inventory").status_code == 200
+        )
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.pc_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.gm_user_id) as gm:
+        assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}").status_code == 404
+        assert (
+            gm.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}/inventory").status_code == 404
+        )
+        # A different character with no deny is still fully readable.
+        assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.npc_id}").status_code == 200
+
+
+def test_character_detail_deny_is_lifted_when_the_grant_is_revoked(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.pc_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as player:
+        assert player.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}").status_code == 404
+    with postgres_engine.begin() as revoke:
+        revoke.execute(
+            text(
+                "UPDATE security.resource_grants SET revoked_at = now() "
+                "WHERE campaign_id = :c AND entity_id = :e"
+            ),
+            {"c": f.campaign_id, "e": f.pc_id},
+        )
+    with client_factory(f.player_user_id) as player:
+        restored = player.get(f"/campaigns/{f.campaign_id}/characters/{f.pc_id}")
+    assert restored.status_code == 200
+    assert restored.json()["name"] == "Aldric Vane"
+
+
 def test_every_entity_in_search_has_a_fetchable_detail_for_that_caller(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:

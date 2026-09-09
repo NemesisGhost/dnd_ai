@@ -578,3 +578,157 @@ def test_every_listed_item_is_fetchable_via_detail_under_the_same_perspective(
                     params=params,
                 )
                 assert detail.status_code == 200, (view, item, detail.text)
+
+
+# ---------------------------------------------------------------------------
+# `recent` belief-vs-canonical confidentiality (review High finding #1)
+# ---------------------------------------------------------------------------
+
+
+def test_recent_with_a_character_perspective_shows_the_private_interpretation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A player asking for `view=recent&character_id=...` (no party) must
+    see each discovery's statement resolved through that character's own
+    `entity_knowledge` belief — never the canonical statement the
+    character-private views deliberately replace."""
+    with postgres_engine.begin() as connection:
+        make_party_discovery(
+            connection,
+            f.timeline_id,
+            f.private_id,
+            knower_entity_id=f.character_id,
+            discovered_at_world_time_id=f.wt_late,
+        )
+    params = {"character_id": str(f.character_id)}
+    with client_factory(f.player_user_id) as client:
+        recent = client.get(_url(f), params={**params, "view": "recent", "limit": 100})
+        detail = client.get(f"/campaigns/{f.campaign_id}/knowledge/{f.private_id}", params=params)
+    assert recent.status_code == detail.status_code == 200
+    item = next(i for i in recent.json()["items"] if i["knowledge_item_id"] == str(f.private_id))
+    assert item["statement"] == "I am certain it was the seneschal."
+    assert item["statement"] == detail.json()["statement"]
+    assert item["truth_status_code"] is None
+    assert item["sensitivity"] is None
+    assert item["scope"] == "character"
+
+
+def test_recent_canonical_only_search_term_does_not_surface_a_distorted_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        make_party_discovery(
+            connection,
+            f.timeline_id,
+            f.private_id,
+            knower_entity_id=f.character_id,
+            discovered_at_world_time_id=f.wt_late,
+        )
+    params = {"character_id": str(f.character_id), "view": "recent"}
+    with client_factory(f.player_user_id) as client:
+        # "bribe" appears only in the canonical statement.
+        canonical_only = client.get(_url(f), params={**params, "q": "bribe"}).json()
+        # "certain" appears only in the character's interpretation.
+        belief_term = client.get(_url(f), params={**params, "q": "certain"}).json()
+    assert str(f.private_id) not in {i["knowledge_item_id"] for i in canonical_only["items"]}
+    assert str(f.private_id) in {i["knowledge_item_id"] for i in belief_term["items"]}
+
+
+def test_recent_mixed_party_and_character_perspective_each_resolve_their_own_belief(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        make_party_discovery(
+            connection,
+            f.timeline_id,
+            f.private_id,
+            knower_entity_id=f.character_id,
+            discovered_at_world_time_id=f.wt_late,
+        )
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={**_perspective(f), "view": "recent", "limit": 100}
+        ).json()
+    by_id = {i["knowledge_item_id"]: i for i in body["items"]}
+    # party discovery -> party interpretation
+    assert by_id[str(f.rumor_id)]["statement"] == "Some say the mayor was replaced last winter."
+    assert by_id[str(f.rumor_id)]["scope"] == "party"
+    # character discovery -> that character's own interpretation
+    assert by_id[str(f.private_id)]["statement"] == "I am certain it was the seneschal."
+    assert by_id[str(f.private_id)]["scope"] == "character"
+
+
+def test_recent_omits_a_discovery_with_no_matching_belief_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A discovery whose party has no belief record is not shown — `recent`
+    stays in agreement with the detail route (which 404s) rather than
+    falling back to the canonical statement."""
+    with postgres_engine.begin() as connection:
+        orphan_id = make_knowledge_item(
+            connection,
+            f.world_id,
+            knowledge_type_code="secret",
+            statement="The vault code is nine-one-seven.",
+        )
+        make_party_discovery(
+            connection,
+            f.timeline_id,
+            orphan_id,
+            party_id=f.party_id,
+            discovered_at_world_time_id=f.wt_late,
+        )
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={**_perspective(f), "view": "recent", "limit": 100}
+        ).json()
+        detail = client.get(
+            f"/campaigns/{f.campaign_id}/knowledge/{orphan_id}", params=_perspective(f)
+        )
+    assert str(orphan_id) not in {i["knowledge_item_id"] for i in body["items"]}
+    assert detail.status_code == 404
+
+
+def test_gm_recent_is_canonical_with_ground_truth(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(_url(f), params={"view": "recent", "limit": 100}).json()
+    by_id = {i["knowledge_item_id"]: i for i in body["items"]}
+    assert by_id[str(f.rumor_id)]["statement"] == "The mayor is secretly a doppelganger."
+    assert by_id[str(f.rumor_id)]["truth_status_code"] == "false"
+    assert by_id[str(f.rumor_id)]["scope"] == "canonical"
+
+
+# ---------------------------------------------------------------------------
+# Long-statement cursor (review Medium finding)
+# ---------------------------------------------------------------------------
+
+
+def test_a_generated_cursor_for_a_long_statement_is_accepted_on_the_next_page(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Regression: a valid long canonical statement (well within the
+    5000-char column limit) must not produce a `next_cursor` the decoder
+    then rejects."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET canonical_statement = :s "
+                "WHERE knowledge_item_id = :id"
+            ),
+            {"s": "A" * 4000, "id": f.fact_id},
+        )
+    params: dict[str, object] = {"view": "party_shared", **_perspective(f), "limit": 1}
+    with client_factory(f.player_user_id) as client:
+        first = client.get(_url(f), params=params)
+        assert first.status_code == 200
+        cursor = first.json()["next_cursor"]
+        assert cursor
+        second = client.get(_url(f), params={**params, "cursor": cursor})
+    assert second.status_code == 200
+    # The two pages together cover both party-known items without overlap.
+    first_ids = [i["knowledge_item_id"] for i in first.json()["items"]]
+    second_ids = [i["knowledge_item_id"] for i in second.json()["items"]]
+    assert set(first_ids).isdisjoint(second_ids)
+    assert {str(f.fact_id), str(f.rumor_id)} <= set(first_ids) | set(second_ids)

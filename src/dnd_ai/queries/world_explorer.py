@@ -190,18 +190,38 @@ class CharacterVisibility:
 # ---------------------------------------------------------------------------
 
 
+# `core.entities.canonical_name` is up to 500 characters (migration 004's
+# `ck_entities_canonical_name_length`); a name of non-ASCII characters
+# escapes to ~6 bytes each in the opaque `dnd_ai.api.pagination` cursor,
+# so carrying a whole name could push the encoded cursor past that
+# module's size bound. Search therefore sorts by, and carries in the
+# cursor, only a bounded lower-cased prefix of the name. `(prefix,
+# entity_id)` is still a strict total order — `entity_id` is unique — so
+# keyset paging over it never skips or repeats a row; the SQL computes the
+# prefix (`lower(left(canonical_name, N))`) and it is echoed back verbatim
+# so the value compared on the next request is exactly what the previous
+# page emitted. (The same treatment `dnd_ai.queries.knowledge_browse`
+# applies to its statement sort key.)
+_NAME_SORT_PREFIX = 200
+
+
 @dataclass(frozen=True)
 class WorldEntityCard:
     """One compact, uniform search/browse result — enough to render a card
     and link to the typed detail route, nothing sensitive. `name`/`summary`
     are `core.entities` fields a `campaign.view` caller is already entitled
-    to for any entity that survived the visibility filter."""
+    to for any entity that survived the visibility filter.
+
+    `name_sort` is the bounded, case-folded ordering key the SQL produced
+    for this row — the value the pagination cursor carries, never
+    recomputed in Python (see `_NAME_SORT_PREFIX`)."""
 
     entity_id: uuid.UUID
     category: str
     entity_type_code: str
     name: str
     summary: str | None
+    name_sort: str
 
 
 def _escape_like(term: str) -> str:
@@ -225,9 +245,11 @@ def search_world_entities(
     after_entity_id: uuid.UUID | None,
 ) -> tuple[WorldEntityCard, ...]:
     """Up to `limit + 1` visible world entities of the requested categories,
-    ordered `(lower(canonical_name), entity_id)`. The caller passes
-    `limit + 1` and uses the presence of the extra row as the "has next
-    page" signal (`dnd_ai.api.pagination.build_page`).
+    ordered `(lower(left(canonical_name, N)), entity_id)` — a bounded name
+    prefix (`_NAME_SORT_PREFIX`) plus the unique entity id, a strict total
+    order that keeps the pagination cursor small regardless of name length.
+    The caller passes `limit + 1` and uses the presence of the extra row as
+    the "has next page" signal (`dnd_ai.api.pagination.build_page`).
 
     `after_name`/`after_entity_id` are the keyset from the previous page's
     last row (both `None` on the first page). `query_text`, when set, is a
@@ -256,8 +278,9 @@ def search_world_entities(
     }
 
     rows = connection.execute(
-        text("""
-            SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code
+        text(f"""
+            SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code,
+                   lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort
             FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
             LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
@@ -296,10 +319,10 @@ def search_world_entities(
               )
               AND (
                     NOT CAST(:has_cursor AS boolean)
-                    OR (lower(e.canonical_name), e.entity_id)
-                       > (lower(CAST(:after_name AS text)), CAST(:after_entity_id AS uuid))
+                    OR (lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id)
+                       > (CAST(:after_name AS text), CAST(:after_entity_id AS uuid))
                   )
-            ORDER BY lower(e.canonical_name), e.entity_id
+            ORDER BY lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id
             LIMIT :limit_plus_one
         """),
         params,
@@ -312,6 +335,7 @@ def search_world_entities(
             entity_type_code=row["entity_type_code"],
             name=row["canonical_name"],
             summary=row["summary"],
+            name_sort=row["name_sort"],
         )
         for row in rows
     )

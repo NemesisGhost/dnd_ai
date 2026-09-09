@@ -276,7 +276,7 @@ def search_world_entities_endpoint(
         cards,
         limit=limit,
         keyset=ENTITY_SEARCH_KEYSET,
-        cursor_key=lambda card: [card.name.lower(), card.entity_id],
+        cursor_key=lambda card: [card.name_sort, card.entity_id],
     )
     return WorldEntitySearchResponse(
         items=[
