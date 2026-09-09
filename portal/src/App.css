@@ -3,6 +3,18 @@
   min-height: 100vh;
 }
 
+/* When a campaign route mounts the navigation rail, lay the shell out as
+   a sidebar column beside the content; the header and footer still span
+   the full width. Routes without the rail keep the single column. */
+.app-shell:has(.app-navigation) {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.app-shell:has(.app-navigation) > .app-header,
+.app-shell:has(.app-navigation) > .app-footer {
+  grid-column: 1 / -1;
+}
+
 .app-header {
   padding: 1rem 1.5rem;
   color: #ffffff;
@@ -111,43 +123,91 @@
   border-radius: 0.375rem;
 }
 
+/* Vertical navigation rail. Expanded shows icon + label side by side at
+   ~12rem; collapsed narrows to an icon-only rail at ~3.5rem where the
+   labels are clipped for assistive tech rather than removed. Collapsing
+   is driven solely by the toggle button — there is no hover expansion. */
+
 .app-navigation {
+  display: flex;
+  flex-direction: column;
+  width: 12rem;
   color: #ffffff;
   background-color: #34495e;
-  border-bottom: 1px solid #22313f;
+  border-right: 1px solid #22313f;
+}
+
+.app-navigation--collapsed {
+  width: 3.5rem;
 }
 
 .app-navigation__list {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1;
+  flex-direction: column;
   gap: 0.25rem;
-  width: 100%;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 0.5rem 1.5rem;
+  margin: 0;
+  padding: 0.5rem;
   list-style: none;
 }
 
-.app-navigation__link {
-  display: block;
-  padding: 0.625rem 0.75rem;
-  color: #e8eef3;
-  border-radius: 0.25rem;
-  text-decoration: none;
+/* Push the collapse/expand control to the bottom of the rail. */
+.app-navigation__toggle-item {
+  margin-top: auto;
 }
 
-.app-navigation__link:hover {
+.app-navigation__link,
+.app-navigation__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  color: #e8eef3;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.app-navigation__link:hover,
+.app-navigation__toggle:hover {
   color: #ffffff;
   background-color: #435f78;
 }
 
+.app-navigation__link:focus-visible,
+.app-navigation__toggle:focus-visible {
+  outline: 2px solid #7ab3e0;
+  outline-offset: 2px;
+}
+
+.app-navigation__icon {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* aria-current on the active NavLink also carries the accent bar so the
+   current route stays identifiable in the collapsed icon-only rail. */
 .app-navigation__link--active {
   color: #ffffff;
   background-color: #315f8c;
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 #b7791f;
 }
 
+/* Disabled "Ask": dashed border and reduced opacity so the unavailable
+   state reads without depending on the muted colour alone. */
 .app-navigation__link--disabled {
   color: #aeb8c2;
+  border-color: #6b7a8a;
+  border-style: dashed;
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
@@ -156,11 +216,24 @@
   background-color: transparent;
 }
 
-@media (max-width: 40rem) {
-  .app-navigation__list {
-    padding-right: 1rem;
-    padding-left: 1rem;
-  }
+/* Collapsed rail: centre the icons and clip the labels using the same
+   screen-reader-only pattern used elsewhere in this stylesheet. */
+.app-navigation--collapsed .app-navigation__link,
+.app-navigation--collapsed .app-navigation__toggle {
+  gap: 0;
+  justify-content: center;
+}
+
+.app-navigation--collapsed .app-navigation__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .hit-points-meter {
