@@ -32,19 +32,34 @@ where the caller is authorized to see them, and the portal's "Sources" tab
 is a client-side presentation over any view (most naturally `recent`),
 exactly as docs/PHASE13D_BACKEND_READINESS.md §4 anticipates.
 
-## GM vs perspective
+## Item visibility vs. ground-truth-field visibility (two decisions)
 
-A caller holding baseline `canon.edit` (a GM) with **no** perspective sees
-*canonical* data — for `known`/`rumors` the world's own
-`knowledge.knowledge_items` (with `truth_status`/`sensitivity`), for
-`recent` every discovery on the timeline, for `public` the public-lore
-rows — honoring any `knowledge_item_id`-targeted `canon.edit` deny.
-`party_shared`/`character_private` still require the GM to supply an
-authorized party/character perspective (a GM inspecting one party's or
-character's beliefs), and return an empty page without one. A non-GM
-caller always sees only their authorized party's / character's own belief
-state, never the ground-truth `truth_status`/`sensitivity` metadata — the
-identical split `get_knowledge_view` already applies.
+These are resolved independently (the Phase 13D Issue-4 correction):
+
+- **Whether the caller may discover/list the item at all** is `campaign.
+  view`. A `knowledge_item_id`-targeted `campaign.view` deny removes the
+  item from every view (`denied_item_ids`) — and from the detail route,
+  which 404s identically.
+- **Whether the caller may see the item's *canonical / GM-only* fields**
+  (`canonical_statement` where a view projects it, `truth_status`,
+  `sensitivity`) is `canon.edit`, resolved **per item** by
+  `_GROUND_TRUTH_EXPR`: baseline `canon.edit` OR a targeted `canon.edit`
+  allow for that exact item, and never a targeted `canon.edit` deny. A
+  `canon.edit` deny **only** nulls that item's ground-truth fields and,
+  where a view would otherwise show the canonical statement, drops it back
+  to the belief projection — it never removes an otherwise-visible item.
+  A targeted `canon.edit` allow reveals only its own item.
+
+So a baseline `canon.edit` caller with **no** perspective sees *canonical*
+data for `known`/`rumors`/`recent`/`public` (minus any per-item `canon.
+edit` deny); a non-GM with a targeted `canon.edit` allow sees canonical
+data for exactly the allowed items; everyone else sees only their
+authorized party's / character's own belief. `party_shared`/
+`character_private` still require an authorized party/character perspective
+and return an empty page without one. The `truth_status`/`sensitivity`
+metadata is populated per row exactly when that per-item `canon.edit`
+decision is true — the identical split `get_knowledge_view` applies for the
+detail route.
 
 ## Ordering
 
@@ -113,6 +128,26 @@ def _sort_key_expr(statement_expr: str) -> str:
     return f"lower(left({statement_expr}, {_STATEMENT_SORT_PREFIX}))"
 
 
+# Whether *this caller* may see the item's canonical / GM-only fields — its
+# `canonical_statement` where a view projects it, `truth_status`, and
+# `sensitivity`. Baseline `canon.edit` (`:gm`) OR a targeted `canon.edit`
+# allow for this exact item, and never a targeted `canon.edit` deny: the
+# same deny-overrides-allow-overrides-baseline precedence
+# `dnd_ai.domain.access.AccessContext.has_capability` resolves for one item.
+#
+# This is deliberately *separate* from item visibility. Whether the caller
+# may discover/list the item at all is `campaign.view` (a targeted deny
+# there removes it, applied via `:denied`). A targeted `canon.edit` deny
+# only strips these ground-truth fields — it never removes an
+# otherwise-visible item, so a player whose party has a belief about an
+# item still sees that belief even when a `canon.edit` deny targets the
+# item.
+_GROUND_TRUTH_EXPR = (
+    "((CAST(:gm AS boolean) OR ki.knowledge_item_id = ANY(CAST(:gt_allowed AS uuid[]))) "
+    "AND NOT (ki.knowledge_item_id = ANY(CAST(:gt_denied AS uuid[]))))"
+)
+
+
 @dataclass(frozen=True)
 class KnowledgeListItem:
     knowledge_item_id: uuid.UUID
@@ -122,9 +157,14 @@ class KnowledgeListItem:
     `interpretation` when one exists, else the canonical statement; the
     canonical statement for a GM canonical view."""
     truth_status_code: str | None
-    """GM-only ground truth — `None` for a non-GM caller."""
+    """The item's ground-truth status — populated only when the caller may
+    see canonical/GM-only fields for *this item* (baseline `canon.edit`, or
+    a targeted `canon.edit` allow, and no targeted `canon.edit` deny);
+    `None` otherwise. A `canon.edit` deny nulls this without hiding the
+    item."""
     sensitivity: str | None
-    """GM-only — `None` for a non-GM caller."""
+    """The item's ground-truth sensitivity — same gating as
+    `truth_status_code`; `None` when the caller may not see it."""
     awareness_level: str | None
     confidence: int | None
     willing_to_share: bool | None
@@ -135,10 +175,14 @@ class KnowledgeListItem:
     source_event_id: uuid.UUID | None
     source_interaction_id: uuid.UUID | None
     subject_entity_id: uuid.UUID | None
-    """The entity this knowledge is about, when it has one and the caller
-    can see the knowledge at all — the related-resource link for the
-    Knowledge screen. Independently re-filtered by the caller before it is
-    followed."""
+    """The entity this knowledge is about (its raw `knowledge_items.
+    subject_entity_id`), or `None`. The API layer additionally **redacts**
+    this to `None` unless the caller can independently discover that entity
+    (Issue 1 — `dnd_ai.api.knowledge._resolve_related_id_redaction`); the
+    same applies to `source_event_id`/`source_interaction_id`. This module
+    itself only scopes by timeline/world/party — the cross-resource
+    discoverability check belongs at the API boundary that has the caller's
+    full `AccessContext`."""
     # --- cursor keying (not part of the public response) --------------
     statement_sort: str
     time_sort: int | None
@@ -157,6 +201,8 @@ def list_knowledge(
     query_text: str | None,
     knowledge_type_code: str | None,
     denied_item_ids: frozenset[uuid.UUID],
+    ground_truth_allowed_item_ids: frozenset[uuid.UUID] = frozenset(),
+    ground_truth_denied_item_ids: frozenset[uuid.UUID] = frozenset(),
     limit: int,
     after_statement: str | None,
     after_time_sort: int | None,
@@ -164,7 +210,18 @@ def list_knowledge(
 ) -> tuple[KnowledgeListItem, ...]:
     """Up to `limit + 1` visible knowledge records for `view`. Returns an
     empty tuple (never an error) when the view needs a perspective the
-    caller does not have — an empty page is not an existence hint."""
+    caller does not have — an empty page is not an existence hint.
+
+    Item *visibility* and *ground-truth-field* visibility are two
+    independent decisions (Issue 4 of the Phase 13D corrections). `denied_
+    item_ids` are the items a targeted `campaign.view` deny removes
+    entirely. `include_ground_truth` is the caller's *baseline* `canon.edit`
+    standing; `ground_truth_allowed_item_ids` / `ground_truth_denied_item_
+    ids` are the per-item `canon.edit` allow / deny targets layered on top
+    (`_GROUND_TRUTH_EXPR` composes them the same way `has_capability` does).
+    A `canon.edit` deny never removes an item — it only nulls that item's
+    `truth_status`/`sensitivity` and, where a view would otherwise project
+    the canonical statement, drops it back to the belief projection."""
     if view not in KNOWLEDGE_VIEWS:
         raise ValueError(f"unknown knowledge view {view!r}")
 
@@ -180,6 +237,8 @@ def list_knowledge(
         "denied": list(denied_item_ids),
         "limit_plus_one": limit + 1,
         "gm": include_ground_truth,
+        "gt_allowed": list(ground_truth_allowed_item_ids),
+        "gt_denied": list(ground_truth_denied_item_ids),
     }
 
     if view == "recent":
@@ -206,10 +265,16 @@ def list_knowledge(
             return ()
         return _list_character_private(connection, common)
     # known / rumors / party_shared
-    if include_ground_truth and authorized_party_id is None:
-        return _list_canonical(connection, common, view=view)
     if authorized_party_id is None:
-        return ()
+        # The canonical (ground-truth) projection — reachable for a baseline
+        # GM, or for a non-GM who holds a targeted `canon.edit` allow for at
+        # least one item (`_list_canonical` itself filters to exactly the
+        # items this caller may see ground truth for, so a targeted deny is
+        # honored and a targeted allow reveals only its own item — never
+        # campaign-wide authority). A caller with neither gets an empty page.
+        if not include_ground_truth and not ground_truth_allowed_item_ids:
+            return ()
+        return _list_canonical(connection, common, view=view)
     return _list_party(connection, common, view=view)
 
 
@@ -252,7 +317,7 @@ def _statement_filters() -> str:
     """
 
 
-def _row_to_item(r: object, *, scope: str, gm: bool) -> KnowledgeListItem:
+def _row_to_item(r: object, *, scope: str) -> KnowledgeListItem:
     # `r` is a SQLAlchemy RowMapping; every _list_* query selects the full
     # column set (padding unused ones with typed NULLs), so a plain
     # subscript is always safe.
@@ -266,12 +331,17 @@ def _row_to_item(r: object, *, scope: str, gm: bool) -> KnowledgeListItem:
     statement_sort = (
         str(raw_sort) if raw_sort is not None else statement.lower()[:_STATEMENT_SORT_PREFIX]
     )
+    # `caller_sees_ground_truth` (`_GROUND_TRUTH_EXPR`) is selected by every
+    # `_list_*` query — a per-item decision, not one global `gm` flag, so a
+    # targeted `canon.edit` deny nulls exactly this item's ground-truth
+    # fields while leaving the rest of the page (and the item itself) alone.
+    sees_ground_truth = bool(row["caller_sees_ground_truth"])
     return KnowledgeListItem(
         knowledge_item_id=row["knowledge_item_id"],  # type: ignore[arg-type]
         knowledge_type_code=str(row["knowledge_type_code"]),
         statement=statement,
-        truth_status_code=(str(row["truth_status_code"]) if gm else None),
-        sensitivity=(str(row["sensitivity"]) if gm else None),
+        truth_status_code=(str(row["truth_status_code"]) if sees_ground_truth else None),
+        sensitivity=(str(row["sensitivity"]) if sees_ground_truth else None),
         awareness_level=_opt_str(row["awareness_level"]),
         confidence=_opt_int(row["confidence"]),
         willing_to_share=_opt_bool(row["willing_to_share"]),
@@ -320,6 +390,7 @@ def _list_party(
                {statement_expr} AS statement,
                {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
+               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
                pk.awareness_level, pk.confidence, pk.willing_to_share,
                NULL::uuid AS discovery_world_time_id,
                pk.last_event_id AS source_event_id,
@@ -341,7 +412,7 @@ def _list_party(
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="party", gm=False) for r in rows)
+    return tuple(_row_to_item(r, scope="party") for r in rows)
 
 
 def _list_character_private(
@@ -356,6 +427,7 @@ def _list_character_private(
                {statement_expr} AS statement,
                {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
+               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
                ek.awareness_level, ek.confidence, ek.willing_to_share,
                wt.world_time_id AS discovery_world_time_id,
                ek.learned_via_event_id AS source_event_id,
@@ -377,7 +449,7 @@ def _list_character_private(
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="character", gm=False) for r in rows)
+    return tuple(_row_to_item(r, scope="character") for r in rows)
 
 
 def _list_canonical(
@@ -398,6 +470,7 @@ def _list_canonical(
                {statement_expr} AS statement,
                {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
+               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
                NULL::text AS awareness_level, NULL::smallint AS confidence,
                NULL::boolean AS willing_to_share,
                NULL::uuid AS discovery_world_time_id,
@@ -410,13 +483,19 @@ def _list_canonical(
         JOIN knowledge.truth_statuses ts ON ts.truth_status_id = ki.truth_status_id
         WHERE e.world_id = :world_id
           {type_clause}
+          -- The canonical view returns *only* items this caller may see
+          -- ground truth for: a targeted `canon.edit` deny drops the item
+          -- from here (it may still surface through a belief view), and a
+          -- non-GM's targeted `canon.edit` allow reveals exactly its own
+          -- item and no other.
+          AND {_GROUND_TRUTH_EXPR}
           {_statement_filters().replace(":__statement_expr__", statement_expr)}
           AND {_cursor_predicate(statement_expr, "ki.knowledge_item_id")}
         ORDER BY {sort_key}, ki.knowledge_item_id
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="canonical", gm=True) for r in rows)
+    return tuple(_row_to_item(r, scope="canonical") for r in rows)
 
 
 def _list_public(
@@ -431,6 +510,7 @@ def _list_public(
                {statement_expr} AS statement,
                {sort_key} AS statement_sort,
                ts.code AS truth_status_code, ki.sensitivity,
+               {_GROUND_TRUTH_EXPR} AS caller_sees_ground_truth,
                pub.awareness_level, NULL::smallint AS confidence,
                NULL::boolean AS willing_to_share,
                pub.known_since_world_time_id AS discovery_world_time_id,
@@ -450,7 +530,7 @@ def _list_public(
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope="public", gm=params["gm"] is True) for r in rows)
+    return tuple(_row_to_item(r, scope="public") for r in rows)
 
 
 def _owned_belief(party_col: str, character_col: str, *, canonical: bool = False) -> str:
@@ -472,78 +552,69 @@ def _list_recent(
 ) -> tuple[KnowledgeListItem, ...]:
     """`knowledge.party_discoveries` newest-first by discovery world time.
 
-    A **GM** (`gm` True) sees the canonical statement (`scope` `canonical`)
-    with no belief metadata — identical to `_list_canonical`;
-    `truth_status`/`sensitivity` are surfaced by `_row_to_item`. With no
-    perspective every discovery on the timeline is in scope; with one,
-    only that party's / character's.
+    **Audience** (which discoveries are in scope): a caller with baseline
+    `canon.edit` and *no* perspective sees every discovery on the timeline;
+    everyone else — including a GM who selected a perspective, and a non-GM
+    with a targeted `canon.edit` allow — sees only the discoveries their
+    authorized party (`pd.party_id = :party_id`) or character
+    (`pd.knower_entity_id = :knower_id`) made. A targeted `canon.edit`
+    allow grants ground truth *for an item*, never a wider view of who
+    discovered what.
 
-    **Every other caller** sees only the discoveries their authorized
-    party (`pd.party_id = :party_id`) or authorized character
-    (`pd.knower_entity_id = :knower_id`) made, and *every* viewer-facing
-    column — `statement`, `scope`, `awareness_level`, `confidence`,
-    `willing_to_share` — is resolved through the **discovery owner's own**
-    belief (`_owned_belief`): `campaign.party_knowledge` for a party
-    discovery, `knowledge.entity_knowledge` for a character discovery.
-    The statement falls back to `ki.canonical_statement` only when that
-    belief carries no interpretation of its own (the identical rule
-    `_list_party` / `_list_character_private` / `get_knowledge_view`
-    apply); a `NULL` in the owning belief's metadata is preserved, never
-    borrowed from the other perspective. A discovery whose matching belief
-    row does not exist at all is omitted entirely — `recent` never
-    discloses a canonical statement the private views deliberately
-    replace, and never lists an item the matching detail route would 404
-    on. The `q` substring match runs against that same viewer-safe
-    statement expression, so a canonical-only search term cannot surface a
-    distorted belief. `NULL` discovery time sorts last;
-    `pd.party_discovery_id` is the stable tie-breaker.
+    **Projection** (per row, `_GROUND_TRUTH_EXPR`): where this caller may
+    see the item's ground truth, the row shows the canonical statement
+    (`scope` `canonical`, no belief metadata) with `truth_status`/
+    `sensitivity` — identical to `_list_canonical`. Where they may not
+    (no `canon.edit` standing for it, or a targeted `canon.edit` deny),
+    *every* viewer-facing column — `statement`, `scope`, `awareness_level`,
+    `confidence`, `willing_to_share` — is resolved through the **discovery
+    owner's own** belief (`_owned_belief`), falling back to
+    `ki.canonical_statement` only when that belief records no
+    interpretation of its own, and the row is shown only if that belief
+    row exists at all (so `recent` never discloses a canonical statement a
+    `canon.edit` deny or a missing belief should have replaced, and never
+    lists an item the matching detail route would 404 on). The `q`
+    substring match runs against that same effective statement expression.
+    `NULL` discovery time sorts last; `pd.party_discovery_id` is the stable
+    tie-breaker.
     """
-    gm = params["gm"] is True
+    gm_baseline = params["gm"] is True
+    no_perspective = params["party_id"] is None and params["knower_id"] is None
+    audience_clause = (
+        "TRUE"
+        if (gm_baseline and no_perspective)
+        else "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
+    )
 
-    if gm:
-        # A GM is authorized to the item's own ground truth regardless of
-        # what any party believes (the identical split `get_knowledge_view`
-        # /`_list_canonical` apply); the confidentiality boundary this
-        # function guards is strictly player-facing. With no perspective a
-        # GM sees every discovery on the timeline; with one, only that
-        # party's / character's — but still the canonical statement.
-        no_perspective = params["party_id"] is None and params["knower_id"] is None
-        audience_clause = (
-            "TRUE"
-            if no_perspective
-            else "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
-        )
-        statement_expr = "ki.canonical_statement"
-        belief_required = ""
-        # A GM canonical view carries no one party's/character's belief
-        # metadata — identical to `_list_canonical`. A GM who wants a
-        # specific perspective's `awareness`/`confidence`/`willing_to_share`
-        # asks for `party_shared`/`character_private` with that perspective.
-        awareness_expr = "NULL::text"
-        confidence_expr = "NULL::smallint"
-        share_expr = "NULL::boolean"
-        scope_expr = "'canonical'"
-    else:
-        audience_clause = "(pd.party_id = :party_id OR pd.knower_entity_id = :knower_id)"
-        # Every viewer-facing column is resolved through the *discovery
-        # owner's own* belief — the party's for a party discovery, the
-        # character's for a character discovery — never the other scope's,
-        # so the statement, scope, and belief metadata on a card can never
-        # contradict each other and a card is stable whether or not the
-        # request also carries the unrelated perspective. `_owned_belief`
-        # keeps that `pd.party_id IS NOT NULL` split in one place.
-        statement_expr = _owned_belief("pk.interpretation", "ek.interpretation", canonical=True)
-        # A discovery with no corresponding authorized belief row is not
-        # shown — keeps `recent` in agreement with the detail route and
-        # avoids a canonical-statement fallback that would broaden access.
-        belief_required = (
-            "AND ((pd.party_id IS NOT NULL AND pk.party_knowledge_id IS NOT NULL) "
-            "     OR (pd.knower_entity_id IS NOT NULL AND ek.entity_knowledge_id IS NOT NULL))"
-        )
-        awareness_expr = _owned_belief("pk.awareness_level", "ek.awareness_level")
-        confidence_expr = _owned_belief("pk.confidence", "ek.confidence")
-        share_expr = _owned_belief("pk.willing_to_share", "ek.willing_to_share")
-        scope_expr = "CASE WHEN pd.party_id IS NOT NULL THEN 'party' ELSE 'character' END"
+    gt = _GROUND_TRUTH_EXPR
+    owner_statement = _owned_belief("pk.interpretation", "ek.interpretation", canonical=True)
+    statement_expr = f"CASE WHEN {gt} THEN ki.canonical_statement ELSE {owner_statement} END"
+    scope_expr = (
+        f"CASE WHEN {gt} THEN 'canonical' "
+        "WHEN pd.party_id IS NOT NULL THEN 'party' ELSE 'character' END"
+    )
+    awareness_expr = (
+        f"CASE WHEN {gt} THEN NULL::text "
+        f"ELSE {_owned_belief('pk.awareness_level', 'ek.awareness_level')} END"
+    )
+    confidence_expr = (
+        f"CASE WHEN {gt} THEN NULL::smallint "
+        f"ELSE {_owned_belief('pk.confidence', 'ek.confidence')} END"
+    )
+    share_expr = (
+        f"CASE WHEN {gt} THEN NULL::boolean "
+        f"ELSE {_owned_belief('pk.willing_to_share', 'ek.willing_to_share')} END"
+    )
+    # A row is kept when the caller may see the item's ground truth, or when
+    # the discovery owner's own belief row exists. A `canon.edit` deny flips
+    # a row from the first case to needing the second — so a denied item
+    # with no belief simply drops out (non-disclosing), exactly as it would
+    # from `_list_canonical`.
+    belief_clause = (
+        f"AND ({gt} "
+        "OR (pd.party_id IS NOT NULL AND pk.party_knowledge_id IS NOT NULL) "
+        "OR (pd.knower_entity_id IS NOT NULL AND ek.entity_knowledge_id IS NOT NULL))"
+    )
 
     sql = f"""
         SELECT ki.knowledge_item_id,
@@ -551,6 +622,7 @@ def _list_recent(
                kt.code AS knowledge_type_code,
                {statement_expr} AS statement,
                ts.code AS truth_status_code, ki.sensitivity,
+               {gt} AS caller_sees_ground_truth,
                {awareness_expr} AS awareness_level,
                {confidence_expr} AS confidence,
                {share_expr} AS willing_to_share,
@@ -577,7 +649,7 @@ def _list_recent(
         WHERE pd.timeline_id = :timeline_id
           AND e.world_id = :world_id
           AND {audience_clause}
-          {belief_required}
+          {belief_clause}
           AND (CAST(:type_code AS text) IS NULL OR kt.code = CAST(:type_code AS text))
           AND NOT (ki.knowledge_item_id = ANY(CAST(:denied AS uuid[])))
           AND (
@@ -602,4 +674,4 @@ def _list_recent(
         LIMIT :limit_plus_one
     """
     rows = connection.execute(text(sql), params).mappings()
-    return tuple(_row_to_item(r, scope=str(r["scope"]), gm=gm) for r in rows)
+    return tuple(_row_to_item(r, scope=str(r["scope"])) for r in rows)

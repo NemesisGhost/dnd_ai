@@ -43,7 +43,7 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from .errors import InvalidCursorError
 
@@ -186,6 +186,65 @@ def decode_cursor(raw: str | None, *, keyset: str, arity: int) -> tuple[CursorVa
             raise InvalidCursorError()
 
     return tuple(values)
+
+
+# The per-position schema an endpoint declares for its own cursor. Once
+# `decode_cursor` has validated the opaque envelope and that every element
+# is a JSON scalar (`str` / `int` / `None`, never `bool`), `decode_typed_
+# cursor` additionally enforces that each element is the *type this
+# endpoint's keyset actually uses* and converts it — so a syntactically
+# valid cursor carrying a non-UUID string, a non-integer, a `null` where a
+# value is required, or a value of the wrong shape for the selected
+# view/category resolves to the same fixed 422 `invalid_cursor` as any
+# other malformed cursor rather than raising `ValueError` (→ 500) deeper in
+# the handler.
+#
+#   "str"          -> a `str`, required (a `null` or number is malformed)
+#   "int_or_none"  -> an `int` or `None` (a `str`, even "42", is malformed;
+#                     `bool` already rejected upstream and re-checked here)
+#   "uuid"         -> a `str` that parses as a canonical UUID, required
+CursorFieldType = Literal["str", "int_or_none", "uuid"]
+
+
+def _coerce_cursor_field(spec: CursorFieldType, value: CursorValue) -> object:
+    if spec == "str":
+        if not isinstance(value, str):
+            raise InvalidCursorError()
+        return value
+    if spec == "int_or_none":
+        if value is None:
+            return None
+        # `bool` is an `int` subclass; a numeric string is not a number.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise InvalidCursorError()
+        return value
+    if spec == "uuid":
+        if not isinstance(value, str):
+            raise InvalidCursorError()
+        try:
+            return uuid.UUID(value)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise InvalidCursorError() from exc
+    raise AssertionError(f"unknown cursor field spec {spec!r}")  # pragma: no cover
+
+
+def decode_typed_cursor(
+    raw: str | None, *, keyset: str, fields: Sequence[CursorFieldType]
+) -> tuple[object, ...] | None:
+    """`decode_cursor` plus per-field type validation/conversion for the
+    calling endpoint's own cursor schema. Returns already-typed values
+    (`str`, `int | None`, `uuid.UUID`) in `fields` order, or `None` for the
+    first page. Every structural or type error — bad envelope, wrong keyset,
+    wrong component count, a non-UUID/non-int/`null`-where-required value,
+    or a value shaped for a different view/category — raises
+    `InvalidCursorError` (the fixed, non-disclosing 422), never `ValueError`
+    or `TypeError` reaching the caller."""
+    values = decode_cursor(raw, keyset=keyset, arity=len(fields))
+    if values is None:
+        return None
+    return tuple(
+        _coerce_cursor_field(spec, value) for spec, value in zip(fields, values, strict=True)
+    )
 
 
 def build_page[Row](

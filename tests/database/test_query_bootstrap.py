@@ -18,6 +18,8 @@ import uuid
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.api.access import resolve_party_perspective
+from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 from tests.factories import (
     lookup_id,
@@ -447,6 +449,159 @@ def test_relationship_revocation_is_reflected_on_the_next_call(
         get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
         == ()
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: authorized_parties only for characters the perspective resolver
+# can actually use (character.view_knowledge held)
+# ---------------------------------------------------------------------------
+
+
+def _view_knowledge_perspective(
+    db_connection: Connection,
+    *,
+    membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    relationship_type_code: str,
+) -> uuid.UUID:
+    relationship_type_id = _character_relationship_type_id(db_connection, relationship_type_code)
+    make_relationship_type_capability(
+        db_connection,
+        relationship_type_id,
+        _capability_id(db_connection, "character.view_knowledge"),
+    )
+    return make_membership_character_relationship(
+        db_connection, membership_id, character_id, relationship_type_id
+    )
+
+
+def test_a_discover_only_character_advertises_no_party_perspectives(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """A character the user can only *discover* (a relationship mapped to
+    `character.discover`, not `character.view_knowledge`) still appears in
+    the perspective list — but `authorized_parties` is empty, because
+    `resolve_party_perspective` would reject any party for it."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Discover Only Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Barely Known")
+    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
+    make_relationship_type_capability(
+        db_connection,
+        relationship_type_id,
+        _capability_id(db_connection, "character.discover"),
+    )
+    make_membership_character_relationship(
+        db_connection, membership_id, character_id, relationship_type_id
+    )
+    wt = make_world_time(db_connection, world_id, 100)
+    party = make_party(db_connection, world_id, name="A Party It Is In")
+    make_campaign_party(db_connection, campaign_id, party)
+    make_party_membership(db_connection, timeline_id, party, character_id, wt)
+
+    (perspective,) = (
+        get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
+    )
+    assert perspective.character_id == character_id
+    assert perspective.authorized_parties == ()
+
+
+def test_revoking_character_view_knowledge_stops_advertising_parties_next_call(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    campaign_id = make_campaign(db_connection, timeline_id, "Revoke View Knowledge Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Was Trusted")
+    relationship_id = _view_knowledge_perspective(
+        db_connection,
+        membership_id=membership_id,
+        character_id=character_id,
+        relationship_type_code="owner",
+    )
+    wt = make_world_time(db_connection, world_id, 100)
+    party = make_party(db_connection, world_id, name="The Trusted Circle")
+    make_campaign_party(db_connection, campaign_id, party)
+    make_party_membership(db_connection, timeline_id, party, character_id, wt)
+
+    before = get_session_bootstrap(db_connection, user_id=user_id).campaigns[0]
+    assert [p.party_id for p in before.character_perspectives[0].authorized_parties] == [party]
+
+    db_connection.execute(
+        text(
+            "UPDATE security.membership_character_relationships "
+            "SET revoked_at = now() WHERE membership_character_relationship_id = :r"
+        ),
+        {"r": relationship_id},
+    )
+
+    after = get_session_bootstrap(db_connection, user_id=user_id).campaigns[0]
+    # The relationship carried the only capability, so the whole perspective
+    # is gone; either way, no party is advertised.
+    assert all(p.authorized_parties == () for p in after.character_perspectives)
+
+
+def test_a_party_not_associated_with_the_campaign_is_not_advertised(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    campaign_id = make_campaign(db_connection, timeline_id, "Unassociated Party Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Kestrel")
+    _view_knowledge_perspective(
+        db_connection,
+        membership_id=membership_id,
+        character_id=character_id,
+        relationship_type_code="owner",
+    )
+    wt = make_world_time(db_connection, world_id, 100)
+    # A party the character is a current member of, but which is NOT a
+    # `campaign.campaign_parties` party — `resolve_party_perspective`'s
+    # `validate_campaign_party` would reject it.
+    orphan_party = make_party(db_connection, world_id, name="Not In This Campaign")
+    make_party_membership(db_connection, timeline_id, orphan_party, character_id, wt)
+
+    (perspective,) = (
+        get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
+    )
+    assert perspective.authorized_parties == ()
+
+
+def test_every_advertised_party_resolves_through_the_real_perspective_resolver(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """The contract: whatever `authorized_parties` the bootstrap hands the
+    portal, `resolve_party_perspective` accepts every one for that
+    character."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Round Trip Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Roundtrip")
+    _view_knowledge_perspective(
+        db_connection,
+        membership_id=membership_id,
+        character_id=character_id,
+        relationship_type_code="owner",
+    )
+    wt = make_world_time(db_connection, world_id, 100)
+    for name in ("Crew One", "Crew Two"):
+        party = make_party(db_connection, world_id, name=name)
+        make_campaign_party(db_connection, campaign_id, party)
+        make_party_membership(db_connection, timeline_id, party, character_id, wt)
+
+    (perspective,) = (
+        get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
+    )
+    assert len(perspective.authorized_parties) == 2
+
+    access = resolve_access_context(db_connection, user_id=user_id, campaign_id=campaign_id)
+    assert access is not None
+    for advertised in perspective.authorized_parties:
+        resolved = resolve_party_perspective(
+            db_connection,
+            access=access,
+            campaign_id=campaign_id,
+            character_id=character_id,
+            party_id=advertised.party_id,
+        )
+        assert resolved == advertised.party_id
 
 
 # ---------------------------------------------------------------------------
