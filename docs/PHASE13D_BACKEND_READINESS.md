@@ -801,3 +801,97 @@ keyset index is a measured-first follow-up (DATABASE_CONVENTIONS.md
 
 `portal/`, `foundry-module/`, development seed data, and Phase 12 AI
 behavior were not modified.
+
+### 10.11 Live-verification development data
+
+`scripts/setup_phase13c_dev_data.py` (the same idempotent, preview-by-default
+fixture that already seeds the Phase 13C portal checkpoints and the Phase
+13D character-state / session / quest checkpoints) was extended to also
+populate a representative World Explorer + Knowledge dataset for manual
+portal verification. This is development-data tooling only — **no API,
+React, migration, authorization, Foundry, or Phase 12 AI code changed**,
+and `database/seeds/` was not touched.
+
+**Command.** Native PostgreSQL only (`127.0.0.1:5432`, not the Compose
+`db` host, not port `5433`):
+
+```
+# DATABASE_URL (or DND_AI_DATABASE_URL) points at the local dnd_ai database
+uv run python scripts/setup_phase13c_dev_data.py --user-id <uuid>            # preview (rolled back)
+uv run python scripts/setup_phase13c_dev_data.py --user-id <uuid> --apply    # write
+```
+
+`--user-id` is an existing, active local account with a password credential
+(bootstrap the first one with `scripts/bootstrap_admin.py` +
+`activate_local_account`). The script prints a password-redacted target
+summary and refuses a non-loopback host or a production-looking database
+name (`DND_AI_ALLOW_NONLOCAL_DEV_DATA=1` overrides). It is idempotent —
+re-running `--apply` reuses every row (`[reused …]`), never duplicates or
+resets. The World/Knowledge rows carry **no reconciliation branch**: the
+screens that read them are read-only, so a live-testing session cannot
+drift them.
+
+**What it adds (Campaign A / Timeline A, reusing the existing Phase 13
+world / campaigns / Character A / Character B):**
+
+| World Explorer category | Fixture record(s) |
+|---|---|
+| locations (4-level hierarchy) | continent *Auremar* → region *The Ashen Vale* → settlement *Hollowmere* (`population`, `location_state`) → building *The Sunken Archive* (`building_use`) |
+| dungeon + area | *The Tidebound Crypt* (`danger_level`) → *The Lantern Antechamber* |
+| player character | *Phase13C Character A* (reused) |
+| NPC | *Archivist Sella Vane* |
+| organization / government | *The Cartographers' Guild* (GM-only `internal_description`), *The Hollowmere Magistracy* (government) |
+| religion | *The Tidefather Communion* + lay order *The Wardens of the Tide* |
+| items | *The Warden's Lantern* (held by Character A), *The Drowned Crown* (loose, in the crypt) |
+| historical events | *The Sundering of the Vale*, *The Sealing of the Sluice-Gates* (recorded), *The Magistrate's Secret Accord* (**draft — GM-only**) |
+| relationship | *membership*: Sella Vane ↔ the Cartographers' Guild |
+
+| Knowledge view | Fixture record |
+|---|---|
+| `known` | "…lower vault floods completely at every high tide" (party belief, no distortion) |
+| `rumors` | "A drowned king still holds court…" (`rumor` type, `truth=false`) |
+| distorted belief | canonical "…to cut the treasury's salvage-levy losses" vs party interpretation "…to appease the Tidefather" |
+| `recent` | "…a sealed sub-basement…" — party discovery with a fictional world-time and a `discovered_via_event_id` (visible source provenance) |
+| `character_private` (A) | "Sella Vane keeps a private ledger…" |
+| `character_private` (B) | "The Warden's Lantern only takes flame for someone of Warden blood" |
+| `party_shared` | the union of the party rows above |
+| `public` | "Hollowmere is built directly over the drowned ruins of Aurell" |
+| quest-subject knowledge | "The Glass Ossuary can only be re-consecrated at slack tide" (subject = the quest entity) |
+| undiscovered by the player | "The Wardens of the Tide answer to the thing in the vault…" — canonical only, no belief row (a GM's canonical view sees it; the player's party/character views never do) |
+
+**Perspectives / audience.** The supplied `--user-id` is the campaign
+owner / GM on both campaigns and controls Character A and Character B (the
+two `character_perspectives` the bootstrap already exposes). The knowledge
+party *The Lantern-Bearers* is created with both characters as current
+members, so `resolve_party_perspective` authorizes the owner's `known` /
+`rumors` / `party_shared` reads for either. A GM's `canon.edit` authority
+does not change with a `character_id` parameter, so this one account cannot
+exercise the *non-GM HTTP path* directly — the script's
+`_print_world_knowledge_verification` therefore also calls the real query
+functions with the non-GM `include_ground_truth=False` +
+resolved-perspective inputs and prints both results (the same stance the
+quest verification takes). To exercise the true non-GM path over HTTP, a
+second limited campaign member is needed — no such local account exists in
+the standard fixture, and the script does not create one.
+
+**Campaign B isolation (Timeline B).** A distinct location (*Saltreach
+Harbor*), a recorded event, and a public-lore knowledge item. The event
+and the knowledge are timeline-scoped and never surface through Campaign
+A's `/world/search`, knowledge views, or event detail (verified). The
+location *entity* is world canon and does appear in Campaign A's search —
+that is the documented world-scoped visibility model (§10.1); its state,
+events, and knowledge stay Campaign B only.
+
+**Verification.** `_print_world_knowledge_verification` runs the real
+`search_world_entities` / `get_location_view` / `get_event_view` /
+`list_knowledge` functions with access inputs resolved by the real
+`resolve_access_context` / `resolve_world_character_visibility` /
+`resolve_party_perspective` helpers (never a lookalike query), and prints:
+every category reachable, case-insensitive `q`, `category` filtering,
+keyset pagination with no page overlap, the four-level breadcrumb trail,
+the Campaign B event's non-disclosure through Campaign A, the GM-only draft
+event, GM canonical vs player interpretation for the distorted belief, the
+canonical-only secret absent from the player's view, disjoint
+character-private sets, `recent` source provenance, and public-lore
+isolation between the two timelines. The same assertions run as focused
+tests in `tests/database/test_setup_phase13c_dev_data.py` (10 added).
