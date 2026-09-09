@@ -86,14 +86,24 @@ def get_knowledge_view(
     expected_world_id: uuid.UUID,
     party_id: uuid.UUID | None,
     include_ground_truth: bool,
+    knower_entity_id: uuid.UUID | None = None,
+    allow_public: bool = False,
 ) -> KnowledgeView:
     """The effective view of one knowledge item: ground truth for a GM
-    (`include_ground_truth=True`), or the authorized `party_id`'s own
-    current belief otherwise. Raises `KnowledgeNotAuthorizedError` for a
-    nonexistent item, one in a different world than `expected_world_id`
-    (always the caller's own resolved-timeline world — `dnd_ai.api.
-    _shared.timeline_world_id`, never caller-supplied), or — for a non-GM
-    caller — one the authorized party has no belief record for."""
+    (`include_ground_truth=True`), the authorized `party_id`'s own current
+    belief (`campaign.party_knowledge`), or — when `party_id` is `None` and
+    `knower_entity_id` is set (an authorized character-private lookup, the
+    Phase 13D Knowledge screen's `character_private` view) — that knower's
+    own `knowledge.entity_knowledge` belief. Raises
+    `KnowledgeNotAuthorizedError` for a nonexistent item, one in a
+    different world than `expected_world_id` (always the caller's own
+    resolved-timeline world — `dnd_ai.api._shared.timeline_world_id`, never
+    caller-supplied), or — for a non-GM caller — one the authorized
+    party/knower has no belief record for.
+
+    `knower_entity_id` must already be an authorized decision (the caller
+    holds `character.view_knowledge` for it) exactly like `party_id` —
+    this query performs no authorization of its own."""
     row = (
         connection.execute(
             text("""
@@ -129,23 +139,68 @@ def get_knowledge_view(
             willing_to_share=None,
         )
 
-    belief_row = (
-        connection.execute(
-            text("""
-                SELECT awareness_level, confidence, interpretation, willing_to_share
-                FROM campaign.party_knowledge
-                WHERE timeline_id = :timeline AND party_id = :party
-                  AND knowledge_item_id = :item
-            """),
-            {"timeline": timeline_id, "party": party_id, "item": knowledge_item_id},
+    if party_id is not None:
+        belief_row = (
+            connection.execute(
+                text("""
+                    SELECT awareness_level, confidence, interpretation, willing_to_share
+                    FROM campaign.party_knowledge
+                    WHERE timeline_id = :timeline AND party_id = :party
+                      AND knowledge_item_id = :item
+                """),
+                {"timeline": timeline_id, "party": party_id, "item": knowledge_item_id},
+            )
+            .mappings()
+            .one_or_none()
         )
-        .mappings()
-        .one_or_none()
-    )
+    elif knower_entity_id is not None:
+        belief_row = (
+            connection.execute(
+                text("""
+                    SELECT awareness_level, confidence, interpretation, willing_to_share
+                    FROM knowledge.entity_knowledge
+                    WHERE timeline_id = :timeline AND knower_entity_id = :knower
+                      AND knowledge_item_id = :item
+                """),
+                {"timeline": timeline_id, "knower": knower_entity_id, "item": knowledge_item_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+    else:
+        belief_row = None
+
+    if belief_row is None and allow_public:
+        # Public lore fallback (Phase 13D Knowledge screen `public` view):
+        # a knowledge item published within any location on this timeline
+        # (`knowledge.public_knowledge`) is viewable by any `campaign.view`
+        # caller — its canonical statement only, never the GM-only
+        # `truth_status`/`sensitivity` metadata. This keeps the `public`
+        # list and this detail route in agreement.
+        is_public = connection.execute(
+            text("""
+                SELECT 1 FROM knowledge.public_knowledge
+                WHERE timeline_id = :timeline AND knowledge_item_id = :item
+                LIMIT 1
+            """),
+            {"timeline": timeline_id, "item": knowledge_item_id},
+        ).scalar()
+        if is_public is not None:
+            return KnowledgeView(
+                knowledge_item_id=row["knowledge_item_id"],
+                knowledge_type_code=row["knowledge_type_code"],
+                statement=row["canonical_statement"],
+                truth_status_code=None,
+                sensitivity=None,
+                awareness_level=None,
+                confidence=None,
+                willing_to_share=None,
+            )
+
     if belief_row is None:
         raise KnowledgeNotAuthorizedError(
-            f"party {party_id} has no belief recorded for knowledge item {knowledge_item_id} "
-            f"on timeline {timeline_id}"
+            f"no belief recorded for knowledge item {knowledge_item_id} on timeline "
+            f"{timeline_id} (party={party_id}, knower={knower_entity_id})"
         )
 
     return KnowledgeView(

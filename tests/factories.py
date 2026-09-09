@@ -51,14 +51,20 @@ def lookup_id(connection: Connection, schema: str, table: str, pk: str, code: st
     return value
 
 
-def make_world(connection: Connection, slug: str = "test-world") -> uuid.UUID:
+def make_world(
+    connection: Connection, slug: str = "test-world", *, name: str = "Test World"
+) -> uuid.UUID:
     value = connection.execute(
         text("""
             INSERT INTO core.worlds (name, slug, lifecycle_status_id)
-            VALUES ('Test World', :slug, :status)
+            VALUES (:name, :slug, :status)
             RETURNING world_id
         """),
-        {"slug": slug, "status": status_id(connection, "lifecycle_statuses", "active")},
+        {
+            "name": name,
+            "slug": slug,
+            "status": status_id(connection, "lifecycle_statuses", "active"),
+        },
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value
@@ -1727,6 +1733,7 @@ def make_party_discovery(
     *,
     party_id: uuid.UUID | None = None,
     knower_entity_id: uuid.UUID | None = None,
+    discovered_at_world_time_id: uuid.UUID | None = None,
     discovered_via_interaction_id: uuid.UUID | None = None,
     discovered_via_event_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
@@ -1742,8 +1749,9 @@ def make_party_discovery(
         text("""
             INSERT INTO knowledge.party_discoveries
                 (timeline_id, knowledge_item_id, party_id, knower_entity_id,
+                 discovered_at_world_time_id,
                  discovered_via_interaction_id, discovered_via_event_id)
-            VALUES (:timeline, :item, :party, :knower, :via_interaction, :via_event)
+            VALUES (:timeline, :item, :party, :knower, :at, :via_interaction, :via_event)
             RETURNING party_discovery_id
         """),
         {
@@ -1751,8 +1759,85 @@ def make_party_discovery(
             "item": knowledge_item_id,
             "party": party_id,
             "knower": knower_entity_id,
+            "at": discovered_at_world_time_id,
             "via_interaction": discovered_via_interaction_id,
             "via_event": discovered_via_event_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_entity_knowledge(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    knower_entity_id: uuid.UUID,
+    *,
+    awareness_level: str = "aware",
+    confidence: int | None = None,
+    interpretation: str | None = None,
+    willing_to_share: bool = True,
+    learned_at_world_time_id: uuid.UUID | None = None,
+    learned_via_event_id: uuid.UUID | None = None,
+    learned_via_interaction_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `knowledge.entity_knowledge` row — one knower's belief about a
+    knowledge item on a timeline (docs/DOMAIN_MODEL.md §15.3). One row per
+    `(timeline, knowledge item, knower)`."""
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.entity_knowledge
+                (timeline_id, knowledge_item_id, knower_entity_id, awareness_level, confidence,
+                 interpretation, willing_to_share, learned_at_world_time_id,
+                 learned_via_event_id, learned_via_interaction_id)
+            VALUES (:timeline, :item, :knower, :awareness, :confidence, :interpretation, :share,
+                    :at, :via_event, :via_interaction)
+            RETURNING entity_knowledge_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": knowledge_item_id,
+            "knower": knower_entity_id,
+            "awareness": awareness_level,
+            "confidence": confidence,
+            "interpretation": interpretation,
+            "share": willing_to_share,
+            "at": learned_at_world_time_id,
+            "via_event": learned_via_event_id,
+            "via_interaction": learned_via_interaction_id,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_public_knowledge(
+    connection: Connection,
+    timeline_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    location_id: uuid.UUID,
+    *,
+    awareness_level: str = "aware",
+    known_since_world_time_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A `knowledge.public_knowledge` row — what is publicly known within a
+    location, independent of any one knower (docs/architecture/
+    DATABASE_MODEL.md §15)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO knowledge.public_knowledge
+                (timeline_id, knowledge_item_id, location_id, awareness_level,
+                 known_since_world_time_id)
+            VALUES (:timeline, :item, :location, :awareness, :since)
+            RETURNING public_knowledge_id
+        """),
+        {
+            "timeline": timeline_id,
+            "item": knowledge_item_id,
+            "location": location_id,
+            "awareness": awareness_level,
+            "since": known_since_world_time_id,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)
