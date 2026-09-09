@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router"
 import "./App.css"
+import { ThemeSelector } from "./themes/ThemeSelector"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { LoginPage } from "./pages/LoginPage"
@@ -19,6 +20,7 @@ function App() {
         <h1 className="app-header__title">
           D&amp;D AI Portal
         </h1>
+        <ThemeSelector />
       </header>
 
       <Routes>

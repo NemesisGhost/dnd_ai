@@ -12,6 +12,7 @@ import {
   vi,
 } from "vitest"
 import App from "./App"
+import { ThemeProvider } from "./themes/ThemeProvider"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
 import { useCampaignSessions } from "./hooks/useCampaignSessions"
@@ -131,6 +132,8 @@ const campaignQuestDetail = {
 }
 
 beforeEach(() => {
+  localStorage.removeItem("dnd-ai-theme")
+
   useSessionBootstrapMock.mockReset()
 
   useSessionBootstrapMock.mockReturnValue({
@@ -204,9 +207,11 @@ beforeEach(() => {
 function renderAppAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <RouteSessionProvider>
-        <App />
-      </RouteSessionProvider>
+      <ThemeProvider>
+        <RouteSessionProvider>
+          <App />
+        </RouteSessionProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   )
 }
@@ -511,5 +516,23 @@ describe("portal routing", () => {
       "aria-current",
       "page",
     )
+  })
+
+  it("provides global appearance selection in the header", () => {
+    renderAppAt("/")
+
+    const header = screen.getByRole("banner")
+
+    expect(
+      within(header).getByRole("combobox", {
+        name: "Appearance",
+      }),
+    ).toHaveValue("system")
+
+    expect(
+      within(header).getByText(
+        "Active theme: Hearthstone",
+      ),
+    ).toBeInTheDocument()
   })
 })
