@@ -422,19 +422,324 @@ quest_state`, `security.resource_grants.session_id`), all already present.
 
 ## 9. Remaining blockers requiring a product/UI decision
 
-1. **World explorer backend (§3)** — needs a pagination/list convention
-   decided once, then list+search endpoints for locations, characters/
-   NPCs, organizations, items, and events. Recommend scoping as its own
-   phase rather than folding into 13D readiness.
-2. **Knowledge screen's six views (§3)** — needs the per-view
-   audience/filter semantics decided (what "recently discovered" means,
-   whether "sources" is a distinct query or a field on existing knowledge
-   items) before any list endpoint can be built correctly.
-3. **Item/artifact detail-by-id** — no route exists for a loose world item
-   not currently held by any character. Small in isolation, but only
-   useful once World explorer's list/search exists to link into it.
+1. **World explorer backend (§3)** — **RESOLVED**, see §10. The
+   pagination convention, `GET .../world/search`, and the typed detail
+   routes are delivered on the `phase13d/world-knowledge-read-api` branch.
+2. **Knowledge screen's six views (§3)** — **RESOLVED**, see §10.5. The
+   per-view semantics, the "recently discovered" ordering, and the
+   "Sources is a facet not a view" decision are documented and delivered.
+3. **Item/artifact detail-by-id** — **RESOLVED**, see §10.2
+   (`GET .../world/items/{item_instance_id}`); ownership/inventory on that
+   detail remains deferred (§10.8 item 4).
 4. **Session detail's participants/locations-visited/encounter and
    character-state-change sections (§3)** — deferred; each needs its own
    join/audience-filtering design against `narrative.event_participants`/
    `.event_locations` and the `campaign.character_state`/`_conditions`/
    `_resources` history.
+
+---
+
+## 10. World Explorer + Knowledge browse backend (delivered)
+
+Blockers §9.1–§9.3 above are **closed** by the
+`phase13d/world-knowledge-read-api` workstream. This section is the
+delivered contract; §9's recommendation to scope it as its own phase was
+followed (it is a single branch/PR, not folded into the readiness patch).
+
+### 10.1 Owner decision — World Explorer visibility
+
+The schema has **no entity-level discovery/knowledge gating** for world
+locations, organizations, items, historical events, relationships, or
+religions. Discovery state exists only for dungeon structural children
+(`world.*.is_hidden` + `knowledge.party_discoveries`) and
+`knowledge.knowledge_items` (the Knowledge screen's own domain). The owner
+directed (2026-09-09) that World Explorer visibility **mirror what the
+existing single-resource detail endpoints already disclose** rather than
+invent a speculative discovery mechanism (this workstream's spec: "derive
+nothing speculatively"):
+
+- **Baseline** for every category is `campaign.view` (already required to
+  reach any of these routes).
+- **Per-resource `campaign.view` deny** (`security.resource_grants`,
+  `entity_id`/`event_id`/`knowledge_item_id` target) removes a specific
+  record from *both* the list and its own detail route — resolved by the
+  caller via `AccessContext.resource_grant_targets(...)` and applied in
+  SQL before pagination. No `allow` counterpart (baseline is already
+  `True` for every `campaign.view` holder — the same reasoning
+  `list_campaign_quests`/`list_campaign_sessions` document).
+- **GM-only *fields*** (`world.organizations.internal_description`,
+  `campaign.relationship_state` subjective rows, knowledge
+  `truth_status`/`sensitivity`) stay gated by `canon.edit` in the reused
+  detail queries — unchanged.
+- **Characters** are the one category with a stricter existing gate: a
+  character appears only when the caller holds one of
+  `character.discover`/`.view_summary`/`.view_full`/`canon.edit` for it
+  (campaign-wide role capability, per-character
+  `security.membership_character_relationships` row, or a
+  `security.resource_grants` allow), minus any per-character deny —
+  `dnd_ai.api.world_explorer.resolve_world_character_visibility`. A caller
+  holding **only** `character.discover` for a character sees the search
+  card but a `GET .../characters/{id}` detail 404s — that is the
+  documented meaning of "discover" (UI_DESIGN.md §5.5: "Character may
+  appear in search or links"), not a list/detail disagreement.
+- **Events** additionally honor `narrative.events` timeline scope and the
+  `draft`/`voided` split `dnd_ai.queries.summary` established: a `voided`
+  event is never listed for anyone; a `draft` event only for a
+  `canon.edit` caller (or one holding a `canon.edit` allow targeting that
+  `event_id`).
+
+Every rejection path (nonexistent, cross-world, cross-timeline for events,
+denied) returns the identical fixed non-disclosing 404 — a caller can
+never distinguish which applied. List and detail eligibility agree because
+the same SQL predicates are reused; **the pre-existing organization-detail
+and dungeon-area-detail routes were hardened** with the targeted
+`campaign.view` deny check to preserve that agreement (the same fix the
+quest-detail route received — §4.2).
+
+### 10.2 Endpoint matrix
+
+| Method + path | Purpose | Backing query |
+|---|---|---|
+| `GET /auth/session` | +`campaigns[].world_id`/`world_name`; +`campaigns[].character_perspectives[].authorized_parties[]` (`party_id`,`party_name`) — additive, all prior fields/behavior preserved | `dnd_ai.queries.bootstrap.get_session_bootstrap` |
+| `GET /campaigns/{campaign_id}/world/search` | Unified type-filtered text search / browse across `location`, `character`, `organization`, `religion`, `item`, `event` | `dnd_ai.queries.world_explorer.search_world_entities` |
+| `GET /campaigns/{campaign_id}/world/relationships` | Relationship list | `.list_world_relationships` |
+| `GET /campaigns/{campaign_id}/world/locations/{location_id}` | Location detail (any `world.locations` row) + containment breadcrumbs | `.get_location_view` |
+| `GET /campaigns/{campaign_id}/world/religions/{religion_id}` | Religion detail | `.get_religion_view` |
+| `GET /campaigns/{campaign_id}/world/items/{item_instance_id}` | Item-instance detail | `.get_item_view` |
+| `GET /campaigns/{campaign_id}/world/events/{event_id}` | Historical-event detail | `.get_event_view` |
+| `GET /campaigns/{campaign_id}/knowledge` | Audience-filtered Knowledge-screen list, `?view=` | `dnd_ai.queries.knowledge_browse.list_knowledge` |
+| `GET /campaigns/{campaign_id}/knowledge/{knowledge_item_id}` | Existing single-item read — extended (backward-compatibly) for a character-private lookup and a public-lore fallback | `dnd_ai.queries.knowledge.get_knowledge_view` |
+
+Existing detail routes **reused unchanged** for their categories:
+`GET /campaigns/{id}/characters/{id}` (+`/inventory`),
+`GET /campaigns/{id}/organizations/{id}` (deny-hardened),
+`GET /campaigns/{id}/relationships/{id}`,
+`GET /campaigns/{id}/dungeon-areas/{id}` (deny-hardened).
+
+All routes: `campaign.view` required; cookie-session or bearer auth
+through the unified boundary; per-request reauthorization; no CSRF header,
+no idempotency key, no `audit.change_log` row, no mutation; same-origin
+`/api/*`.
+
+### 10.3 Response DTOs
+
+- **`WorldEntityCard`** (search item): `entity_id`, `category`
+  (`location`|`character`|`organization`|`religion`|`item`|`event`),
+  `entity_type_code`, `name`, `summary`. Uniform and non-sensitive by
+  construction — denied records are filtered out entirely, not
+  down-projected. `WorldEntitySearchResponse` = `{items[], next_cursor}`.
+- **`RelationshipCard`**: `relationship_id`, `relationship_type_code`,
+  `description`, `participant_entity_ids[]`. `RelationshipListResponse` =
+  `{items[], next_cursor}`.
+- **`LocationDetailResponse`**: `location_id`, `name`, `summary`,
+  `location_type_code`, `parent_location_id` (null when the parent is
+  denied to the caller), `breadcrumbs[]` (`{location_id, name,
+  location_type_code}` root → parent, truncated at the first denied
+  ancestor), `population`/`building_use`/`danger_level` (subtype fields,
+  null when N/A), current `campaign.location_state` (`is_searched`,
+  `is_destroyed`, `alarm_level`, `condition_notes` — null when no row).
+- **`ReligionDetailResponse`**: `religion_id`, `name`, `summary`,
+  `pantheon_structure`, `serving_organization_ids[]` (authorized only).
+- **`ItemDetailResponse`**: `item_instance_id`, `name`, `summary`,
+  `item_definition_id`, `origin_notes`, current `campaign.item_state`
+  (`quantity`, `condition_percentage`, `charges_current`,
+  `charges_maximum`, `is_equipped`, `is_destroyed` — null when no row).
+- **`EventDetailResponse`**: `event_id`, `name`, `summary`,
+  `event_type_code`, `event_status_code`, `world_time_id`, `details`,
+  `session_id`, `participants[]` (`{entity_id, role_code}` — each
+  independently filtered), `locations[]` (`{location_id, role}` —
+  filtered).
+- **`KnowledgeListItemResponse`**: `knowledge_item_id`,
+  `knowledge_type_code`, `statement` (viewer-safe: the party's/character's
+  own `interpretation` when recorded, else canonical; canonical for a GM
+  canonical view), `truth_status_code`/`sensitivity` (GM-only — null
+  otherwise), `awareness_level`, `confidence`, `willing_to_share`, `scope`
+  (`party`|`character`|`public`|`canonical`), `discovery_world_time_id`,
+  `source_event_id`, `source_interaction_id`, `subject_entity_id`
+  (related-resource link). `KnowledgeListResponse` = `{items[],
+  next_cursor}`.
+
+Every response is a typed Pydantic model — no loosely-typed DB rows, no
+generic entity DTO for detail.
+
+### 10.4 Search / filter / pagination behavior
+
+- **`/world/search`** query params: `category` (repeatable; omitted = all
+  six), `q` (≤200 chars, case-insensitive substring over
+  `core.entities.canonical_name` + `summary` — never `core.entity_names`
+  aliases, some of which are themselves a disclosure), `limit` (1–100,
+  default 25), `cursor`.
+- **`/world/relationships`** params: `q` (over `description`), `type`
+  (`world.relationship_types.code`), `related_entity_id`, `limit`,
+  `cursor`.
+- **`/knowledge`** params: `view` (default `known`), `character_id`,
+  `party_id`, `q` (over the viewer-safe statement), `type`
+  (`knowledge.knowledge_types.code`), `limit`, `cursor`.
+- **Ordering** — deterministic and stable: entity search
+  `(lower(canonical_name), entity_id)`; relationships `(relationship_id)`;
+  statement-ordered knowledge views `(lower(statement),
+  knowledge_item_id)`; `recent` `(world_time.sort_key DESC NULLS LAST,
+  party_discovery_id)`.
+- **Cursor** (`dnd_ai.api.pagination`) — an **opaque, strictly-validated**
+  base64url(JSON) token: `[version, keyset_name, [sort values]]`. Not
+  signed (this app has no signing secret and does not need one): every
+  decoded value is bound as a SQL parameter, never interpolated, and the
+  keyset predicate only ever *narrows* an already-authorized,
+  already-filtered result set. The embedded `keyset_name` binds a cursor
+  to the endpoint family that issued it. A malformed / tampered /
+  wrong-keyset / wrong-arity cursor → fixed **422 `invalid_cursor`**,
+  non-disclosing (never echoes the value).
+- **No total count** on any browse response (UI_DESIGN.md §9). A page
+  reports only whether `next_cursor` is non-null (over-fetch `limit + 1`,
+  presence of the extra row is the "has next page" signal).
+- **Empty result** → `{items: [], next_cursor: null}` — identical for
+  "authorized but nothing matches" and "no authorized perspective", never
+  an existence hint.
+- **Invalid filter value** (bad `category`, `view`, out-of-range `limit`)
+  → FastAPI request validation, **422 `invalid_request`**.
+
+### 10.5 Knowledge view semantics
+
+| `view` | Source | Audience |
+|---|---|---|
+| `known` | `campaign.party_knowledge` (authorized party), `knowledge_type` **not** in the rumor set | the party's settled knowledge |
+| `rumors` | `campaign.party_knowledge` (authorized party), `knowledge_type` **in** rumor/belief/misconception/theory/prophecy | the party's unsettled beliefs |
+| `party_shared` | `campaign.party_knowledge` (authorized party), every row | the party's collective knowledge (union of the two above) |
+| `character_private` | `knowledge.entity_knowledge` where `knower_entity_id` = the authorized character | that character's individual beliefs |
+| `recent` | `knowledge.party_discoveries` for the authorized party and/or character, newest discovery-world-time first | the audience's discovery stream |
+| `public` | `knowledge.public_knowledge` on the timeline | any `campaign.view` caller — **no perspective needed** |
+
+The `known`/`rumors` split is grounded in the seeded
+`knowledge.knowledge_types` vocabulary, not an invented flag.
+
+**"Sources" is not a `view`.** The domain model has no standalone
+provenance table — `learned_via_*`/`discovered_via_*` live on
+`entity_knowledge`/`party_discoveries` themselves. Every list item carries
+`source_event_id`/`source_interaction_id`/`discovery_world_time_id` where
+authorized; the portal's "Sources" tab is a client-side presentation over
+any view (most naturally `recent`).
+
+**"Recently discovered" (`recent`)** is an ordered stream, not a
+wall-clock window: newest visible discovery first, ordered by
+`core.world_times.sort_key` of `discovered_at_world_time_id`, **NULLS
+LAST**, with the immutable `party_discovery_id` as the tie-breaker.
+Discoveries with no recorded world time sort after every dated one.
+
+**GM (baseline `canon.edit`) with no perspective** sees canonical data:
+`known`/`rumors` → `knowledge.knowledge_items` in the world (with
+`truth_status`/`sensitivity`); `recent` → every discovery on the timeline;
+`public` → the public-lore rows. `party_shared`/`character_private` still
+require the GM to supply an authorized party/character perspective and
+return an empty page without one. A non-GM never receives
+`truth_status`/`sensitivity`.
+
+### 10.6 Perspective resolution (Phase 13D §4)
+
+- A caller-supplied `character_id`/`party_id` **never** grants access.
+  `dnd_ai.api.access.resolve_party_perspective` (unchanged) re-proves, per
+  request: the caller holds `character.view_knowledge` for `character_id`,
+  `party_id` is associated with the campaign, and `character_id` is a
+  **current** `campaign.party_memberships` member of `party_id` on the
+  campaign's own timeline. Any failure → fixed non-disclosing 404 (not a
+  silent downgrade).
+- **Ambiguous multi-party membership** is handled deterministically by
+  requiring the portal to name the `party_id` explicitly — it is never
+  guessed from `character_id`. `/auth/session` now hands the portal the
+  exact set it may choose from:
+  `campaigns[].character_perspectives[].authorized_parties[]` — the
+  parties each authorized character is a current member of, campaign-
+  associated, recomputed every bootstrap. Parties/characters the user
+  cannot select never appear.
+- `character_private` needs only `character_id` (with
+  `character.view_knowledge` held for it). `recent` accepts either or
+  both. `public` needs neither.
+- The existing `GET .../knowledge/{id}` detail route is unchanged for its
+  GM and `(character_id, party_id)` callers, and additionally: a non-GM
+  who supplies **only** `character_id` and holds `character.view_knowledge`
+  for it gets that character's own `entity_knowledge` belief
+  (`knower_entity_id`); any caller gets the public-lore fallback
+  (`allow_public`) for an item published in `knowledge.public_knowledge` —
+  so `character_private` and `public` lists agree with detail.
+
+### 10.7 World Explorer category coverage
+
+| UI_DESIGN.md §5.4 category | Covered by |
+|---|---|
+| locations and dungeons | `/world/search?category=location` (all `world.locations` kinds incl. dungeon/dungeon_area) + `/world/locations/{id}`; dungeon-area *structural children* stay on `/dungeon-areas/{id}` |
+| NPCs and player characters | `/world/search?category=character` (bare `character`, `npc`, `player_character`) + existing `/characters/{id}` |
+| organizations, factions, governments, religions, cultures | `category=organization` (business/government/religious_organization/military_unit/political_faction) + `category=religion`; existing `/organizations/{id}` + `/world/religions/{id}`. ("cultures" — `world.cultures` was never built; no schema exists, so no endpoint — see §10.8.) |
+| items and artifacts | `category=item` + `/world/items/{id}` |
+| historical events | `category=event` + `/world/events/{id}` |
+| relationships | `/world/relationships` + existing `/relationships/{id}` |
+| approved lore and knowledge | the `/campaigns/{id}/knowledge` list (`view=public` for lore) + `/knowledge/{id}` |
+
+### 10.8 Known intentional limitations
+
+1. **Relationship edges are not hidden by node visibility.** The
+   `/world/relationships` list mirrors the *existing* relationship-detail
+   contract — `dnd_ai.queries.relationship`'s own model treats
+   participants as a structural fact visible to any `campaign.view`
+   caller; only per-participant *subjective* state is GM-gated. A card's
+   `participant_entity_ids` therefore may include an entity the caller
+   cannot open in `/characters/{id}` (exactly as the existing
+   `/relationships/{id}` route already discloses). Hiding an edge whose
+   node a caller cannot discover would be a change to the existing
+   relationship contract, not just this list — deferred as a deliberate
+   product decision, not built speculatively.
+2. **No `cultures` endpoint.** UI_DESIGN.md §5.4 lists "cultures" but no
+   `world.cultures` table (or any culture concept) exists in the schema.
+   Not built — deriving one would be new domain vocabulary ahead of the
+   phase that needs it.
+3. **Archived entities are not filtered** from World Explorer lists —
+   consistent with "mirror existing detail endpoints" (the reused detail
+   queries do not filter `core.entities.archived_at` either). If the
+   product wants archived records hidden from browse, that is a
+   cross-cutting change to every world read, tracked separately.
+4. **Item detail carries state only, not ownership/inventory** (who
+   currently holds it). That needs its own audience design (§9.3) and no
+   §5.4 bullet requires it for the MVP.
+5. **`recent` for a character-only (no party) perspective** shows the
+   canonical statement rather than the character's own interpretation
+   (which lives in `entity_knowledge`, not `party_knowledge`). Minor;
+   `character_private` shows the interpretation.
+6. **`/world/search` `q`** matches `canonical_name` + `summary` only, not
+   `core.entity_names` aliases (secret/mistaken alias types would be a
+   disclosure risk).
+7. **Session detail's participants/locations/state-change sections**
+   (§9.4) remain deferred — untouched by this workstream.
+
+### 10.9 Migrations
+
+**None.** Every endpoint reads existing tables/columns only. No index was
+added: the delivered `q`/keyset queries were judged acceptable for the
+MVP's data scale against the existing FK indexes (`ix_*` on
+`core.entities.world_id`, `entity_type_id`; `knowledge.*` and
+`campaign.party_knowledge` timeline/party/item indexes from migrations
+041/073/074); adding a `pg_trgm` GIN index for `ILIKE` or a covering
+keyset index is a measured-first follow-up (DATABASE_CONVENTIONS.md
+§33.1), not a speculative addition here.
+
+### 10.10 Files changed
+
+- `src/dnd_ai/api/pagination.py` (new) + `src/dnd_ai/api/errors.py`
+  (`InvalidCursorError`)
+- `src/dnd_ai/queries/world_explorer.py`, `src/dnd_ai/api/world_explorer.py` (new)
+- `src/dnd_ai/queries/knowledge_browse.py` (new),
+  `src/dnd_ai/api/knowledge.py` (list endpoint + detail hardening/extension)
+- `src/dnd_ai/queries/knowledge.py` (`knower_entity_id`/`allow_public`)
+- `src/dnd_ai/queries/bootstrap.py`, `src/dnd_ai/api/local_auth.py`
+  (`world_id`/`world_name`, `authorized_parties`)
+- `src/dnd_ai/api/relationships.py`, `src/dnd_ai/api/dungeon.py`
+  (targeted `campaign.view` deny check on the existing detail routes)
+- `src/dnd_ai/api/app.py` (register `world_explorer` router)
+- `tests/database/test_api_world_explorer.py`,
+  `tests/database/test_api_knowledge_browse.py` (new),
+  `tests/database/test_query_bootstrap.py` (world/party-perspective tests),
+  `tests/unit/test_api_pagination.py` (new),
+  `tests/unit/test_api_app.py` (`InvalidCursorError` contract)
+- `tests/factories.py` (`make_entity_knowledge`, `make_public_knowledge`,
+  `make_world(name=)`, `make_party_discovery(discovered_at_world_time_id=)`)
+- `docs/PHASE13D_BACKEND_READINESS.md` (this section), `docs/PLAN.md`
+
+`portal/`, `foundry-module/`, development seed data, and Phase 12 AI
+behavior were not modified.

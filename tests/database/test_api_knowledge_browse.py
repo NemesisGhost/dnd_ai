@@ -1,0 +1,580 @@
+"""Tests for `dnd_ai.api.knowledge`'s new Phase 13D list endpoint
+(`GET /campaigns/{id}/knowledge`) — the audience-filtered discovery/list
+side of the Knowledge screen (docs/UI_DESIGN.md §5.6).
+
+Covers, per docs/PHASE13D_BACKEND_READINESS.md §9: known fact; false party
+belief (interpretation, not canonical truth); recently-discovered ordering
+and pagination; character-private knowledge and its exclusion from another
+character's perspective; party-shared and its exclusion of another party's
+knowledge; public lore; provenance on visible records; GM truth vs player
+belief; targeted deny; no / valid / mismatched perspective; empty list;
+search and type/view filters; list/detail agreement; revocation reflected
+on the next request; no leaked truth-status/sensitivity/ids.
+
+The existing `test_api_knowledge.py` covers the single-item detail route's
+own GM/party split exhaustively; this file adds only the list behavior and
+the character-private detail extension.
+"""
+
+import uuid
+from collections.abc import Callable, Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import Connection, Engine, text
+
+from dnd_ai.api.app import create_app
+from dnd_ai.api.auth import get_authenticated_user_id
+from dnd_ai.api.deps import get_engine
+from tests.factories import (
+    lookup_id,
+    make_campaign,
+    make_campaign_membership,
+    make_campaign_party,
+    make_character,
+    make_character_relationship_type,
+    make_entity_knowledge,
+    make_knowledge_item,
+    make_location,
+    make_membership_character_relationship,
+    make_membership_role,
+    make_party,
+    make_party_discovery,
+    make_party_knowledge,
+    make_party_membership,
+    make_public_knowledge,
+    make_relationship_type_capability,
+    make_resource_grant,
+    make_role,
+    make_role_capability,
+    make_timeline,
+    make_user,
+    make_world,
+    make_world_time,
+)
+
+pytestmark = pytest.mark.database
+
+
+class Fixture:
+    def __init__(self, connection: Connection, slug: str) -> None:
+        self.world_id = make_world(connection, slug=slug)
+        self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
+        self.wt_early = make_world_time(connection, self.world_id, 100)
+        self.wt_late = make_world_time(connection, self.world_id, 900)
+        self.campaign_id = make_campaign(
+            connection, self.timeline_id, lifecycle_status_code="pending"
+        )
+
+        self.party_id = make_party(connection, self.world_id, name="The Company")
+        make_campaign_party(connection, self.campaign_id, self.party_id)
+        self.other_party_id = make_party(connection, self.world_id, name="The Rivals")
+        make_campaign_party(connection, self.campaign_id, self.other_party_id)
+
+        self.character_id = make_character(connection, self.world_id, name="Aria")
+        make_party_membership(
+            connection, self.timeline_id, self.party_id, self.character_id, self.wt_early
+        )
+        self.other_character_id = make_character(connection, self.world_id, name="Borin")
+
+        # --- knowledge items --------------------------------------------
+        self.fact_id = make_knowledge_item(
+            connection,
+            self.world_id,
+            knowledge_type_code="fact",
+            truth_status_code="true",
+            statement="The bridge at Elmford is sound.",
+        )
+        self.rumor_id = make_knowledge_item(
+            connection,
+            self.world_id,
+            knowledge_type_code="rumor",
+            truth_status_code="false",
+            statement="The mayor is secretly a doppelganger.",
+        )
+        self.private_id = make_knowledge_item(
+            connection,
+            self.world_id,
+            knowledge_type_code="secret",
+            truth_status_code="true",
+            statement="Aria saw the seneschal take a bribe.",
+        )
+        self.public_id = make_knowledge_item(
+            connection,
+            self.world_id,
+            knowledge_type_code="fact",
+            truth_status_code="true",
+            statement="The harvest festival is on the first of Highsun.",
+        )
+        self.other_party_only_id = make_knowledge_item(
+            connection,
+            self.world_id,
+            knowledge_type_code="fact",
+            truth_status_code="true",
+            statement="The Rivals found the northern cache.",
+        )
+
+        # The Company's party knowledge: a true fact, and a false belief
+        # (interpretation differs from canonical truth).
+        make_party_knowledge(
+            connection, self.timeline_id, self.party_id, self.fact_id, awareness_level="aware"
+        )
+        make_party_knowledge(
+            connection,
+            self.timeline_id,
+            self.party_id,
+            self.rumor_id,
+            awareness_level="rumored",
+            confidence=30,
+            interpretation="Some say the mayor was replaced last winter.",
+        )
+        # Another party's knowledge — must never appear in The Company's view.
+        make_party_knowledge(
+            connection, self.timeline_id, self.other_party_id, self.other_party_only_id
+        )
+
+        # Aria's individual (character-private) belief.
+        make_entity_knowledge(
+            connection,
+            self.timeline_id,
+            self.private_id,
+            self.character_id,
+            interpretation="I am certain it was the seneschal.",
+            learned_at_world_time_id=self.wt_late,
+        )
+        # Borin's individual belief — must not appear in Aria's perspective.
+        make_entity_knowledge(
+            connection,
+            self.timeline_id,
+            self.rumor_id,
+            self.other_character_id,
+            interpretation="Borin's private notes.",
+        )
+
+        # Discoveries for the recently-discovered stream (early then late).
+        self.discovery_early_id = make_party_discovery(
+            connection,
+            self.timeline_id,
+            self.fact_id,
+            party_id=self.party_id,
+            discovered_at_world_time_id=self.wt_early,
+        )
+        self.discovery_late_id = make_party_discovery(
+            connection,
+            self.timeline_id,
+            self.rumor_id,
+            party_id=self.party_id,
+            discovered_at_world_time_id=self.wt_late,
+        )
+
+        # Public lore at a location.
+        self.location_id = make_location(connection, self.world_id, name="Elmford")
+        make_public_knowledge(connection, self.timeline_id, self.public_id, self.location_id)
+
+        # --- users / roles ---------------------------------------------
+        self.view_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "campaign.view"
+        )
+        canon_edit_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "canon.edit"
+        )
+        view_knowledge_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_knowledge"
+        )
+
+        self.gm_user_id = make_user(connection, "Knowledge GM")
+        gm_membership_id = make_campaign_membership(connection, self.campaign_id, self.gm_user_id)
+        self.gm_membership_id = gm_membership_id
+        gm_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, gm_role_id, self.view_capability_id)
+        make_role_capability(connection, gm_role_id, canon_edit_id)
+        make_membership_role(connection, gm_membership_id, gm_role_id)
+
+        self.player_user_id = make_user(connection, "Knowledge Player")
+        player_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.player_user_id
+        )
+        self.player_membership_id = player_membership_id
+        player_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"player_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, player_role_id, self.view_capability_id)
+        make_membership_role(connection, player_membership_id, player_role_id)
+
+        self.relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(connection, self.relationship_type_id, view_knowledge_id)
+        make_membership_character_relationship(
+            connection,
+            player_membership_id,
+            self.character_id,
+            self.relationship_type_id,
+            timeline_id=self.timeline_id,
+        )
+
+        self.outsider_user_id = make_user(connection, "Knowledge Outsider")
+
+
+@pytest.fixture
+def f(postgres_engine: Engine) -> Iterator[Fixture]:
+    with postgres_engine.begin() as connection:
+        fixture = Fixture(connection, f"knowledge-browse-{uuid.uuid4().hex[:8]}")
+    yield fixture
+    with postgres_engine.begin() as cleanup:
+        cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        for stmt, param in [
+            (
+                "DELETE FROM security.membership_character_relationships "
+                "WHERE campaign_membership_id IN (SELECT campaign_membership_id "
+                "FROM security.campaign_memberships WHERE campaign_id = :c)",
+                {"c": fixture.campaign_id},
+            ),
+            (
+                "DELETE FROM security.membership_roles WHERE role_id IN "
+                "(SELECT role_id FROM security.roles WHERE campaign_id = :c)",
+                {"c": fixture.campaign_id},
+            ),
+            (
+                "DELETE FROM security.role_capabilities WHERE role_id IN "
+                "(SELECT role_id FROM security.roles WHERE campaign_id = :c)",
+                {"c": fixture.campaign_id},
+            ),
+            ("DELETE FROM security.roles WHERE campaign_id = :c", {"c": fixture.campaign_id}),
+            (
+                "DELETE FROM security.resource_grants WHERE campaign_id = :c",
+                {"c": fixture.campaign_id},
+            ),
+            (
+                "DELETE FROM security.campaign_memberships WHERE campaign_id = :c",
+                {"c": fixture.campaign_id},
+            ),
+            (
+                "DELETE FROM campaign.party_knowledge WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM knowledge.party_discoveries WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM knowledge.entity_knowledge WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM knowledge.public_knowledge WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM campaign.party_memberships WHERE timeline_id = :t",
+                {"t": fixture.timeline_id},
+            ),
+            (
+                "DELETE FROM campaign.campaign_parties WHERE campaign_id = :c",
+                {"c": fixture.campaign_id},
+            ),
+            ("DELETE FROM campaign.campaigns WHERE campaign_id = :c", {"c": fixture.campaign_id}),
+            ("DELETE FROM campaign.parties WHERE world_id = :w", {"w": fixture.world_id}),
+            ("DELETE FROM campaign.timelines WHERE world_id = :w", {"w": fixture.world_id}),
+            ("DELETE FROM core.entities WHERE world_id = :w", {"w": fixture.world_id}),
+            ("DELETE FROM core.worlds WHERE world_id = :w", {"w": fixture.world_id}),
+            (
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :rt",
+                {"rt": fixture.relationship_type_id},
+            ),
+            (
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :rt",
+                {"rt": fixture.relationship_type_id},
+            ),
+            (
+                "DELETE FROM security.users WHERE user_id = ANY(:u)",
+                {"u": [fixture.gm_user_id, fixture.player_user_id, fixture.outsider_user_id]},
+            ),
+        ]:
+            cleanup.execute(text(stmt), param)
+
+
+@pytest.fixture
+def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]:
+    def _make(user_id: uuid.UUID) -> TestClient:
+        from tests.factories import oidc_principal
+
+        app = create_app()
+        app.dependency_overrides[get_engine] = lambda: postgres_engine
+        app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
+        return TestClient(app, raise_server_exceptions=False)
+
+    return _make
+
+
+def _url(f: Fixture) -> str:
+    return f"/campaigns/{f.campaign_id}/knowledge"
+
+
+def _perspective(f: Fixture) -> dict[str, str]:
+    return {"character_id": str(f.character_id), "party_id": str(f.party_id)}
+
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+
+
+def test_non_member_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        assert client.get(_url(f)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Player perspective views
+# ---------------------------------------------------------------------------
+
+
+def test_known_view_returns_the_partys_settled_facts_not_rumors(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(_url(f), params={"view": "known", **_perspective(f), "limit": 100}).json()
+    ids = {item["knowledge_item_id"] for item in body["items"]}
+    assert str(f.fact_id) in ids
+    assert str(f.rumor_id) not in ids
+    # No ground-truth metadata leaks to a player.
+    for item in body["items"]:
+        assert item["truth_status_code"] is None
+        assert item["sensitivity"] is None
+
+
+def test_rumors_view_shows_the_partys_interpretation_not_canonical_truth(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={"view": "rumors", **_perspective(f), "limit": 100}
+        ).json()
+    by_id = {item["knowledge_item_id"]: item for item in body["items"]}
+    assert str(f.rumor_id) in by_id
+    item = by_id[str(f.rumor_id)]
+    assert item["statement"] == "Some say the mayor was replaced last winter."
+    assert item["statement"] != "The mayor is secretly a doppelganger."
+    assert item["truth_status_code"] is None  # never told it's "false"
+    assert item["confidence"] == 30
+
+
+def test_party_shared_is_the_union_of_known_and_rumors(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "limit": 100}
+        ).json()
+    ids = {item["knowledge_item_id"] for item in body["items"]}
+    assert {str(f.fact_id), str(f.rumor_id)} <= ids
+    assert str(f.other_party_only_id) not in ids  # another party's knowledge excluded
+
+
+def test_character_private_shows_only_the_selected_characters_beliefs(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f),
+            params={"view": "character_private", "character_id": str(f.character_id), "limit": 100},
+        ).json()
+    ids = {item["knowledge_item_id"] for item in body["items"]}
+    assert str(f.private_id) in ids
+    # Borin's private belief about the rumor is not in Aria's perspective.
+    by_id = {item["knowledge_item_id"]: item for item in body["items"]}
+    assert (
+        by_id.get(str(f.rumor_id)) is None
+        or by_id[str(f.rumor_id)]["statement"] != "Borin's private notes."
+    )
+
+
+def test_public_view_needs_no_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(_url(f), params={"view": "public", "limit": 100}).json()
+    ids = {item["knowledge_item_id"] for item in body["items"]}
+    assert str(f.public_id) in ids
+    for item in body["items"]:
+        assert item["truth_status_code"] is None  # non-public canonical fields withheld
+
+
+def test_recent_view_is_newest_discovery_first_and_paginates(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        page1 = client.get(_url(f), params={"view": "recent", **_perspective(f), "limit": 1}).json()
+        assert [i["knowledge_item_id"] for i in page1["items"]] == [str(f.rumor_id)]
+        assert page1["next_cursor"] is not None
+        page2 = client.get(
+            _url(f),
+            params={
+                "view": "recent",
+                **_perspective(f),
+                "limit": 1,
+                "cursor": page1["next_cursor"],
+            },
+        ).json()
+    assert [i["knowledge_item_id"] for i in page2["items"]] == [str(f.fact_id)]
+    # Provenance is surfaced on the record.
+    assert "discovery_world_time_id" in page1["items"][0]
+
+
+# ---------------------------------------------------------------------------
+# GM
+# ---------------------------------------------------------------------------
+
+
+def test_gm_known_view_is_canonical_with_ground_truth(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(_url(f), params={"view": "known", "limit": 100}).json()
+    by_id = {item["knowledge_item_id"]: item for item in body["items"]}
+    assert str(f.fact_id) in by_id
+    assert by_id[str(f.fact_id)]["truth_status_code"] == "true"
+    assert by_id[str(f.fact_id)]["statement"] == "The bridge at Elmford is sound."
+    # The rumor-typed item is not in the GM's "known" (settled) canonical view.
+    assert str(f.rumor_id) not in by_id
+
+
+def test_gm_rumors_view_shows_canonical_statement_and_false_status(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        body = client.get(_url(f), params={"view": "rumors", "limit": 100}).json()
+    by_id = {item["knowledge_item_id"]: item for item in body["items"]}
+    assert by_id[str(f.rumor_id)]["statement"] == "The mayor is secretly a doppelganger."
+    assert by_id[str(f.rumor_id)]["truth_status_code"] == "false"
+
+
+# ---------------------------------------------------------------------------
+# Perspective / empty / filters
+# ---------------------------------------------------------------------------
+
+
+def test_no_perspective_yields_an_empty_page_not_an_error(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        body = client.get(_url(f), params={"view": "party_shared"}).json()
+    assert body == {"items": [], "next_cursor": None}
+
+
+def test_a_mismatched_perspective_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        response = client.get(
+            _url(f),
+            params={
+                "view": "party_shared",
+                "character_id": str(f.character_id),
+                "party_id": str(f.other_party_id),  # Aria is not in The Rivals
+            },
+        )
+    assert response.status_code == 404
+
+
+def test_search_and_type_filters(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        by_q = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "q": "bridge"}
+        ).json()
+        by_type = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "type": "rumor"}
+        ).json()
+    assert {i["knowledge_item_id"] for i in by_q["items"]} == {str(f.fact_id)}
+    assert {i["knowledge_item_id"] for i in by_type["items"]} == {str(f.rumor_id)}
+
+
+def test_an_invalid_cursor_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        response = client.get(_url(f), params={"view": "known", "cursor": "garbage"})
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Targeted deny + revocation
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_deny_hides_an_item_from_the_list_and_detail(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            knowledge_item_id=f.fact_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as client:
+        body = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "limit": 100}
+        ).json()
+        detail = client.get(
+            f"/campaigns/{f.campaign_id}/knowledge/{f.fact_id}", params=_perspective(f)
+        )
+    assert str(f.fact_id) not in {i["knowledge_item_id"] for i in body["items"]}
+    assert detail.status_code == 404
+
+
+def test_revoking_the_character_relationship_takes_effect_on_the_next_request(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        before = client.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "limit": 100}
+        ).json()
+        assert before["items"]
+    with postgres_engine.begin() as revoke:
+        revoke.execute(
+            text(
+                "UPDATE security.membership_character_relationships SET revoked_at = now() "
+                "WHERE character_id = :c"
+            ),
+            {"c": f.character_id},
+        )
+    with client_factory(f.player_user_id) as client:
+        after = client.get(_url(f), params={"view": "party_shared", **_perspective(f)})
+    # The perspective can no longer be proven -> 404 (resolve_party_perspective).
+    assert after.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# list/detail agreement
+# ---------------------------------------------------------------------------
+
+
+def test_every_listed_item_is_fetchable_via_detail_under_the_same_perspective(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        for view, params in [
+            ("party_shared", _perspective(f)),
+            ("character_private", {"character_id": str(f.character_id)}),
+            ("public", {}),
+        ]:
+            listed = client.get(_url(f), params={"view": view, **params, "limit": 100}).json()[
+                "items"
+            ]
+            assert listed, view
+            for item in listed:
+                detail = client.get(
+                    f"/campaigns/{f.campaign_id}/knowledge/{item['knowledge_item_id']}",
+                    params=params,
+                )
+                assert detail.status_code == 200, (view, item, detail.text)
