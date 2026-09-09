@@ -111,11 +111,20 @@ describe("AppNavigation", () => {
             ),
         ).not.toBeInTheDocument()
 
+        const askLabel =
+            within(navigation).getByText("Ask")
+
+        expect(askLabel).toHaveClass(
+            "app-navigation__label",
+        )
+
         expect(
-            within(navigation).getByText("Ask"),
+            askLabel.closest(
+                "[aria-disabled='true']",
+            ),
         ).toHaveAttribute(
-            "aria-disabled",
-            "true",
+            "title",
+            "Unavailable until Phase 12 is verified",
         )
     })
 
@@ -249,6 +258,136 @@ describe("AppNavigation", () => {
         ).toHaveAttribute(
             "aria-expanded",
             "true",
+        )
+    })
+
+    it("opens and closes the mobile navigation explicitly", () => {
+        renderNavigation()
+
+        const navigation = screen.getByRole(
+            "navigation",
+            {
+                name: "Campaign",
+            },
+        )
+
+        const openButton =
+            screen.getByRole("button", {
+                name: "Open campaign navigation",
+            })
+
+        expect(openButton).toHaveAttribute(
+            "aria-expanded",
+            "false",
+        )
+
+        expect(openButton).toHaveAttribute(
+            "aria-controls",
+            "campaign-navigation-list",
+        )
+
+        expect(navigation).not.toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        fireEvent.click(openButton)
+
+        expect(navigation).toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        const closeButton =
+            screen.getByRole("button", {
+                name: "Close campaign navigation",
+            })
+
+        expect(closeButton).toHaveAttribute(
+            "aria-expanded",
+            "true",
+        )
+
+        fireEvent.click(closeButton)
+
+        expect(navigation).not.toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        expect(
+            screen.getByRole("button", {
+                name: "Open campaign navigation",
+            }),
+        ).toHaveAttribute(
+            "aria-expanded",
+            "false",
+        )
+    })
+
+    it("closes the mobile navigation after choosing a destination", () => {
+        renderNavigation()
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Open campaign navigation",
+            }),
+        )
+
+        const navigation = screen.getByRole(
+            "navigation",
+            {
+                name: "Campaign",
+            },
+        )
+
+        expect(navigation).toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        fireEvent.click(
+            within(navigation).getByRole("link", {
+                name: "World",
+            }),
+        )
+
+        expect(navigation).not.toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        expect(
+            screen.getByRole("button", {
+                name: "Open campaign navigation",
+            }),
+        ).toHaveAttribute(
+            "aria-expanded",
+            "false",
+        )
+    })
+
+    it("closes the mobile navigation when Escape is pressed", () => {
+        renderNavigation()
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Open campaign navigation",
+            }),
+        )
+
+        const navigation = screen.getByRole(
+            "navigation",
+            {
+                name: "Campaign",
+            },
+        )
+
+        expect(navigation).toHaveClass(
+            "app-navigation--mobile-open",
+        )
+
+        fireEvent.keyDown(document, {
+            key: "Escape",
+        })
+
+        expect(navigation).not.toHaveClass(
+            "app-navigation--mobile-open",
         )
     })
 })

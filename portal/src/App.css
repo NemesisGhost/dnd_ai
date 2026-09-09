@@ -10,8 +10,8 @@
   grid-template-columns: auto minmax(0, 1fr);
 }
 
-.app-shell:has(.app-navigation) > .app-header,
-.app-shell:has(.app-navigation) > .app-footer {
+.app-shell:has(.app-navigation)>.app-header,
+.app-shell:has(.app-navigation)>.app-footer {
   grid-column: 1 / -1;
 }
 
@@ -57,6 +57,7 @@
 }
 
 @media (max-width: 40rem) {
+
   .app-header,
   .app-main,
   .app-footer {
@@ -73,6 +74,85 @@
     width: calc(100% - 2rem);
     padding-right: 1rem;
     padding-left: 1rem;
+  }
+
+  .app-shell:has(.app-navigation) {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell:has(.app-navigation)>.app-header,
+  .app-shell:has(.app-navigation)>.app-footer {
+    grid-column: 1;
+  }
+
+  .app-navigation__mobile-toggle {
+    position: absolute;
+    top: 0.65rem;
+    right: 1rem;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 2.75rem;
+    padding: 0.4rem 0.65rem;
+    color: #ffffff;
+    font: inherit;
+    background-color: #34495e;
+    border: 1px solid #7a8b9c;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+
+  .app-navigation__mobile-toggle:focus-visible {
+    outline: 2px solid #7ab3e0;
+    outline-offset: 2px;
+  }
+
+  .app-navigation__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: block;
+    background-color: rgb(0 0 0 / 45%);
+    border: 0;
+  }
+
+  .app-navigation,
+  .app-navigation--collapsed {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    display: none;
+    width: min(18rem, 85vw);
+    overflow-y: auto;
+  }
+
+  .app-navigation--mobile-open {
+    display: flex;
+  }
+
+  .app-navigation--collapsed .app-navigation__link,
+  .app-navigation--collapsed .app-navigation__toggle {
+    gap: 0.75rem;
+    justify-content: flex-start;
+  }
+
+  .app-navigation--collapsed .app-navigation__label {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: initial;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .app-navigation__toggle-item {
+    display: none;
   }
 }
 
@@ -234,6 +314,11 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+.app-navigation__mobile-toggle,
+.app-navigation__backdrop {
+  display: none;
 }
 
 .hit-points-meter {
@@ -671,7 +756,7 @@
   min-width: 0;
 }
 
-.campaign-workspace > .campaign-context-panel {
+.campaign-workspace>.campaign-context-panel {
   max-width: 100%;
 }
 
@@ -685,7 +770,7 @@
     grid-row: 1;
   }
 
-  .campaign-workspace > .campaign-context-panel {
+  .campaign-workspace>.campaign-context-panel {
     grid-column: 2;
     grid-row: 1;
     max-width: 20rem;

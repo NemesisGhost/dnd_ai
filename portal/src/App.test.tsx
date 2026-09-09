@@ -262,9 +262,14 @@ describe("portal routing", () => {
       }),
     ).not.toBeInTheDocument()
 
+    const disabledAsk = screen.getByTitle(
+      "Unavailable until Phase 12 is verified",
+    )
+
+    expect(disabledAsk).toHaveAttribute("aria-disabled", "true")
     expect(
-      screen.getByText("Ask"),
-    ).toHaveAttribute("aria-disabled", "true")
+      screen.queryByRole("link", { name: "Ask" }),
+    ).not.toBeInTheDocument()
 
     expect(
       screen.getByRole("link", {
