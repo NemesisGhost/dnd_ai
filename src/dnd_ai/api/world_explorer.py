@@ -23,7 +23,7 @@ idempotency key, no `audit.change_log` row, no mutation.
 """
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -35,6 +35,7 @@ from dnd_ai.queries.world_explorer import (
     RELATIONSHIP_KEYSET,
     WORLD_CATEGORY_TYPE_CODES,
     CharacterVisibility,
+    WorldEntityVisibility,
     get_event_view,
     get_item_view,
     get_location_view,
@@ -50,7 +51,7 @@ from .pagination import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     build_page,
-    decode_cursor,
+    decode_typed_cursor,
 )
 
 router = APIRouter(tags=["world-explorer"])
@@ -120,6 +121,21 @@ def _campaign_view_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UU
     entity_denied, _ = access.resource_grant_targets(_VIEW_CAPABILITY, "entity_id")
     event_denied, _ = access.resource_grant_targets(_VIEW_CAPABILITY, "event_id")
     return entity_denied | event_denied
+
+
+def resolve_world_entity_visibility(access: AccessContext) -> WorldEntityVisibility:
+    """The full discoverability bundle for the caller — the same inputs
+    `search_world_entities` applies, packaged so a *second* consumer (the
+    relationship list and detail, Issue 1) decides "may this relationship
+    name this participant" the identical way."""
+    draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
+    return WorldEntityVisibility(
+        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        character_visibility=resolve_world_character_visibility(access),
+        include_draft_events=access.has_capability(_GM_CAPABILITY),
+        draft_event_allowed_ids=draft_allowed,
+        draft_event_denied_ids=draft_denied,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +266,9 @@ def search_world_entities_endpoint(
     for cat in categories:
         type_codes.extend(WORLD_CATEGORY_TYPE_CODES[cat])
 
-    keyset = decode_cursor(cursor, keyset=ENTITY_SEARCH_KEYSET, arity=2)
-    after_name = str(keyset[0]) if keyset is not None and keyset[0] is not None else None
-    after_entity_id = uuid.UUID(str(keyset[1])) if keyset is not None else None
+    keyset = decode_typed_cursor(cursor, keyset=ENTITY_SEARCH_KEYSET, fields=("str", "uuid"))
+    after_name = cast(str, keyset[0]) if keyset is not None else None
+    after_entity_id = cast(uuid.UUID, keyset[1]) if keyset is not None else None
 
     draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
 
@@ -307,21 +323,24 @@ def list_world_relationships_endpoint(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
 ) -> RelationshipListResponse:
-    """Relationships in the campaign's world, cursor-paginated. Mirrors the
-    existing `GET /campaigns/{id}/relationships/{id}` detail contract:
-    every relationship is visible to any `campaign.view` caller (who is
-    related to whom is a structural fact), filtered only by `q` (substring
-    over description), `type`, and `related_entity_id`. See
+    """Relationships in the campaign's world, cursor-paginated. A
+    relationship is returned only when every participant is independently
+    discoverable by the caller (Issue 1 — a card never carries a
+    participant id the audience has no route to, and this route agrees with
+    `GET /campaigns/{id}/relationships/{id}`). Filtered further by `q`
+    (substring over description), `type`, and `related_entity_id`. See
     `dnd_ai.queries.world_explorer.list_world_relationships`."""
-    keyset = decode_cursor(cursor, keyset=RELATIONSHIP_KEYSET, arity=1)
-    after_relationship_id = uuid.UUID(str(keyset[0])) if keyset is not None else None
+    keyset = decode_typed_cursor(cursor, keyset=RELATIONSHIP_KEYSET, fields=("uuid",))
+    after_relationship_id = cast(uuid.UUID, keyset[0]) if keyset is not None else None
 
     cards = list_world_relationships(
         connection,
         world_id=timeline_world_id(connection, access.timeline_id),
+        timeline_id=access.timeline_id,
         query_text=q,
         relationship_type_code=type,
         related_entity_id=related_entity_id,
+        visibility=resolve_world_entity_visibility(access),
         limit=limit,
         after_relationship_id=after_relationship_id,
     )

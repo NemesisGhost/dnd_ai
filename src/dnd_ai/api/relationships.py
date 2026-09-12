@@ -60,13 +60,18 @@ The relationship read side uses the same URL prefix:
 (`dnd_ai.queries.relationship.get_relationship_view`), requiring only
 `campaign.view` (the read-only counterpart to every command route's
 `canon.edit`, matching `dnd_ai.api.dungeon`/`.characters`/`.quests`'s own
-read endpoints). Participants and the shared, objective
-`campaign.relationship_state` row are always returned to any authorized
-caller; each participant's own *subjective* state row (affinity, trust,
-private interpretation, ...) is returned only to a caller holding
-`canon.edit` — see `dnd_ai.queries.relationship`'s own docstring for why
-this first cut is conservative rather than guessing a per-holder
-character-relationship rule. This `canon.edit` check
+read endpoints). A relationship is returned only when the caller can
+independently discover *every* one of its participants (the shared
+`dnd_ai.queries.world_explorer` discoverability rule — Issue 1); otherwise
+it is the same fixed non-disclosing 404 a nonexistent relationship
+produces, and the World Explorer relationship *list* applies the identical
+rule so the two agree. When it is returned, the shared, objective
+`campaign.relationship_state` row comes with it for any authorized caller;
+each participant's own *subjective* state row (affinity, trust, private
+interpretation, ...) only for a caller holding `canon.edit` — see
+`dnd_ai.queries.relationship`'s own docstring for why the subjective split
+is conservative rather than guessing a per-holder character-relationship
+rule. This `canon.edit` check
 (`access.has_capability(_RELATIONSHIP_MANAGE_CAPABILITY)`) is deliberately
 untargeted: `security.resource_grants` has no `relationship_id` target
 kind at all (a relationship connects two or more participants of equal
@@ -115,6 +120,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["relationships"])
 
@@ -353,6 +359,7 @@ def get_relationship_endpoint(
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         include_subjective=include_subjective,
+        visibility=resolve_world_entity_visibility(access),
     )
 
     return RelationshipResponse(

@@ -6,6 +6,7 @@ cursor encode/decode/validation"). No database.
 
 import base64
 import json
+import uuid
 
 import pytest
 
@@ -16,6 +17,7 @@ from dnd_ai.api.pagination import (
     MAX_PAGE_SIZE,
     build_page,
     decode_cursor,
+    decode_typed_cursor,
     encode_cursor,
 )
 
@@ -134,6 +136,72 @@ def test_encode_raises_rather_than_emit_a_cursor_it_would_reject() -> None:
     huge = "\U0001f409" * 4000
     with pytest.raises(ValueError, match="over the"):
         encode_cursor("knowledge_by_statement", [huge, "id"])
+
+
+# ---------------------------------------------------------------------------
+# decode_typed_cursor — per-field type validation (Issue 3: 422 not 500)
+# ---------------------------------------------------------------------------
+
+
+def _forged(keyset: str, values: list[object]) -> str:
+    return (
+        base64.urlsafe_b64encode(
+            json.dumps([1, keyset, values], separators=(",", ":")).encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+
+def test_typed_cursor_returns_already_typed_values() -> None:
+    raw = encode_cursor("k", ["a name", "11111111-1111-1111-1111-111111111111"])
+    result = decode_typed_cursor(raw, keyset="k", fields=("str", "uuid"))
+    assert result == ("a name", uuid.UUID("11111111-1111-1111-1111-111111111111"))
+
+
+def test_typed_cursor_none_for_the_first_page() -> None:
+    assert decode_typed_cursor(None, keyset="k", fields=("uuid",)) is None
+    assert decode_typed_cursor("", keyset="k", fields=("str", "uuid")) is None
+
+
+def test_typed_cursor_allows_a_nullable_int_field() -> None:
+    raw = encode_cursor("recent", [None, "11111111-1111-1111-1111-111111111111"])
+    assert decode_typed_cursor(raw, keyset="recent", fields=("int_or_none", "uuid")) == (
+        None,
+        uuid.UUID("11111111-1111-1111-1111-111111111111"),
+    )
+    raw2 = encode_cursor("recent", [42, "11111111-1111-1111-1111-111111111111"])
+    assert decode_typed_cursor(raw2, keyset="recent", fields=("int_or_none", "uuid"))[0] == 42
+
+
+@pytest.mark.parametrize(
+    ("fields", "values"),
+    [
+        (("str", "uuid"), ["ok", "not-a-uuid"]),  # invalid UUID string
+        (("str", "uuid"), ["ok", 12345]),  # number where a UUID string is expected
+        (
+            ("str", "uuid"),
+            [None, "11111111-1111-1111-1111-111111111111"],
+        ),  # null where str required
+        (("str", "uuid"), [123, "11111111-1111-1111-1111-111111111111"]),  # int where str required
+        (("int_or_none", "uuid"), ["12", "11111111-1111-1111-1111-111111111111"]),  # numeric string
+        (("int_or_none", "uuid"), [True, "11111111-1111-1111-1111-111111111111"]),  # bool as int
+        (("uuid",), [42]),  # number where a UUID is expected
+        (("str", "uuid"), ["only one"]),  # missing a required field
+        (("str", "uuid"), ["a", "11111111-1111-1111-1111-111111111111", "extra"]),  # wrong arity
+    ],
+)
+def test_typed_cursor_rejects_bad_field_values_with_invalid_cursor(
+    fields: tuple[str, ...], values: list[object]
+) -> None:
+    with pytest.raises(InvalidCursorError):
+        decode_typed_cursor(_forged("k", values), keyset="k", fields=fields)  # type: ignore[arg-type]
+
+
+def test_typed_cursor_rejects_a_cursor_for_a_different_keyset() -> None:
+    raw = encode_cursor("world_entities", ["x", "11111111-1111-1111-1111-111111111111"])
+    with pytest.raises(InvalidCursorError):
+        decode_typed_cursor(raw, keyset="knowledge_recent", fields=("str", "uuid"))
 
 
 # ---------------------------------------------------------------------------

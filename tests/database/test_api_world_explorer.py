@@ -455,6 +455,16 @@ def test_search_cursor_walks_names_that_share_a_long_prefix_exactly_once(
     assert made <= set(seen), "a shared-prefix entity was skipped"
 
 
+def _forged_cursor(keyset: str, values: list[object]) -> str:
+    """A structurally valid opaque cursor (`decode_cursor` accepts the
+    envelope) whose *values* are what a test wants to be wrong."""
+    import base64
+    import json
+
+    raw = json.dumps([1, keyset, values], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
 def test_invalid_cursor_is_rejected_with_422(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
@@ -462,6 +472,54 @@ def test_invalid_cursor_is_rejected_with_422(
         response = client.get(_search(f), params={"cursor": "not-a-real-cursor"})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["Amber Reach", "not-a-uuid"],  # syntactically valid cursor, bad UUID
+        ["Amber Reach", 12345],  # a number where a UUID string is expected
+        [None, "11111111-1111-1111-1111-111111111111"],  # null where a name is required
+        ["only-one-field"],  # missing the id component
+        ["Amber Reach", "11111111-1111-1111-1111-111111111111", "extra"],  # wrong shape
+    ],
+)
+def test_a_wellformed_cursor_with_bad_values_is_422_not_500(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, values: list[object]
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(
+            _search(f), params={"cursor": _forged_cursor("world_entities", values)}
+        )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
+def test_a_relationship_cursor_with_a_bad_uuid_is_422_not_500(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.gm_user_id) as client:
+        response = client.get(
+            f"/campaigns/{f.campaign_id}/world/relationships",
+            params={"cursor": _forged_cursor("world_relationships", ["not-a-uuid"])},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
+def test_a_valid_generated_cursor_still_paginates(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Regression: the typed decoder must not reject a real server-issued
+    cursor."""
+    with client_factory(f.gm_user_id) as client:
+        first = client.get(_search(f), params={"limit": 2}).json()
+        assert first["next_cursor"] is not None
+        second = client.get(_search(f), params={"limit": 2, "cursor": first["next_cursor"]})
+    assert second.status_code == 200
+    first_ids = {i["entity_id"] for i in first["items"]}
+    second_ids = {i["entity_id"] for i in second.json()["items"]}
+    assert not (first_ids & second_ids)
 
 
 def test_a_cursor_from_a_different_keyset_is_rejected(
@@ -680,31 +738,164 @@ def test_event_detail_draft_visibility_matches_the_list(
 # ---------------------------------------------------------------------------
 
 
-def test_relationships_list_mirrors_the_existing_detail_contract(
+def test_a_relationship_with_all_visible_participants_is_listed_and_fetchable(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
-    """Owner decision: World Explorer relationship visibility mirrors the
-    existing `/relationships/{id}` route — every relationship (and its
-    participant ids) is a structural fact visible to any `campaign.view`
-    caller. Both the player and the GM see both relationships; the
-    player's list agrees with what a direct `/relationships/{id}` fetch
-    returns."""
-    for user_id in (f.player_user_id, f.gm_user_id):
-        with client_factory(user_id) as client:
-            items = client.get(
+    """`visible_relationship_id` connects the guild and the region — both
+    plain `campaign.view` entities the player can discover — so it is in
+    the player's list and directly fetchable, and never carries a
+    participant id the player has no route to."""
+    with client_factory(f.player_user_id) as client:
+        items = client.get(
+            f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+        ).json()["items"]
+        by_id = {item["relationship_id"]: item for item in items}
+        assert str(f.visible_relationship_id) in by_id
+        listed = by_id[str(f.visible_relationship_id)]
+        assert set(listed["participant_entity_ids"]) == {str(f.org_id), str(f.region_id)}
+
+        detail = client.get(f"/campaigns/{f.campaign_id}/relationships/{f.visible_relationship_id}")
+        assert detail.status_code == 200
+        assert {p["entity_id"] for p in detail.json()["participants"]} == {
+            str(f.org_id),
+            str(f.region_id),
+        }
+        # list/detail agreement across the whole page.
+        for item in items:
+            assert (
+                client.get(
+                    f"/campaigns/{f.campaign_id}/relationships/{item['relationship_id']}"
+                ).status_code
+                == 200
+            )
+
+
+def test_a_relationship_edge_with_an_undiscoverable_participant_is_suppressed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """`character_relationship_id` connects the guild and the NPC
+    `Vashka the Quiet`, whom the player holds no `character.*` capability
+    for. The whole relationship is suppressed for the player — absent from
+    the list, and a direct fetch by its known UUID is the same
+    non-disclosing 404 a nonexistent id gives. The GM (who discovers every
+    character) sees it in both places."""
+    with client_factory(f.player_user_id) as player:
+        listed = {
+            item["relationship_id"]
+            for item in player.get(
                 f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
             ).json()["items"]
-            ids = {item["relationship_id"] for item in items}
-            assert {
-                str(f.visible_relationship_id),
-                str(f.character_relationship_id),
-            } <= ids
-            # list/detail agreement: each listed relationship is fetchable.
-            for item in items:
-                detail = client.get(
-                    f"/campaigns/{f.campaign_id}/relationships/{item['relationship_id']}"
-                )
-                assert detail.status_code == 200
+        }
+        assert str(f.character_relationship_id) not in listed
+        # No response anywhere carries the hidden participant's id.
+        raw = player.get(
+            f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+        ).text
+        assert str(f.npc_id) not in raw
+        assert str(f.character_relationship_id) not in raw
+
+        direct = player.get(
+            f"/campaigns/{f.campaign_id}/relationships/{f.character_relationship_id}"
+        )
+        missing = player.get(f"/campaigns/{f.campaign_id}/relationships/{uuid.uuid4()}")
+        assert direct.status_code == missing.status_code == 404
+        assert direct.json()["error"]["code"] == missing.json()["error"]["code"]
+        assert direct.json()["error"]["message"] == missing.json()["error"]["message"]
+
+    with client_factory(f.gm_user_id) as gm:
+        gm_listed = {
+            item["relationship_id"]
+            for item in gm.get(
+                f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+            ).json()["items"]
+        }
+        assert str(f.character_relationship_id) in gm_listed
+        assert (
+            gm.get(
+                f"/campaigns/{f.campaign_id}/relationships/{f.character_relationship_id}"
+            ).status_code
+            == 200
+        )
+
+
+def test_a_relationship_edge_with_a_campaign_view_denied_participant_is_suppressed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A targeted `campaign.view` deny on the guild removes
+    `visible_relationship_id` (guild + region) from the player's list and
+    direct fetch — the same deny that hides the guild from
+    `/world/search`. A different member is unaffected."""
+    with client_factory(f.player_user_id) as player:
+        assert str(f.visible_relationship_id) in {
+            item["relationship_id"]
+            for item in player.get(
+                f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+            ).json()["items"]
+        }
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.org_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as player:
+        listed = {
+            item["relationship_id"]
+            for item in player.get(
+                f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+            ).json()["items"]
+        }
+        assert str(f.visible_relationship_id) not in listed
+        assert (
+            player.get(
+                f"/campaigns/{f.campaign_id}/relationships/{f.visible_relationship_id}"
+            ).status_code
+            == 404
+        )
+    with client_factory(f.gm_user_id) as gm:
+        assert str(f.visible_relationship_id) in {
+            item["relationship_id"]
+            for item in gm.get(
+                f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+            ).json()["items"]
+        }
+
+
+def test_a_relationship_edge_with_a_wrong_timeline_event_participant_is_suppressed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A relationship naming an event that lives on a *different* timeline
+    than the caller's campaign is suppressed for everyone (even the GM) —
+    the event is not discoverable in this campaign, exactly as
+    `/world/search?category=event` already excludes it."""
+    with postgres_engine.begin() as setup:
+        rel = make_relationship(
+            setup, f.world_id, relationship_type_code="control", description="tied to a sidebranch"
+        )
+        make_relationship_participant(setup, rel, f.org_id)
+        make_relationship_participant(setup, rel, f.other_timeline_event_id, role_code="object")
+    for user_id in (f.player_user_id, f.gm_user_id):
+        with client_factory(user_id) as client:
+            listed = {
+                item["relationship_id"]
+                for item in client.get(
+                    f"/campaigns/{f.campaign_id}/world/relationships", params={"limit": 100}
+                ).json()["items"]
+            }
+            assert str(rel) not in listed
+            assert client.get(f"/campaigns/{f.campaign_id}/relationships/{rel}").status_code == 404
+    with postgres_engine.begin() as teardown:
+        teardown.execute(text("SET LOCAL session_replication_role = replica"))
+        teardown.execute(
+            text("DELETE FROM world.relationship_participants WHERE relationship_id = :r"),
+            {"r": rel},
+        )
+        teardown.execute(
+            text("DELETE FROM world.relationships WHERE relationship_id = :r"), {"r": rel}
+        )
 
 
 def test_relationships_can_be_filtered_by_type_and_related_entity(
