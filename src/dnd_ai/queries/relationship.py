@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.queries.world_explorer import WorldEntityVisibility, discoverable_entity_ids
 
 
 class RelationshipNotFoundError(DomainAuthorizationError):
@@ -90,14 +91,20 @@ def get_relationship_view(
     timeline_id: uuid.UUID,
     expected_world_id: uuid.UUID,
     include_subjective: bool,
+    visibility: WorldEntityVisibility,
 ) -> RelationshipView:
     """The effective state of one relationship: its participants, current
     shared status, and — only when `include_subjective=True` — every
     participant's own current subjective view. Raises
-    `RelationshipNotFoundError` for a nonexistent relationship or one
+    `RelationshipNotFoundError` for a nonexistent relationship, one
     belonging to a different world than `expected_world_id` (always the
     caller's own resolved-timeline world — `dnd_ai.api._shared.
-    timeline_world_id`, never caller-supplied)."""
+    timeline_world_id`, never caller-supplied), **or one with any
+    participant this caller cannot independently discover** (Issue 1) — all
+    identically, so returning a relationship never discloses an inaccessible
+    participant id or edge, and the list route (`list_world_relationships`,
+    which applies the same rule in SQL) and this route agree on which
+    relationships an audience may see."""
     row = (
         connection.execute(
             text("""
@@ -133,6 +140,23 @@ def get_relationship_view(
         RelationshipParticipantView(entity_id=p["entity_id"], role_code=p["role_code"])
         for p in participant_rows
     )
+
+    # A relationship that would name a participant the caller cannot
+    # independently discover is treated exactly like a nonexistent one —
+    # never returned with the inaccessible id redacted or the edge partly
+    # shown. Keeps list and detail in agreement.
+    participant_ids = [p.entity_id for p in participants]
+    discoverable = discoverable_entity_ids(
+        connection,
+        participant_ids,
+        world_id=expected_world_id,
+        timeline_id=timeline_id,
+        visibility=visibility,
+    )
+    if any(entity_id not in discoverable for entity_id in participant_ids):
+        raise RelationshipNotFoundError(
+            f"relationship {relationship_id} has a participant not discoverable by this caller"
+        )
 
     state_columns = """
         rs.perspective_holder_entity_id, rst.code AS status_code, rs.affinity, rs.trust,

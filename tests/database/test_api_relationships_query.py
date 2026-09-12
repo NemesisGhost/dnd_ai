@@ -8,9 +8,11 @@ tests exercise campaign-capability enforcement and the shared-vs-
 subjective state split, not OIDC token verification.
 
 Covers: access control (non-member 404, capless-member 403), that
-participants and the shared, objective relationship state are always
-returned to any authorized caller, that subjective per-participant state
-(affinity/trust/private interpretation) is returned only to a caller
+participants and the shared, objective relationship state are returned to
+any authorized caller *who can independently discover every participant*
+(Issue 1 — a relationship with an undiscoverable participant is suppressed
+whole, identical to a nonexistent one), that subjective per-participant
+state (affinity/trust/private interpretation) is returned only to a caller
 holding `canon.edit` and otherwise omitted entirely (not merely withheld
 after being fetched), and cross-world/nonexistent-relationship rejection.
 """
@@ -30,10 +32,13 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_character,
+    make_character_relationship_type,
+    make_membership_character_relationship,
     make_membership_role,
     make_relationship,
     make_relationship_participant,
     make_relationship_state,
+    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_timeline,
@@ -112,11 +117,55 @@ class Fixture:
         player_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.player_user_id
         )
+        self.player_membership_id = player_membership_id
         player_role_id = make_role(
             connection, campaign_id=self.campaign_id, code=f"player_{uuid.uuid4().hex[:8]}"
         )
         make_role_capability(connection, player_role_id, view_capability_id)
         make_membership_role(connection, player_membership_id, player_role_id)
+
+        # The player can independently discover both participants of the
+        # main relationship (a per-character `character.view_summary`
+        # relationship to each) — so the relationship is returned to the
+        # player. A relationship with a participant the player *cannot*
+        # discover is a separate test (`test_a_relationship_with_an_
+        # undiscoverable_participant_is_suppressed`).
+        discover_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_summary"
+        )
+        self.relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(
+            connection, self.relationship_type_id, discover_capability_id
+        )
+        for character_id in (self.entity_a_id, self.entity_b_id):
+            make_membership_character_relationship(
+                connection,
+                player_membership_id,
+                character_id,
+                self.relationship_type_id,
+                timeline_id=self.timeline_id,
+            )
+
+        # A relationship one of whose participants the player has no way to
+        # discover.
+        self.undiscoverable_entity_id = make_character(
+            connection, self.world_id, name="Unknowable Stranger"
+        )
+        self.relationship_with_hidden_participant_id = make_relationship(
+            connection, self.world_id, relationship_type_code="rivalry"
+        )
+        make_relationship_participant(
+            connection,
+            self.relationship_with_hidden_participant_id,
+            self.entity_a_id,
+            role_code="subject",
+        )
+        make_relationship_participant(
+            connection,
+            self.relationship_with_hidden_participant_id,
+            self.undiscoverable_entity_id,
+            role_code="object",
+        )
 
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
@@ -174,6 +223,20 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             )
             cleanup.execute(
                 text("""
+                    DELETE FROM security.membership_character_relationships
+                    WHERE campaign_membership_id IN (
+                        SELECT campaign_membership_id FROM security.campaign_memberships
+                        WHERE campaign_id IN (
+                            SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
+                                SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
+                            )
+                        )
+                    )
+                """),
+                {"w": world_id},
+            )
+            cleanup.execute(
+                text("""
                     DELETE FROM security.campaign_memberships WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id IN (
                             SELECT timeline_id FROM campaign.timelines WHERE world_id = :w
@@ -195,6 +258,20 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             )
             cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
             cleanup.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world_id})
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :rt"
+            ),
+            {"rt": fixture.relationship_type_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :rt"
+            ),
+            {"rt": fixture.relationship_type_id},
+        )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {
@@ -279,6 +356,10 @@ def test_a_gm_sees_shared_and_every_participants_subjective_state(
 def test_a_player_sees_shared_state_and_participants_but_no_subjective_states(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
+    """The player can independently discover both participants (a
+    `character.view_summary` relationship to each), so the relationship is
+    returned — with the shared state and participant ids, no subjective
+    rows."""
     with client_factory(f.player_user_id) as client:
         response = client.get(_relationship_url(f))
     assert response.status_code == 200, response.text
@@ -291,6 +372,42 @@ def test_a_player_sees_shared_state_and_participants_but_no_subjective_states(
     assert body["shared_state"]["status_code"] == "active"
     assert body["shared_state"]["affinity"] == 10
     assert body["subjective_states"] == []
+
+
+# ---------------------------------------------------------------------------
+# Issue 1: a relationship never discloses an inaccessible participant
+# ---------------------------------------------------------------------------
+
+
+def test_a_relationship_with_an_undiscoverable_participant_is_suppressed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """The player has no way to discover `Unknowable Stranger`, so a
+    relationship naming it is suppressed whole for the player — never
+    returned with the id redacted or the edge partly shown. A GM (who
+    discovers every character) still sees it."""
+    with client_factory(f.player_user_id) as player:
+        denied = player.get(_relationship_url(f, f.relationship_with_hidden_participant_id))
+    assert denied.status_code == 404
+
+    with client_factory(f.gm_user_id) as gm:
+        allowed = gm.get(_relationship_url(f, f.relationship_with_hidden_participant_id))
+    assert allowed.status_code == 200
+    assert {p["entity_id"] for p in allowed.json()["participants"]} == {
+        str(f.entity_a_id),
+        str(f.undiscoverable_entity_id),
+    }
+
+
+def test_the_suppressed_relationship_is_indistinguishable_from_a_nonexistent_one(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as player:
+        suppressed = player.get(_relationship_url(f, f.relationship_with_hidden_participant_id))
+        missing = player.get(_relationship_url(f, uuid.uuid4()))
+    assert suppressed.status_code == missing.status_code == 404
+    assert suppressed.json()["error"]["code"] == missing.json()["error"]["code"]
+    assert suppressed.json()["error"]["message"] == missing.json()["error"]["message"]
 
 
 # ---------------------------------------------------------------------------

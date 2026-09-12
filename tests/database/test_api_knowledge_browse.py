@@ -34,10 +34,13 @@ from tests.factories import (
     make_character,
     make_character_relationship_type,
     make_entity_knowledge,
+    make_event,
+    make_interaction,
     make_knowledge_item,
     make_location,
     make_membership_character_relationship,
     make_membership_role,
+    make_organization,
     make_party,
     make_party_discovery,
     make_party_knowledge,
@@ -178,6 +181,7 @@ class Fixture:
         canon_edit_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "canon.edit"
         )
+        self.canon_edit_capability_id = canon_edit_id
         view_knowledge_id = lookup_id(
             connection, "security", "capabilities", "capability_id", "character.view_knowledge"
         )
@@ -898,3 +902,315 @@ def test_gm_recent_carries_no_party_belief_metadata(
         assert item["awareness_level"] is None
         assert item["confidence"] is None
         assert item["willing_to_share"] is None
+
+
+# ---------------------------------------------------------------------------
+# Issue 3: malformed typed cursor values return 422, never 500
+# ---------------------------------------------------------------------------
+
+
+def _forged_knowledge_cursor(keyset: str, values: list[object]) -> str:
+    import base64
+    import json
+
+    raw = json.dumps([1, keyset, values], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+@pytest.mark.parametrize(
+    ("view", "keyset", "values"),
+    [
+        ("known", "knowledge_by_statement", ["a bridge", "not-a-uuid"]),  # bad UUID
+        (
+            "known",
+            "knowledge_by_statement",
+            [123, "11111111-1111-1111-1111-111111111111"],
+        ),  # int for str
+        (
+            "known",
+            "knowledge_by_statement",
+            [None, "11111111-1111-1111-1111-111111111111"],
+        ),  # null name
+        ("known", "knowledge_by_statement", ["a bridge"]),  # missing id
+        ("known", "knowledge_by_statement", ["a bridge", "1111...", "extra"]),  # wrong shape
+        (
+            "recent",
+            "knowledge_recent",
+            ["not-an-int", "11111111-1111-1111-1111-111111111111"],
+        ),  # str for int
+        (
+            "recent",
+            "knowledge_recent",
+            [True, "11111111-1111-1111-1111-111111111111"],
+        ),  # bool for int
+        # A cursor shaped for the *other* view/keyset:
+        ("recent", "knowledge_by_statement", ["a bridge", "11111111-1111-1111-1111-111111111111"]),
+        ("known", "knowledge_recent", [5, "11111111-1111-1111-1111-111111111111"]),
+    ],
+)
+def test_a_wellformed_cursor_with_bad_values_is_422_not_500(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    view: str,
+    keyset: str,
+    values: list[object],
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        response = client.get(
+            _url(f),
+            params={
+                "view": view,
+                **_perspective(f),
+                "cursor": _forged_knowledge_cursor(keyset, values),
+            },
+        )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
+def test_a_valid_recent_cursor_still_paginates(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.player_user_id) as client:
+        page1 = client.get(_url(f), params={"view": "recent", **_perspective(f), "limit": 1}).json()
+        assert page1["next_cursor"] is not None
+        page2 = client.get(
+            _url(f),
+            params={
+                "view": "recent",
+                **_perspective(f),
+                "limit": 1,
+                "cursor": page1["next_cursor"],
+            },
+        )
+    assert page2.status_code == 200
+    assert page1["items"][0]["knowledge_item_id"] not in {
+        i["knowledge_item_id"] for i in page2.json()["items"]
+    }
+
+
+# ---------------------------------------------------------------------------
+# Issue 4: campaign.view vs canon.edit — a canon.edit deny never hides an
+# otherwise-visible item; it only strips that item's ground-truth fields.
+# ---------------------------------------------------------------------------
+
+
+def test_a_targeted_canon_edit_deny_does_not_hide_an_item_the_party_believes(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The player has no `canon.edit` at all, so a `canon.edit` deny
+    targeting `rumor_id` changes nothing about that item's capability — yet
+    before Issue 4 it vanished from the player's list too (the deny set
+    conflated `campaign.view` and `canon.edit`). Now the player still sees
+    their party's belief (interpretation, no truth_status/sensitivity), and
+    list and detail agree."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.rumor_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.player_user_id) as player:
+        listed = player.get(
+            _url(f), params={"view": "party_shared", **_perspective(f), "limit": 100}
+        ).json()["items"]
+        detail = player.get(
+            f"/campaigns/{f.campaign_id}/knowledge/{f.rumor_id}", params=_perspective(f)
+        )
+    row = next(i for i in listed if i["knowledge_item_id"] == str(f.rumor_id))
+    assert row["statement"] == "Some say the mayor was replaced last winter."
+    assert row["truth_status_code"] is None
+    assert row["sensitivity"] is None
+    assert detail.status_code == 200
+    assert detail.json()["statement"] == row["statement"]
+
+
+def test_the_canonical_rumors_list_drops_an_item_a_gm_is_denied_ground_truth_for(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.rumor_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+    with client_factory(f.gm_user_id) as gm:
+        listed = {
+            i["knowledge_item_id"]
+            for i in gm.get(_url(f), params={"view": "rumors", "limit": 100}).json()["items"]
+        }
+        detail = gm.get(f"/campaigns/{f.campaign_id}/knowledge/{f.rumor_id}")
+    # No perspective, no ground truth for this item -> the canonical view
+    # has nothing to show, and detail 404s. They agree.
+    assert str(f.rumor_id) not in listed
+    assert detail.status_code == 404
+    # A different, undenied item is unaffected.
+    with client_factory(f.gm_user_id) as gm:
+        others = {
+            i["knowledge_item_id"]
+            for i in gm.get(_url(f), params={"view": "known", "limit": 100}).json()["items"]
+        }
+    assert str(f.fact_id) in others
+
+
+def test_a_non_gm_with_a_targeted_canon_edit_allow_sees_that_items_ground_truth_only(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A targeted `canon.edit` allow reveals one item's canonical view to a
+    caller with no baseline `canon.edit` — and *only* that item (no
+    campaign-wide GM authority)."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.canon_edit_capability_id,
+            knowledge_item_id=f.fact_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="allow",
+        )
+    with client_factory(f.player_user_id) as player:
+        known = player.get(_url(f), params={"view": "known", "limit": 100}).json()["items"]
+        detail = player.get(f"/campaigns/{f.campaign_id}/knowledge/{f.fact_id}")
+    ids = {i["knowledge_item_id"] for i in known}
+    assert ids == {str(f.fact_id)}, "only the targeted item, canonical view"
+    row = next(i for i in known if i["knowledge_item_id"] == str(f.fact_id))
+    assert row["scope"] == "canonical"
+    assert row["truth_status_code"] == "true"
+    assert detail.status_code == 200
+    assert detail.json()["truth_status_code"] == "true"
+
+
+# ---------------------------------------------------------------------------
+# Issue 1: a knowledge item never discloses an unauthorized related id
+# ---------------------------------------------------------------------------
+
+
+def test_a_visible_subject_and_source_event_id_are_returned(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as setup:
+        org_id = make_organization(setup, f.world_id, name="The Cartographers Guild")
+        setup.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET subject_entity_id = :s "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"s": org_id, "k": f.fact_id},
+        )
+        event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            f.wt_early,
+            campaign_id=f.campaign_id,
+            name="The Guild Charter Signed",
+        )
+        setup.execute(
+            text(
+                "UPDATE knowledge.party_discoveries SET discovered_via_event_id = :e "
+                "WHERE party_discovery_id = :d"
+            ),
+            {"e": event_id, "d": f.discovery_early_id},
+        )
+    with client_factory(f.player_user_id) as player:
+        recent = player.get(
+            _url(f), params={"view": "recent", **_perspective(f), "limit": 100}
+        ).json()["items"]
+    row = next(i for i in recent if i["knowledge_item_id"] == str(f.fact_id))
+    assert row["subject_entity_id"] == str(org_id)
+    assert row["source_event_id"] == str(event_id)
+
+
+def test_a_denied_subject_and_a_draft_source_event_id_are_redacted(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The knowledge item stays visible; only the related ids the player
+    cannot independently discover are nulled — and never appear anywhere in
+    the serialized response."""
+    with postgres_engine.begin() as setup:
+        org_id = make_organization(setup, f.world_id, name="The Hidden Circle")
+        setup.execute(
+            text(
+                "UPDATE knowledge.knowledge_items SET subject_entity_id = :s "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"s": org_id, "k": f.fact_id},
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=org_id,
+            grantee_campaign_membership_id=f.player_membership_id,
+            effect="deny",
+        )
+        draft_event_id = make_event(
+            setup,
+            f.world_id,
+            f.timeline_id,
+            f.wt_early,
+            campaign_id=f.campaign_id,
+            event_status_code="draft",
+            name="An Unrecorded Meeting",
+        )
+        setup.execute(
+            text(
+                "UPDATE knowledge.party_discoveries SET discovered_via_event_id = :e "
+                "WHERE party_discovery_id = :d"
+            ),
+            {"e": draft_event_id, "d": f.discovery_early_id},
+        )
+    with client_factory(f.player_user_id) as player:
+        response = player.get(_url(f), params={"view": "recent", **_perspective(f), "limit": 100})
+    row = next(i for i in response.json()["items"] if i["knowledge_item_id"] == str(f.fact_id))
+    assert row["subject_entity_id"] is None
+    assert row["source_event_id"] is None
+    assert str(org_id) not in response.text
+    assert str(draft_event_id) not in response.text
+    # The GM (discovers the org, sees the draft event) gets both ids.
+    with client_factory(f.gm_user_id) as gm:
+        gm_recent = gm.get(_url(f), params={"view": "recent", "limit": 100}).json()["items"]
+    gm_row = next(i for i in gm_recent if i["knowledge_item_id"] == str(f.fact_id))
+    assert gm_row["subject_entity_id"] == str(org_id)
+    assert gm_row["source_event_id"] == str(draft_event_id)
+
+
+def test_a_same_timeline_source_interaction_id_is_returned(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`interaction.interactions` has no browse/detail endpoint; the only
+    "may I see this" signal the redaction check permits is that it happened
+    on the caller's own campaign timeline — which the schema's own
+    `enforce_party_discovery_source_world` trigger already guarantees for
+    any interaction a discovery references, so a cross-timeline reference
+    cannot be constructed on these tables and there is no negative case to
+    assert. This confirms the permitted (positive) case."""
+    with postgres_engine.begin() as setup:
+        interaction_id = make_interaction(
+            setup, f.timeline_id, f.wt_early, campaign_id=f.campaign_id
+        )
+        setup.execute(
+            text(
+                "UPDATE knowledge.party_discoveries SET discovered_via_interaction_id = :i "
+                "WHERE party_discovery_id = :d"
+            ),
+            {"i": interaction_id, "d": f.discovery_early_id},
+        )
+    with client_factory(f.player_user_id) as player:
+        recent = player.get(
+            _url(f), params={"view": "recent", **_perspective(f), "limit": 100}
+        ).json()["items"]
+    row = next(i for i in recent if i["knowledge_item_id"] == str(f.fact_id))
+    assert row["source_interaction_id"] == str(interaction_id)
+    with postgres_engine.begin() as teardown:
+        teardown.execute(text("SET LOCAL session_replication_role = replica"))
+        teardown.execute(
+            text("DELETE FROM interaction.interactions WHERE interaction_id = :i"),
+            {"i": interaction_id},
+        )

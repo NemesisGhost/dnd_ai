@@ -70,10 +70,19 @@ keyset the opaque `dnd_ai.api.pagination` cursor carries. Relationships
 (not entity-rooted, no name) order by `relationship_id` alone. No total
 count is computed for any browse result (docs/UI_DESIGN.md §9).
 
-`world.relationships` visibility mirrors the existing relationship detail
-route (participants are a structural fact visible to any `campaign.view`
-caller) rather than hiding an edge whose node the caller cannot discover —
-see `list_world_relationships` for the reasoning and the follow-up note.
+`world.relationships` (list and detail) is returned only when *every*
+participant is independently discoverable by the caller under the rules
+above — `_entity_discoverable_expr` / `discoverable_entity_ids`, the same
+predicate `search_world_entities` applies. A relationship with any
+`campaign.view`-denied, undiscoverable-character, cross-world/wrong-
+timeline-event, `voided`/unauthorized-`draft`-event, or
+non-browsable-type participant is suppressed whole — never returned with
+the inaccessible id redacted or the edge partly shown, and never in a way
+that reveals a relationship or participant was filtered (Issue 1). The
+list applies this in SQL before `LIMIT` so pagination stays exact; detail
+raises the standard non-disclosing 404. `world.relationships` itself has
+no `security.resource_grants` target column, so suppression is entirely
+participant-driven.
 
 This module is framework-free and performs no authorization of its own:
 every visibility parameter (`campaign_view_denied_entity_ids`,
@@ -342,6 +351,126 @@ def search_world_entities(
 
 
 # ---------------------------------------------------------------------------
+# Shared entity-discoverability rule (Issue 1 — related-resource disclosure)
+# ---------------------------------------------------------------------------
+
+# Every `core.entity_types.code` that belongs to a browsable World Explorer
+# category. An entity of any *other* type (a quest, a knowledge item, an
+# interaction, ...) has no World Explorer surface at all and is treated as
+# not-discoverable when it appears as a related resource — the conservative
+# choice, so a relationship never leaks an id the audience has no route to.
+_BROWSABLE_TYPE_CODES: tuple[str, ...] = tuple(_TYPE_CODE_TO_CATEGORY)
+
+
+@dataclass(frozen=True)
+class WorldEntityVisibility:
+    """Everything the discoverability rule needs, resolved once from the
+    caller's `AccessContext` (`dnd_ai.api.world_explorer.
+    resolve_world_entity_visibility`) and reused wherever a *related*
+    resource id might otherwise be disclosed — the relationship list and
+    detail (Issue 1). It carries the identical inputs
+    `search_world_entities` already applies, so "may I see this entity in
+    /world/search" and "may this relationship name this participant" can
+    never disagree."""
+
+    campaign_view_denied_entity_ids: frozenset[uuid.UUID]
+    character_visibility: CharacterVisibility
+    include_draft_events: bool
+    draft_event_allowed_ids: frozenset[uuid.UUID]
+    draft_event_denied_ids: frozenset[uuid.UUID]
+
+
+# A SQL boolean that is TRUE exactly when the entity joined as `{e}` (with
+# its `core.entity_types` row `{et}` and its LEFT-JOINed `narrative.events`
+# `{ev}` / `narrative.event_statuses` `{es}` rows) is discoverable by the
+# caller under `search_world_entities`'s own rules: a browsable type in the
+# caller's world, not `campaign.view`-denied, characters gated by the
+# discover tiers, events timeline-scoped with the draft/voided split. Kept
+# byte-for-byte aligned with `search_world_entities`'s WHERE clause.
+def _entity_discoverable_expr(*, e: str, et: str, ev: str, es: str) -> str:
+    return f"""(
+        {e}.world_id = :disc_world_id
+        AND {et}.code = ANY(CAST(:disc_browsable_codes AS text[]))
+        AND NOT ({e}.entity_id = ANY(CAST(:disc_cv_denied AS uuid[])))
+        AND (
+          CASE
+            WHEN {et}.code = ANY(CAST(:disc_character_codes AS text[])) THEN
+              (CAST(:disc_discover_all AS boolean)
+               AND NOT ({e}.entity_id = ANY(CAST(:disc_char_hidden AS uuid[]))))
+              OR {e}.entity_id = ANY(CAST(:disc_char_visible AS uuid[]))
+            WHEN {et}.code = 'event' THEN
+              {ev}.event_id IS NOT NULL
+              AND {ev}.timeline_id = :disc_timeline_id
+              AND {es}.code <> 'voided'
+              AND (
+                {es}.code <> 'draft'
+                OR (
+                  NOT ({e}.entity_id = ANY(CAST(:disc_draft_denied AS uuid[])))
+                  AND (
+                    CAST(:disc_include_draft AS boolean)
+                    OR {e}.entity_id = ANY(CAST(:disc_draft_allowed AS uuid[]))
+                  )
+                )
+              )
+            ELSE TRUE
+          END
+        )
+    )"""
+
+
+def _entity_visibility_params(
+    *, world_id: uuid.UUID, timeline_id: uuid.UUID, visibility: WorldEntityVisibility
+) -> dict[str, object]:
+    return {
+        "disc_world_id": world_id,
+        "disc_timeline_id": timeline_id,
+        "disc_browsable_codes": list(_BROWSABLE_TYPE_CODES),
+        "disc_character_codes": list(_CHARACTER_TYPE_CODES),
+        "disc_cv_denied": list(visibility.campaign_view_denied_entity_ids),
+        "disc_discover_all": visibility.character_visibility.discover_all,
+        "disc_char_visible": list(visibility.character_visibility.force_visible),
+        "disc_char_hidden": list(visibility.character_visibility.force_hidden),
+        "disc_include_draft": visibility.include_draft_events,
+        "disc_draft_allowed": list(visibility.draft_event_allowed_ids),
+        "disc_draft_denied": list(visibility.draft_event_denied_ids),
+    }
+
+
+def discoverable_entity_ids(
+    connection: Connection,
+    candidate_ids: Sequence[uuid.UUID],
+    *,
+    world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    visibility: WorldEntityVisibility,
+) -> frozenset[uuid.UUID]:
+    """The subset of `candidate_ids` the caller is independently authorized
+    to discover in the World Explorer — used by the relationship *detail*
+    route to decide whether returning a relationship would disclose an
+    inaccessible participant. The list route pushes the identical predicate
+    into SQL before pagination (`list_world_relationships`)."""
+    if not candidate_ids:
+        return frozenset()
+    params = _entity_visibility_params(
+        world_id=world_id, timeline_id=timeline_id, visibility=visibility
+    )
+    params["candidate_ids"] = list(candidate_ids)
+    rows = connection.execute(
+        text(f"""
+            SELECT e.entity_id
+            FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
+            LEFT JOIN narrative.event_statuses es ON es.event_status_id = ev.event_status_id
+            WHERE e.entity_id = ANY(CAST(:candidate_ids AS uuid[]))
+              AND {_entity_discoverable_expr(e="e", et="et", ev="ev", es="es")}
+        """),
+        params,
+    ).scalars()
+    return frozenset(rows)
+
+
+# ---------------------------------------------------------------------------
 # Relationships list (not entity-rooted)
 # ---------------------------------------------------------------------------
 
@@ -358,32 +487,37 @@ def list_world_relationships(
     connection: Connection,
     *,
     world_id: uuid.UUID,
+    timeline_id: uuid.UUID,
     query_text: str | None,
     relationship_type_code: str | None,
     related_entity_id: uuid.UUID | None,
+    visibility: WorldEntityVisibility,
     limit: int,
     after_relationship_id: uuid.UUID | None,
 ) -> tuple[RelationshipCard, ...]:
     """Up to `limit + 1` relationships in the world, ordered by
     `relationship_id`.
 
-    **Visibility (owner decision, 2026-09-09 — "mirror existing detail
-    endpoints"):** the existing `GET /campaigns/{id}/relationships/{id}`
-    route already returns a relationship and its full participant list to
-    *any* `campaign.view` caller — `dnd_ai.queries.relationship`'s own
-    docstring: "who is related to whom is a structural fact, not a
-    subjective judgment"; only the per-participant *subjective* state is
-    GM-gated. This list mirrors that exactly: every relationship in the
-    campaign's world, filtered only by `query_text` (case-insensitive
-    substring over `description`), `relationship_type_code`, and
-    `related_entity_id`. `world.relationships` is not entity-rooted and has
-    no `security.resource_grants` target column, so there is no per-
-    relationship deny to apply. The `participant_entity_ids` a card carries
-    are the same ids the detail route already discloses. (A future product
-    decision to hide edges whose nodes a caller cannot discover would be a
-    change to the *existing* relationship contract, not just this list —
-    tracked as a consideration in docs/PHASE13D_BACKEND_READINESS.md.)
-    """
+    **Visibility (Issue 1 correction — related-resource disclosure):** a
+    relationship is returned only when *every* one of its participant
+    entities is independently discoverable by this caller under the World
+    Explorer's own rules (`discoverable_entity_ids` / the shared
+    `_entity_discoverable_expr` predicate). If any participant is
+    `campaign.view`-denied, an undiscoverable character, a cross-world or
+    wrong-timeline event, a `voided`/unauthorized-`draft` event, or an
+    entity of a type the World Explorer does not browse at all, the whole
+    relationship is suppressed — a card never carries a
+    `participant_entity_id` the audience has no route to, and never reveals
+    that a relationship or a participant was filtered out. The predicate is
+    applied in SQL *before* `LIMIT`, so keyset pagination stays exact.
+    `world.relationships` itself is not entity-rooted and has no
+    `security.resource_grants` target column, so there is no
+    per-relationship deny; suppression is entirely driven by participant
+    discoverability. `query_text` (case-insensitive substring over
+    `description`), `relationship_type_code`, and `related_entity_id` filter
+    further; filtering by a `related_entity_id` the caller cannot discover
+    simply yields relationships that are then all suppressed (an empty
+    list, not an error — non-disclosing)."""
     params: dict[str, object] = {
         "world_id": world_id,
         "like_pattern": f"%{_escape_like(query_text)}%" if query_text else None,
@@ -392,10 +526,13 @@ def list_world_relationships(
         "limit_plus_one": limit + 1,
         "after_relationship_id": after_relationship_id,
         "has_cursor": after_relationship_id is not None,
+        **_entity_visibility_params(
+            world_id=world_id, timeline_id=timeline_id, visibility=visibility
+        ),
     }
 
     rows = connection.execute(
-        text("""
+        text(f"""
             SELECT r.relationship_id, rt.code AS type_code, r.description
             FROM world.relationships r
             JOIN world.relationship_types rt
@@ -417,6 +554,19 @@ def list_world_relationships(
                   WHERE rp.relationship_id = r.relationship_id
                     AND rp.entity_id = CAST(:related_entity_id AS uuid)
                 )
+              )
+              -- Suppress the whole relationship if any participant is not
+              -- independently discoverable by this caller.
+              AND NOT EXISTS (
+                SELECT 1
+                FROM world.relationship_participants rpv
+                JOIN core.entities pe ON pe.entity_id = rpv.entity_id
+                JOIN core.entity_types pet ON pet.entity_type_id = pe.entity_type_id
+                LEFT JOIN narrative.events pev ON pev.event_id = rpv.entity_id
+                LEFT JOIN narrative.event_statuses pes
+                       ON pes.event_status_id = pev.event_status_id
+                WHERE rpv.relationship_id = r.relationship_id
+                  AND NOT {_entity_discoverable_expr(e="pe", et="pet", ev="pev", es="pes")}
               )
             ORDER BY r.relationship_id
             LIMIT :limit_plus_one

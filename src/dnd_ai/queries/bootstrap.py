@@ -47,7 +47,15 @@ itself already performs per campaign:
   `resolve_access_context` already performs; a relationship type mapped to
   no capabilities at all (`security.character_relationship_type_
   capabilities` has no row for it) is not offered as a selectable
-  perspective, since there would be nothing authorized to do through it.
+  perspective, since there would be nothing authorized to do through it;
+- `authorized_parties` under each character perspective: only populated
+  when the user holds `character.view_knowledge` for that character — the
+  capability `dnd_ai.api.access.resolve_party_perspective` itself requires
+  before it will authorize any party perspective. A character that is
+  merely discoverable (a relationship mapped to only `character.discover`,
+  say) still appears in the perspective list, but with `authorized_parties
+  = ()`, so the portal is never handed a `(character_id, party_id)` pair
+  the resolver would reject.
 
 Selection defaults (no persisted preference exists yet — see this module's
 own `SessionBootstrapView` docstring):
@@ -69,6 +77,13 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import resolve_access_context
+
+# The capability `dnd_ai.api.access.resolve_party_perspective` requires the
+# caller to hold for a character before it will authorize *any* party
+# perspective through that character (its `capability_code` default). A
+# character the user cannot satisfy this for must not have parties
+# advertised under it — see the party-row query below.
+_KNOWLEDGE_PERSPECTIVE_CAPABILITY = "character.view_knowledge"
 
 
 @dataclass(frozen=True)
@@ -250,9 +265,29 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             # the campaign. This is exactly what `dnd_ai.api.access.
             # resolve_party_perspective` re-proves per request — surfacing
             # it here just saves the portal from guessing a `party_id`
-            # (Phase 13D §4). Only characters this membership already holds
-            # a relationship capability for reach this loop, so no party of
-            # an unrelated character is ever disclosed.
+            # (Phase 13D §4).
+            #
+            # `resolve_party_perspective` additionally requires the caller
+            # to hold `character.view_knowledge` for the named character
+            # (requirement 1 of its own docstring); a character that is only
+            # *discoverable* — a relationship type mapped to, say, just
+            # `character.discover` — reaches this loop (it has *some*
+            # capability) but can never actually be used as a knowledge/
+            # quest perspective. Advertising its parties would hand the
+            # portal a `(character_id, party_id)` pair the resolver rejects
+            # with a fixed 404. So `authorized_parties` is populated only for
+            # characters this membership holds `character.view_knowledge`
+            # for; every other character still appears in the perspective
+            # list (its established contract is unchanged) but with no
+            # parties. A revoked capability or relationship affects the next
+            # bootstrap because `access` is re-resolved every call.
+            knowledge_perspective_ids = [
+                character_id
+                for character_id in character_ids
+                if access.has_capability(
+                    _KNOWLEDGE_PERSPECTIVE_CAPABILITY, character_id=character_id
+                )
+            ]
             party_rows = (
                 connection.execute(
                     text("""
@@ -269,11 +304,13 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
                     {
                         "campaign_id": campaign_id,
                         "timeline_id": access.timeline_id,
-                        "ids": character_ids,
+                        "ids": knowledge_perspective_ids,
                     },
                 )
                 .mappings()
                 .all()
+                if knowledge_perspective_ids
+                else []
             )
             parties_by_character: dict[uuid.UUID, list[PartyPerspectiveRefView]] = {}
             for party_row in party_rows:
