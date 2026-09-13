@@ -158,6 +158,17 @@ export function useWorldEntities(
                     error instanceof WorldRequestError &&
                     error.status === 401
                 ) {
+                    // A stale authorization: drop any retained page before
+                    // reloading the session rather than leaving it visible
+                    // (as "refreshing") until the reload changes the route.
+                    setSnapshot({
+                        campaignId,
+                        category,
+                        query,
+                        cursor,
+                        requestVersion,
+                        state: initialState,
+                    })
                     void reload()
                     return
                 }

@@ -87,8 +87,15 @@ describe("WorldEntitiesBoundary", () => {
         renderBoundary()
 
         expect(
+            screen.getByRole("region", {
+                name: "World entities results",
+            }),
+        ).toHaveAttribute("aria-busy", "true")
+
+        expect(
             screen.getByRole("heading", {
                 name: "Loading world",
+                level: 2,
             }),
         ).toBeInTheDocument()
 
@@ -119,6 +126,7 @@ describe("WorldEntitiesBoundary", () => {
         expect(
             screen.getByRole("heading", {
                 name: "World unavailable",
+                level: 2,
             }),
         ).toBeInTheDocument()
 
@@ -151,6 +159,7 @@ describe("WorldEntitiesBoundary", () => {
         expect(
             screen.getByRole("heading", {
                 name: "World information unavailable",
+                level: 2,
             }),
         ).toBeInTheDocument()
 

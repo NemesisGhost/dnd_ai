@@ -180,6 +180,36 @@ describe("WorldEntityList", () => {
             ).toBeInTheDocument()
         })
 
+        it("disables Next page while refreshing and re-enables it once settled", () => {
+            const { rerender } = render(
+                <WorldEntityList
+                    page={page}
+                    refreshing
+                    onNextPage={vi.fn()}
+                />,
+            )
+
+            expect(
+                screen.getByRole("button", {
+                    name: "Next page",
+                }),
+            ).toBeDisabled()
+
+            rerender(
+                <WorldEntityList
+                    page={page}
+                    refreshing={false}
+                    onNextPage={vi.fn()}
+                />,
+            )
+
+            expect(
+                screen.getByRole("button", {
+                    name: "Next page",
+                }),
+            ).toBeEnabled()
+        })
+
         it("does not show the updating indicator immediately", () => {
             render(
                 <WorldEntityList

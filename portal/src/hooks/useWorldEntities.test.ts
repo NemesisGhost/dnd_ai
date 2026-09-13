@@ -385,6 +385,54 @@ describe("useWorldEntities", () => {
         })
     })
 
+    it("clears a retained page immediately on a 401 before reloading the session", async () => {
+        fetchWorldEntitiesMock.mockResolvedValueOnce(
+            firstPage,
+        )
+
+        const { result, rerender } = renderHook(
+            ({ query }) =>
+                useWorldEntities(
+                    "campaign-a",
+                    null,
+                    query,
+                ),
+            {
+                initialProps: {
+                    query: "",
+                },
+            },
+        )
+
+        await waitFor(() => {
+            expect(result.current.state).toEqual({
+                status: "success",
+                page: firstPage,
+            })
+        })
+
+        fetchWorldEntitiesMock.mockRejectedValueOnce(
+            new WorldRequestError(401),
+        )
+
+        rerender({
+            query: "sundering",
+        })
+
+        expect(result.current.state).toEqual({
+            status: "refreshing",
+            page: firstPage,
+        })
+
+        await waitFor(() => {
+            expect(result.current.state).toEqual({
+                status: "loading",
+            })
+        })
+
+        expect(reloadMock).toHaveBeenCalledTimes(1)
+    })
+
     it("requests the supplied next-page cursor", async () => {
         fetchWorldEntitiesMock.mockResolvedValue(
             secondPage,

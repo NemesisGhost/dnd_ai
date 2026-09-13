@@ -1,8 +1,4 @@
-import {
-    useEffect,
-    useId,
-    useState,
-} from "react"
+import { useId } from "react"
 import type { ReactNode } from "react"
 import type { WorldCategory } from "../types/world"
 
@@ -29,11 +25,6 @@ const categoryOptions: CategoryOption[] = [
     { value: "event", label: "Events" },
 ]
 
-// Short debounce: long enough to collapse per-keystroke requests, short
-// enough that live search still feels immediate (see WorldEntitiesBoundary
-// for how an in-flight request keeps the previous results visible).
-const SEARCH_DEBOUNCE_MS = 180
-
 export function WorldPage({
     category,
     query,
@@ -43,25 +34,6 @@ export function WorldPage({
 }: WorldPageProps) {
     const searchInputId = useId()
     const categorySelectId = useId()
-
-    const [searchInputValue, setSearchInputValue] =
-        useState(query)
-
-    useEffect(() => {
-        setSearchInputValue(query)
-    }, [query])
-
-    useEffect(() => {
-        if (searchInputValue === query) {
-            return
-        }
-
-        const timeoutId = window.setTimeout(() => {
-            onQueryChange(searchInputValue)
-        }, SEARCH_DEBOUNCE_MS)
-
-        return () => window.clearTimeout(timeoutId)
-    }, [searchInputValue, query, onQueryChange])
 
     return (
         <section aria-labelledby="world-heading">
@@ -79,11 +51,9 @@ export function WorldPage({
                     <input
                         id={searchInputId}
                         type="search"
-                        value={searchInputValue}
+                        value={query}
                         onChange={(event) =>
-                            setSearchInputValue(
-                                event.currentTarget.value,
-                            )
+                            onQueryChange(event.currentTarget.value)
                         }
                     />
                 </div>

@@ -1,6 +1,5 @@
 import type { ReactNode } from "react"
 import { useWorldEntities } from "../hooks/useWorldEntities"
-import PlaceholderPage from "../pages/PlaceholderPage"
 import type {
     WorldCategory,
     WorldEntityPage,
@@ -31,33 +30,46 @@ export function WorldEntitiesBoundary({
         cursor,
     )
 
+    // Rendered inside WorldPage, which already carries the page's <h1>, so
+    // every branch here is result-region markup (a labelled region with at
+    // most an <h2>) rather than a page-level placeholder.
+
     if (state.status === "loading") {
         return (
-            <PlaceholderPage
-                title="Loading world"
-                description="Loading the latest authorized world information."
-            />
+            <div
+                role="region"
+                aria-label="World entities results"
+                aria-busy="true"
+            >
+                <h2>Loading world</h2>
+                <p>
+                    Loading the latest authorized world information.
+                </p>
+            </div>
         )
     }
 
     if (state.status === "unavailable") {
         return (
-            <PlaceholderPage
-                title="World unavailable"
-                description="The requested world information is not available."
-            />
+            <div
+                role="region"
+                aria-label="World entities results"
+            >
+                <h2>World unavailable</h2>
+                <p>
+                    The requested world information is not available.
+                </p>
+            </div>
         )
     }
 
     if (state.status === "error") {
         return (
-            <section
-                className="placeholder-page"
-                aria-labelledby="world-error-heading"
+            <div
+                role="region"
+                aria-label="World entities results"
             >
-                <h1 id="world-error-heading">
-                    World information unavailable
-                </h1>
+                <h2>World information unavailable</h2>
 
                 <p>
                     The portal could not load the world information.
@@ -70,7 +82,7 @@ export function WorldEntitiesBoundary({
                 >
                     Try again
                 </button>
-            </section>
+            </div>
         )
     }
 

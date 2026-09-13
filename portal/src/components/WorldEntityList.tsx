@@ -1,12 +1,9 @@
-import {
-    useEffect,
-    useState,
-} from "react"
 import type {
     WorldCategory,
     WorldEntityCard,
     WorldEntityPage,
 } from "../types/world"
+import { UpdatingIndicator } from "./UpdatingIndicator"
 
 const categoryLabels: Record<WorldCategory, string> = {
     location: "Location",
@@ -16,10 +13,6 @@ const categoryLabels: Record<WorldCategory, string> = {
     item: "Item",
     event: "Event",
 }
-
-// How long a refresh must run before the "Updating results…" indicator
-// appears, so a fast reload doesn't just flash it on and off.
-const UPDATING_INDICATOR_DELAY_MS = 200
 
 function formatEntityType(entityTypeCode: string): string {
     return entityTypeCode
@@ -49,36 +42,13 @@ export function WorldEntityList({
     refreshing = false,
     onNextPage,
 }: WorldEntityListProps) {
-    const [showUpdatingIndicator, setShowUpdatingIndicator] =
-        useState(false)
-
-    useEffect(() => {
-        if (!refreshing) {
-            setShowUpdatingIndicator(false)
-            return
-        }
-
-        const timeoutId = window.setTimeout(() => {
-            setShowUpdatingIndicator(true)
-        }, UPDATING_INDICATOR_DELAY_MS)
-
-        return () => window.clearTimeout(timeoutId)
-    }, [refreshing])
-
     return (
         <div
             role="region"
             aria-label="World entities results"
             aria-busy={refreshing}
         >
-            {showUpdatingIndicator && (
-                <p
-                    className="world-entity-list__status"
-                    role="status"
-                >
-                    Updating results…
-                </p>
-            )}
+            {refreshing && <UpdatingIndicator />}
 
             {page.items.length > 0 ? (
                 <ul aria-label="World entities">
@@ -100,6 +70,7 @@ export function WorldEntityList({
             {page.next_cursor !== null && (
                 <button
                     type="button"
+                    disabled={refreshing}
                     onClick={onNextPage}
                 >
                     Next page

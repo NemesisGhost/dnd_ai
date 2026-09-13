@@ -235,6 +235,69 @@ describe("CampaignWorldPage", () => {
         ).toBeInTheDocument()
     })
 
+    it("keeps a single page heading while the results region is loading", () => {
+        useWorldEntitiesMock.mockReturnValue({
+            state: {
+                status: "loading",
+            },
+            retry: vi.fn(),
+        })
+
+        renderCampaignWorldPage()
+
+        expect(
+            screen.getAllByRole("heading", {
+                level: 1,
+            }),
+        ).toHaveLength(1)
+
+        expect(
+            screen.getByRole("heading", {
+                name: "World",
+                level: 1,
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", {
+                name: "Loading world",
+                level: 2,
+            }),
+        ).toBeInTheDocument()
+    })
+
+    it("keeps a single page heading while the results region shows an error", () => {
+        useWorldEntitiesMock.mockReturnValue({
+            state: {
+                status: "error",
+                error: new Error("boom"),
+            },
+            retry: vi.fn(),
+        })
+
+        renderCampaignWorldPage()
+
+        expect(
+            screen.getAllByRole("heading", {
+                level: 1,
+            }),
+        ).toHaveLength(1)
+
+        expect(
+            screen.getByRole("heading", {
+                name: "World",
+                level: 1,
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", {
+                name: "World information unavailable",
+                level: 2,
+            }),
+        ).toBeInTheDocument()
+    })
+
     it("does not reload on every keystroke while typing a search", () => {
         renderCampaignWorldPage()
 
@@ -293,6 +356,28 @@ describe("CampaignWorldPage", () => {
     })
 
     it("keeps the search input mounted and focused while a new page loads", () => {
+        // The mock stands in for the real hook, which only changes its
+        // returned state once the (debounced) query it was called with
+        // actually changes — key the mock off that argument so the test
+        // reflects that instead of asserting on render-count timing.
+        useWorldEntitiesMock.mockImplementation(
+            (_campaignId, _category, query) =>
+                query === ""
+                    ? {
+                        state: {
+                            status: "success",
+                            page: worldPage,
+                        },
+                        retry: vi.fn(),
+                    }
+                    : {
+                        state: {
+                            status: "loading",
+                        },
+                        retry: vi.fn(),
+                    },
+        )
+
         renderCampaignWorldPage()
 
         const searchInput =
@@ -303,13 +388,6 @@ describe("CampaignWorldPage", () => {
         searchInput.focus()
         expect(searchInput).toHaveFocus()
 
-        useWorldEntitiesMock.mockReturnValue({
-            state: {
-                status: "loading",
-            },
-            retry: vi.fn(),
-        })
-
         fireEvent.change(searchInput, {
             target: {
                 value: "g",
@@ -318,6 +396,17 @@ describe("CampaignWorldPage", () => {
 
         expect(searchInput).toHaveValue("g")
 
+        // The debounce hasn't elapsed: the hook is still being called with
+        // the previous (empty) query, so its previous page remains.
+        expect(
+            useWorldEntitiesMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            null,
+            "",
+            null,
+        )
+
         expect(
             screen.getByRole("heading", {
                 name: "Glass Harbor",
@@ -325,8 +414,17 @@ describe("CampaignWorldPage", () => {
         ).toBeInTheDocument()
 
         act(() => {
-            vi.advanceTimersByTime(300)
+            vi.advanceTimersByTime(180)
         })
+
+        expect(
+            useWorldEntitiesMock,
+        ).toHaveBeenLastCalledWith(
+            "campaign-a",
+            null,
+            "g",
+            null,
+        )
 
         expect(
             screen.getByRole("heading", {

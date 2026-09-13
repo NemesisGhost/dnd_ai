@@ -1,12 +1,9 @@
 import {
-    act,
     fireEvent,
     render,
     screen,
 } from "@testing-library/react"
 import {
-    afterEach,
-    beforeEach,
     describe,
     expect,
     it,
@@ -39,14 +36,6 @@ function renderPage(overrides: RenderOverrides = {}) {
 }
 
 describe("WorldPage", () => {
-    beforeEach(() => {
-        vi.useFakeTimers()
-    })
-
-    afterEach(() => {
-        vi.useRealTimers()
-    })
-
     it("renders the heading and labelled search controls", () => {
         renderPage()
 
@@ -101,7 +90,7 @@ describe("WorldPage", () => {
         ).toBeInTheDocument()
     })
 
-    it("reports search-query changes", () => {
+    it("is a controlled search input: it reflects the query prop and reports every change immediately", () => {
         const onQueryChange = vi.fn()
 
         renderPage({
@@ -122,61 +111,13 @@ describe("WorldPage", () => {
             },
         })
 
-        expect(searchInput).toHaveValue("harbor")
-        expect(onQueryChange).not.toHaveBeenCalled()
-
-        act(() => {
-            vi.advanceTimersByTime(180)
-        })
-
-        expect(onQueryChange).toHaveBeenCalledWith(
-            "harbor",
-        )
-    })
-
-    it("restarts the debounce when a query change lands before the prior one commits", () => {
-        const onQueryChange = vi.fn()
-
-        renderPage({
-            query: "",
-            onQueryChange,
-        })
-
-        const searchInput =
-            screen.getByRole("searchbox", {
-                name: "Search",
-            })
-
-        fireEvent.change(searchInput, {
-            target: {
-                value: "ha",
-            },
-        })
-
-        act(() => {
-            vi.advanceTimersByTime(100)
-        })
-
-        fireEvent.change(searchInput, {
-            target: {
-                value: "harbor",
-            },
-        })
-
-        act(() => {
-            vi.advanceTimersByTime(100)
-        })
-
-        expect(onQueryChange).not.toHaveBeenCalled()
-
-        act(() => {
-            vi.advanceTimersByTime(100)
-        })
-
+        // WorldPage does not debounce or hold its own copy of the value:
+        // it reports the raw change and waits for a new `query` prop.
         expect(onQueryChange).toHaveBeenCalledTimes(1)
         expect(onQueryChange).toHaveBeenCalledWith(
             "harbor",
         )
+        expect(searchInput).toHaveValue("glass")
     })
 
     it("reports category selections and maps All to null", () => {
