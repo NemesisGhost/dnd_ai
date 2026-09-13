@@ -12,6 +12,7 @@ import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
 import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
+import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 
 function App() {
   return (
@@ -68,12 +69,7 @@ function App() {
 
           <Route
             path="world"
-            element={
-              <PlaceholderPage
-                title="World"
-                description="Authorized locations, people, factions, and lore will appear here."
-              />
-            }
+            element={<CampaignWorldPage />}
           />
 
           <Route

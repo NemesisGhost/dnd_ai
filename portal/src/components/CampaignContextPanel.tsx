@@ -4,29 +4,18 @@ import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface CampaignContextPanelProps {
-  // The active campaign, plus the full authorized list for the campaign selector.
   campaign: CampaignContext
   campaigns: CampaignContext[]
   selectedCharacterId: string | null
   onSelectCampaign: (campaignId: string) => void
   onSelectCharacter: (characterId: string | null) => void
-  // Reserved: read-only until the backend exposes authorized worlds.
-  worldName?: string | null
 }
-
-// One compact, infobox-styled panel describing the viewer's current vantage
-// point as a World -> Campaign -> Timeline -> Character hierarchy. Purely
-// presentational: it takes the current selections and reports changes through
-// callbacks. CampaignLayout owns the routing and perspective wiring. World and
-// Timeline are not yet selectable (no authorized list / selection API), so they
-// are shown read-only / disabled. Never renders raw identifiers.
 export function CampaignContextPanel({
   campaign,
   campaigns,
   selectedCharacterId,
   onSelectCampaign,
   onSelectCharacter,
-  worldName,
 }: CampaignContextPanelProps) {
   const worldHeadingId = useId()
   const campaignHeadingId = useId()
@@ -34,8 +23,8 @@ export function CampaignContextPanel({
   const characterHeadingId = useId()
 
   const selectedCharacter = campaign.character_perspectives.find(
-    (character) => character.character_id === selectedCharacterId,
-  )
+      (character) => character.character_id === selectedCharacterId,
+    )
 
   const perspectiveName =
     selectedCharacter?.character_name ?? "No character perspective selected"
@@ -64,7 +53,7 @@ export function CampaignContextPanel({
             World
           </h3>
           <p className="campaign-context-panel__value">
-            {worldName ?? "Not available"}
+            {campaign.world_name ?? "Not available"}
           </p>
         </section>
 

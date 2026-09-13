@@ -1,7 +1,10 @@
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
-import type { SessionBootstrap } from "../types/bootstrap"
+import type {
+    CampaignContext,
+    SessionBootstrap,
+} from "../types/bootstrap"
 import { useCharacterPerspective } from "./useCharacterPerspective"
 import type { UseSessionBootstrapResult } from "./useSessionBootstrap"
 
@@ -21,13 +24,15 @@ const campaign = {
         {
             character_id: "character-a",
             character_name: "Character A",
+            authorized_parties: [],
         },
         {
             character_id: "character-b",
             character_name: "Character B",
+            authorized_parties: [],
         },
     ],
-}
+} satisfies CampaignContext
 
 const bootstrap: SessionBootstrap = {
     ...sessionBootstrapFixture,

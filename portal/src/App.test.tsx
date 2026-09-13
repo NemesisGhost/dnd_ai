@@ -22,6 +22,7 @@ import { useCampaignQuests } from "./hooks/useCampaignQuests"
 import { useCharacter } from "./hooks/useCharacter"
 import { useQuest } from "./hooks/useQuest"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import { useWorldEntities } from "./hooks/useWorldEntities"
 import type {
   CampaignSessionDetail,
   CampaignSessionListItem,
@@ -29,6 +30,8 @@ import type {
 import type {
   CampaignSummary,
 } from "./types/campaignSummary"
+
+import type { WorldEntityPage } from "./types/world"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -58,6 +61,10 @@ vi.mock("./hooks/useQuest", () => ({
   useQuest: vi.fn(),
 }))
 
+vi.mock("./hooks/useWorldEntities", () => ({
+  useWorldEntities: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
@@ -84,6 +91,10 @@ const useCampaignQuestsMock = vi.mocked(
 
 const useQuestMock = vi.mocked(
   useQuest,
+)
+
+const useWorldEntitiesMock = vi.mocked(
+  useWorldEntities,
 )
 
 const emptyCampaignSummary = {
@@ -130,6 +141,19 @@ const campaignQuestDetail = {
   status_code: "active",
   stages: [],
 }
+
+const worldEntityPage = {
+  items: [
+    {
+      entity_id: "location-1",
+      category: "location",
+      entity_type_code: "city",
+      name: "Glass Harbor",
+      summary: "A harbor surrounded by ancient glass towers.",
+    },
+  ],
+  next_cursor: null,
+} satisfies WorldEntityPage
 
 beforeEach(() => {
   localStorage.removeItem("dnd-ai-theme")
@@ -199,6 +223,16 @@ beforeEach(() => {
     state: {
       status: "success",
       quest: campaignQuestDetail,
+    },
+    retry: vi.fn(),
+  })
+
+  useWorldEntitiesMock.mockReset()
+
+  useWorldEntitiesMock.mockReturnValue({
+    state: {
+      status: "success",
+      page: worldEntityPage,
     },
     retry: vi.fn(),
   })
@@ -533,6 +567,39 @@ describe("portal routing", () => {
       within(header).getByText(
         "Active theme: Hearthstone",
       ),
+    ).toBeInTheDocument()
+  })
+
+  it("routes World through the authorized World boundary", () => {
+    renderAppAt("/app/mundivita/world")
+
+    expect(
+      screen.getByRole("link", {
+        name: "World",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useWorldEntitiesMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      null,
+      "",
+      null,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "World",
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Glass Harbor",
+        level: 2,
+      }),
     ).toBeInTheDocument()
   })
 })

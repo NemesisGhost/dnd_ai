@@ -21,12 +21,22 @@ vi.mock("../hooks/useCharacter", () => ({
 const baseCampaign = {
   campaign_id: "campaign-secret-id",
   campaign_name: "Mundivita",
+  world_id: "world-secret-id",
+  world_name: "Mundivita",
   timeline_id: "timeline-secret-id",
   timeline_name: "Primary Timeline",
   roles: ["campaign_owner"],
   character_perspectives: [
-    { character_id: "character-a", character_name: "Ixamarra" },
-    { character_id: "character-b", character_name: "Corvane" },
+    {
+      character_id: "character-a",
+      character_name: "Ixamarra",
+      authorized_parties: [],
+    },
+    {
+      character_id: "character-b",
+      character_name: "Corvane",
+      authorized_parties: [],
+    },
   ],
   selected_character_id: "character-a",
   capabilities: [],
@@ -85,7 +95,9 @@ describe("CampaignContextPanel", () => {
       .getByRole("heading", { name: "World" })
       .closest("section") as HTMLElement
 
-    expect(within(world).getByText("Not available")).toBeInTheDocument()
+    expect(
+      within(world).getByText("Mundivita"),
+    ).toBeInTheDocument()
     expect(
       within(world).queryByRole("combobox"),
     ).not.toBeInTheDocument()

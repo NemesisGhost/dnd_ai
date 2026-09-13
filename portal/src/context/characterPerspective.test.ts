@@ -26,6 +26,7 @@ describe("resolveSelectedCharacterId", () => {
                 {
                     character_id: "character-second",
                     character_name: "Second Character",
+                    authorized_parties: [],
                 },
             ],
         } satisfies CampaignContext

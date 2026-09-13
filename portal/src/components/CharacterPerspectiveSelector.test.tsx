@@ -7,14 +7,16 @@ import { describe, expect, it, vi } from "vitest"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 const perspectives = [
-    {
-        character_id: "character-a",
-        character_name: "Character A",
-    },
-    {
-        character_id: "character-b",
-        character_name: "Character B",
-    },
+  {
+    character_id: "character-a",
+    character_name: "Character A",
+    authorized_parties: [],
+  },
+  {
+    character_id: "character-b",
+    character_name: "Character B",
+    authorized_parties: [],
+  },
 ]
 
 describe("CharacterPerspectiveSelector", () => {
