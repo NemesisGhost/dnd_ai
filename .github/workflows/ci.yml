@@ -44,6 +44,9 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src
 
+      - name: Type check operational CI helper
+        run: uv run mypy scripts/wait_for_ci.py
+
   portal-check:
     name: Portal tests, lint, and build
     runs-on: ubuntu-latest
@@ -102,7 +105,7 @@ jobs:
 
       - name: Run the test suite (node --test)
         working-directory: foundry-module
-        run: node --test test/
+        run: node --test
 
       - name: Package (proves the build/reproducible-zip step works)
         working-directory: foundry-module
