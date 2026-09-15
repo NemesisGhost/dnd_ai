@@ -37,6 +37,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any, cast
 
 API_ROOT = "https://api.github.com"
 
@@ -75,7 +76,10 @@ def _resolve_repo() -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def _get(url: str, token: str) -> dict:
+JsonObject = dict[str, Any]
+
+
+def _get(url: str, token: str) -> JsonObject:
     request = urllib.request.Request(
         url,
         headers={
@@ -85,7 +89,10 @@ def _get(url: str, token: str) -> dict:
     )
     try:
         with urllib.request.urlopen(request) as response:
-            return json.load(response)
+            payload: object = json.load(response)
+            if not isinstance(payload, dict) or not all(isinstance(key, str) for key in payload):
+                raise RuntimeError(f"GitHub API returned a non-object response for {url}")
+            return cast(JsonObject, payload)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API {exc.code} for {url}: {body}") from exc
@@ -94,9 +101,15 @@ def _get(url: str, token: str) -> dict:
 def _resolve_run_id(owner: str, repo: str, sha: str, token: str) -> int:
     data = _get(f"{API_ROOT}/repos/{owner}/{repo}/actions/runs?head_sha={sha}", token)
     runs = data.get("workflow_runs", [])
-    if not runs:
+    if not isinstance(runs, list) or not runs:
         raise RuntimeError(f"No workflow runs found for commit {sha}")
-    return runs[0]["id"]
+    first_run = runs[0]
+    if not isinstance(first_run, dict):
+        raise RuntimeError(f"GitHub API returned an invalid workflow run for commit {sha}")
+    run_id = first_run.get("id")
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        raise RuntimeError(f"GitHub API returned an invalid workflow run id for commit {sha}")
+    return run_id
 
 
 _NOISE_CONCLUSIONS = (None, "success", "skipped")
@@ -126,7 +139,7 @@ def wait_for_run(
 ) -> bool:
     deadline = time.monotonic() + timeout_seconds
     last_status: str | None = None
-    data: dict = {}
+    data: JsonObject = {}
 
     while True:
         data = _get(f"{API_ROOT}/repos/{owner}/{repo}/actions/runs/{run_id}", token)
