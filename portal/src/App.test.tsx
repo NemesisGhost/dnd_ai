@@ -15,6 +15,7 @@ import App from "./App"
 import { ThemeProvider } from "./themes/ThemeProvider"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
+import { knowledgePageFixture } from "./fixtures/knowledge"
 import { useCampaignSessions } from "./hooks/useCampaignSessions"
 import { useCampaignSession } from "./hooks/useCampaignSession"
 import { useCampaignSummary } from "./hooks/useCampaignSummary"
@@ -23,6 +24,8 @@ import { useCharacter } from "./hooks/useCharacter"
 import { useQuest } from "./hooks/useQuest"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 import { useWorldEntities } from "./hooks/useWorldEntities"
+import { useKnowledgeItems } from "./hooks/useKnowledgeItems"
+
 import type {
   CampaignSessionDetail,
   CampaignSessionListItem,
@@ -65,6 +68,10 @@ vi.mock("./hooks/useWorldEntities", () => ({
   useWorldEntities: vi.fn(),
 }))
 
+vi.mock("./hooks/useKnowledgeItems", () => ({
+  useKnowledgeItems: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
@@ -95,6 +102,10 @@ const useQuestMock = vi.mocked(
 
 const useWorldEntitiesMock = vi.mocked(
   useWorldEntities,
+)
+
+const useKnowledgeItemsMock = vi.mocked(
+  useKnowledgeItems,
 )
 
 const emptyCampaignSummary = {
@@ -233,6 +244,16 @@ beforeEach(() => {
     state: {
       status: "success",
       page: worldEntityPage,
+    },
+    retry: vi.fn(),
+  })
+
+  useKnowledgeItemsMock.mockReset()
+
+  useKnowledgeItemsMock.mockReturnValue({
+    state: {
+      status: "success",
+      page: knowledgePageFixture,
     },
     retry: vi.fn(),
   })
@@ -600,6 +621,41 @@ describe("portal routing", () => {
         name: "Glass Harbor",
         level: 2,
       }),
+    ).toBeInTheDocument()
+  })
+
+  it("routes Knowledge through the authorized Knowledge boundary", () => {
+    renderAppAt("/app/mundivita/knowledge")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Knowledge",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useKnowledgeItemsMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "known",
+      "character-ixamarra",
+      null,
+      "",
+      null,
+      null,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Knowledge",
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText(
+        knowledgePageFixture.items[0].statement,
+      ),
     ).toBeInTheDocument()
   })
 })

@@ -595,6 +595,32 @@
   font-style: italic;
 }
 
+/* Knowledge page */
+
+.knowledge-page__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.knowledge-page__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.knowledge-page__field input,
+.knowledge-page__field select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
 .sortable-table {
   width: 100%;
   border-collapse: collapse;

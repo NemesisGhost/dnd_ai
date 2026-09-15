@@ -13,6 +13,7 @@ import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
+import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 
 function App() {
   return (
@@ -99,12 +100,7 @@ function App() {
 
           <Route
             path="knowledge"
-            element={
-              <PlaceholderPage
-                title="Knowledge"
-                description="Facts visible from the selected character perspective will appear here."
-              />
-            }
+            element={<CampaignKnowledgePage />}
           />
 
           <Route
