@@ -1,84 +1,147 @@
-import type { ReactNode } from "react"
-import { usePerspective } from "../context/CharacterPerspectiveContext"
+import { useId } from "react"
 import type { CampaignContext } from "../types/bootstrap"
+import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface CampaignContextPanelProps {
   campaign: CampaignContext
-  // Composition points for dimensions the current frontend/backend
-  // contracts do not yet expose. Left undefined until real authorized data
-  // is available; see the "not yet supported" note in the component doc.
-  worldName?: string | null
-  currentWorldTime?: ReactNode
+  campaigns: CampaignContext[]
+  selectedCharacterId: string | null
+  onSelectCampaign: (campaignId: string) => void
+  onSelectCharacter: (characterId: string | null) => void
 }
-
-// Answers "what campaign context and viewing perspective am I using?" for
-// the campaign shell. Distinct from the InfoBox family, which answers
-// "what are the facts about the entity on this page?" Reuses the
-// established character-perspective context/selector rather than
-// introducing a second perspective state.
 export function CampaignContextPanel({
   campaign,
-  worldName,
-  currentWorldTime,
+  campaigns,
+  selectedCharacterId,
+  onSelectCampaign,
+  onSelectCharacter,
 }: CampaignContextPanelProps) {
-  const { getSelectedCharacterId, selectCharacter } = usePerspective()
-
-  const selectedCharacterId = getSelectedCharacterId(
-    campaign.campaign_id,
-  )
+  const worldHeadingId = useId()
+  const campaignHeadingId = useId()
+  const timelineHeadingId = useId()
+  const characterHeadingId = useId()
 
   const selectedCharacter = campaign.character_perspectives.find(
-    (character) => character.character_id === selectedCharacterId,
-  )
+      (character) => character.character_id === selectedCharacterId,
+    )
 
   const perspectiveName =
-    selectedCharacter?.character_name ?? "No character selected"
+    selectedCharacter?.character_name ?? "No character perspective selected"
 
-  const hasWorld = worldName !== undefined && worldName !== null
-  const hasTime =
-    currentWorldTime !== undefined && currentWorldTime !== null
+  const rolesLabel =
+    campaign.roles.length > 0
+      ? campaign.roles.join(", ")
+      : "Not available"
 
   return (
     <details className="campaign-context-panel" open>
       <summary className="campaign-context-panel__summary">
-        Campaign context: {campaign.campaign_name} — Viewing as{" "}
-        {perspectiveName}
+        Campaign context: {campaign.campaign_name}
+        {" — "}Viewing as {perspectiveName}
       </summary>
 
-      <dl className="campaign-context-panel__list">
-        {hasWorld && (
-          <div className="campaign-context-panel__item">
-            <dt>World</dt>
-            <dd>{worldName}</dd>
-          </div>
-        )}
+      <div className="campaign-context-panel__body">
+        <section
+          className="campaign-context-panel__section"
+          aria-labelledby={worldHeadingId}
+        >
+          <h3
+            id={worldHeadingId}
+            className="campaign-context-panel__section-heading"
+          >
+            World
+          </h3>
+          <p className="campaign-context-panel__value">
+            {campaign.world_name ?? "Not available"}
+          </p>
+        </section>
 
-        <div className="campaign-context-panel__item">
-          <dt>Campaign</dt>
-          <dd>{campaign.campaign_name}</dd>
-        </div>
-
-        {hasTime && (
-          <div className="campaign-context-panel__item">
-            <dt>Time</dt>
-            <dd>{currentWorldTime}</dd>
-          </div>
-        )}
-
-        <div className="campaign-context-panel__item">
-          <dt>Viewing as</dt>
-          <dd>
-            <CharacterPerspectiveSelector
-              perspectives={campaign.character_perspectives}
-              selectedCharacterId={selectedCharacterId}
-              onSelectCharacter={(characterId) =>
-                selectCharacter(campaign.campaign_id, characterId)
+        <section
+          className="campaign-context-panel__section"
+          aria-labelledby={campaignHeadingId}
+        >
+          <h3
+            id={campaignHeadingId}
+            className="campaign-context-panel__section-heading"
+          >
+            Campaign
+          </h3>
+          <select
+            className="campaign-context-panel__control"
+            aria-labelledby={campaignHeadingId}
+            value={campaign.campaign_id}
+            onChange={(event) => {
+              const nextCampaignId = event.currentTarget.value
+              if (nextCampaignId !== campaign.campaign_id) {
+                onSelectCampaign(nextCampaignId)
               }
+            }}
+          >
+            {campaigns.map((candidate) => (
+              <option
+                key={candidate.campaign_id}
+                value={candidate.campaign_id}
+              >
+                {candidate.campaign_name}
+              </option>
+            ))}
+          </select>
+
+          <dl className="campaign-context-panel__detail">
+            <div className="campaign-context-panel__detail-row">
+              <dt>Your roles</dt>
+              <dd>{rolesLabel}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section
+          className="campaign-context-panel__section"
+          aria-labelledby={timelineHeadingId}
+        >
+          <h3
+            id={timelineHeadingId}
+            className="campaign-context-panel__section-heading"
+          >
+            Timeline
+          </h3>
+          <select
+            className="campaign-context-panel__control"
+            aria-labelledby={timelineHeadingId}
+            value="current"
+            disabled
+          >
+            <option value="current">
+              {campaign.timeline_name ?? "No timeline selected"}
+            </option>
+          </select>
+        </section>
+
+        <section
+          className="campaign-context-panel__section"
+          aria-labelledby={characterHeadingId}
+        >
+          <h3
+            id={characterHeadingId}
+            className="campaign-context-panel__section-heading"
+          >
+            Character
+          </h3>
+          <CharacterPerspectiveSelector
+            perspectives={campaign.character_perspectives}
+            selectedCharacterId={selectedCharacterId}
+            onSelectCharacter={onSelectCharacter}
+          />
+
+          {selectedCharacterId !== null && (
+            <CharacterContextDetails
+              campaignId={campaign.campaign_id}
+              characterId={selectedCharacterId}
             />
-          </dd>
-        </div>
-      </dl>
+          )}
+        </section>
+      </div>
     </details>
   )
 }

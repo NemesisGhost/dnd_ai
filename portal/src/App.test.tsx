@@ -1,6 +1,7 @@
 import {
   render,
   screen,
+  within,
 } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import {
@@ -11,21 +12,163 @@ import {
   vi,
 } from "vitest"
 import App from "./App"
+import { ThemeProvider } from "./themes/ThemeProvider"
 import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { sessionBootstrapFixture } from "./fixtures/sessionBootstrap"
-import {
-  useSessionBootstrap,
-} from "./hooks/useSessionBootstrap"
+import { knowledgePageFixture } from "./fixtures/knowledge"
+import { useCampaignSessions } from "./hooks/useCampaignSessions"
+import { useCampaignSession } from "./hooks/useCampaignSession"
+import { useCampaignSummary } from "./hooks/useCampaignSummary"
+import { useCampaignQuests } from "./hooks/useCampaignQuests"
+import { useCharacter } from "./hooks/useCharacter"
+import { useQuest } from "./hooks/useQuest"
+import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
+import { useWorldEntities } from "./hooks/useWorldEntities"
+import { useKnowledgeItems } from "./hooks/useKnowledgeItems"
+
+import type {
+  CampaignSessionDetail,
+  CampaignSessionListItem,
+} from "./types/campaignSession"
+import type {
+  CampaignSummary,
+} from "./types/campaignSummary"
+
+import type { WorldEntityPage } from "./types/world"
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
+}))
+
+vi.mock("./hooks/useCampaignSummary", () => ({
+  useCampaignSummary: vi.fn(),
+}))
+
+vi.mock("./hooks/useCharacter", () => ({
+  useCharacter: vi.fn(),
+}))
+
+vi.mock("./hooks/useCampaignSessions", () => ({
+  useCampaignSessions: vi.fn(),
+}))
+
+vi.mock("./hooks/useCampaignSession", () => ({
+  useCampaignSession: vi.fn(),
+}))
+
+vi.mock("./hooks/useCampaignQuests", () => ({
+  useCampaignQuests: vi.fn(),
+}))
+
+vi.mock("./hooks/useQuest", () => ({
+  useQuest: vi.fn(),
+}))
+
+vi.mock("./hooks/useWorldEntities", () => ({
+  useWorldEntities: vi.fn(),
+}))
+
+vi.mock("./hooks/useKnowledgeItems", () => ({
+  useKnowledgeItems: vi.fn(),
 }))
 
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
 
+const useCampaignSummaryMock = vi.mocked(
+  useCampaignSummary,
+)
+
+const useCharacterMock = vi.mocked(
+  useCharacter,
+)
+
+const useCampaignSessionsMock = vi.mocked(
+  useCampaignSessions,
+)
+
+const useCampaignSessionMock = vi.mocked(
+  useCampaignSession,
+)
+
+const useCampaignQuestsMock = vi.mocked(
+  useCampaignQuests,
+)
+
+const useQuestMock = vi.mocked(
+  useQuest,
+)
+
+const useWorldEntitiesMock = vi.mocked(
+  useWorldEntities,
+)
+
+const useKnowledgeItemsMock = vi.mocked(
+  useKnowledgeItems,
+)
+
+const emptyCampaignSummary = {
+  current_session: null,
+  previous_session_recap: null,
+  recent_events: [],
+} satisfies CampaignSummary
+
+const campaignSessions = [
+  {
+    session_id: "session-2",
+    session_number: 2,
+    title: "Most Recent Session",
+    status_code: "completed",
+    started_at: "2026-02-01T18:00:00Z",
+    ended_at: "2026-02-01T22:00:00Z",
+  },
+] satisfies CampaignSessionListItem[]
+
+const campaignSessionDetail = {
+  session_id: "session-detail",
+  session_number: 12,
+  title: "The Glass Ossuary",
+  status_code: "ended",
+  started_at: "2026-08-30T18:00:00Z",
+  ended_at: "2026-08-30T22:00:00Z",
+  summary: "The party entered the dormant facility.",
+  start_world_time_id: "world-time-start",
+  end_world_time_id: "world-time-end",
+  events: [],
+} satisfies CampaignSessionDetail
+
+const campaignQuests = [
+  {
+    quest_id: "quest-detail",
+    name: "Restore the Glass Ossuary",
+    status_code: "active",
+  },
+]
+
+const campaignQuestDetail = {
+  quest_id: "quest-detail",
+  name: "Restore the Glass Ossuary",
+  status_code: "active",
+  stages: [],
+}
+
+const worldEntityPage = {
+  items: [
+    {
+      entity_id: "location-1",
+      category: "location",
+      entity_type_code: "city",
+      name: "Glass Harbor",
+      summary: "A harbor surrounded by ancient glass towers.",
+    },
+  ],
+  next_cursor: null,
+} satisfies WorldEntityPage
+
 beforeEach(() => {
+  localStorage.removeItem("dnd-ai-theme")
+
   useSessionBootstrapMock.mockReset()
 
   useSessionBootstrapMock.mockReturnValue({
@@ -35,14 +178,95 @@ beforeEach(() => {
     },
     reload: vi.fn(),
   })
+
+  useCampaignSummaryMock.mockReset()
+
+  useCampaignSummaryMock.mockReturnValue({
+    state: {
+      status: "success",
+      summary: emptyCampaignSummary,
+    },
+    retry: vi.fn(),
+  })
+
+  useCharacterMock.mockReset()
+
+  useCharacterMock.mockReturnValue({
+    state: {
+      status: "unavailable",
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignSessionsMock.mockReset()
+
+  useCampaignSessionsMock.mockReturnValue({
+    state: {
+      status: "success",
+      sessions: campaignSessions,
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignSessionMock.mockReset()
+
+  useCampaignSessionMock.mockReturnValue({
+    state: {
+      status: "success",
+      session: campaignSessionDetail,
+    },
+    retry: vi.fn(),
+  })
+
+  useCampaignQuestsMock.mockReset()
+
+  useCampaignQuestsMock.mockReturnValue({
+    state: {
+      status: "success",
+      quests: campaignQuests,
+    },
+    retry: vi.fn(),
+  })
+
+  useQuestMock.mockReset()
+
+  useQuestMock.mockReturnValue({
+    state: {
+      status: "success",
+      quest: campaignQuestDetail,
+    },
+    retry: vi.fn(),
+  })
+
+  useWorldEntitiesMock.mockReset()
+
+  useWorldEntitiesMock.mockReturnValue({
+    state: {
+      status: "success",
+      page: worldEntityPage,
+    },
+    retry: vi.fn(),
+  })
+
+  useKnowledgeItemsMock.mockReset()
+
+  useKnowledgeItemsMock.mockReturnValue({
+    state: {
+      status: "success",
+      page: knowledgePageFixture,
+    },
+    retry: vi.fn(),
+  })
 })
 
 function renderAppAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <RouteSessionProvider>
-        <App />
-      </RouteSessionProvider>
+      <ThemeProvider>
+        <RouteSessionProvider>
+          <App />
+        </RouteSessionProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   )
 }
@@ -98,9 +322,14 @@ describe("portal routing", () => {
       }),
     ).not.toBeInTheDocument()
 
+    const disabledAsk = screen.getByTitle(
+      "Unavailable until Phase 12 is verified",
+    )
+
+    expect(disabledAsk).toHaveAttribute("aria-disabled", "true")
     expect(
-      screen.getByText("Ask"),
-    ).toHaveAttribute("aria-disabled", "true")
+      screen.queryByRole("link", { name: "Ask" }),
+    ).not.toBeInTheDocument()
 
     expect(
       screen.getByRole("link", {
@@ -109,10 +338,25 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
+      within(
+        screen.getByRole("navigation", { name: "Campaign" }),
+      ).queryByRole("link", {
         name: "Change campaign",
       }),
-    ).toHaveAttribute("href", "/campaigns")
+    ).not.toBeInTheDocument()
+
+    expect(
+      within(screen.getByRole("main")).getByRole("combobox", {
+        name: "Campaign",
+      }),
+    ).toHaveValue("mundivita")
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Home",
+      }),
+    ).toBeInTheDocument()
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {
@@ -129,5 +373,289 @@ describe("portal routing", () => {
         name: "Campaign",
       }),
     ).not.toBeInTheDocument()
+  })
+
+  it("routes Characters to the selected character workspace", () => {
+    renderAppAt("/app/mundivita/characters")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Characters",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCharacterMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Character unavailable",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("routes Quests through the selected character perspective", () => {
+    renderAppAt("/app/mundivita/quests")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Quests",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCampaignQuestsMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Quests",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Restore the Glass Ossuary",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/quests/quest-detail",
+    )
+  })
+
+  it("routes a quest ID through the quest-detail boundary", () => {
+    renderAppAt(
+      "/app/mundivita/quests/quest-detail",
+    )
+
+    expect(
+      useQuestMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "quest-detail",
+      "character-ixamarra",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Restore the Glass Ossuary",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText("Status: active"),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Back to quests",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/quests",
+    )
+
+    expect(
+      screen.getByRole("link", {
+        name: "Quests",
+      }),
+    ).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+  })
+
+  it("uses the campaign fallback for an unknown quest subroute", () => {
+    renderAppAt(
+      "/app/mundivita/quests/quest-detail/unknown",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Campaign page not found",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      useCampaignQuestsMock,
+    ).not.toHaveBeenCalled()
+
+    expect(
+      useQuestMock,
+    ).not.toHaveBeenCalled()
+  })
+
+  it("routes Sessions through the campaign sessions boundary", () => {
+    renderAppAt("/app/mundivita/sessions")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Sessions",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useCampaignSessionsMock,
+    ).toHaveBeenCalledWith("mundivita")
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Sessions",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("table", {
+        name: "Sessions",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Most Recent Session",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/sessions/session-2",
+    )
+  })
+
+  it("routes a session ID through the session-detail boundary", () => {
+    renderAppAt(
+      "/app/mundivita/sessions/session-detail",
+    )
+
+    expect(
+      useCampaignSessionMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "session-detail",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "The Glass Ossuary",
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText(
+        "The party entered the dormant facility.",
+      ),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", {
+        name: "Back to sessions",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/app/mundivita/sessions",
+    )
+
+    expect(
+      screen.getByRole("link", {
+        name: "Sessions",
+      }),
+    ).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
+  })
+
+  it("provides global appearance selection in the header", () => {
+    renderAppAt("/")
+
+    const header = screen.getByRole("banner")
+
+    expect(
+      within(header).getByRole("combobox", {
+        name: "Appearance",
+      }),
+    ).toHaveValue("system")
+
+    expect(
+      within(header).getByText(
+        "Active theme: Hearthstone",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("routes World through the authorized World boundary", () => {
+    renderAppAt("/app/mundivita/world")
+
+    expect(
+      screen.getByRole("link", {
+        name: "World",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useWorldEntitiesMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      null,
+      "",
+      null,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "World",
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Glass Harbor",
+        level: 2,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("routes Knowledge through the authorized Knowledge boundary", () => {
+    renderAppAt("/app/mundivita/knowledge")
+
+    expect(
+      screen.getByRole("link", {
+        name: "Knowledge",
+      }),
+    ).toHaveAttribute("aria-current", "page")
+
+    expect(
+      useKnowledgeItemsMock,
+    ).toHaveBeenCalledWith(
+      "mundivita",
+      "known",
+      "character-ixamarra",
+      null,
+      "",
+      null,
+      null,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Knowledge",
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByText(
+        knowledgePageFixture.items[0].statement,
+      ),
+    ).toBeInTheDocument()
   })
 })

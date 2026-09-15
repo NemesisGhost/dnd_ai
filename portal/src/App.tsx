@@ -1,16 +1,28 @@
 import { Navigate, Route, Routes } from "react-router"
 import "./App.css"
+import { ThemeSelector } from "./themes/ThemeSelector"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { LoginPage } from "./pages/LoginPage"
 import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
 import { CampaignsPage } from "./pages/CampaignsPage"
+import { CampaignHomePage } from "./pages/CampaignHomePage"
+import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
+import { CampaignQuestsPage } from "./pages/CampaignQuestsPage"
+import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
+import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
+import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
+import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
+import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 
 function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 className="app-header__title">D&amp;D AI Portal</h1>
+        <h1 className="app-header__title">
+          D&amp;D AI Portal
+        </h1>
+        <ThemeSelector />
       </header>
 
       <Routes>
@@ -46,66 +58,49 @@ function App() {
           path="/app/:campaignId"
           element={<CampaignSessionBoundary />}
         >
-          <Route index element={<Navigate to="home" replace />} />
+          <Route
+            index
+            element={<Navigate to="home" replace />}
+          />
 
           <Route
             path="home"
-            element={
-              <PlaceholderPage
-                title="Home"
-                description="Campaign activity and summary information will appear here."
-              />
-            }
+            element={<CampaignHomePage />}
           />
 
           <Route
             path="world"
-            element={
-              <PlaceholderPage
-                title="World"
-                description="Authorized locations, people, factions, and lore will appear here."
-              />
-            }
+            element={<CampaignWorldPage />}
           />
 
           <Route
             path="characters"
-            element={
-              <PlaceholderPage
-                title="Characters"
-                description="Authorized player and non-player character information will appear here."
-              />
-            }
+            element={<CampaignCharactersPage />}
           />
 
           <Route
             path="quests"
-            element={
-              <PlaceholderPage
-                title="Quests"
-                description="Known active and completed quests will appear here."
-              />
-            }
+            element={<CampaignQuestsPage />}
+          />
+
+          <Route
+            path="quests/:questId"
+            element={<CampaignQuestDetailPage />}
           />
 
           <Route
             path="sessions"
-            element={
-              <PlaceholderPage
-                title="Sessions"
-                description="Session history and summaries will appear here."
-              />
-            }
+            element={<CampaignSessionsPage />}
+          />
+
+          <Route
+            path="sessions/:sessionId"
+            element={<CampaignSessionDetailPage />}
           />
 
           <Route
             path="knowledge"
-            element={
-              <PlaceholderPage
-                title="Knowledge"
-                description="Facts visible from the selected character perspective will appear here."
-              />
-            }
+            element={<CampaignKnowledgePage />}
           />
 
           <Route

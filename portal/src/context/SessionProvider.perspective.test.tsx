@@ -11,16 +11,45 @@ import {
   it,
   vi,
 } from "vitest"
-import { CampaignContextBar } from "../components/CampaignContextBar"
+import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "../hooks/useSessionBootstrap"
 import { AuthenticatedSessionBoundary } from "../layouts/AuthenticatedSessionBoundary"
-import type { SessionBootstrap } from "../types/bootstrap"
+import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
+import { usePerspective } from "./CharacterPerspectiveContext"
 import { SessionProvider } from "./SessionProvider"
 
 vi.mock("../hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
 }))
+vi.mock("../hooks/useCharacter", () => ({
+  useCharacter: () => ({
+    state: { status: "unavailable" },
+    retry: vi.fn(),
+  }),
+}))
+
+// Connects the presentational panel to the real perspective context supplied
+// by SessionProvider, the way CampaignLayout does in the app.
+function ConnectedPanel({
+  campaign,
+}: {
+  campaign: CampaignContext
+}) {
+  const { getSelectedCharacterId, selectCharacter } = usePerspective()
+
+  return (
+    <CampaignContextPanel
+      campaign={campaign}
+      campaigns={[campaign]}
+      selectedCharacterId={getSelectedCharacterId(campaign.campaign_id)}
+      onSelectCampaign={() => { }}
+      onSelectCharacter={(characterId) =>
+        selectCharacter(campaign.campaign_id, characterId)
+      }
+    />
+  )
+}
 
 const useSessionBootstrapMock =
   vi.mocked(useSessionBootstrap)
@@ -44,13 +73,15 @@ const campaign = {
     {
       character_id: "character-a",
       character_name: "Character A",
+      authorized_parties: [],
     },
     {
       character_id: "character-b",
       character_name: "Character B",
+      authorized_parties: [],
     },
   ],
-}
+} satisfies CampaignContext
 
 const bootstrap: SessionBootstrap = {
   ...sessionBootstrapFixture,
@@ -71,9 +102,7 @@ function TestPortal() {
             return currentCampaign === undefined
               ? null
               : (
-                <CampaignContextBar
-                  campaign={currentCampaign}
-                />
+                <ConnectedPanel campaign={currentCampaign} />
               )
           }}
         </AuthenticatedSessionBoundary>
@@ -100,9 +129,10 @@ describe("SessionProvider perspective integration", () => {
     const { rerender } = render(<TestPortal />)
 
     expect(
-      screen.getByText("No character selected", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as No character perspective selected",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
 
     fireEvent.change(
@@ -134,8 +164,8 @@ describe("SessionProvider perspective integration", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole("region", {
-        name: "Current campaign context",
+      screen.queryByRole("combobox", {
+        name: "Character perspective",
       }),
     ).not.toBeInTheDocument()
 
@@ -156,9 +186,10 @@ describe("SessionProvider perspective integration", () => {
     ).toHaveValue("character-b")
 
     expect(
-      screen.getByText("Character B", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as Character B",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
   })
 
@@ -218,9 +249,10 @@ describe("SessionProvider perspective integration", () => {
     ).toHaveValue("character-a")
 
     expect(
-      screen.getByText("Character A", {
-        selector: "dd",
-      }),
+      screen.getByText(
+        "Campaign context: Mundivita — Viewing as Character A",
+        { selector: "summary" },
+      ),
     ).toBeInTheDocument()
 
     expect(
@@ -230,9 +262,10 @@ describe("SessionProvider perspective integration", () => {
     ).not.toBeInTheDocument()
 
     expect(
-      screen.queryByText("Character B", {
-        selector: "dd",
-      }),
+      screen.queryByText(
+        "Campaign context: Mundivita — Viewing as Character B",
+        { selector: "summary" },
+      ),
     ).not.toBeInTheDocument()
   })
 })

@@ -5,9 +5,16 @@ Vite, and React Router.
 
 ## Current status
 
-Phase 13A is complete. Phase 13C campaign-context integration is implemented
-on this branch, with live multi-campaign and perspective verification still
-outstanding. Phase 13C is not yet marked complete.
+**Phases 13A, 13B, 13C, and 13D are complete and verified.** The six 13D
+read-only screens (Home, World, Characters, Quests, Sessions, Knowledge) are
+wired to live campaign-scoped API endpoints, each behind a shared
+`*Boundary` component providing consistent loading, empty, denied
+(non-discoverable), error-with-retry, and background-refreshing states. The
+automated suite (`npm test`, `npm run lint`, `npm run build`) and a live
+multi-role browser pass have both passed — see
+[Phase 13C/13D verification](#phase-13c13d-verification) below. 13E (GM
+access tools), 13F (Foundry connections/device UI), 13G (Phase 12 surfaces),
+and 13H (E2E coverage and production packaging) have not started.
 
 The portal currently includes:
 
@@ -16,23 +23,34 @@ The portal currently includes:
 - Authoritative identity, campaign, timeline, role, perspective, capability,
   and feature data from `GET /auth/session`.
 - Loading, unauthenticated, recoverable-error, and empty-campaign states.
-- Campaign selection and a Change campaign navigation link.
+- Inline campaign and character-perspective selection.
 - Fresh session bootstrap when entering, leaving, or switching campaign
   scope, including browser Back/Forward navigation.
 - In-memory character-perspective selection, checked against the latest
-  server-authorized perspective list after refresh.
-- Capability-dependent navigation.
+  server-authorized perspective list after refresh; capabilities (e.g. the
+  Access nav item) come only from the bootstrap's per-campaign `capabilities`
+  list, never derived locally from role or perspective.
+- A Home dashboard showing the latest session, previous-session recap, and
+  recent events (a narrower slice than Phase 13's full dashboard bullet —
+  active quests, recent discoveries, relevant NPCs/factions, reminders, and
+  an Ask entry point are not yet on this page).
+- A World explorer with type-filtered and text-searchable result cards and
+  keyset pagination.
+- Characters, Quests (list and detail), and Sessions (list and detail)
+  screens reading live campaign-scoped data.
+- A Knowledge screen filterable by view (across the documented knowledge
+  views) and authorized party, with search and keyset pagination.
 - A visibly disabled Ask feature while the server manifest disables it.
-- Placeholder pages for later portal increments.
-- Focused automated tests for session, routing, and selection behavior.
+- Light/dark theme switching.
+- Placeholder pages for later portal increments (Ask, Access management).
+- Automated tests covering routing, session and perspective behavior, and
+  each screen's loading, empty, denied, and error states.
 
 Navigating between pages within the same campaign preserves the provider
 and selected perspective. Changing campaign scope resets them.
 
 The campaign picker's Default campaign marker describes the server's
 bootstrap default, not a persisted last-visited preference.
-
-Phase 13D read-only resource views have not started.
 
 ## Prerequisites
 
@@ -143,27 +161,37 @@ Authenticated campaign routes:
 - `/app/:campaignId/world`
 - `/app/:campaignId/characters`
 - `/app/:campaignId/quests`
+- `/app/:campaignId/quests/:questId`
 - `/app/:campaignId/sessions`
+- `/app/:campaignId/sessions/:sessionId`
 - `/app/:campaignId/knowledge`
-- `/app/:campaignId/ask`
-- `/app/:campaignId/access`
+- `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
+- `/app/:campaignId/access` (placeholder — Phase 13E)
 
-Campaign resource pages remain placeholders. Campaign IDs from URLs are
-matched against the current bootstrap's authorized campaign list.
-Unavailable campaigns receive a generic unavailable/not-found state.
+Every route above except `ask` and `access` is a live, API-backed screen.
+Campaign IDs from URLs are matched against the current bootstrap's
+authorized campaign list. Unavailable campaigns receive a generic
+unavailable/not-found state.
 
 Frontend navigation visibility is presentation only. The backend remains
 responsible for authorizing every resource request.
 
 ## Source organization
 
-- `src/api`: HTTP clients.
-- `src/components`: Interface components.
-- `src/context`: Session and perspective contexts/providers.
-- `src/fixtures`: Test fixture data; not production identity data.
-- `src/hooks`: Session, login, and perspective behavior.
-- `src/layouts`: Authentication boundaries and campaign layouts.
-- `src/pages`: Route-level pages and placeholders.
+- `src/api`: Typed fetch clients, one module per backend contract (session,
+  world, quests, sessions, knowledge, characters, campaign summary, login).
+- `src/components`: Interface components, including the `*Boundary`
+  components (e.g. `WorldEntitiesBoundary`, `KnowledgeItemsBoundary`,
+  `CampaignQuestsBoundary`) that turn a hook's fetch state into consistent
+  loading/empty/denied/error/refreshing UI for each screen.
+- `src/context`: Session and character-perspective contexts/providers.
+- `src/fixtures`: Test-only fixture data; never used outside tests.
+- `src/hooks`: Data-fetching hooks backing each boundary, plus session,
+  login, and perspective behavior.
+- `src/layouts`: Authentication/session boundaries and campaign layouts.
+- `src/pages`: Route-level screens (Home, World, Characters, Quests,
+  Sessions, Knowledge, Login) and placeholders.
+- `src/themes`: Light/dark theme context, provider, and selector.
 - `src/test`: Shared test initialization.
 - `src/types`: TypeScript representations of backend contracts.
 - `src/App.tsx`: Declarative route table.
@@ -193,15 +221,15 @@ not store Foundry device credentials.
 Backend endpoint availability does not mean that every account-management
 or authentication workflow has a completed portal screen.
 
-## Phase 13C verification
+## Phase 13C/13D verification
 
-Latest owner-reported local checks:
+Automated checks (all screens, run from `portal/`):
 
-- 53 automated tests passed.
-- ESLint passed.
-- Production build passed.
+- `npm test` — 369 tests passed across 65 test files.
+- `npm run lint` passed.
+- `npm run build` passed.
 
-Live checks already reported:
+Live checks reported for 13C (campaign/perspective context):
 
 - Login succeeds and opens campaign selection.
 - Refresh restores the authenticated session.
@@ -216,6 +244,21 @@ Live checks already reported:
 - Session expiry/revocation followed by refresh shows login without retained protected context.
 - A failed refresh hides protected context and offers a working retry.
 - Disabled Phase 12 surfaces make no related network requests.
+
+Live checks reported for 13D (Home, World, Characters, Quests, Sessions,
+Knowledge), exercised across GM, player, and observer/assistant-GM
+perspectives:
+
+- Each screen loads live data for an authorized campaign/character
+  perspective, and reflects a perspective or campaign switch correctly.
+- GM, player, and observer views differ correctly where authorization or
+  knowledge scoping applies (notably Knowledge and World).
+- Inaccessible or unauthorized resources produce the denied/unavailable
+  state rather than leaking existence.
+- Quests and Sessions list-to-detail navigation works, and World/Knowledge
+  search, category/view filters, and keyset pagination return correct live
+  results.
+- A simulated request failure shows the error state and a working retry.
 
 ## Learning checkpoints
 

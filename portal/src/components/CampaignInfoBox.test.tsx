@@ -7,11 +7,17 @@ import { CampaignInfoBox } from "./CampaignInfoBox"
 const baseCampaign = {
   campaign_id: "campaign-secret-id",
   campaign_name: "Mundivita",
+  world_id: "world-secret-id",
+  world_name: "Mundivita",
   timeline_id: "timeline-secret-id",
   timeline_name: "Primary Timeline",
   roles: ["campaign_owner", "player"],
   character_perspectives: [
-    { character_id: "character-a", character_name: "Ixamarra" },
+    {
+      character_id: "character-a",
+      character_name: "Ixamarra",
+      authorized_parties: [],
+    },
   ],
   selected_character_id: "character-a",
   capabilities: ["access.manage"],
