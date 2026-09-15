@@ -719,6 +719,13 @@ The database will use bounded PostgreSQL schemas:
 
 ### What exists today
 
+For a dated, verification-backed summary of completed and remaining work, see
+[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md). In brief, the repository now
+contains a mature PostgreSQL/FastAPI backend, a Foundry v13 adapter, and the
+Phase 13A-13D React portal. It is still pre-release: live Foundry acceptance,
+the remaining portal increments, AI-provider smoke verification, and production
+packaging/operations remain open.
+
 ```text
 .
 ├── README.md                       # This file — project entry point
@@ -846,6 +853,9 @@ Note that a freshly deployed database is an **empty PostgreSQL instance** until 
 ---
 
 ## Documentation
+
+- [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) — dated implementation,
+  verification, and graded-issue snapshot
 
 ### Design and domain
 
