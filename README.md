@@ -743,6 +743,8 @@ The database will use bounded PostgreSQL schemas:
 │   ├── CHECKLIST.md                # Pre-deployment checks
 │   ├── INFRASTRUCTURE.md           # Infrastructure reference
 │   ├── AI_ASSISTANT_GUIDE.md       # On-demand examples; not startup context
+│   ├── UI_DESIGN.md                # Portal screen specs and authorization matrix
+│   ├── PHASE13D_BACKEND_READINESS.md
 │   ├── architecture/
 │   │   ├── SYSTEM_ARCHITECTURE.md
 │   │   ├── DATABASE_MODEL.md
@@ -765,6 +767,20 @@ The Python project and migration scaffolding use this layout:
 │   └── seeds/
 ├── src/dnd_ai/                     # persistence/ and config.py so far
 └── tests/{unit,database,scenario}/
+```
+
+The owner-authored React portal (Phase 13, [§2.9](docs/PLAN.md#29-phase-13-ui-code-is-owner-authored)) lives under `portal/`, built with React, TypeScript, and Vite, and tested with Vitest and Testing Library:
+
+```text
+└── portal/
+    └── src/
+        ├── api/            # Typed fetch wrappers per backend contract (session, world, quests, knowledge, ...)
+        ├── context/         # Session bootstrap and character-perspective React context
+        ├── hooks/           # Data-fetching hooks backing each boundary component
+        ├── layouts/         # AuthenticatedSessionBoundary, CampaignLayout, and other route-level boundaries
+        ├── components/      # Shared UI, including the *Boundary components providing loading/empty/denied/error states
+        ├── pages/           # Route-level screens: Home, World, Characters, Quests, Sessions, Knowledge, Login
+        └── types/           # Response types matching the backend contracts
 ```
 
 ### Reserved extension points

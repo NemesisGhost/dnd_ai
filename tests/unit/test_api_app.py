@@ -24,6 +24,7 @@ from dnd_ai.api.errors import (
     ApiError,
     ConflictError,
     ForbiddenError,
+    InvalidCursorError,
     NotFoundError,
     UnauthorizedError,
     _route_template,
@@ -465,6 +466,12 @@ def test_unauthorized_timeline_error_response_omits_every_supplied_uuid() -> Non
             409,
             "conflict",
             "The request could not be completed due to a conflicting change.",
+        ),
+        (
+            InvalidCursorError,
+            422,
+            "invalid_cursor",
+            "The pagination cursor is invalid.",
         ),
     ],
 )

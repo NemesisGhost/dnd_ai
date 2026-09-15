@@ -34,6 +34,19 @@ falls back to the campaign-wide row. Like `dnd_ai.queries.dungeon`, this
 module performs no authorization of its own — `party_id` must already be
 an authorized perspective (`dnd_ai.api.access.resolve_party_perspective`)
 by the time it reaches here.
+
+Campaign exposure: quest *definitions* (`narrative.quests`) are world
+canon and carry no `campaign_id` (docs/architecture/DATABASE_MODEL.md §14)
+— a single world can host many campaign timelines. What makes a quest
+visible *to one campaign* is a qualifying `campaign.quest_state` row on
+that campaign's exact `timeline_id`, under the audience rule
+`_QUEST_STATE_MATCHES_AUDIENCE` encodes. `list_campaign_quests` applies
+that rule to enumerate a campaign's tracked quests; `get_quest_view`
+applies the identical rule (via `require_campaign_tracking=True`) so a
+same-world quest tracked only on a *different* campaign's timeline — or
+only for an unauthorized party — is not directly fetchable and raises the
+same non-disclosing `QuestNotFoundError` a nonexistent quest does. List
+and detail therefore never disagree on which quests an audience may see.
 """
 
 import uuid
@@ -43,15 +56,33 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
+# The single audience-scoping predicate shared by `list_campaign_quests`
+# and `get_quest_view`. A `campaign.quest_state` row establishes that a
+# world-scoped quest (no `campaign_id`; docs/architecture/DATABASE_MODEL.md
+# §14) is tracked *for this campaign audience* only when the row is
+# campaign-wide (`party_id IS NULL`), belongs to the caller's own
+# already-authorized party perspective (`party_id = :party`), or the caller
+# sees canonical truth across every party (`:include_all_parties` — a GM).
+# `{alias}` is the `campaign.quest_state` alias in the surrounding query;
+# both call sites bind the identical `:party`/`:include_all_parties`
+# parameters, so list and detail can never disagree on which quests an
+# audience may see (docs/PHASE13D_BACKEND_READINESS.md §4.2/§5).
+_QUEST_STATE_MATCHES_AUDIENCE = (
+    "(:include_all_parties OR {alias}.party_id IS NULL OR {alias}.party_id = :party)"
+)
+
 
 class QuestNotFoundError(DomainAuthorizationError):
-    """Raised by `get_quest_view()` for a nonexistent `quest_id`, or one
-    whose own world does not match the caller's `expected_world_id` —
-    identically, so a caller can never distinguish "doesn't exist" from
-    "belongs to a different world" (mirroring `dnd_ai.queries.dungeon.
-    DungeonAreaNotFoundError`'s identical reasoning). The supplied
-    quest/world ids are included only in the constructor's `detail`
-    argument (`str(self)`), never in `safe_message`."""
+    """Raised by `get_quest_view()` for a nonexistent `quest_id`, one whose
+    own world does not match the caller's `expected_world_id`, or (when
+    `require_campaign_tracking=True`) one not tracked on the caller's
+    `timeline_id` for their audience — all identically, so a caller can
+    never distinguish "doesn't exist" from "belongs to a different world"
+    from "tracked only on another campaign's timeline" (mirroring
+    `dnd_ai.queries.dungeon.DungeonAreaNotFoundError`'s identical
+    reasoning). The supplied quest/world/timeline ids are included only in
+    the constructor's `detail` argument (`str(self)`), never in
+    `safe_message`."""
 
 
 @dataclass(frozen=True)
@@ -92,6 +123,8 @@ def get_quest_view(
     expected_world_id: uuid.UUID,
     party_id: uuid.UUID | None,
     include_hidden: bool,
+    require_campaign_tracking: bool = False,
+    include_all_parties: bool = False,
 ) -> QuestView:
     """The effective, audience-filtered state of one quest: its stages and
     objectives, each with the applicable current status (the party-scoped
@@ -99,7 +132,22 @@ def get_quest_view(
     campaign-wide row). Raises `QuestNotFoundError` for a nonexistent quest
     or one belonging to a different world than `expected_world_id` (always
     the caller's own resolved-timeline world — `dnd_ai.api._shared.
-    timeline_world_id`, never caller-supplied)."""
+    timeline_world_id`, never caller-supplied).
+
+    `require_campaign_tracking` (opt-in — the API detail route passes it,
+    the AI context/proposal callers deliberately do not, since they draw
+    quests from `narrative.quest_participants`, not campaign tracking):
+    when `True`, also raises `QuestNotFoundError` unless a qualifying
+    `campaign.quest_state` row exists on `timeline_id` under the shared
+    `_QUEST_STATE_MATCHES_AUDIENCE` rule — the identical
+    timeline/party/`include_all_parties` audience test `list_campaign_
+    quests` applies, so a same-world quest tracked only on another
+    campaign's timeline, or only for an unauthorized party, is not
+    directly fetchable. `include_all_parties` (a GM sees any party's row;
+    a non-GM only a campaign-wide row or their own `party_id`'s) is only
+    consulted when `require_campaign_tracking` is `True`. Per-quest
+    `campaign.view` deny is the caller's concern (already resolved before
+    this call), matching `denied_quest_ids` for the list."""
     quest_row = (
         connection.execute(
             text("""
@@ -119,6 +167,31 @@ def get_quest_view(
             f"quest {quest_id} does not exist in world {expected_world_id} "
             f"(actual world: {quest_row['world_id'] if quest_row is not None else None})"
         )
+
+    if require_campaign_tracking:
+        is_tracked = connection.execute(
+            text(f"""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM campaign.quest_state qst_audience
+                    WHERE qst_audience.timeline_id = :timeline
+                      AND qst_audience.quest_id = :quest
+                      AND {_QUEST_STATE_MATCHES_AUDIENCE.format(alias="qst_audience")}
+                )
+            """),
+            {
+                "timeline": timeline_id,
+                "quest": quest_id,
+                "party": party_id,
+                "include_all_parties": include_all_parties,
+            },
+        ).scalar()
+        if not is_tracked:
+            raise QuestNotFoundError(
+                f"quest {quest_id} is not tracked on timeline {timeline_id} for this "
+                f"campaign audience (include_all_parties={include_all_parties}, "
+                f"party_id={party_id})"
+            )
 
     quest_status_row = (
         connection.execute(
@@ -319,15 +392,21 @@ def list_campaign_quests(
     is framework-free and performs no authorization of its own:
     `include_all_parties`, `party_id`, and `denied_quest_ids` must already
     be authorized/resolved decisions by the time they reach here, exactly
-    like `get_quest_view`."""
+    like `get_quest_view`.
+
+    The "is this quest tracked for this audience" test is the shared
+    `_QUEST_STATE_MATCHES_AUDIENCE` predicate — the identical SQL
+    `get_quest_view(..., require_campaign_tracking=True)` applies — so a
+    quest this list excludes for a given audience can never be fetched
+    directly by that same audience, and vice versa."""
     rows = connection.execute(
-        text("""
+        text(f"""
             WITH tracked AS (
-                SELECT DISTINCT quest_id
-                FROM campaign.quest_state
-                WHERE timeline_id = :timeline
-                  AND (:include_all_parties OR party_id IS NULL OR party_id = :party)
-                  AND NOT (quest_id = ANY(CAST(:denied AS uuid[])))
+                SELECT DISTINCT qst_audience.quest_id
+                FROM campaign.quest_state qst_audience
+                WHERE qst_audience.timeline_id = :timeline
+                  AND {_QUEST_STATE_MATCHES_AUDIENCE.format(alias="qst_audience")}
+                  AND NOT (qst_audience.quest_id = ANY(CAST(:denied AS uuid[])))
             )
             SELECT e.entity_id AS quest_id, e.canonical_name AS name,
                    COALESCE(qs_party.code, qs_campaign.code) AS status_code

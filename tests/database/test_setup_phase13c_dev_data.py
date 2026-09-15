@@ -20,17 +20,35 @@ import setup_phase13c_dev_data
 from setup_phase13c_dev_data import _run
 from sqlalchemy import Connection, text
 
+from dnd_ai.api.access import resolve_party_perspective
+from dnd_ai.api.world_explorer import resolve_world_character_visibility
+from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.domain.passwords import hash_password
 from dnd_ai.queries.bootstrap import CampaignBootstrapView, get_session_bootstrap
 from dnd_ai.queries.character import get_character_view
 from dnd_ai.queries.character_sheet import get_character_sheet_view
+from dnd_ai.queries.knowledge_browse import list_knowledge
+from dnd_ai.queries.quest import (
+    QuestNotFoundError,
+    get_quest_view,
+    list_campaign_quests,
+)
 from dnd_ai.queries.session import (
     SessionNotFoundError,
     get_session_view,
     list_campaign_sessions,
 )
+from dnd_ai.queries.world_explorer import (
+    WORLD_CATEGORY_TYPE_CODES,
+    WorldResourceNotFoundError,
+    get_event_view,
+    get_location_view,
+    search_world_entities,
+)
 from tests.factories import (
+    lookup_id,
     make_campaign,
+    make_entity,
     make_event,
     make_session,
     make_timeline,
@@ -725,3 +743,906 @@ def test_production_environment_refusal_is_enforced(
     monkeypatch.setattr(setup_phase13c_dev_data.settings, "environment", "production")
     with pytest.raises(SystemExit):
         setup_phase13c_dev_data._require_non_production()
+
+
+def test_remote_database_target_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_require_local_target` aborts on a non-loopback DATABASE_URL host and
+    on a production-looking database name, unless the override env var is
+    set — the safe-target guard the World/Knowledge fixture run depends on."""
+    monkeypatch.setattr(setup_phase13c_dev_data.settings, "environment", "local")
+    monkeypatch.delenv("DND_AI_ALLOW_NONLOCAL_DEV_DATA", raising=False)
+
+    monkeypatch.setattr(
+        setup_phase13c_dev_data,
+        "_database_url",
+        lambda: "postgresql+psycopg://app:secret@db.example.com:5432/dnd_ai",
+    )
+    with pytest.raises(SystemExit):
+        setup_phase13c_dev_data._require_local_target()
+
+    monkeypatch.setattr(
+        setup_phase13c_dev_data,
+        "_database_url",
+        lambda: "postgresql+psycopg://app:secret@127.0.0.1:5432/dnd_ai_production",
+    )
+    with pytest.raises(SystemExit):
+        setup_phase13c_dev_data._require_local_target()
+
+    # A loopback host + ordinary dev database name is accepted, and the safe
+    # summary never contains the password.
+    monkeypatch.setattr(
+        setup_phase13c_dev_data,
+        "_database_url",
+        lambda: "postgresql+psycopg://app:hunter2@127.0.0.1:5432/dnd_ai",
+    )
+    setup_phase13c_dev_data._require_local_target()
+    summary = setup_phase13c_dev_data._safe_target_summary()
+    assert "hunter2" not in summary
+    assert "127.0.0.1:5432/dnd_ai" in summary
+
+
+# ---------------------------------------------------------------------------
+# Phase 13D Quest list/detail fixture
+# ---------------------------------------------------------------------------
+
+_QUEST_A_ACTIVE = "Restore the Glass Ossuary"
+_QUEST_A_COMPLETED = "Gather the Hollow Verses"
+_QUEST_A_NULL_STATUS = "Wake the Tide Beneath Vheil"
+_QUEST_B = "Chart the Sunken Marches"
+_EXPECTED_A_QUEST_NAMES = {_QUEST_A_ACTIVE, _QUEST_A_COMPLETED, _QUEST_A_NULL_STATUS}
+
+
+def _quest_context(
+    db_connection: Connection, *, user_id: uuid.UUID
+) -> tuple[CampaignBootstrapView, CampaignBootstrapView, uuid.UUID, bool]:
+    """(campaign_a, campaign_b, world_a_id, account_is_gm) — the inputs the
+    portal's quest route resolves before calling the production queries."""
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a = campaigns[_CAMPAIGN_A]
+    campaign_b = campaigns[_CAMPAIGN_B]
+    assert campaign_a.timeline_id is not None
+    world_a = db_connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": campaign_a.timeline_id},
+    ).scalar()
+    assert isinstance(world_a, uuid.UUID)
+    return campaign_a, campaign_b, world_a, "canon.edit" in campaign_a.capabilities
+
+
+def _list_a(db_connection: Connection, campaign_a: CampaignBootstrapView, *, is_gm: bool) -> list:
+    assert campaign_a.timeline_id is not None
+    return list(
+        list_campaign_quests(
+            db_connection,
+            timeline_id=campaign_a.timeline_id,
+            party_id=None,
+            include_all_parties=is_gm,
+        )
+    )
+
+
+def test_preview_mode_rolls_back_all_new_quest_rows(db_connection: Connection) -> None:
+    """Item 1: a preview (the identical SQL path, then a rollback) leaves no
+    quest, stage, objective, party, or quest/objective-state row behind."""
+    user_id = _make_local_account(db_connection, display_name="Quest Preview Tester")
+
+    savepoint = db_connection.begin_nested()
+    _run(db_connection, user_id=user_id)
+
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert {
+        i.name for i in _list_a(db_connection, campaign_a, is_gm=is_gm)
+    } == _EXPECTED_A_QUEST_NAMES
+    assert (
+        db_connection.execute(
+            text(
+                "SELECT count(*) FROM narrative.quest_objectives qo "
+                "JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id "
+                "JOIN core.entities e ON e.entity_id = qs.quest_id "
+                "WHERE e.world_id = :w"
+            ),
+            {"w": world_a},
+        ).scalar()
+        == 7
+    )
+
+    savepoint.rollback()
+
+    for name in (*_EXPECTED_A_QUEST_NAMES, _QUEST_B):
+        assert (
+            db_connection.execute(
+                text("SELECT count(*) FROM core.entities WHERE canonical_name = :n"),
+                {"n": name},
+            ).scalar()
+            == 0
+        ), name
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM campaign.parties WHERE name = 'The Ashen Vigil'")
+        ).scalar()
+        == 0
+    )
+
+
+def test_apply_creates_the_expected_quests_stages_and_objectives(
+    db_connection: Connection,
+) -> None:
+    """Item 2: apply mode creates three Campaign A quests (active, completed,
+    null-status), the detailed quest's three ordered stages, and its six
+    objectives with the documented lookup codes."""
+    user_id = _make_local_account(db_connection, display_name="Quest Apply Tester")
+    _run(db_connection, user_id=user_id)
+
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    items = {i.name: i for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}
+    assert set(items) == _EXPECTED_A_QUEST_NAMES
+    assert items[_QUEST_A_ACTIVE].status_code == "active"
+    assert items[_QUEST_A_COMPLETED].status_code == "completed"
+    assert items[_QUEST_A_NULL_STATUS].status_code is None
+
+    assert campaign_a.timeline_id is not None
+    detail = get_quest_view(
+        db_connection,
+        quest_id=items[_QUEST_A_ACTIVE].quest_id,
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        party_id=None,
+        include_hidden=True,
+    )
+    assert [s.name for s in detail.stages] == [
+        "The Warden's Vigil",
+        "Reassemble the Reliquary",
+        "Aftermath in the Nave",
+    ]
+    assert [s.stage_type for s in detail.stages] == ["sequential", "sequential", "optional"]
+    assert detail.stages[2].objectives == ()
+
+    objectives = {o.name: o for s in detail.stages for o in s.objectives}
+    assert len(objectives) == 6
+    lanterns = objectives["Light the three vigil lanterns"]
+    assert lanterns.requirement_level == "required"
+    assert lanterns.completion_mode == "automatic"
+    assert lanterns.quantity_required == 3
+    assert lanterns.description is not None
+    assert lanterns.status_code == "completed"
+
+    challenge = objectives["Answer the warden's challenge"]
+    assert challenge.completion_mode == "gm_confirmed"
+    assert challenge.description is None
+    assert challenge.quantity_required is None
+    assert challenge.status_code == "active"
+
+    assert objectives["Recover the sexton's iron key"].requirement_level == "optional"
+    assert objectives["Recover the sexton's iron key"].status_code is None
+    assert (
+        objectives["Catalogue the recovered relics"].visibility_policy == "hidden_until_discovered"
+    )
+    assert objectives["Brief Archivist Vell in private"].visibility_policy == "gm_only"
+
+    empty = get_quest_view(
+        db_connection,
+        quest_id=items[_QUEST_A_COMPLETED].quest_id,
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        party_id=None,
+        include_hidden=True,
+    )
+    assert empty.stages == ()
+    assert empty.status_code == "completed"
+
+
+def test_running_apply_twice_creates_no_duplicate_quest_rows(db_connection: Connection) -> None:
+    """Item 3: quest/stage/objective/state rows are as idempotent as every
+    other row this fixture creates."""
+    user_id = _make_local_account(db_connection, display_name="Quest Idempotent Tester")
+
+    first = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id)
+    assert all("[created]" in line for line in first.lines), first.lines
+    assert all("[reused" in line for line in second.lines), second.lines
+    assert len(first.lines) == len(second.lines)
+
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert len(_list_a(db_connection, campaign_a, is_gm=is_gm)) == 3
+    assert (
+        db_connection.execute(
+            text(
+                "SELECT count(*) FROM narrative.quest_stages qs "
+                "JOIN core.entities e ON e.entity_id = qs.quest_id WHERE e.world_id = :w"
+            ),
+            {"w": world_a},
+        ).scalar()
+        == 4
+    )
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM campaign.parties WHERE name = 'The Ashen Vigil'")
+        ).scalar()
+        == 1
+    )
+
+
+def test_rerun_reconciles_mutable_quest_rows_after_drift(db_connection: Connection) -> None:
+    """Item 4: a live-testing session that advanced an objective, re-statused
+    a quest, and renumbered a stage is reset by a second apply — each
+    reported as "reconciled" — and the real queries then show the restored
+    values."""
+    user_id = _make_local_account(db_connection, display_name="Quest Reconcile Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None
+    glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
+        _QUEST_A_ACTIVE
+    ]
+
+    db_connection.execute(
+        text("""
+            UPDATE campaign.quest_state
+            SET quest_status_id = (
+                SELECT quest_status_id FROM campaign.quest_statuses WHERE code = 'completed'
+            )
+            WHERE quest_id = :q AND party_id IS NULL
+        """),
+        {"q": glass_id},
+    )
+    db_connection.execute(
+        text("""
+            UPDATE campaign.objective_state os
+            SET objective_status_id = (
+                SELECT objective_status_id FROM campaign.objective_statuses WHERE code = 'failed'
+            )
+            FROM narrative.quest_objectives qo
+            JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
+            WHERE os.quest_objective_id = qo.quest_objective_id
+              AND qs.quest_id = :q AND qo.name = 'Light the three vigil lanterns'
+        """),
+        {"q": glass_id},
+    )
+    db_connection.execute(
+        text("""
+            UPDATE narrative.quest_stages SET sequence_number = 99, stage_type = 'optional'
+            WHERE quest_id = :q AND name = 'The Warden''s Vigil'
+        """),
+        {"q": glass_id},
+    )
+
+    second = _run(db_connection, user_id=user_id)
+    reconciled = [line for line in second.lines if "[reconciled" in line]
+    assert any(f"quest state {_QUEST_A_ACTIVE!r} (campaign-wide)" in line for line in reconciled), (
+        reconciled
+    )
+    assert any("Light the three vigil lanterns" in line for line in reconciled), reconciled
+    assert any("The Warden's Vigil" in line for line in reconciled), reconciled
+
+    detail = get_quest_view(
+        db_connection,
+        quest_id=glass_id,
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        party_id=None,
+        include_hidden=True,
+    )
+    assert detail.status_code == "active"
+    assert [s.name for s in detail.stages][0] == "The Warden's Vigil"
+    assert detail.stages[0].stage_type == "sequential"
+    lanterns = next(
+        o for s in detail.stages for o in s.objectives if o.name == "Light the three vigil lanterns"
+    )
+    assert lanterns.status_code == "completed"
+
+
+def test_a_name_collision_with_non_fixture_data_fails_safely(db_connection: Connection) -> None:
+    """Item 5: a second entity taking a fixture quest's name is treated as a
+    collision — the re-run aborts with guidance rather than guessing which
+    row is the fixture's."""
+    user_id = _make_local_account(db_connection, display_name="Quest Collision Tester")
+    _run(db_connection, user_id=user_id)
+
+    world_a = db_connection.execute(
+        text("SELECT world_id FROM core.entities WHERE canonical_name = :n"),
+        {"n": _QUEST_A_ACTIVE},
+    ).scalar()
+    assert isinstance(world_a, uuid.UUID)
+    continent_type_id = lookup_id(
+        db_connection, "core", "entity_types", "entity_type_id", "continent"
+    )
+    make_entity(db_connection, world_a, continent_type_id, name=_QUEST_A_ACTIVE)
+
+    with pytest.raises(SystemExit, match="collision"):
+        _run(db_connection, user_id=user_id)
+
+
+def test_campaign_a_and_b_quests_remain_isolated(db_connection: Connection) -> None:
+    """Item 6: Campaign B's quest is tracked only on Timeline B and never
+    appears in Campaign A's list, and vice versa."""
+    user_id = _make_local_account(db_connection, display_name="Quest Isolation Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert campaign_b.timeline_id is not None
+
+    a_names = {i.name for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}
+    b_names = {
+        i.name
+        for i in list_campaign_quests(
+            db_connection,
+            timeline_id=campaign_b.timeline_id,
+            party_id=None,
+            include_all_parties=is_gm,
+        )
+    }
+    assert a_names == _EXPECTED_A_QUEST_NAMES
+    assert b_names == {_QUEST_B}
+    assert not (a_names & b_names)
+
+
+def test_production_list_query_returns_the_expected_campaign_a_quests(
+    db_connection: Connection,
+) -> None:
+    """Item 7: the real `list_campaign_quests` returns exactly the three
+    Campaign A fixture quests, ordered by canonical_name (the production
+    contract), with the documented statuses."""
+    user_id = _make_local_account(db_connection, display_name="Quest List Query Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+
+    items = _list_a(db_connection, campaign_a, is_gm=is_gm)
+    assert [i.name for i in items] == sorted(i.name for i in items)
+    assert [(i.name, i.status_code) for i in items] == [
+        (_QUEST_A_COMPLETED, "completed"),
+        (_QUEST_A_ACTIVE, "active"),
+        (_QUEST_A_NULL_STATUS, None),
+    ]
+
+
+def test_production_detail_query_preserves_stage_sequence_order(db_connection: Connection) -> None:
+    """Item 8: `get_quest_view` returns "Restore the Glass Ossuary"'s stages
+    in sequence order, which is deliberately the reverse of alphabetical."""
+    user_id = _make_local_account(db_connection, display_name="Quest Detail Query Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None
+    glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
+        _QUEST_A_ACTIVE
+    ]
+
+    detail = get_quest_view(
+        db_connection,
+        quest_id=glass_id,
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        party_id=None,
+        include_hidden=True,
+    )
+    names = [s.name for s in detail.stages]
+    seqs = [s.sequence_number for s in detail.stages]
+    assert seqs == sorted(seqs)
+    assert names == ["The Warden's Vigil", "Reassemble the Reliquary", "Aftermath in the Nave"]
+    assert names != sorted(names), "sequence order must differ from alphabetical"
+
+
+def test_production_visibility_filtering_is_preserved(db_connection: Connection) -> None:
+    """Item 9: `get_quest_view` still filters objectives by
+    `visibility_policy` — a non-GM audience (`include_hidden=False`) sees
+    only the four `visible` objectives; the `gm_only` and stateless
+    `hidden_until_discovered` objectives are returned only with
+    `include_hidden=True`."""
+    user_id = _make_local_account(db_connection, display_name="Quest Visibility Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None
+    glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
+        _QUEST_A_ACTIVE
+    ]
+
+    def _objective_names(*, include_hidden: bool) -> set[str]:
+        view = get_quest_view(
+            db_connection,
+            quest_id=glass_id,
+            timeline_id=campaign_a.timeline_id,  # type: ignore[arg-type]
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=include_hidden,
+        )
+        return {o.name for s in view.stages for o in s.objectives}
+
+    non_gm = _objective_names(include_hidden=False)
+    gm = _objective_names(include_hidden=True)
+    assert non_gm == {
+        "Light the three vigil lanterns",
+        "Answer the warden's challenge",
+        "Recover the sexton's iron key",
+        "Set the ossuary keystone",
+    }
+    assert gm - non_gm == {"Catalogue the recovered relics", "Brief Archivist Vell in private"}
+
+
+def test_the_campaign_b_quest_is_not_disclosed_through_campaign_a_list(
+    db_connection: Connection,
+) -> None:
+    """Item 10: the exact shape that exposed the Phase 13D detail-disclosure
+    defect — one world, two timelines, one campaign per timeline, Campaign
+    B's quest state only on Timeline B, requested through Campaign A.
+
+    Both the LIST query (timeline/audience scoped) and the DETAIL query
+    (`get_quest_view(..., require_campaign_tracking=True)`, the way
+    `get_quest_endpoint` calls it) now apply the one shared tracking rule,
+    so Campaign B's quest neither appears in Campaign A's list nor is
+    directly fetchable through Campaign A — it raises the same
+    `QuestNotFoundError` a nonexistent id does. This is the script's own
+    read-only production-query verification, exercised here as a real
+    regression test rather than a printed expectation."""
+    user_id = _make_local_account(db_connection, display_name="Quest Cross Campaign Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None and campaign_b.timeline_id is not None
+
+    b_quest_id = list_campaign_quests(
+        db_connection,
+        timeline_id=campaign_b.timeline_id,
+        party_id=None,
+        include_all_parties=is_gm,
+    )[0].quest_id
+
+    a_list = _list_a(db_connection, campaign_a, is_gm=is_gm)
+    assert b_quest_id not in {i.quest_id for i in a_list}
+
+    # Baseline: a truly nonexistent id is non-disclosing.
+    with pytest.raises(QuestNotFoundError):
+        get_quest_view(
+            db_connection,
+            quest_id=uuid.uuid4(),
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=True,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
+        )
+
+    # The fix: a same-world quest tracked only on Campaign B's timeline is
+    # not fetchable through Campaign A — identical non-disclosing result.
+    with pytest.raises(QuestNotFoundError):
+        get_quest_view(
+            db_connection,
+            quest_id=b_quest_id,
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            party_id=None,
+            include_hidden=True,
+            require_campaign_tracking=True,
+            include_all_parties=is_gm,
+        )
+
+    # ...while under Campaign B's own timeline it still resolves normally.
+    assert campaign_b.timeline_id is not None
+    world_b = db_connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": campaign_b.timeline_id},
+    ).scalar()
+    assert isinstance(world_b, uuid.UUID)
+    cross_ok = get_quest_view(
+        db_connection,
+        quest_id=b_quest_id,
+        timeline_id=campaign_b.timeline_id,
+        expected_world_id=world_b,
+        party_id=None,
+        include_hidden=True,
+        require_campaign_tracking=True,
+        include_all_parties=is_gm,
+    )
+    assert cross_ok.name == _QUEST_B
+    assert cross_ok.status_code == "active"
+
+
+# ---------------------------------------------------------------------------
+# Phase 13D World Explorer + Knowledge fixture
+# ---------------------------------------------------------------------------
+
+_CHAR_A = "Phase13C Character A"
+_CHAR_B = "Phase13C Character B"
+_WK_PARTY = "The Lantern-Bearers"
+_ALL_TYPE_CODES = [c for codes in WORLD_CATEGORY_TYPE_CODES.values() for c in codes]
+_SALTREACH_EVENT = "The Darkening of the Saltreach Beacon"
+_DRAFT_EVENT = "The Magistrate's Secret Accord"
+_CANONICAL_ONLY = "answer to the thing in the vault"
+
+
+def _wk_context(
+    db_connection: Connection, *, user_id: uuid.UUID
+) -> tuple[CampaignBootstrapView, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+    """(campaign_a, world_a_id, character_a_id, character_b_id, party_id)."""
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a = campaigns[_CAMPAIGN_A]
+    assert campaign_a.timeline_id is not None
+    world_a = db_connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": campaign_a.timeline_id},
+    ).scalar()
+    assert isinstance(world_a, uuid.UUID)
+    character_a = next(
+        p.character_id for p in campaign_a.character_perspectives if p.character_name == _CHAR_A
+    )
+    character_b = next(
+        p.character_id for p in campaign_a.character_perspectives if p.character_name == _CHAR_B
+    )
+    party_id = db_connection.execute(
+        text("SELECT party_id FROM campaign.parties WHERE world_id = :w AND name = :n"),
+        {"w": world_a, "n": _WK_PARTY},
+    ).scalar()
+    assert isinstance(party_id, uuid.UUID)
+    return campaign_a, world_a, character_a, character_b, party_id
+
+
+def _search_all(
+    db_connection: Connection,
+    campaign_a: CampaignBootstrapView,
+    world_a: uuid.UUID,
+    *,
+    codes: list[str] | None = None,
+    q: str | None = None,
+    include_draft: bool = True,
+) -> tuple:
+    assert campaign_a.timeline_id is not None
+    return search_world_entities(
+        db_connection,
+        world_id=world_a,
+        timeline_id=campaign_a.timeline_id,
+        category_type_codes=codes or _ALL_TYPE_CODES,
+        query_text=q,
+        campaign_view_denied_entity_ids=frozenset(),
+        character_visibility=resolve_world_character_visibility(_access(db_connection, campaign_a)),
+        include_draft_events=include_draft,
+        draft_event_allowed_ids=frozenset(),
+        draft_event_denied_ids=frozenset(),
+        limit=200,
+        after_name=None,
+        after_entity_id=None,
+    )
+
+
+def _access(db_connection: Connection, campaign: CampaignBootstrapView):
+    access = resolve_access_context(
+        db_connection,
+        user_id=db_connection.execute(
+            text(
+                "SELECT sm.user_id FROM security.campaign_memberships sm WHERE sm.campaign_id = :c"
+            ),
+            {"c": campaign.campaign_id},
+        ).scalar(),
+        campaign_id=campaign.campaign_id,
+    )
+    assert access is not None
+    return access
+
+
+def _knowledge(
+    db_connection: Connection,
+    campaign_a: CampaignBootstrapView,
+    world_a: uuid.UUID,
+    *,
+    view: str,
+    ground_truth: bool,
+    party: uuid.UUID | None = None,
+    knower: uuid.UUID | None = None,
+    timeline_id: uuid.UUID | None = None,
+) -> tuple:
+    return list_knowledge(
+        db_connection,
+        view=view,
+        timeline_id=timeline_id or campaign_a.timeline_id,  # type: ignore[arg-type]
+        world_id=world_a,
+        include_ground_truth=ground_truth,
+        authorized_party_id=party,
+        authorized_knower_id=knower,
+        query_text=None,
+        knowledge_type_code=None,
+        denied_item_ids=frozenset(),
+        limit=200,
+        after_statement=None,
+        after_time_sort=None,
+        after_record_id=None,
+    )
+
+
+def test_wk_apply_makes_every_world_explorer_category_reachable(db_connection: Connection) -> None:
+    """The world hierarchy and one entity of every World Explorer category
+    are all reachable through the real `search_world_entities` query — valid
+    subtype rows and foreign keys, ordered as production orders them."""
+    user_id = _make_local_account(db_connection, display_name="WK Apply Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
+
+    cards = _search_all(db_connection, campaign_a, world_a)
+    by_category: dict[str, set[str]] = {}
+    for card in cards:
+        by_category.setdefault(card.category, set()).add(card.name)
+    assert set(by_category) == {
+        "location",
+        "character",
+        "organization",
+        "religion",
+        "item",
+        "event",
+    }
+
+    assert {"Auremar", "The Ashen Vale", "Hollowmere", "The Sunken Archive"} <= by_category[
+        "location"
+    ]
+    assert "The Tidebound Crypt" in by_category["location"]
+    assert "The Lantern Antechamber" in by_category["location"]
+    assert "Archivist Sella Vane" in by_category["character"]
+    assert {"The Cartographers' Guild", "The Hollowmere Magistracy"} <= by_category["organization"]
+    assert "The Tidefather Communion" in by_category["religion"]
+    assert {"The Warden's Lantern", "The Drowned Crown"} <= by_category["item"]
+    assert {"The Sundering of the Vale", "The Sealing of the Sluice-Gates"} <= by_category["event"]
+
+    names = [c.name_sort for c in cards]
+    assert names == sorted(names), "search results must be name-sorted (production contract)"
+
+
+def test_wk_is_idempotent(db_connection: Connection) -> None:
+    """A second apply reuses every world/knowledge row — nothing duplicated."""
+    user_id = _make_local_account(db_connection, display_name="WK Idempotent Tester")
+    first = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id)
+    assert all("[created]" in line for line in first.lines), first.lines
+    assert all("[reused" in line for line in second.lines), second.lines
+    assert len(first.lines) == len(second.lines)
+
+    campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
+    assert (
+        db_connection.execute(
+            text(
+                "SELECT count(*) FROM core.entities WHERE world_id = :w "
+                "AND canonical_name = 'Hollowmere'"
+            ),
+            {"w": world_a},
+        ).scalar()
+        == 1
+    )
+    # One entity per fixture location, org, religion, item, npc, event, KI.
+    assert len(_search_all(db_connection, campaign_a, world_a)) == len(
+        _search_all(db_connection, campaign_a, world_a)
+    )
+
+
+def test_wk_location_hierarchy_breadcrumbs(db_connection: Connection) -> None:
+    """`get_location_view` returns the four-level containment trail for the
+    deepest fixture location."""
+    user_id = _make_local_account(db_connection, display_name="WK Breadcrumb Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None
+
+    building_id = db_connection.execute(
+        text("SELECT entity_id FROM core.entities WHERE world_id = :w AND canonical_name = :n"),
+        {"w": world_a, "n": "The Sunken Archive"},
+    ).scalar()
+    view = get_location_view(
+        db_connection,
+        location_id=building_id,  # type: ignore[arg-type]
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        denied_entity_ids=frozenset(),
+    )
+    assert [c.name for c in view.breadcrumbs] == ["Auremar", "The Ashen Vale", "Hollowmere"]
+    assert view.building_use == "library and records hall"
+
+    settlement_id = db_connection.execute(
+        text("SELECT entity_id FROM core.entities WHERE world_id = :w AND canonical_name = :n"),
+        {"w": world_a, "n": "Hollowmere"},
+    ).scalar()
+    settlement = get_location_view(
+        db_connection,
+        location_id=settlement_id,  # type: ignore[arg-type]
+        timeline_id=campaign_a.timeline_id,
+        expected_world_id=world_a,
+        denied_entity_ids=frozenset(),
+    )
+    assert settlement.population == 4200
+    assert settlement.is_searched is True
+    assert settlement.alarm_level == 1
+
+
+def test_wk_knowledge_truth_versus_belief_separation(db_connection: Connection) -> None:
+    """The distorted party belief: a GM sees the canonical statement and its
+    truth_status; the player party-perspective sees only the party's own
+    interpretation with no ground truth."""
+    user_id = _make_local_account(db_connection, display_name="WK Belief Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, character_a, _character_b, party_id = _wk_context(
+        db_connection, user_id=user_id
+    )
+
+    authorized_party = resolve_party_perspective(
+        db_connection,
+        access=_access(db_connection, campaign_a),
+        campaign_id=campaign_a.campaign_id,
+        character_id=character_a,
+        party_id=party_id,
+    )
+    assert authorized_party == party_id
+
+    gm = _knowledge(db_connection, campaign_a, world_a, view="known", ground_truth=True)
+    player = _knowledge(
+        db_connection, campaign_a, world_a, view="known", ground_truth=False, party=party_id
+    )
+
+    gm_sluice = next(i for i in gm if "sluice-gates" in i.statement.lower())
+    player_sluice = next(i for i in player if "sluice-gates" in i.statement.lower())
+    assert "salvage-levy" in gm_sluice.statement
+    assert gm_sluice.truth_status_code == "true"
+    assert "appease the Tidefather" in player_sluice.statement
+    assert player_sluice.truth_status_code is None
+    assert player_sluice.sensitivity is None
+
+    # The canonical-only secret: a GM's canonical view has it; the player's
+    # party view never does (no belief row for the party).
+    assert any(_CANONICAL_ONLY in i.statement.lower() for i in gm)
+    assert not any(_CANONICAL_ONLY in i.statement.lower() for i in player)
+
+
+def test_wk_private_party_public_recipient_semantics(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection, display_name="WK Recipient Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, character_a, character_b, party_id = _wk_context(
+        db_connection, user_id=user_id
+    )
+
+    private_a = {
+        i.knowledge_item_id
+        for i in _knowledge(
+            db_connection,
+            campaign_a,
+            world_a,
+            view="character_private",
+            ground_truth=False,
+            knower=character_a,
+        )
+    }
+    private_b = {
+        i.knowledge_item_id
+        for i in _knowledge(
+            db_connection,
+            campaign_a,
+            world_a,
+            view="character_private",
+            ground_truth=False,
+            knower=character_b,
+        )
+    }
+    assert private_a and private_b
+    assert not (private_a & private_b), "character-private knowledge must not cross knowers"
+
+    party_shared = _knowledge(
+        db_connection, campaign_a, world_a, view="party_shared", ground_truth=False, party=party_id
+    )
+    assert {i.scope for i in party_shared} == {"party"}
+    assert len(party_shared) >= 4
+
+    public = _knowledge(db_connection, campaign_a, world_a, view="public", ground_truth=False)
+    assert any("aurell" in i.statement.lower() for i in public)
+    assert {i.scope for i in public} == {"public"}
+
+
+def test_wk_recent_carries_visible_source_provenance(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection, display_name="WK Provenance Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, character_a, _b, party_id = _wk_context(db_connection, user_id=user_id)
+
+    recent = _knowledge(
+        db_connection,
+        campaign_a,
+        world_a,
+        view="recent",
+        ground_truth=False,
+        party=party_id,
+        knower=character_a,
+    )
+    discovered = next(i for i in recent if "sub-basement" in i.statement.lower())
+    assert discovered.discovery_world_time_id is not None
+    assert discovered.source_event_id is not None
+    assert discovered.scope == "party"
+    # `recent` never falls back to a bare canonical statement for the player.
+    assert "bricked over" in discovered.statement
+
+
+def test_wk_campaign_a_and_b_isolation(db_connection: Connection) -> None:
+    """Campaign B's event and knowledge (Timeline B) never surface through
+    Campaign A; the world-canon Saltreach location does, by the documented
+    world-scoped model."""
+    user_id = _make_local_account(db_connection, display_name="WK Isolation Tester")
+    _run(db_connection, user_id=user_id)
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a = campaigns[_CAMPAIGN_A]
+    campaign_b = campaigns[_CAMPAIGN_B]
+    _, world_a, *_ = _wk_context(db_connection, user_id=user_id)
+    assert campaign_a.timeline_id is not None and campaign_b.timeline_id is not None
+
+    a_events = {c.name for c in _search_all(db_connection, campaign_a, world_a, codes=["event"])}
+    assert _SALTREACH_EVENT not in a_events
+
+    saltreach_event_id = db_connection.execute(
+        text("SELECT entity_id FROM core.entities WHERE world_id = :w AND canonical_name = :n"),
+        {"w": world_a, "n": _SALTREACH_EVENT},
+    ).scalar()
+    with pytest.raises(WorldResourceNotFoundError):
+        get_event_view(
+            db_connection,
+            event_id=saltreach_event_id,  # type: ignore[arg-type]
+            timeline_id=campaign_a.timeline_id,
+            expected_world_id=world_a,
+            denied_entity_ids=frozenset(),
+            include_draft=True,
+            draft_allowed=False,
+            draft_denied=False,
+            character_visibility=resolve_world_character_visibility(
+                _access(db_connection, campaign_a)
+            ),
+        )
+
+    a_public = _knowledge(db_connection, campaign_a, world_a, view="public", ground_truth=True)
+    b_public = _knowledge(
+        db_connection,
+        campaign_a,
+        world_a,
+        view="public",
+        ground_truth=True,
+        timeline_id=campaign_b.timeline_id,
+    )
+    assert not any("beacon-keeper" in i.statement.lower() for i in a_public)
+    assert any("beacon-keeper" in i.statement.lower() for i in b_public)
+
+    # The Saltreach location entity is world canon -> visible in both.
+    a_locations = {
+        c.name for c in _search_all(db_connection, campaign_a, world_a, codes=["settlement"])
+    }
+    assert "Saltreach Harbor" in a_locations
+
+
+def test_wk_draft_event_is_gm_only(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection, display_name="WK Draft Tester")
+    _run(db_connection, user_id=user_id)
+    campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
+
+    gm = {
+        c.name
+        for c in _search_all(
+            db_connection, campaign_a, world_a, codes=["event"], include_draft=True
+        )
+    }
+    player = {
+        c.name
+        for c in _search_all(
+            db_connection, campaign_a, world_a, codes=["event"], include_draft=False
+        )
+    }
+    assert _DRAFT_EVENT in gm
+    assert _DRAFT_EVENT not in player
+    assert "The Sundering of the Vale" in player
+
+
+def test_wk_preserves_unrelated_world_rows(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection, display_name="WK Unrelated Guard Tester")
+    other_world_id = make_world(db_connection, slug="unrelated-wk-world")
+    continent_type = lookup_id(db_connection, "core", "entity_types", "entity_type_id", "continent")
+    other_entity = make_entity(db_connection, other_world_id, continent_type, name="Auremar")
+
+    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id)
+
+    assert (
+        db_connection.execute(
+            text("SELECT canonical_name FROM core.entities WHERE entity_id = :e"),
+            {"e": other_entity},
+        ).scalar()
+        == "Auremar"
+    )
+    # Same name in two different worlds is fine — the fixture only ever
+    # touches its own world.
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM core.entities WHERE canonical_name = 'Auremar'")
+        ).scalar()
+        == 2
+    )

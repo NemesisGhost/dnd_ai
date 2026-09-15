@@ -1,7 +1,10 @@
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
-import type { SessionBootstrap } from "../types/bootstrap"
+import type {
+    CampaignContext,
+    SessionBootstrap,
+} from "../types/bootstrap"
 import { useCharacterPerspective } from "./useCharacterPerspective"
 import type { UseSessionBootstrapResult } from "./useSessionBootstrap"
 
@@ -21,13 +24,15 @@ const campaign = {
         {
             character_id: "character-a",
             character_name: "Character A",
+            authorized_parties: [],
         },
         {
             character_id: "character-b",
             character_name: "Character B",
+            authorized_parties: [],
         },
     ],
-}
+} satisfies CampaignContext
 
 const bootstrap: SessionBootstrap = {
     ...sessionBootstrapFixture,
@@ -241,6 +246,46 @@ describe("useCharacterPerspective", () => {
 
         expect(
             result.current.getSelectedCharacterId("campaign-b"),
+        ).toBeNull()
+    })
+
+    it("clears the character without restoring the server default", () => {
+        const session = makeSession({
+            ...bootstrap,
+            campaigns: [
+                {
+                    ...campaign,
+                    selected_character_id: "character-a",
+                },
+            ],
+        })
+
+        const { result } = renderHook(
+            useCharacterPerspective,
+            {
+                initialProps: session,
+            },
+        )
+
+        expect(
+            result.current.getSelectedCharacterId(
+                "campaign-a",
+            ),
+        ).toBe("character-a")
+
+        act(() => {
+            result.current.selectCharacter(
+                "campaign-a",
+                null,
+            )
+        })
+
+        expect(session.reload).toHaveBeenCalledTimes(1)
+
+        expect(
+            result.current.getSelectedCharacterId(
+                "campaign-a",
+            ),
         ).toBeNull()
     })
 })

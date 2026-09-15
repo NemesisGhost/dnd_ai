@@ -347,6 +347,19 @@ class ConflictError(ApiError):
     safe_message = "The request could not be completed due to a conflicting change."
 
 
+class InvalidCursorError(ApiError):
+    """A malformed, tampered, or wrong-endpoint keyset pagination cursor
+    (`dnd_ai.api.pagination.decode_cursor`). A fixed 422 — the request
+    parameter itself is invalid and retrying it verbatim cannot help — and
+    deliberately non-disclosing: the response never echoes the offending
+    cursor value, and a bad cursor and an empty result page are
+    indistinguishable to a caller trying to probe for hidden rows."""
+
+    status_code = 422
+    error_code = "invalid_cursor"
+    safe_message = "The pagination cursor is invalid."
+
+
 class RateLimitedError(UnauthorizedError):
     """Too many attempts for one IP/account combination within the current
     window (docs/PLAN.md §23.4/§23.5, Phase 11R workstream B —
@@ -377,6 +390,7 @@ _API_ERROR_CONTRACTS: dict[type[ApiError], _ErrorContract] = {
     ForbiddenError: _ErrorContract(403, "forbidden", ForbiddenError.safe_message),
     NotFoundError: _ErrorContract(404, "not_found", NotFoundError.safe_message),
     ConflictError: _ErrorContract(409, "conflict", ConflictError.safe_message),
+    InvalidCursorError: _ErrorContract(422, "invalid_cursor", InvalidCursorError.safe_message),
     RateLimitedError: _ErrorContract(429, "rate_limited", RateLimitedError.safe_message),
 }
 

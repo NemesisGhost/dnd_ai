@@ -4,14 +4,22 @@ export interface UserSummary {
   display_name: string
 }
 
+export interface AuthorizedParty {
+  party_id: string
+  party_name: string
+}
+
 export interface CharacterPerspective {
   character_id: string
   character_name: string
+  authorized_parties: AuthorizedParty[]
 }
 
 export interface CampaignContext {
   campaign_id: string
   campaign_name: string
+  world_id: string | null
+  world_name: string | null
   timeline_id: string | null
   timeline_name: string | null
   roles: string[]

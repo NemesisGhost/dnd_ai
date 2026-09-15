@@ -7,12 +7,15 @@ export const sessionBootstrapFixture = {
   },
 
   selected_campaign_id: "mundivita",
-  csrf_token: 'fixture-csrf-token-not-a-secret',
+  csrf_token: "fixture-csrf-token-not-a-secret",
   browser_session_id: "browser-session-fixture-001",
+
   campaigns: [
     {
       campaign_id: "mundivita",
       campaign_name: "Mundivita",
+      world_id: "world-mundivita",
+      world_name: "Mundivita",
       timeline_id: "timeline-primary",
       timeline_name: "Primary Timeline",
       roles: ["campaign_owner"],
@@ -20,10 +23,16 @@ export const sessionBootstrapFixture = {
         {
           character_id: "character-ixamarra",
           character_name: "Ixamarra",
+          authorized_parties: [
+            {
+              party_id: "party-primary",
+              party_name: "The Adventuring Party",
+            },
+          ],
         },
       ],
       selected_character_id: "character-ixamarra",
-      capabilities: ['access.manage']
+      capabilities: ["access.manage"],
     },
   ],
 
