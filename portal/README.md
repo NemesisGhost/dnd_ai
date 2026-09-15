@@ -23,7 +23,7 @@ The portal currently includes:
 - Authoritative identity, campaign, timeline, role, perspective, capability,
   and feature data from `GET /auth/session`.
 - Loading, unauthenticated, recoverable-error, and empty-campaign states.
-- Campaign selection and a Change campaign navigation link.
+- Inline campaign and character-perspective selection.
 - Fresh session bootstrap when entering, leaving, or switching campaign
   scope, including browser Back/Forward navigation.
 - In-memory character-perspective selection, checked against the latest
@@ -34,9 +34,8 @@ The portal currently includes:
   recent events (a narrower slice than Phase 13's full dashboard bullet —
   active quests, recent discoveries, relevant NPCs/factions, reminders, and
   an Ask entry point are not yet on this page).
-- A World explorer with type-filtered/text-searchable browsing, typed detail
-  routes (religions, item instances, historical events, locations with
-  containment breadcrumbs), and keyset pagination.
+- A World explorer with type-filtered and text-searchable result cards and
+  keyset pagination.
 - Characters, Quests (list and detail), and Sessions (list and detail)
   screens reading live campaign-scoped data.
 - A Knowledge screen filterable by view (across the documented knowledge
@@ -44,8 +43,8 @@ The portal currently includes:
 - A visibly disabled Ask feature while the server manifest disables it.
 - Light/dark theme switching.
 - Placeholder pages for later portal increments (Ask, Access management).
-- 369 automated tests (`npm test`) covering routing, session/perspective
-  behavior, and each screen's loading/empty/denied/error states.
+- Automated tests covering routing, session and perspective behavior, and
+  each screen's loading, empty, denied, and error states.
 
 Navigating between pages within the same campaign preserves the provider
 and selected perspective. Changing campaign scope resets them.
