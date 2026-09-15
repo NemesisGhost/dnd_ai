@@ -532,7 +532,7 @@ CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hoste
 
 **`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
 
-**`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test test/` and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
+**`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test` (portable automatic discovery) and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
 
 **Portal checks are not yet wired into CI.** Until a dedicated portal job is
 added, run `npm test`, `npm run lint`, and `npm run build` locally from
