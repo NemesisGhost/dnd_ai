@@ -2,13 +2,16 @@ import { useId } from "react"
 import { AbilityScoreCard } from "../components/AbilityScoreCard"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
-import type { FactGridItem } from "../components/FactGrid"
+import { CharacterDetailsPanel } from "./CharacterDetailsPanel"
+import { CharacterSkillsTables } from "./CharacterSkillsTables"
+import { FeatureCard } from "./FeatureCard"
+import { SpellCard } from "./SpellCard"
+import { humanizeCode } from "./characterSheetPresentation"
 import { HitPointsMeter } from "../components/HitPointsMeter"
 import { StatCard } from "../components/StatCard"
 import type { CharacterDetail } from "../types/character"
 import type {
     CharacterSheet,
-    CharacterSheetClassLevel,
     CharacterSheetSpell,
     CharacterSheetSpellcastingProfile,
 } from "../types/characterSheet"
@@ -17,51 +20,6 @@ import formatSignedNumber from "../utils/signedNumbers"
 interface CharacterSheetPageProps {
     sheet: CharacterSheet
     character: CharacterDetail
-}
-
-const ABILITY_ABBREVIATIONS: Record<string, string> = {
-    strength: "STR",
-    dexterity: "DEX",
-    constitution: "CON",
-    intelligence: "INT",
-    wisdom: "WIS",
-    charisma: "CHA",
-}
-
-function abbreviateAbility(code: string): string {
-    return ABILITY_ABBREVIATIONS[code] ?? code.slice(0, 3).toUpperCase()
-}
-
-function humanizeCode(code: string): string {
-    return code
-        .split("_")
-        .filter((word) => word.length > 0)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" ")
-}
-
-function describeProficiency(
-    isProficient: boolean,
-    isExpertise: boolean,
-): string {
-    if (isExpertise) {
-        return "Expertise"
-    }
-    if (isProficient) {
-        return "Proficient"
-    }
-    return "Not proficient"
-}
-
-function describeClassLevel(
-    classLevel: CharacterSheetClassLevel,
-): string {
-    const subclassSuffix =
-        classLevel.subclass_display_name !== null
-            ? ` – ${classLevel.subclass_display_name}`
-            : ""
-
-    return `${classLevel.class_display_name} ${classLevel.level}${subclassSuffix}`
 }
 
 interface SpellLevelGroup {
@@ -141,34 +99,11 @@ function SpellcastingProfileSection({
                     >
                         <h4>{describeSpellLevel(group.level)}</h4>
 
-                        <ul className="character-sheet__fact-list">
+                        <div className="character-sheet__disclosure-grid">
                             {group.spells.map((spell) => (
-                                <li key={spell.spell_id}>
-                                    <span className="character-sheet__fact-list-primary">
-                                        {spell.display_name}
-                                    </span>
-
-                                    {spell.school !== null && (
-                                        <span className="character-sheet__fact-list-secondary">
-                                            {" "}
-                                            · {humanizeCode(spell.school)}
-                                        </span>
-                                    )}
-
-                                    <span className="spellcasting-profile__spell-state">
-                                        {spell.is_known
-                                            ? "Known"
-                                            : "Not known"}
-                                    </span>
-
-                                    <span className="spellcasting-profile__spell-state">
-                                        {spell.is_prepared
-                                            ? "Prepared"
-                                            : "Not prepared"}
-                                    </span>
-                                </li>
+                                <SpellCard key={spell.spell_id} spell={spell} />
                             ))}
-                        </ul>
+                        </div>
                     </div>
                 ))
             ) : (
@@ -182,45 +117,6 @@ export function CharacterSheetPage({
     sheet,
     character,
 }: CharacterSheetPageProps) {
-    const headerFacts: FactGridItem[] = [
-        {
-            key: "build",
-            label: "Build",
-            value: sheet.build_label ?? "No active build",
-        },
-        {
-            key: "ruleset",
-            label: "Ruleset",
-            value: sheet.ruleset_display_name ?? "Not recorded",
-        },
-        {
-            key: "ruleset-version",
-            label: "Ruleset version",
-            value: sheet.ruleset_version_label ?? "Not recorded",
-        },
-        {
-            key: "classes",
-            label: "Classes",
-            value:
-                sheet.class_levels.length > 0 ? (
-                    <ul className="character-sheet__inline-list">
-                        {sheet.class_levels.map((classLevel) => (
-                            <li key={classLevel.class_id}>
-                                {describeClassLevel(classLevel)}
-                            </li>
-                        ))}
-                    </ul>
-                ) : (
-                    "None recorded"
-                ),
-        },
-        {
-            key: "total-level",
-            label: "Character level",
-            value: sheet.total_level,
-        },
-    ]
-
     const conditions = character.conditions
     const resources = character.resources
 
@@ -230,20 +126,7 @@ export function CharacterSheetPage({
 
     return (
         <div className="character-sheet">
-            <header className="character-sheet__header">
-                <p className="character-sheet__eyebrow">
-                    {sheet.species_display_name}
-                    {" · "}
-                    {humanizeCode(sheet.size_category)}
-                </p>
-
-                <h1>{sheet.name}</h1>
-
-                <FactGrid
-                    className="character-sheet__header-facts"
-                    items={headerFacts}
-                />
-            </header>
+            <CharacterDetailsPanel sheet={sheet} />
 
             {sheet.character_build_id === null && (
                 <p className="character-sheet__empty-build">
@@ -275,50 +158,25 @@ export function CharacterSheetPage({
 
                 <StatCard
                     label="Hit points"
-                    value={
-                        character.current_hit_points !== null &&
-                            character.maximum_hit_points !== null
-                            ? undefined
-                            : "Not recorded"
-                    }
+                    className="stat-card--hit-points"
+                    value={character.current_hit_points !== null && character.maximum_hit_points !== null
+                        ? undefined : "Not recorded"}
+                    secondary={<>Temporary hit points: {character.temporary_hit_points ?? "Not recorded"}</>}
                 >
-                    {character.current_hit_points !== null &&
-                        character.maximum_hit_points !== null && (
-                            <HitPointsMeter
-                                currentHitPoints={
-                                    character.current_hit_points
-                                }
-                                maximumHitPoints={
-                                    character.maximum_hit_points
-                                }
-                            />
-                        )}
+                    {character.current_hit_points !== null && character.maximum_hit_points !== null && (
+                        <HitPointsMeter currentHitPoints={character.current_hit_points}
+                            maximumHitPoints={character.maximum_hit_points} />
+                    )}
                 </StatCard>
-
-                <StatCard
-                    label="Temporary hit points"
-                    value={
-                        character.temporary_hit_points ??
-                        "Not recorded"
-                    }
-                />
-
-                <StatCard
-                    label="Exhaustion"
-                    value={
-                        character.exhaustion_level ?? "Not recorded"
-                    }
-                />
-
-                <StatCard
-                    label="Death saves"
-                    value={
-                        hasKnownDeathSaves
-                            ? `${character.death_save_successes} / ${character.death_save_failures}`
-                            : "Not recorded"
-                    }
-                />
             </section>
+
+            <DetailPanel title="Current State" className="detail-panel--wide">
+                <FactGrid items={[
+                    { key: "exhaustion", label: "Exhaustion", value: character.exhaustion_level ?? "Not recorded" },
+                    { key: "death-saves", label: "Death saves", value: hasKnownDeathSaves
+                        ? `${character.death_save_successes} / ${character.death_save_failures}` : "Not recorded" },
+                ]} />
+            </DetailPanel>
 
             <div className="character-sheet__panel-grid">
                 <DetailPanel
@@ -364,45 +222,7 @@ export function CharacterSheetPage({
                     isEmpty={sheet.skills.length === 0}
                     emptyState={<p>No skills recorded.</p>}
                 >
-                    <div className="character-sheet__table-scroll">
-                        <table>
-                            <caption>Skills</caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Skill</th>
-                                    <th scope="col">Ability</th>
-                                    <th scope="col">Proficiency</th>
-                                    <th scope="col">Bonus</th>
-                                    <th scope="col">Passive</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {sheet.skills.map((skill) => (
-                                    <tr key={skill.skill_id}>
-                                        <td>{skill.display_name}</td>
-                                        <td>
-                                            {abbreviateAbility(
-                                                skill.governing_ability_code,
-                                            )}
-                                        </td>
-                                        <td>
-                                            {describeProficiency(
-                                                skill.is_proficient,
-                                                skill.is_expertise,
-                                            )}
-                                        </td>
-                                        <td>
-                                            {formatSignedNumber(skill.bonus)}
-                                        </td>
-                                        <td>
-                                            {skill.passive_score ??
-                                                "Not recorded"}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <CharacterSkillsTables skills={sheet.skills} />
                 </DetailPanel>
 
                 <DetailPanel
@@ -537,38 +357,10 @@ export function CharacterSheetPage({
                     isEmpty={sheet.features.length === 0}
                     emptyState={<p>No features recorded.</p>}
                 >
-                    <div className="character-sheet__table-scroll">
-                        <table>
-                            <caption>Features and traits</caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Name</th>
-                                    <th scope="col">Description</th>
-                                    <th scope="col">Source</th>
-                                    <th scope="col">Granted at level</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {sheet.features.map((feature) => (
-                                    <tr key={feature.feature_id}>
-                                        <td>{feature.display_name}</td>
-                                        <td>
-                                            {feature.description ??
-                                                "No description recorded."}
-                                        </td>
-                                        <td>
-                                            {humanizeCode(
-                                                feature.source_category,
-                                            )}
-                                        </td>
-                                        <td>
-                                            {feature.granted_at_level ??
-                                                "Not recorded"}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="character-sheet__disclosure-grid">
+                        {sheet.features.map((feature) => (
+                            <FeatureCard key={feature.feature_id} feature={feature} />
+                        ))}
                     </div>
                 </DetailPanel>
 

@@ -77,9 +77,10 @@ describe("CharacterSheetPage", () => {
     it("renders the character/build header facts", () => {
         renderPage()
 
-        expect(screen.getByText("Dragonborn · Medium")).toBeInTheDocument()
+        expect(screen.getByText("Dragonborn")).toBeInTheDocument()
+        expect(screen.getByText("Medium")).toBeInTheDocument()
         expect(
-            screen.getByText("Bard 6 – College of Lore"),
+            screen.getByText("Bard 6 — College of Lore — d8"),
         ).toBeInTheDocument()
         expect(screen.getByText("Primary Build")).toBeInTheDocument()
         expect(
@@ -95,6 +96,27 @@ describe("CharacterSheetPage", () => {
         ).toBeInTheDocument()
     })
 
+    it("keeps every multiclass entry in contract order and names the bounded header", () => {
+        const fighter = {
+            ...characterSheetFixture.class_levels[0],
+            class_id: "class-fighter", class_display_name: "Fighter", level: 2,
+            hit_die: 10, subclass_display_name: null,
+        }
+        renderPage({ ...characterSheetFixture, class_levels: [fighter, characterSheetFixture.class_levels[0]] })
+        const header = screen.getByRole("banner", { name: "Ixamarra" })
+        expect(within(header).getByRole("heading", { level: 1, name: "Ixamarra" })).toBeInTheDocument()
+        expect(within(header).getAllByRole("listitem").map((item) => item.textContent))
+            .toEqual(["Fighter 2 — d10", "Bard 6 — College of Lore — d8"])
+    })
+
+    it("keeps deliberate no-build fallbacks in Character Details", () => {
+        renderPage(sparseCharacterSheetFixture, sparseCharacter)
+        const header = screen.getByRole("banner", { name: "Sparse Fighter" })
+        expect(header).toHaveTextContent("None recorded")
+        expect(header).toHaveTextContent("No active build")
+        expect(header).toHaveTextContent("RulesetNot recorded")
+    })
+
     it("shows the primary stat cards including proficiency bonus and movement", () => {
         renderPage()
 
@@ -102,6 +124,21 @@ describe("CharacterSheetPage", () => {
         expect(screen.getByText("+3")).toBeInTheDocument()
         expect(screen.getByText("Walk")).toBeInTheDocument()
         expect(screen.getByText("30 ft")).toBeInTheDocument()
+    })
+
+    it("renders every movement type and a missing-movement fallback", () => {
+        const movements = [
+            ...characterSheetFixture.movements,
+            { movement_type: "fly", speed_feet: 60 },
+            { movement_type: "swim", speed_feet: 20 },
+        ]
+        const { rerender } = renderPage({ ...characterSheetFixture, movements })
+        const primary = screen.getByRole("region", { name: "Primary stats" })
+        expect(primary).toHaveTextContent("Walk30 ft")
+        expect(primary).toHaveTextContent("Fly60 ft")
+        expect(primary).toHaveTextContent("Swim20 ft")
+        rerender(<CharacterSheetPage sheet={{ ...characterSheetFixture, movements: [] }} character={richCharacter} />)
+        expect(screen.getByRole("region", { name: "Primary stats" })).toHaveTextContent("MovementNot recorded")
     })
 
     it("shows the hit points meter from the passed-in CharacterDetail", () => {
@@ -123,55 +160,28 @@ describe("CharacterSheetPage", () => {
         expect(hitPointsCard).toHaveTextContent("Not recorded")
     })
 
-    it("shows temporary hit points, exhaustion, and death saves from CharacterDetail", () => {
+    it("keeps temporary HP with the meter and moves exhaustion and death saves into Current State", () => {
         renderPage()
-
-        const tempHpCard = screen
-            .getByText("Temporary hit points")
-            .closest("figure") as HTMLElement
-        expect(tempHpCard).toHaveTextContent("5")
-
-        const exhaustionCard = screen
-            .getByText("Exhaustion")
-            .closest("figure") as HTMLElement
-        expect(exhaustionCard).toHaveTextContent("1")
-
-        const deathSavesCard = screen
-            .getByText("Death saves")
-            .closest("figure") as HTMLElement
-        expect(deathSavesCard).toHaveTextContent("2 / 1")
+        const hpCard = screen.getByText("Hit points").closest("figure") as HTMLElement
+        expect(within(hpCard).getByRole("meter")).toHaveAttribute("aria-valuemax", "42")
+        expect(hpCard).toHaveTextContent("Temporary hit points: 5")
+        expect(screen.queryByText("Temporary hit points", { exact: true })).not.toBeInTheDocument()
+        const currentState = screen.getByRole("region", { name: "Current State" })
+        expect(currentState).toHaveTextContent("Exhaustion")
+        expect(currentState).toHaveTextContent("1")
+        expect(currentState).toHaveTextContent("Death saves")
+        expect(currentState).toHaveTextContent("2 / 1")
     })
 
-    it("shows zero temporary hit points and exhaustion as valid recorded states", () => {
-        renderPage(characterSheetFixture, {
-            ...richCharacter,
-            temporary_hit_points: 0,
-            exhaustion_level: 0,
+    it("preserves recorded zeroes and nullable current state", () => {
+        const { rerender } = renderPage(characterSheetFixture, {
+            ...richCharacter, temporary_hit_points: 0, exhaustion_level: 0,
         })
-
-        const tempHpCard = screen
-            .getByText("Temporary hit points")
-            .closest("figure") as HTMLElement
-        expect(tempHpCard).toHaveTextContent("0")
-
-        const exhaustionCard = screen
-            .getByText("Exhaustion")
-            .closest("figure") as HTMLElement
-        expect(exhaustionCard).toHaveTextContent("0")
-    })
-
-    it("shows not-recorded death saves and temp HP when the character detail lacks them", () => {
-        renderPage(characterSheetFixture, sparseCharacter)
-
-        const tempHpCard = screen
-            .getByText("Temporary hit points")
-            .closest("figure") as HTMLElement
-        expect(tempHpCard).toHaveTextContent("Not recorded")
-
-        const deathSavesCard = screen
-            .getByText("Death saves")
-            .closest("figure") as HTMLElement
-        expect(deathSavesCard).toHaveTextContent("Not recorded")
+        expect(screen.getByText("Hit points").closest("figure")).toHaveTextContent("Temporary hit points: 0")
+        expect(screen.getByRole("region", { name: "Current State" })).toHaveTextContent("Exhaustion0")
+        rerender(<CharacterSheetPage sheet={characterSheetFixture} character={sparseCharacter} />)
+        expect(screen.getByText("Hit points").closest("figure")).toHaveTextContent("Temporary hit points: Not recorded")
+        expect(screen.getByRole("region", { name: "Current State" })).toHaveTextContent("Death savesNot recorded")
     })
 
     it("renders ability score cards with score, modifier, and matching saving throw", () => {
@@ -277,20 +287,13 @@ describe("CharacterSheetPage", () => {
         expect(screen.getAllByText("Not recorded.").length).toBe(2)
     })
 
-    it("renders features with their source and granted level", () => {
+    it("renders native feature disclosures with metadata and description", () => {
         renderPage()
-
-        const row = screen
-            .getByText("Cutting Words")
-            .closest("tr") as HTMLElement
-
-        const cells = within(row).getAllByRole("cell")
-        expect(cells.map((cell) => cell.textContent)).toEqual([
-            "Cutting Words",
-            "Use Bardic Inspiration to distract another creature.",
-            "Subclass",
-            "3",
-        ])
+        const card = screen.getByText("Cutting Words").closest("details") as HTMLElement
+        expect(card.tagName).toBe("DETAILS")
+        expect(within(card).getByText("Subclass")).toBeInTheDocument()
+        expect(within(card).getByText("Granted at level 3")).toBeInTheDocument()
+        expect(within(card).getByText("Use Bardic Inspiration to distract another creature.")).toBeInTheDocument()
     })
 
     it("groups spells by level, labeling level zero as Cantrips", () => {
@@ -349,14 +352,8 @@ describe("CharacterSheetPage", () => {
             ".spellcasting-profile__level-group",
         ) as HTMLElement
 
-        const spellNames = within(levelOneGroup)
-            .getAllByRole("listitem")
-            .map(
-                (item) =>
-                    item.querySelector(
-                        ".character-sheet__fact-list-primary",
-                    )?.textContent,
-            )
+        const spellNames = within(levelOneGroup).getAllByText(/Zephyr Strike|Arcane Lock/)
+            .map((item) => item.textContent)
 
         expect(spellNames).toEqual(["Zephyr Strike", "Arcane Lock"])
     })
@@ -366,7 +363,7 @@ describe("CharacterSheetPage", () => {
 
         const vickedMockeryEntry = screen
             .getByText("Vicious Mockery")
-            .closest("li") as HTMLElement
+            .closest("details") as HTMLElement
         expect(within(vickedMockeryEntry).getByText("Known")).toBeInTheDocument()
         expect(
             within(vickedMockeryEntry).getByText("Prepared"),
@@ -374,7 +371,7 @@ describe("CharacterSheetPage", () => {
 
         const detectMagicEntry = screen
             .getByText("Detect Magic")
-            .closest("li") as HTMLElement
+            .closest("details") as HTMLElement
         expect(within(detectMagicEntry).getByText("Known")).toBeInTheDocument()
         expect(
             within(detectMagicEntry).getByText("Not prepared"),
