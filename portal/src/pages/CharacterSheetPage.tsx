@@ -1,11 +1,14 @@
 import { useId } from "react"
+import { AbilityScoreCard } from "../components/AbilityScoreCard"
+import { DetailPanel } from "../components/DetailPanel"
+import { FactGrid } from "../components/FactGrid"
+import type { FactGridItem } from "../components/FactGrid"
 import { HitPointsMeter } from "../components/HitPointsMeter"
+import { StatCard } from "../components/StatCard"
 import type { CharacterDetail } from "../types/character"
 import type {
     CharacterSheet,
     CharacterSheetClassLevel,
-    CharacterSheetMovement,
-    CharacterSheetSkill,
     CharacterSheetSpell,
     CharacterSheetSpellcastingProfile,
 } from "../types/characterSheet"
@@ -16,48 +19,25 @@ interface CharacterSheetPageProps {
     character: CharacterDetail
 }
 
-const SKILL_COLUMN_COUNT = 3
-
-function distributeIntoColumns<T>(
-    items: T[],
-    columnCount: number,
-): T[][] {
-    const safeColumnCount = Math.max(
-        1,
-        Math.min(columnCount, items.length || 1),
-    )
-
-    const baseSize = Math.floor(
-        items.length / safeColumnCount,
-    )
-
-    const extraItems = items.length % safeColumnCount
-
-    let offset = 0
-
-    return Array.from(
-        { length: safeColumnCount },
-        (_, columnIndex) => {
-            const columnSize =
-                baseSize +
-                (columnIndex < extraItems ? 1 : 0)
-
-            const column = items.slice(
-                offset,
-                offset + columnSize,
-            )
-
-            offset += columnSize
-
-            return column
-        },
-    )
+const ABILITY_ABBREVIATIONS: Record<string, string> = {
+    strength: "STR",
+    dexterity: "DEX",
+    constitution: "CON",
+    intelligence: "INT",
+    wisdom: "WIS",
+    charisma: "CHA",
 }
 
-function capitalize(text: string): string {
-    return text.length === 0
-        ? text
-        : text.charAt(0).toUpperCase() + text.slice(1)
+function abbreviateAbility(code: string): string {
+    return ABILITY_ABBREVIATIONS[code] ?? code.slice(0, 3).toUpperCase()
+}
+
+function humanizeCode(code: string): string {
+    return code
+        .split("_")
+        .filter((word) => word.length > 0)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")
 }
 
 function describeProficiency(
@@ -84,108 +64,41 @@ function describeClassLevel(
     return `${classLevel.class_display_name} ${classLevel.level}${subclassSuffix}`
 }
 
-function describeMovement(
-    movement: CharacterSheetMovement,
-): string {
-    return `${capitalize(movement.movement_type)} ${movement.speed_feet} ft`
+interface SpellLevelGroup {
+    level: number
+    spells: CharacterSheetSpell[]
 }
 
-function sortSpells(
+function groupSpellsByLevel(
     spells: CharacterSheetSpell[],
-): CharacterSheetSpell[] {
-    return [...spells].sort(
+): SpellLevelGroup[] {
+    const sorted = [...spells].sort(
         (a, b) =>
             a.level - b.level ||
             a.display_name.localeCompare(b.display_name),
     )
-}
 
-interface OtherEntry {
-    key: string
-    category: string
-    name: string
-    detail: string
-}
+    const groups = new Map<number, CharacterSheetSpell[]>()
 
-function buildOtherEntries(sheet: CharacterSheet): OtherEntry[] {
-    const proficiencyEntries: OtherEntry[] =
-        sheet.other_proficiencies.map((proficiency) => ({
-            key: `proficiency-${proficiency.proficiency_type_code}-${proficiency.target_label}`,
-            category: proficiency.proficiency_type_display_name,
-            name: proficiency.target_label,
-            detail: proficiency.is_expertise
-                ? "Expertise"
-                : "—",
+    for (const spell of sorted) {
+        const existing = groups.get(spell.level)
+        if (existing !== undefined) {
+            existing.push(spell)
+        } else {
+            groups.set(spell.level, [spell])
+        }
+    }
+
+    return Array.from(groups.entries())
+        .sort(([levelA], [levelB]) => levelA - levelB)
+        .map(([level, levelSpells]) => ({
+            level,
+            spells: levelSpells,
         }))
-
-    const languageEntries: OtherEntry[] = sheet.languages.map(
-        (language) => ({
-            key: `language-${language.language_id}`,
-            category: "Language",
-            name: language.display_name,
-            detail: "—",
-        }),
-    )
-
-    const senseEntries: OtherEntry[] = sheet.senses.map(
-        (sense) => ({
-            key: `sense-${sense.sense_type}`,
-            category: "Sense",
-            name: capitalize(sense.sense_type),
-            detail: `${sense.range_feet} ft`,
-        }),
-    )
-
-    return [
-        ...proficiencyEntries,
-        ...languageEntries,
-        ...senseEntries,
-    ]
 }
 
-interface SkillColumnTableProps {
-    skills: CharacterSheetSkill[]
-    columnNumber: number
-}
-
-function SkillColumnTable({
-    skills,
-    columnNumber,
-}: SkillColumnTableProps) {
-    return (
-        <div className="character-sheet__table-scroll">
-            <table>
-                <caption>Skills (column {columnNumber})</caption>
-                <thead>
-                    <tr>
-                        <th scope="col">Skill</th>
-                        <th scope="col">Ability</th>
-                        <th scope="col">Proficiency</th>
-                        <th scope="col">Modifier</th>
-                        <th scope="col">Passive</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {skills.map((skill) => (
-                        <tr key={skill.skill_id}>
-                            <td>{skill.display_name}</td>
-                            <td>{skill.governing_ability_code.toUpperCase()}</td>
-                            <td>
-                                {describeProficiency(
-                                    skill.is_proficient,
-                                    skill.is_expertise,
-                                )}
-                            </td>
-                            <td>{formatSignedNumber(skill.bonus)}</td>
-                            <td>
-                                {skill.passive_score ?? "Not recorded"}
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    )
+function describeSpellLevel(level: number): string {
+    return level === 0 ? "Cantrips" : `Level ${level}`
 }
 
 interface SpellcastingProfileSectionProps {
@@ -196,82 +109,74 @@ function SpellcastingProfileSection({
     profile,
 }: SpellcastingProfileSectionProps) {
     const headingId = useId()
-    const sortedSpells = sortSpells(profile.spells)
+    const spellLevelGroups = groupSpellsByLevel(profile.spells)
 
     return (
-        <section aria-labelledby={headingId}>
+        <section
+            className="spellcasting-profile"
+            aria-labelledby={headingId}
+        >
             <h3 id={headingId}>
                 {profile.class_display_name ?? "Spellcasting"}
             </h3>
 
-            <dl className="character-sheet__summary">
-                <div>
-                    <dt>Spellcasting ability</dt>
-                    <dd>
-                        {profile.spellcasting_ability_display_name}
-                    </dd>
-                </div>
+            <div className="character-sheet__stat-row character-sheet__stat-row--compact">
+                <StatCard
+                    label="Spellcasting ability"
+                    value={profile.spellcasting_ability_display_name}
+                />
 
-                <div>
-                    <dt>Spell attack bonus</dt>
-                    <dd>
-                        {formatSignedNumber(
-                            profile.spell_attack_bonus,
-                        )}
-                    </dd>
-                </div>
+                <StatCard
+                    label="Spell attack bonus"
+                    value={formatSignedNumber(
+                        profile.spell_attack_bonus,
+                    )}
+                />
 
-                <div>
-                    <dt>Spell save DC</dt>
-                    <dd>
-                        {profile.spell_save_dc ?? "Not recorded"}
-                    </dd>
-                </div>
-            </dl>
+                <StatCard
+                    label="Spell save DC"
+                    value={profile.spell_save_dc ?? "Not recorded"}
+                />
+            </div>
 
-            {sortedSpells.length > 0 ? (
-                <div className="character-sheet__table-scroll">
-                    <table>
-                        <caption>
-                            {profile.class_display_name ?? "Spellcasting"}
-                            {" spells"}
-                        </caption>
-                        <thead>
-                            <tr>
-                                <th scope="col">Level</th>
-                                <th scope="col">Name</th>
-                                <th scope="col">School</th>
-                                <th scope="col">Known</th>
-                                <th scope="col">Prepared</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {sortedSpells.map((spell) => (
-                                <tr key={spell.spell_id}>
-                                    <td>
-                                        {spell.level === 0
-                                            ? "Cantrip"
-                                            : spell.level}
-                                    </td>
-                                    <td>{spell.display_name}</td>
-                                    <td>
-                                        {spell.school ?? "Not recorded"}
-                                    </td>
-                                    <td>
+            {spellLevelGroups.length > 0 ? (
+                spellLevelGroups.map((group) => (
+                    <div
+                        className="spellcasting-profile__level-group"
+                        key={group.level}
+                    >
+                        <h4>{describeSpellLevel(group.level)}</h4>
+
+                        <ul className="character-sheet__fact-list">
+                            {group.spells.map((spell) => (
+                                <li key={spell.spell_id}>
+                                    <span className="character-sheet__fact-list-primary">
+                                        {spell.display_name}
+                                    </span>
+
+                                    {spell.school !== null && (
+                                        <span className="character-sheet__fact-list-secondary">
+                                            {" "}
+                                            · {humanizeCode(spell.school)}
+                                        </span>
+                                    )}
+
+                                    <span className="spellcasting-profile__spell-state">
                                         {spell.is_known
                                             ? "Known"
                                             : "Not known"}
-                                    </td>
-                                    <td>
+                                    </span>
+
+                                    <span className="spellcasting-profile__spell-state">
                                         {spell.is_prepared
                                             ? "Prepared"
                                             : "Not prepared"}
-                                    </td>
-                                </tr>
+                                    </span>
+                                </li>
                             ))}
-                        </tbody>
-                    </table>
-                </div>
+                        </ul>
+                    </div>
+                ))
             ) : (
                 <p>No spells recorded.</p>
             )}
@@ -283,121 +188,68 @@ export function CharacterSheetPage({
     sheet,
     character,
 }: CharacterSheetPageProps) {
-    const skillColumns = distributeIntoColumns(
-        sheet.skills,
-        SKILL_COLUMN_COUNT,
-    )
+    const headerFacts: FactGridItem[] = [
+        {
+            key: "build",
+            label: "Build",
+            value: sheet.build_label ?? "No active build",
+        },
+        {
+            key: "ruleset",
+            label: "Ruleset",
+            value: sheet.ruleset_display_name ?? "Not recorded",
+        },
+        {
+            key: "ruleset-version",
+            label: "Ruleset version",
+            value: sheet.ruleset_version_label ?? "Not recorded",
+        },
+        {
+            key: "classes",
+            label: "Classes",
+            value:
+                sheet.class_levels.length > 0 ? (
+                    <ul className="character-sheet__inline-list">
+                        {sheet.class_levels.map((classLevel) => (
+                            <li key={classLevel.class_id}>
+                                {describeClassLevel(classLevel)}
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    "None recorded"
+                ),
+        },
+        {
+            key: "total-level",
+            label: "Character level",
+            value: sheet.total_level,
+        },
+    ]
 
-    const otherEntries = buildOtherEntries(sheet)
+    const conditions = character.conditions
+    const resources = character.resources
+
+    const hasKnownDeathSaves =
+        character.death_save_successes !== null &&
+        character.death_save_failures !== null
 
     return (
-        <section
-            className="character-sheet"
-            aria-labelledby="character-sheet-heading"
-        >
-            <h1 id="character-sheet-heading">{sheet.name}</h1>
+        <div className="character-sheet">
+            <header className="character-sheet__header">
+                <p className="character-sheet__eyebrow">
+                    {sheet.species_display_name}
+                    {" · "}
+                    {humanizeCode(sheet.size_category)}
+                </p>
 
-            <dl className="character-sheet__summary">
-                <div>
-                    <dt>Species</dt>
-                    <dd>{sheet.species_display_name}</dd>
-                </div>
+                <h1>{sheet.name}</h1>
 
-                <div>
-                    <dt>Size</dt>
-                    <dd>{sheet.size_category}</dd>
-                </div>
-
-                <div>
-                    <dt>Character level</dt>
-                    <dd>{sheet.total_level}</dd>
-                </div>
-
-                <div>
-                    <dt>Proficiency bonus</dt>
-                    <dd>
-                        {formatSignedNumber(
-                            sheet.proficiency_bonus,
-                        )}
-                    </dd>
-                </div>
-
-                <div>
-                    <dt>Hit points</dt>
-                    <dd className="character-sheet__hit-points-value">
-                        {character.current_hit_points !== null &&
-                            character.maximum_hit_points !== null ? (
-                            <HitPointsMeter
-                                currentHitPoints={
-                                    character.current_hit_points
-                                }
-                                maximumHitPoints={
-                                    character.maximum_hit_points
-                                }
-                            />
-                        ) : (
-                            "Not recorded"
-                        )}
-                    </dd>
-                </div>
-
-                <div>
-                    <dt>Build</dt>
-                    <dd>{sheet.build_label ?? "No active build"}</dd>
-                </div>
-
-                <div>
-                    <dt>Ruleset</dt>
-                    <dd>
-                        {sheet.ruleset_display_name ?? "Not recorded"}
-                    </dd>
-                </div>
-
-                <div>
-                    <dt>Ruleset version</dt>
-                    <dd>
-                        {sheet.ruleset_version_label ?? "Not recorded"}
-                    </dd>
-                </div>
-
-                <div>
-                    <dt>Classes</dt>
-                    <dd>
-                        {sheet.class_levels.length > 0 ? (
-                            <ul className="character-sheet__inline-list">
-                                {sheet.class_levels.map(
-                                    (classLevel) => (
-                                        <li key={classLevel.class_id}>
-                                            {describeClassLevel(
-                                                classLevel,
-                                            )}
-                                        </li>
-                                    ),
-                                )}
-                            </ul>
-                        ) : (
-                            "None recorded"
-                        )}
-                    </dd>
-                </div>
-
-                <div>
-                    <dt>Movement</dt>
-                    <dd>
-                        {sheet.movements.length > 0 ? (
-                            <ul className="character-sheet__inline-list">
-                                {sheet.movements.map((movement) => (
-                                    <li key={movement.movement_type}>
-                                        {describeMovement(movement)}
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            "Not recorded"
-                        )}
-                    </dd>
-                </div>
-            </dl>
+                <FactGrid
+                    className="character-sheet__header-facts"
+                    items={headerFacts}
+                />
+            </header>
 
             {sheet.character_build_id === null && (
                 <p className="character-sheet__empty-build">
@@ -406,138 +258,298 @@ export function CharacterSheetPage({
                 </p>
             )}
 
-            <section aria-labelledby="ability-scores-heading">
-                <h2 id="ability-scores-heading">
-                    Ability Scores &amp; Saving Throws
-                </h2>
+            <section
+                className="character-sheet__stat-row"
+                aria-label="Primary stats"
+            >
+                <StatCard
+                    label="Proficiency bonus"
+                    value={formatSignedNumber(sheet.proficiency_bonus)}
+                />
 
-                {sheet.ability_scores.length > 0 ? (
-                    <div className="character-sheet__table-scroll">
-                        <table>
-                            <caption>
-                                Ability scores and saving throws
-                            </caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Ability</th>
-                                    <th scope="col">Score</th>
-                                    <th scope="col">Modifier</th>
-                                    <th scope="col">Save proficiency</th>
-                                    <th scope="col">Save modifier</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {sheet.ability_scores.map((ability) => {
-                                    const savingThrow =
-                                        sheet.saving_throws.find(
-                                            (candidate) =>
-                                                candidate.ability_id ===
-                                                ability.ability_id,
-                                        )
-
-                                    return (
-                                        <tr key={ability.ability_id}>
-                                            <td>
-                                                {ability.ability_display_name}
-                                            </td>
-                                            <td>{ability.score}</td>
-                                            <td>
-                                                {formatSignedNumber(
-                                                    ability.modifier,
-                                                )}
-                                            </td>
-                                            <td>
-                                                {savingThrow !== undefined
-                                                    ? describeProficiency(
-                                                        savingThrow.is_proficient,
-                                                        false,
-                                                    )
-                                                    : "Not recorded"}
-                                            </td>
-                                            <td>
-                                                {savingThrow !== undefined
-                                                    ? formatSignedNumber(
-                                                        savingThrow.bonus,
-                                                    )
-                                                    : "Not recorded"}
-                                            </td>
-                                        </tr>
-                                    )
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
+                {sheet.movements.length > 0 ? (
+                    sheet.movements.map((movement) => (
+                        <StatCard
+                            key={movement.movement_type}
+                            label={humanizeCode(movement.movement_type)}
+                            value={`${movement.speed_feet} ft`}
+                        />
+                    ))
                 ) : (
-                    <p>No ability scores recorded.</p>
+                    <StatCard label="Movement" value="Not recorded" />
                 )}
-            </section>
 
-            <section aria-labelledby="skills-heading">
-                <h2 id="skills-heading">Skills</h2>
-
-                {sheet.skills.length > 0 ? (
-                    <div className="character-sheet__skill-columns">
-                        {skillColumns.map((column, columnIndex) => (
-                            <SkillColumnTable
-                                key={`skill-column-${columnIndex}`}
-                                skills={column}
-                                columnNumber={columnIndex + 1}
+                <StatCard
+                    label="Hit points"
+                    value={
+                        character.current_hit_points !== null &&
+                            character.maximum_hit_points !== null
+                            ? undefined
+                            : "Not recorded"
+                    }
+                >
+                    {character.current_hit_points !== null &&
+                        character.maximum_hit_points !== null && (
+                            <HitPointsMeter
+                                currentHitPoints={
+                                    character.current_hit_points
+                                }
+                                maximumHitPoints={
+                                    character.maximum_hit_points
+                                }
                             />
-                        ))}
-                    </div>
-                ) : (
-                    <p>No skills recorded.</p>
-                )}
+                        )}
+                </StatCard>
+
+                <StatCard
+                    label="Temporary hit points"
+                    value={
+                        character.temporary_hit_points ??
+                        "Not recorded"
+                    }
+                />
+
+                <StatCard
+                    label="Exhaustion"
+                    value={
+                        character.exhaustion_level ?? "Not recorded"
+                    }
+                />
+
+                <StatCard
+                    label="Death saves"
+                    value={
+                        hasKnownDeathSaves
+                            ? `${character.death_save_successes} / ${character.death_save_failures}`
+                            : "Not recorded"
+                    }
+                />
             </section>
 
-            <section aria-labelledby="other-proficiencies-heading">
-                <h2 id="other-proficiencies-heading">
-                    Other Proficiencies, Languages, &amp; Senses
-                </h2>
+            <div className="character-sheet__panel-grid">
+                <DetailPanel
+                    title="Ability Scores & Saving Throws"
+                    className="detail-panel--wide"
+                    isEmpty={sheet.ability_scores.length === 0}
+                    emptyState={<p>No ability scores recorded.</p>}
+                >
+                    <div className="character-sheet__ability-grid">
+                        {sheet.ability_scores.map((ability) => {
+                            const savingThrow = sheet.saving_throws.find(
+                                (candidate) =>
+                                    candidate.ability_id ===
+                                    ability.ability_id,
+                            )
 
-                {otherEntries.length > 0 ? (
+                            return (
+                                <AbilityScoreCard
+                                    key={ability.ability_id}
+                                    abilityDisplayName={
+                                        ability.ability_display_name
+                                    }
+                                    score={ability.score}
+                                    modifier={ability.modifier}
+                                    savingThrow={
+                                        savingThrow !== undefined
+                                            ? {
+                                                bonus: savingThrow.bonus,
+                                                isProficient:
+                                                    savingThrow.is_proficient,
+                                            }
+                                            : null
+                                    }
+                                />
+                            )
+                        })}
+                    </div>
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Skills"
+                    className="detail-panel--wide"
+                    isEmpty={sheet.skills.length === 0}
+                    emptyState={<p>No skills recorded.</p>}
+                >
                     <div className="character-sheet__table-scroll">
                         <table>
-                            <caption>
-                                Other proficiencies, languages, and senses
-                            </caption>
+                            <caption>Skills</caption>
                             <thead>
                                 <tr>
-                                    <th scope="col">Category</th>
-                                    <th scope="col">Name</th>
-                                    <th scope="col">Detail</th>
+                                    <th scope="col">Skill</th>
+                                    <th scope="col">Ability</th>
+                                    <th scope="col">Proficiency</th>
+                                    <th scope="col">Bonus</th>
+                                    <th scope="col">Passive</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {otherEntries.map((entry) => (
-                                    <tr key={entry.key}>
-                                        <td>{entry.category}</td>
-                                        <td>{entry.name}</td>
-                                        <td>{entry.detail}</td>
+                                {sheet.skills.map((skill) => (
+                                    <tr key={skill.skill_id}>
+                                        <td>{skill.display_name}</td>
+                                        <td>
+                                            {abbreviateAbility(
+                                                skill.governing_ability_code,
+                                            )}
+                                        </td>
+                                        <td>
+                                            {describeProficiency(
+                                                skill.is_proficient,
+                                                skill.is_expertise,
+                                            )}
+                                        </td>
+                                        <td>
+                                            {formatSignedNumber(skill.bonus)}
+                                        </td>
+                                        <td>
+                                            {skill.passive_score ??
+                                                "Not recorded"}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
-                ) : (
-                    <p>
-                        No other proficiencies, languages, or senses
-                        recorded.
-                    </p>
-                )}
-            </section>
+                </DetailPanel>
 
-            <section aria-labelledby="features-heading">
-                <h2 id="features-heading">Features</h2>
+                <DetailPanel
+                    title="Other Proficiencies"
+                    isEmpty={sheet.other_proficiencies.length === 0}
+                    emptyState={
+                        <p>No other proficiencies recorded.</p>
+                    }
+                >
+                    <ul className="character-sheet__fact-list">
+                        {sheet.other_proficiencies.map(
+                            (proficiency) => (
+                                <li
+                                    key={`${proficiency.proficiency_type_code}-${proficiency.target_label}`}
+                                >
+                                    <span className="character-sheet__fact-list-primary">
+                                        {proficiency.target_label}
+                                    </span>{" "}
+                                    <span className="character-sheet__fact-list-secondary">
+                                        (
+                                        {
+                                            proficiency.proficiency_type_display_name
+                                        }
+                                        {proficiency.is_expertise
+                                            ? ", Expertise"
+                                            : ""}
+                                        )
+                                    </span>
+                                </li>
+                            ),
+                        )}
+                    </ul>
+                </DetailPanel>
 
-                {sheet.features.length > 0 ? (
+                <DetailPanel
+                    title="Languages"
+                    isEmpty={sheet.languages.length === 0}
+                    emptyState={<p>No languages recorded.</p>}
+                >
+                    <ul className="character-sheet__fact-list">
+                        {sheet.languages.map((language) => (
+                            <li key={language.language_id}>
+                                {language.display_name}
+                            </li>
+                        ))}
+                    </ul>
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Senses"
+                    isEmpty={sheet.senses.length === 0}
+                    emptyState={<p>No senses recorded.</p>}
+                >
+                    <FactGrid
+                        items={sheet.senses.map((sense) => ({
+                            key: sense.sense_type,
+                            label: humanizeCode(sense.sense_type),
+                            value: `${sense.range_feet} ft`,
+                        }))}
+                    />
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Conditions"
+                    isEmpty={
+                        conditions === null ||
+                        conditions.length === 0
+                    }
+                    emptyState={
+                        <p>
+                            {conditions === null
+                                ? "Not recorded."
+                                : "No conditions are currently recorded."}
+                        </p>
+                    }
+                >
+                    {conditions !== null && (
+                        <ul className="character-sheet__fact-list">
+                            {conditions.map((condition) => (
+                                <li key={condition.condition_code}>
+                                    <span className="character-sheet__fact-list-primary">
+                                        {humanizeCode(
+                                            condition.condition_code,
+                                        )}
+                                    </span>
+                                    {condition.source_description !==
+                                        null && (
+                                            <span className="character-sheet__fact-list-secondary">
+                                                {" — "}
+                                                {condition.source_description}
+                                            </span>
+                                        )}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Resources"
+                    isEmpty={
+                        resources === null || resources.length === 0
+                    }
+                    emptyState={
+                        <p>
+                            {resources === null
+                                ? "Not recorded."
+                                : "No resources are currently recorded."}
+                        </p>
+                    }
+                >
+                    {resources !== null && (
+                        <ul className="character-sheet__fact-list">
+                            {resources.map((resource) => (
+                                <li key={resource.resource_code}>
+                                    <span className="character-sheet__fact-list-primary">
+                                        {humanizeCode(
+                                            resource.resource_code,
+                                        )}
+                                    </span>{" "}
+                                    {resource.current_amount} /{" "}
+                                    {resource.maximum_amount}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Features & Traits"
+                    className="detail-panel--wide"
+                    isEmpty={sheet.features.length === 0}
+                    emptyState={<p>No features recorded.</p>}
+                >
                     <div className="character-sheet__table-scroll">
                         <table>
                             <caption>Features and traits</caption>
                             <thead>
                                 <tr>
                                     <th scope="col">Name</th>
-                                    <th scope="col">Effect</th>
+                                    <th scope="col">Description</th>
                                     <th scope="col">Source</th>
                                     <th scope="col">Granted at level</th>
                                 </tr>
@@ -551,7 +563,7 @@ export function CharacterSheetPage({
                                                 "No description recorded."}
                                         </td>
                                         <td>
-                                            {capitalize(
+                                            {humanizeCode(
                                                 feature.source_category,
                                             )}
                                         </td>
@@ -564,27 +576,26 @@ export function CharacterSheetPage({
                             </tbody>
                         </table>
                     </div>
-                ) : (
-                    <p>No features recorded.</p>
-                )}
-            </section>
+                </DetailPanel>
 
-            <section aria-labelledby="spellcasting-heading">
-                <h2 id="spellcasting-heading">Spellcasting</h2>
-
-                {sheet.spellcasting_profiles.length > 0 ? (
-                    sheet.spellcasting_profiles.map((profile) => (
+                <DetailPanel
+                    title="Spellcasting"
+                    className="detail-panel--wide"
+                    isEmpty={sheet.spellcasting_profiles.length === 0}
+                    emptyState={
+                        <p>No spellcasting abilities recorded.</p>
+                    }
+                >
+                    {sheet.spellcasting_profiles.map((profile) => (
                         <SpellcastingProfileSection
                             key={
                                 profile.character_spellcasting_profile_id
                             }
                             profile={profile}
                         />
-                    ))
-                ) : (
-                    <p>No spellcasting abilities recorded.</p>
-                )}
-            </section>
-        </section>
+                    ))}
+                </DetailPanel>
+            </div>
+        </div>
     )
 }

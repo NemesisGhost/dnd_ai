@@ -275,3 +275,51 @@ export const characterSheetFixture = {
         },
     ],
 } satisfies CharacterSheet
+
+export const sparseCharacterSheetFixture = {
+    character_id: "character-sparse",
+    name: "Sparse Fighter",
+    species_code: "human",
+    species_display_name: "Human",
+    size_category: "medium",
+
+    character_build_id: null,
+    build_label: null,
+    ruleset_code: null,
+    ruleset_display_name: null,
+    ruleset_version_id: null,
+    ruleset_version_label: null,
+
+    total_level: 0,
+    proficiency_bonus: null,
+
+    class_levels: [],
+    ability_scores: [],
+    skills: [],
+    saving_throws: [],
+    other_proficiencies: [],
+    features: [],
+    spellcasting_profiles: [],
+
+    languages: [
+        {
+            language_id: "language-common",
+            code: "common",
+            display_name: "Common",
+        },
+    ],
+
+    senses: [
+        {
+            sense_type: "darkvision",
+            range_feet: 60,
+        },
+    ],
+
+    movements: [
+        {
+            movement_type: "walk",
+            speed_feet: 30,
+        },
+    ],
+} satisfies CharacterSheet

@@ -1,30 +1,61 @@
 import { render, screen, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import { characterSheetFixture } from "../fixtures/characterSheet"
+import {
+    characterSheetFixture,
+    sparseCharacterSheetFixture,
+} from "../fixtures/characterSheet"
 import type { CharacterDetail } from "../types/character"
 import type { CharacterSheet } from "../types/characterSheet"
 import { CharacterSheetPage } from "./CharacterSheetPage"
 
-const baseCharacter: CharacterDetail = {
+const richCharacter: CharacterDetail = {
     character_id: "character-ixamarra",
     name: "Ixamarra",
     species_code: "dragonborn",
     size_category: "medium",
     current_hit_points: 30,
     maximum_hit_points: 42,
-    temporary_hit_points: 0,
-    exhaustion_level: 0,
-    death_save_successes: 0,
-    death_save_failures: 0,
+    temporary_hit_points: 5,
+    exhaustion_level: 1,
+    death_save_successes: 2,
+    death_save_failures: 1,
     current_location_id: null,
     active_encounter_id: null,
-    conditions: [],
-    resources: [],
+    conditions: [
+        {
+            condition_code: "poisoned",
+            source_description: "Giant spider bite",
+        },
+    ],
+    resources: [
+        {
+            resource_code: "inspiration_die",
+            current_amount: 2,
+            maximum_amount: 5,
+        },
+    ],
+}
+
+const sparseCharacter: CharacterDetail = {
+    character_id: "character-sparse",
+    name: "Sparse Fighter",
+    species_code: "human",
+    size_category: "medium",
+    current_hit_points: null,
+    maximum_hit_points: null,
+    temporary_hit_points: null,
+    exhaustion_level: null,
+    death_save_successes: null,
+    death_save_failures: null,
+    current_location_id: null,
+    active_encounter_id: null,
+    conditions: null,
+    resources: null,
 }
 
 function renderPage(
     sheet: CharacterSheet = characterSheetFixture,
-    character: CharacterDetail = baseCharacter,
+    character: CharacterDetail = richCharacter,
 ) {
     return render(
         <CharacterSheetPage sheet={sheet} character={character} />,
@@ -32,32 +63,45 @@ function renderPage(
 }
 
 describe("CharacterSheetPage", () => {
-    it("renders the header facts", () => {
+    it("has exactly one page heading identifying the character", () => {
         renderPage()
 
-        expect(
-            screen.getByRole("heading", {
-                level: 1,
-                name: "Ixamarra",
-            }),
-        ).toBeInTheDocument()
+        const headings = screen.getAllByRole("heading", { level: 1 })
+        expect(headings).toHaveLength(1)
+        expect(headings[0]).toHaveTextContent("Ixamarra")
+    })
 
-        expect(screen.getByText("Dragonborn")).toBeInTheDocument()
-        expect(screen.getByText("medium")).toBeInTheDocument()
-        expect(screen.getByText("6")).toBeInTheDocument()
-        expect(screen.getByText("+3")).toBeInTheDocument()
+    it("renders the character/build header facts", () => {
+        renderPage()
+
+        expect(screen.getByText("Dragonborn · Medium")).toBeInTheDocument()
         expect(
             screen.getByText("Bard 6 – College of Lore"),
         ).toBeInTheDocument()
-        expect(screen.getByText("Walk 30 ft")).toBeInTheDocument()
         expect(screen.getByText("Primary Build")).toBeInTheDocument()
         expect(
             screen.getByText("Dungeons & Dragons Fifth Edition"),
         ).toBeInTheDocument()
         expect(screen.getByText("2014 Core Rules")).toBeInTheDocument()
+
+        const characterLevelRow = screen.getByText(
+            "Character level",
+        ).closest(".fact-grid__row") as HTMLElement
+        expect(
+            within(characterLevelRow).getByText("6"),
+        ).toBeInTheDocument()
     })
 
-    it("shows the hit points meter from the passed-in character", () => {
+    it("shows the primary stat cards including proficiency bonus and movement", () => {
+        renderPage()
+
+        expect(screen.getByText("Proficiency bonus")).toBeInTheDocument()
+        expect(screen.getByText("+3")).toBeInTheDocument()
+        expect(screen.getByText("Walk")).toBeInTheDocument()
+        expect(screen.getByText("30 ft")).toBeInTheDocument()
+    })
+
+    it("shows the hit points meter from the passed-in CharacterDetail", () => {
         renderPage()
 
         expect(
@@ -66,74 +110,168 @@ describe("CharacterSheetPage", () => {
     })
 
     it("falls back to a not-recorded note when hit points are missing", () => {
-        renderPage(characterSheetFixture, {
-            ...baseCharacter,
-            current_hit_points: null,
-            maximum_hit_points: null,
-        })
+        renderPage(characterSheetFixture, sparseCharacter)
 
-        const hitPoints = screen.getByText("Hit points").nextElementSibling
-        expect(hitPoints).toHaveTextContent("Not recorded")
         expect(screen.queryByRole("meter")).not.toBeInTheDocument()
+
+        const hitPointsCard = screen
+            .getByText("Hit points")
+            .closest("figure") as HTMLElement
+        expect(hitPointsCard).toHaveTextContent("Not recorded")
     })
 
-    it("renders ability scores with their matching saving throws", () => {
+    it("shows temporary hit points, exhaustion, and death saves from CharacterDetail", () => {
         renderPage()
 
-        const table = screen.getByRole("table", {
-            name: "Ability scores and saving throws",
+        const tempHpCard = screen
+            .getByText("Temporary hit points")
+            .closest("figure") as HTMLElement
+        expect(tempHpCard).toHaveTextContent("5")
+
+        const exhaustionCard = screen
+            .getByText("Exhaustion")
+            .closest("figure") as HTMLElement
+        expect(exhaustionCard).toHaveTextContent("1")
+
+        const deathSavesCard = screen
+            .getByText("Death saves")
+            .closest("figure") as HTMLElement
+        expect(deathSavesCard).toHaveTextContent("2 / 1")
+    })
+
+    it("shows zero temporary hit points and exhaustion as valid recorded states", () => {
+        renderPage(characterSheetFixture, {
+            ...richCharacter,
+            temporary_hit_points: 0,
+            exhaustion_level: 0,
         })
 
-        const charismaRow = within(table)
-            .getByText("Charisma")
-            .closest("tr")
+        const tempHpCard = screen
+            .getByText("Temporary hit points")
+            .closest("figure") as HTMLElement
+        expect(tempHpCard).toHaveTextContent("0")
 
-        expect(charismaRow).not.toBeNull()
-        const charismaCells = within(charismaRow as HTMLElement).getAllByRole(
-            "cell",
-        )
-        expect(charismaCells.map((cell) => cell.textContent)).toEqual([
-            "Charisma",
-            "18",
-            "+4",
-            "Proficient",
+        const exhaustionCard = screen
+            .getByText("Exhaustion")
+            .closest("figure") as HTMLElement
+        expect(exhaustionCard).toHaveTextContent("0")
+    })
+
+    it("shows not-recorded death saves and temp HP when the character detail lacks them", () => {
+        renderPage(characterSheetFixture, sparseCharacter)
+
+        const tempHpCard = screen
+            .getByText("Temporary hit points")
+            .closest("figure") as HTMLElement
+        expect(tempHpCard).toHaveTextContent("Not recorded")
+
+        const deathSavesCard = screen
+            .getByText("Death saves")
+            .closest("figure") as HTMLElement
+        expect(deathSavesCard).toHaveTextContent("Not recorded")
+    })
+
+    it("renders ability score cards with score, modifier, and matching saving throw", () => {
+        renderPage()
+
+        const card = screen.getByRole("article", { name: "Charisma" })
+
+        expect(within(card).getByText("+4")).toBeInTheDocument()
+        expect(within(card).getByText("Score 18")).toBeInTheDocument()
+        expect(within(card).getByText("+7")).toBeInTheDocument()
+        expect(within(card).getByText("Proficient")).toBeInTheDocument()
+    })
+
+    it("shows a non-proficient saving throw without inventing proficiency", () => {
+        renderPage()
+
+        const card = screen.getByRole("article", { name: "Strength" })
+
+        expect(within(card).getByText("Not proficient")).toBeInTheDocument()
+    })
+
+    it("does not put any raw ability id in the DOM", () => {
+        const { container } = renderPage()
+
+        for (const ability of characterSheetFixture.ability_scores) {
+            expect(
+                container.innerHTML.includes(ability.ability_id),
+            ).toBe(false)
+        }
+    })
+
+    it("renders the skills panel with proficiency, expertise, and bonus", () => {
+        renderPage()
+
+        const table = screen.getByRole("table", { name: "Skills" })
+
+        const historyRow = within(table)
+            .getByText("History")
+            .closest("tr") as HTMLElement
+
+        const cells = within(historyRow).getAllByRole("cell")
+        expect(cells.map((cell) => cell.textContent)).toEqual([
+            "History",
+            "INT",
+            "Expertise",
             "+7",
+            "17",
         ])
     })
 
-    it("splits skills across multiple tables preserving overall order", () => {
+    it("shows separate panels for other proficiencies, languages, senses, conditions, and resources", () => {
         renderPage()
 
-        const columnOne = screen.getByRole("table", {
-            name: "Skills (column 1)",
-        })
-        const columnTwo = screen.getByRole("table", {
-            name: "Skills (column 2)",
-        })
-        const columnThree = screen.getByRole("table", {
-            name: "Skills (column 3)",
-        })
-
-        expect(within(columnOne).getByText("Arcana")).toBeInTheDocument()
-        expect(within(columnTwo).getByText("History")).toBeInTheDocument()
         expect(
-            within(columnThree).getByText("Persuasion"),
+            screen.getByRole("heading", {
+                level: 2,
+                name: "Other Proficiencies",
+            }),
         ).toBeInTheDocument()
+        expect(screen.getByText("Lute")).toBeInTheDocument()
 
-        expect(screen.getAllByText("Expertise").length).toBeGreaterThan(0)
+        expect(
+            screen.getByRole("heading", { level: 2, name: "Languages" }),
+        ).toBeInTheDocument()
+        expect(screen.getByText("Draconic")).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", { level: 2, name: "Senses" }),
+        ).toBeInTheDocument()
+        expect(screen.getByText("Darkvision")).toBeInTheDocument()
+        expect(screen.getByText("60 ft")).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", { level: 2, name: "Conditions" }),
+        ).toBeInTheDocument()
+        expect(screen.getByText("Poisoned")).toBeInTheDocument()
+        expect(screen.getByText(/Giant spider bite/)).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", { level: 2, name: "Resources" }),
+        ).toBeInTheDocument()
+        expect(screen.getByText("Inspiration Die")).toBeInTheDocument()
     })
 
-    it("combines other proficiencies, languages, and senses in one table", () => {
-        renderPage()
-
-        const table = screen.getByRole("table", {
-            name: "Other proficiencies, languages, and senses",
+    it("preserves valid empty conditions and resources states", () => {
+        renderPage(characterSheetFixture, {
+            ...richCharacter,
+            conditions: [],
+            resources: [],
         })
 
-        expect(within(table).getByText("Lute")).toBeInTheDocument()
-        expect(within(table).getByText("Draconic")).toBeInTheDocument()
-        expect(within(table).getByText("Darkvision")).toBeInTheDocument()
-        expect(within(table).getByText("60 ft")).toBeInTheDocument()
+        expect(
+            screen.getByText("No conditions are currently recorded."),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText("No resources are currently recorded."),
+        ).toBeInTheDocument()
+    })
+
+    it("shows a neutral not-recorded state when conditions and resources are unavailable", () => {
+        renderPage(characterSheetFixture, sparseCharacter)
+
+        expect(screen.getAllByText("Not recorded.").length).toBe(2)
     })
 
     it("renders features with their source and granted level", () => {
@@ -152,58 +290,94 @@ describe("CharacterSheetPage", () => {
         ])
     })
 
-    it("sorts spells by level and shows known/prepared indicators", () => {
+    it("groups spells by level, labeling level zero as Cantrips", () => {
         renderPage()
 
-        const table = screen.getByRole("table", {
-            name: "Bard spells",
-        })
+        expect(
+            screen.getByRole("heading", { level: 4, name: "Cantrips" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByRole("heading", { level: 4, name: "Level 1" }),
+        ).toBeInTheDocument()
 
-        const rows = within(table).getAllByRole("row").slice(1)
-        const firstRowCells = within(rows[0]).getAllByRole("cell")
-        expect(firstRowCells[0]).toHaveTextContent("Cantrip")
-        expect(firstRowCells[1]).toHaveTextContent("Vicious Mockery")
-        expect(firstRowCells[3]).toHaveTextContent("Known")
-        expect(firstRowCells[4]).toHaveTextContent("Prepared")
-
-        const secondRowCells = within(rows[1]).getAllByRole("cell")
-        expect(secondRowCells[1]).toHaveTextContent("Detect Magic")
-        expect(secondRowCells[4]).toHaveTextContent("Not prepared")
+        expect(screen.getByText("Vicious Mockery")).toBeInTheDocument()
+        expect(screen.getByText("Detect Magic")).toBeInTheDocument()
     })
 
-    it("does not put the spellcasting profile id in the DOM", () => {
+    it("shows known/prepared state explicitly for each spell", () => {
         renderPage()
+
+        const vickedMockeryEntry = screen
+            .getByText("Vicious Mockery")
+            .closest("li") as HTMLElement
+        expect(within(vickedMockeryEntry).getByText("Known")).toBeInTheDocument()
+        expect(
+            within(vickedMockeryEntry).getByText("Prepared"),
+        ).toBeInTheDocument()
+
+        const detectMagicEntry = screen
+            .getByText("Detect Magic")
+            .closest("li") as HTMLElement
+        expect(within(detectMagicEntry).getByText("Known")).toBeInTheDocument()
+        expect(
+            within(detectMagicEntry).getByText("Not prepared"),
+        ).toBeInTheDocument()
+    })
+
+    it("supports multiple spellcasting profiles without duplicate DOM ids", () => {
+        const secondProfile = {
+            ...characterSheetFixture.spellcasting_profiles[0],
+            character_spellcasting_profile_id: "spellcasting-profile-feat",
+            class_id: null,
+            class_code: null,
+            class_display_name: null,
+        }
+
+        const multiProfileSheet: CharacterSheet = {
+            ...characterSheetFixture,
+            spellcasting_profiles: [
+                characterSheetFixture.spellcasting_profiles[0],
+                secondProfile,
+            ],
+        }
+
+        const { container } = renderPage(multiProfileSheet)
+
+        const headings = screen.getAllByRole("heading", { level: 3 })
+        const headingIds = headings.map((heading) => heading.id)
+        expect(new Set(headingIds).size).toBe(headingIds.length)
+
+        expect(
+            container.innerHTML.includes(
+                "spellcasting-profile-bard",
+            ),
+        ).toBe(false)
+        expect(
+            container.innerHTML.includes(
+                "spellcasting-profile-feat",
+            ),
+        ).toBe(false)
+    })
+
+    it("does not put the spellcasting profile id or spell ids in the DOM", () => {
+        const { container } = renderPage()
 
         const profileId =
             characterSheetFixture.spellcasting_profiles[0]
                 .character_spellcasting_profile_id
 
-        expect(
-            document.querySelector(`[id*="${profileId}"]`),
-        ).not.toBeInTheDocument()
+        expect(container.innerHTML.includes(profileId)).toBe(false)
+
+        for (const spell of characterSheetFixture
+            .spellcasting_profiles[0].spells) {
+            expect(container.innerHTML.includes(spell.spell_id)).toBe(
+                false,
+            )
+        }
     })
 
-    it("renders an empty-build note while preserving character-level collections", () => {
-        const emptyBuild: CharacterSheet = {
-            ...characterSheetFixture,
-            character_build_id: null,
-            build_label: null,
-            ruleset_code: null,
-            ruleset_display_name: null,
-            ruleset_version_id: null,
-            ruleset_version_label: null,
-            total_level: 0,
-            proficiency_bonus: null,
-            class_levels: [],
-            ability_scores: [],
-            skills: [],
-            saving_throws: [],
-            other_proficiencies: [],
-            features: [],
-            spellcasting_profiles: [],
-        } satisfies CharacterSheet
-
-        renderPage(emptyBuild)
+    it("renders an empty-build note while preserving character-level facts (sparse Character B)", () => {
+        renderPage(sparseCharacterSheetFixture, sparseCharacter)
 
         expect(
             screen.getByText(
@@ -212,15 +386,25 @@ describe("CharacterSheetPage", () => {
         ).toBeInTheDocument()
 
         expect(screen.getByText("No active build")).toBeInTheDocument()
-        expect(screen.getByText("No ability scores recorded.")).toBeInTheDocument()
+        expect(
+            screen.getByText("No ability scores recorded."),
+        ).toBeInTheDocument()
         expect(screen.getByText("No skills recorded.")).toBeInTheDocument()
+        expect(
+            screen.getByText("No other proficiencies recorded."),
+        ).toBeInTheDocument()
         expect(screen.getByText("No features recorded.")).toBeInTheDocument()
         expect(
             screen.getByText("No spellcasting abilities recorded."),
         ).toBeInTheDocument()
 
-        expect(screen.getByText("Draconic")).toBeInTheDocument()
+        expect(screen.getByText("Common")).toBeInTheDocument()
         expect(screen.getByText("Darkvision")).toBeInTheDocument()
-        expect(screen.getByText("Walk 30 ft")).toBeInTheDocument()
+        expect(screen.getByText("Walk")).toBeInTheDocument()
+        expect(screen.getByText("30 ft")).toBeInTheDocument()
+
+        expect(
+            screen.getByRole("heading", { level: 1, name: "Sparse Fighter" }),
+        ).toBeInTheDocument()
     })
 })
