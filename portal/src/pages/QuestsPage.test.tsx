@@ -2,7 +2,6 @@ import {
     fireEvent,
     render,
     screen,
-    within,
 } from "@testing-library/react"
 import {
     MemoryRouter,
@@ -50,7 +49,10 @@ function renderQuestsPage(
                 <Route
                     path="/app/:campaignId/quests"
                     element={
-                        <QuestsPage quests={pageQuests} />
+                        <QuestsPage
+                            campaignId="test-campaign"
+                            quests={pageQuests}
+                        />
                     }
                 />
             </Routes>
@@ -58,14 +60,12 @@ function renderQuestsPage(
     )
 }
 
-function questNamesInTableOrder(): string[] {
-    const table = screen.getByRole("table", {
-        name: "Quests",
-    })
+function questNamesInCardOrder(): string[] {
+    const grid = screen.getByRole("list", { name: "Quests" })
 
-    return within(table)
-        .getAllByRole("link")
-        .map((link) => link.textContent ?? "")
+    return Array.from(
+        grid.querySelectorAll(".entity-card__title"),
+    ).map((element) => element.textContent ?? "")
 }
 
 describe("QuestsPage", () => {
@@ -86,14 +86,14 @@ describe("QuestsPage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.queryByRole("table"),
+            screen.queryByRole("list"),
         ).not.toBeInTheDocument()
     })
 
-    it("lists quests alphabetically with campaign-relative detail links", () => {
+    it("lists quests alphabetically by default with campaign-relative detail links", () => {
         renderQuestsPage(quests)
 
-        expect(questNamesInTableOrder()).toEqual([
+        expect(questNamesInCardOrder()).toEqual([
             "Alpha Quest",
             "Beta Quest",
             "Zeta Quest",
@@ -101,7 +101,7 @@ describe("QuestsPage", () => {
 
         expect(
             screen.getByRole("link", {
-                name: "Alpha Quest",
+                name: /Alpha Quest/,
             }),
         ).toHaveAttribute(
             "href",
@@ -113,48 +113,60 @@ describe("QuestsPage", () => {
         ).toBeInTheDocument()
     })
 
-    it("sorts status in either direction while keeping missing status last", () => {
+    it("does not invent card content beyond name and status", () => {
         renderQuestsPage(quests)
 
-        const statusButton = screen.getByRole(
-            "button",
-            {
-                name: "Status",
-            },
+        expect(screen.queryByText(/objective/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/reward/i)).not.toBeInTheDocument()
+    })
+
+    it("sorts by name in descending order", () => {
+        renderQuestsPage(quests)
+
+        fireEvent.change(
+            screen.getByRole("combobox", { name: "Direction" }),
+            { target: { value: "desc" } },
         )
 
-        fireEvent.click(statusButton)
-
-        expect(questNamesInTableOrder()).toEqual([
+        expect(questNamesInCardOrder()).toEqual([
             "Zeta Quest",
             "Beta Quest",
             "Alpha Quest",
         ])
+    })
 
-        expect(
-            screen.getByRole("columnheader", {
-                name: "Status",
-            }),
-        ).toHaveAttribute(
-            "aria-sort",
-            "ascending",
+    it("sorts by status ascending, keeping missing status last", () => {
+        renderQuestsPage(quests)
+
+        fireEvent.change(
+            screen.getByRole("combobox", { name: "Sort by" }),
+            { target: { value: "status" } },
         )
 
-        fireEvent.click(statusButton)
+        expect(questNamesInCardOrder()).toEqual([
+            "Zeta Quest",
+            "Beta Quest",
+            "Alpha Quest",
+        ])
+    })
 
-        expect(questNamesInTableOrder()).toEqual([
+    it("sorts by status descending, still keeping missing status last", () => {
+        renderQuestsPage(quests)
+
+        fireEvent.change(
+            screen.getByRole("combobox", { name: "Sort by" }),
+            { target: { value: "status" } },
+        )
+
+        fireEvent.change(
+            screen.getByRole("combobox", { name: "Direction" }),
+            { target: { value: "desc" } },
+        )
+
+        expect(questNamesInCardOrder()).toEqual([
             "Beta Quest",
             "Zeta Quest",
             "Alpha Quest",
         ])
-
-        expect(
-            screen.getByRole("columnheader", {
-                name: "Status",
-            }),
-        ).toHaveAttribute(
-            "aria-sort",
-            "descending",
-        )
     })
 })

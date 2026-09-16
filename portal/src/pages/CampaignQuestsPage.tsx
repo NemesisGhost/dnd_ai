@@ -30,6 +30,7 @@ export function CampaignQuestsPage() {
         >
             {(quests) => (
                 <QuestsPage
+                    campaignId={campaignId}
                     quests={quests}
                 />
             )}

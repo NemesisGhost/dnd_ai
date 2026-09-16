@@ -1,43 +1,19 @@
 import type {
-    WorldCategory,
-    WorldEntityCard,
     WorldEntityPage,
 } from "../types/world"
+import { CardGrid } from "./CardGrid"
 import { UpdatingIndicator } from "./UpdatingIndicator"
-
-const categoryLabels: Record<WorldCategory, string> = {
-    location: "Location",
-    character: "Character",
-    organization: "Organization",
-    religion: "Religion",
-    item: "Item",
-    event: "Event",
-}
-
-function formatEntityType(entityTypeCode: string): string {
-    return entityTypeCode
-        .split("_")
-        .filter((word) => word.length > 0)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" ")
-}
-
-function describeEntity(entity: WorldEntityCard): string {
-    const categoryLabel = categoryLabels[entity.category]
-    const typeLabel = formatEntityType(entity.entity_type_code)
-
-    return typeLabel === categoryLabel
-        ? categoryLabel
-        : `${categoryLabel} - ${typeLabel}`
-}
+import { WorldCard } from "./WorldCard"
 
 interface WorldEntityListProps {
+    campaignId: string
     page: WorldEntityPage
     refreshing?: boolean
     onNextPage: () => void
 }
 
 export function WorldEntityList({
+    campaignId,
     page,
     refreshing = false,
     onNextPage,
@@ -51,18 +27,15 @@ export function WorldEntityList({
             {refreshing && <UpdatingIndicator />}
 
             {page.items.length > 0 ? (
-                <ul aria-label="World entities">
+                <CardGrid ariaLabel="World entities" className="world-card-grid">
                     {page.items.map((entity) => (
-                        <li key={entity.entity_id}>
-                            <h2>{entity.name}</h2>
-                            {" "}
-                            <p>{describeEntity(entity)}</p>
-                            <p>
-                                {entity.summary ?? "No summary recorded."}
-                            </p>
-                        </li>
+                        <WorldCard
+                            key={entity.entity_id}
+                            campaignId={campaignId}
+                            entity={entity}
+                        />
                     ))}
-                </ul>
+                </CardGrid>
             ) : (
                 <p>No world entities match the current search.</p>
             )}

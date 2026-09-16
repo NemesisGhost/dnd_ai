@@ -69,8 +69,7 @@
 
 .app-main {
   width: 100%;
-  max-width: 72rem;
-  margin: 0 auto;
+  margin: 0;
   padding: 2rem 1.5rem;
 }
 
@@ -942,4 +941,708 @@
 
 .sortable-table__sort-button:hover {
   color: var(--color-primary);
+}
+
+/* Character sheet */
+
+.character-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.character-sheet__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.character-sheet__eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.character-sheet__header h1 {
+  margin: 0 0 0.5rem;
+}
+
+.character-sheet__header-facts {
+  margin: 0;
+}
+
+.character-sheet__empty-build {
+  padding: 0.75rem 1rem;
+  margin: 0;
+  color: var(--color-warning);
+  background-color: var(--color-warning-background);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 0.375rem;
+}
+
+/* Primary stat row: compact peer StatCards (proficiency bonus, movement,
+   hit points, temporary hit points, exhaustion, death saves). */
+.character-sheet__stat-row {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 0.75rem;
+}
+
+.character-sheet__stat-row--compact {
+  margin: 0.75rem 0 1rem;
+}
+
+/* Ability score cards reflow the same way as the stat row, with a
+   slightly larger minimum to fit the score/save rows. */
+.character-sheet__ability-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.75rem;
+}
+
+/* Shared detail-panel grid: most panels reflow to a compact column,
+   while wide panels (tables, spellcasting) span every column.
+   min-width: 0 overrides the default content-based automatic minimum
+   size on the grid item/track so a panel can shrink below the
+   intrinsic width of a wide table it contains; the table then scrolls
+   inside its own .character-sheet__table-scroll wrapper instead of
+   forcing the grid (and the page) wider. */
+.character-sheet__panel-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+
+.character-sheet__panel-grid .detail-panel--wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.character-sheet__feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.character-sheet__table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.character-sheet__table-scroll table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+}
+
+.character-sheet__table-scroll th,
+.character-sheet__table-scroll td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.character-sheet__table-scroll th {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.character-sheet__inline-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.character-sheet__fact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.character-sheet__fact-list-primary {
+  font-weight: 600;
+}
+
+.character-sheet__fact-list-secondary {
+  color: var(--color-text-muted);
+}
+
+/* Detail panel: bounded surface with a heading, shared by every
+   character-sheet section (and future detail pages). */
+.detail-panel {
+  padding: 1rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+}
+
+.detail-panel__heading {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.detail-panel__description {
+  margin: 0 0 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.detail-panel__empty {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* Fact grid: compact label/value pairs (header facts, senses, etc.). */
+.fact-grid {
+  display: grid;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+
+@media (min-width: 40rem) {
+  .fact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.fact-grid.character-sheet__header-facts {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.character-sheet__header-facts .fact-grid__row,
+.character-sheet__header-facts dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fact-grid__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+}
+
+.fact-grid__row dt {
+  min-width: 9rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.fact-grid__row dd {
+  margin: 0;
+}
+
+/* Stat card: one prominent value with a visible label, used for
+   proficiency bonus, movement, hit points, and similar high-value
+   facts. */
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  margin: 0;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+}
+
+.stat-card__label {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.stat-card__value {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.stat-card__secondary {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.stat-card .hit-points-meter {
+  display: block;
+  width: 100%;
+  max-width: 16rem;
+}
+
+/* Ability score card: one card per ability with a prominent modifier
+   and an explicit save-proficiency state. */
+.ability-score-card {
+  padding: 0.75rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  text-align: center;
+}
+
+.ability-score-card__name {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ability-score-card__modifier {
+  margin: 0.25rem 0 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.ability-score-card__score {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.ability-score-card__save {
+  margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8rem;
+}
+
+.ability-score-card__save-label {
+  color: var(--color-text-muted);
+}
+
+.ability-score-card__save-bonus {
+  font-weight: 600;
+}
+
+.ability-score-card__proficiency {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  color: var(--color-text-muted);
+}
+
+.ability-score-card__proficiency--proficient {
+  color: var(--color-text);
+  font-weight: 700;
+  background-color: var(--color-surface-muted);
+  border-radius: 0.25rem;
+}
+
+/* Spellcasting profile: a repeated subrecord inside the Spellcasting
+   panel, grouping its own spells by level. */
+.spellcasting-profile + .spellcasting-profile {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.spellcasting-profile__level-group {
+  margin-top: 1rem;
+}
+
+.spellcasting-profile__level-group h4 {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.spellcasting-profile__spell-state {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  background-color: var(--color-surface-muted);
+  border-radius: 0.25rem;
+}
+
+.character-skills-tables {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+/* Each table reads as its own bordered card so the split between
+   tables stays visible whether they sit side by side or wrap onto
+   their own lines. */
+.character-skills-tables__table {
+  flex: 0 0 min(100%, 38rem);
+  width: min(100%, 38rem);
+  max-width: 38rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-muted);
+}
+
+.character-skills-tables__table table {
+  min-width: 36rem;
+}
+
+/* Keep skill names (and other short values) on one line rather than
+   wrapping mid-word inside a narrow column. */
+.character-skills-tables__table th,
+.character-skills-tables__table td {
+  white-space: nowrap;
+}
+
+.character-skills-tables__table input[type="checkbox"] {
+  vertical-align: middle;
+}
+
+.character-skills-tables__expertise-mark {
+  margin-left: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  background-color: var(--color-surface);
+  border-radius: 0.25rem;
+}
+
+.character-sheet__disclosure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.character-disclosure-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface-muted);
+}
+
+.character-disclosure-card summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.character-disclosure-card summary::-webkit-details-marker { display: none; }
+.character-disclosure-card summary:hover { background: var(--color-surface-hover); }
+.character-disclosure-card summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.character-disclosure-card summary strong { flex-basis: 100%; }
+.character-disclosure-card summary span:not(.character-disclosure-card__indicator) {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.character-disclosure-card__indicator { margin-left: auto; }
+.character-disclosure-card__indicator::after { content: "Expand +"; font-size: 0.8rem; }
+.character-disclosure-card[open] .character-disclosure-card__indicator::after { content: "Collapse −"; }
+.character-disclosure-card__body {
+  padding: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+.character-disclosure-card__body p { margin: 0.75rem 0 0; }
+.character-disclosure-card__body p:first-child { margin-top: 0; }
+
+.stat-card--hit-points {
+  grid-column: span 2;
+  min-width: 0;
+}
+
+@media (max-width: 22rem) {
+  .stat-card--hit-points { grid-column: auto; }
+}
+
+/* Shared collection card grid (World, Knowledge, Quests). auto-fit with a
+   responsive minimum keeps the collection using the full page width while
+   individual cards stay bounded and readable — never a narrow fixed max
+   width on the overall content. */
+.card-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  list-style: none;
+}
+
+.world-card-grid,
+.knowledge-card-grid {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.quest-card-grid {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+}
+
+/* Shared collection card surface. A fully-linked card uses one Link
+   covering the whole surface; a non-interactive card (no supported detail
+   route yet) keeps the same visual treatment without the hover/focus
+   affordance. */
+.entity-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface);
+}
+
+.entity-card__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.entity-card__link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.entity-card__link:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: -3px;
+  border-radius: 0.5rem;
+}
+
+.entity-card--static {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--color-text-muted);
+}
+
+.entity-card__eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.entity-card__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.entity-card__summary {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.entity-card__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.entity-card__status {
+  margin: 0.25rem 0 0;
+  padding: 0.1rem 0.5rem;
+  align-self: flex-start;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text);
+  background-color: var(--color-surface-muted);
+  border-radius: 0.25rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .entity-card__link {
+    transition: background-color 0.15s ease-out;
+  }
+}
+
+/* World / Knowledge / Quest full-detail page headers: eyebrow + single h1,
+   consistent with the character-sheet header treatment. */
+.world-detail__eyebrow,
+.knowledge-detail__eyebrow,
+.quest-detail__eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.world-detail__summary {
+  margin: 0.25rem 0 1rem;
+  max-width: 60rem;
+  color: var(--color-text-muted);
+}
+
+.world-detail__panel-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  min-width: 0;
+}
+
+.world-detail__breadcrumbs {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.quest-detail__status {
+  margin: 0 0 1rem;
+  color: var(--color-text-muted);
+}
+
+.quest-detail__stage-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  min-width: 0;
+}
+
+.quest-detail__stage-description {
+  margin: 0 0 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.quest-detail__objective-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+/* Expandable objective card — same visual/accessibility precedent as the
+   character sheet's disclosure cards (native <details>/<summary>, explicit
+   expand/collapse indicator text, visible keyboard focus, no color-only
+   state). */
+.quest-objective-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-muted);
+}
+
+.quest-objective-card summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.quest-objective-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.quest-objective-card summary:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.quest-objective-card summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.quest-objective-card summary strong {
+  flex-basis: 100%;
+}
+
+.quest-objective-card summary span:not(.quest-objective-card__indicator) {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.quest-objective-card__indicator {
+  margin-left: auto;
+}
+
+.quest-objective-card__indicator::after {
+  content: "Expand +";
+  font-size: 0.8rem;
+}
+
+.quest-objective-card[open] .quest-objective-card__indicator::after {
+  content: "Collapse −";
+}
+
+.quest-objective-card__body {
+  padding: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+/* Compact card-compatible quest sort controls, replacing the previous
+   sortable table's column-header buttons. */
+.quests-page__sort-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-end;
+  margin: 1rem 0 0;
+}
+
+.quests-page__sort-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.quests-page__sort-field select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
 }

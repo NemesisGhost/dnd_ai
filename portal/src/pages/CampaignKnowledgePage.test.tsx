@@ -216,11 +216,9 @@ describe("CampaignKnowledgePage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", {
-                name: knowledgePageFixture.items[0]
-                    .statement,
-                level: 2,
-            }),
+            screen.getByText(
+                knowledgePageFixture.items[0].statement,
+            ),
         ).toBeInTheDocument()
     })
 
@@ -725,6 +723,107 @@ describe("CampaignKnowledgePage", () => {
                 name: "View",
             }),
         ).toHaveValue("known")
+    })
+
+    it("carries the selected character perspective into each Knowledge card's detail link", () => {
+        renderCampaignKnowledgePage()
+
+        expect(
+            screen.getByRole("link", {
+                name: knowledgePageFixture.items[0].statement,
+            }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-glass-ossuary?character_id=character-a",
+        )
+    })
+
+    it("updates each Knowledge card's link when the character perspective changes", () => {
+        useSessionMock.mockReturnValue({
+            state: buildSessionState({
+                "character-a": [partyPrimary],
+                "character-b": [partyCouncil],
+            }),
+            reload: vi.fn(),
+        })
+
+        const getSelectedCharacterId = vi.fn(
+            () => "character-a",
+        )
+
+        function renderWithPerspective() {
+            return render(
+                <CharacterPerspectiveContext.Provider
+                    value={{
+                        getSelectedCharacterId,
+                        selectCharacter: vi.fn(),
+                    }}
+                >
+                    <MemoryRouter
+                        initialEntries={[
+                            "/app/campaign-a/knowledge",
+                        ]}
+                    >
+                        <Routes>
+                            <Route
+                                path="/app/:campaignId/knowledge"
+                                element={
+                                    <CampaignKnowledgePage />
+                                }
+                            />
+                        </Routes>
+                    </MemoryRouter>
+                </CharacterPerspectiveContext.Provider>,
+            )
+        }
+
+        const { rerender } = renderWithPerspective()
+
+        expect(
+            screen.getByRole("link", {
+                name: knowledgePageFixture.items[0].statement,
+            }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-glass-ossuary?character_id=character-a",
+        )
+
+        getSelectedCharacterId.mockReturnValue(
+            "character-b",
+        )
+
+        rerender(
+            <CharacterPerspectiveContext.Provider
+                value={{
+                    getSelectedCharacterId,
+                    selectCharacter: vi.fn(),
+                }}
+            >
+                <MemoryRouter
+                    initialEntries={[
+                        "/app/campaign-a/knowledge",
+                    ]}
+                >
+                    <Routes>
+                        <Route
+                            path="/app/:campaignId/knowledge"
+                            element={
+                                <CampaignKnowledgePage />
+                            }
+                        />
+                    </Routes>
+                </MemoryRouter>
+            </CharacterPerspectiveContext.Provider>,
+        )
+
+        expect(
+            screen.getByRole("link", {
+                name: knowledgePageFixture.items[0].statement,
+            }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-glass-ossuary?character_id=character-b",
+        )
     })
 
     it("does not request Knowledge data without a campaign ID", () => {

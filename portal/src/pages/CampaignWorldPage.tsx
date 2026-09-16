@@ -74,6 +74,7 @@ function CampaignWorldContent({
             >
                 {(page, refreshing) => (
                     <WorldEntityList
+                        campaignId={campaignId}
                         page={page}
                         refreshing={refreshing}
                         onNextPage={() =>

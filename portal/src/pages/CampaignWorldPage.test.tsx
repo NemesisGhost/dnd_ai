@@ -119,10 +119,7 @@ describe("CampaignWorldPage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", {
-                name: "Glass Harbor",
-                level: 2,
-            }),
+            screen.getByText("Glass Harbor"),
         ).toBeInTheDocument()
     })
 
@@ -180,9 +177,7 @@ describe("CampaignWorldPage", () => {
         renderCampaignWorldPage()
 
         expect(
-            screen.getByRole("heading", {
-                name: "Glass Harbor",
-            }),
+            screen.getByText("Glass Harbor"),
         ).toBeInTheDocument()
 
         useWorldEntitiesMock.mockReturnValue({
@@ -217,9 +212,7 @@ describe("CampaignWorldPage", () => {
         )
 
         expect(
-            screen.getByRole("heading", {
-                name: "Glass Harbor",
-            }),
+            screen.getByText("Glass Harbor"),
         ).toBeInTheDocument()
 
         expect(
@@ -408,9 +401,7 @@ describe("CampaignWorldPage", () => {
         )
 
         expect(
-            screen.getByRole("heading", {
-                name: "Glass Harbor",
-            }),
+            screen.getByText("Glass Harbor"),
         ).toBeInTheDocument()
 
         act(() => {
@@ -440,9 +431,7 @@ describe("CampaignWorldPage", () => {
         ).toHaveFocus()
 
         expect(
-            screen.queryByRole("heading", {
-                name: "Glass Harbor",
-            }),
+            screen.queryByText("Glass Harbor"),
         ).not.toBeInTheDocument()
     })
 

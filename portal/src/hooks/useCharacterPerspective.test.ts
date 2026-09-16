@@ -288,4 +288,74 @@ describe("useCharacterPerspective", () => {
             ),
         ).toBeNull()
     })
+
+    describe("syncCharacterFromUrl", () => {
+        it("updates the visible selection for an authorized character without reloading", () => {
+            const session = makeSession()
+
+            const { result } = renderHook(
+                useCharacterPerspective,
+                { initialProps: session },
+            )
+
+            act(() => {
+                result.current.syncCharacterFromUrl(
+                    "campaign-a",
+                    "character-b",
+                )
+            })
+
+            expect(
+                result.current.getSelectedCharacterId("campaign-a"),
+            ).toBe("character-b")
+
+            expect(session.reload).not.toHaveBeenCalled()
+        })
+
+        it("ignores a character not in the campaign's authorized character_perspectives", () => {
+            const session = makeSession()
+
+            const { result } = renderHook(
+                useCharacterPerspective,
+                { initialProps: session },
+            )
+
+            act(() => {
+                result.current.syncCharacterFromUrl(
+                    "campaign-a",
+                    "character-unauthorized",
+                )
+            })
+
+            expect(
+                result.current.getSelectedCharacterId("campaign-a"),
+            ).toBeNull()
+
+            expect(session.reload).not.toHaveBeenCalled()
+        })
+
+        it("ignores an unavailable campaign", () => {
+            const session = makeSession()
+
+            const { result } = renderHook(
+                useCharacterPerspective,
+                { initialProps: session },
+            )
+
+            act(() => {
+                result.current.syncCharacterFromUrl(
+                    "campaign-unavailable",
+                    "character-b",
+                )
+            })
+
+            expect(session.reload).not.toHaveBeenCalled()
+
+            expect(
+                result.current.getSelectedCharacterId(
+                    "campaign-unavailable",
+                ),
+            ).toBeNull()
+        })
+    })
 })

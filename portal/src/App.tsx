@@ -13,7 +13,9 @@ import { CampaignQuestDetailPage } from "./pages/CampaignQuestDetailPage"
 import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
+import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
+import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 
 function App() {
   return (
@@ -74,6 +76,11 @@ function App() {
           />
 
           <Route
+            path="world/:category/:entityId"
+            element={<CampaignWorldDetailPage />}
+          />
+
+          <Route
             path="characters"
             element={<CampaignCharactersPage />}
           />
@@ -101,6 +108,11 @@ function App() {
           <Route
             path="knowledge"
             element={<CampaignKnowledgePage />}
+          />
+
+          <Route
+            path="knowledge/:knowledgeItemId"
+            element={<CampaignKnowledgeDetailPage />}
           />
 
           <Route

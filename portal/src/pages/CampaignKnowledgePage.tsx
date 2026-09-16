@@ -6,6 +6,12 @@ import {
     useParams,
 } from "react-router"
 import {
+    CardGrid,
+} from "../components/CardGrid"
+import {
+    KnowledgeCard,
+} from "../components/KnowledgeCard"
+import {
     KnowledgeItemsBoundary,
 } from "../components/KnowledgeItemsBoundary"
 import {
@@ -24,9 +30,7 @@ import type {
     AuthorizedParty,
 } from "../types/bootstrap"
 import type {
-    KnowledgeListItem,
     KnowledgePage as KnowledgeResultsPage,
-    KnowledgeScope,
     KnowledgeView,
 } from "../types/knowledge"
 import PlaceholderPage from "./PlaceholderPage"
@@ -37,28 +41,6 @@ import { KnowledgePage } from "./KnowledgePage"
 // delayed — KnowledgeItemsBoundary/useKnowledgeItems keep the previous
 // results visible (as "refreshing") while the new one is in flight.
 const SEARCH_DEBOUNCE_MS = 180
-
-const scopeLabels: Record<KnowledgeScope, string> = {
-    canonical: "Canonical",
-    party: "Party",
-    character: "Character",
-    public: "Public",
-}
-
-function formatCode(code: string): string {
-    return code
-        .split("_")
-        .filter((word) => word.length > 0)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" ")
-}
-
-function describeKnowledgeItem(item: KnowledgeListItem): string {
-    const typeLabel = formatCode(item.knowledge_type_code)
-    const scopeLabel = scopeLabels[item.scope]
-
-    return `${typeLabel} - ${scopeLabel}`
-}
 
 // The authorized-party list lives on the selected character's perspective
 // in the session bootstrap, not the knowledge API itself — a character can
@@ -88,12 +70,18 @@ function resolveAuthorizedParties(
 }
 
 interface KnowledgeItemListProps {
+    campaignId: string
+    characterId: string | null
+    partyId: string | null
     page: KnowledgeResultsPage
     refreshing: boolean
     onNextPage: () => void
 }
 
 function KnowledgeItemList({
+    campaignId,
+    characterId,
+    partyId,
     page,
     refreshing,
     onNextPage,
@@ -107,23 +95,20 @@ function KnowledgeItemList({
             {refreshing && <UpdatingIndicator />}
 
             {page.items.length > 0 ? (
-                <ul aria-label="Knowledge items">
+                <CardGrid
+                    ariaLabel="Knowledge items"
+                    className="knowledge-card-grid"
+                >
                     {page.items.map((item) => (
-                        <li key={item.knowledge_item_id}>
-                            <h2>{item.statement}</h2>
-                            {" "}
-                            <p>{describeKnowledgeItem(item)}</p>
-                            <p>
-                                {item.awareness_level !== null
-                                    ? `Awareness: ${formatCode(item.awareness_level)}`
-                                    : "Awareness not recorded"}
-                            </p>
-                            {item.confidence !== null && (
-                                <p>Confidence: {item.confidence}%</p>
-                            )}
-                        </li>
+                        <KnowledgeCard
+                            key={item.knowledge_item_id}
+                            campaignId={campaignId}
+                            item={item}
+                            characterId={characterId}
+                            partyId={partyId}
+                        />
                     ))}
-                </ul>
+                </CardGrid>
             ) : (
                 <p>No knowledge matches the current search.</p>
             )}
@@ -238,6 +223,9 @@ function CampaignKnowledgeContent({
             >
                 {(page, refreshing) => (
                     <KnowledgeItemList
+                        campaignId={campaignId}
+                        characterId={characterId}
+                        partyId={partyId}
                         page={page}
                         refreshing={refreshing}
                         onNextPage={() =>

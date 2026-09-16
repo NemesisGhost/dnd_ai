@@ -1,79 +1,84 @@
-import { Link } from "react-router"
-import { SortableTable } from "../components/SortableTable"
-import type { SortableTableColumn } from "../components/SortableTable"
+import { useId, useState } from "react"
+import { CardGrid } from "../components/CardGrid"
+import { QuestCard } from "../components/QuestCard"
 import type { CampaignQuestListItem } from "../types/quest"
-import {
-    applyDirection,
-} from "../utils/sorting"
+import { sortQuests } from "../utils/questSorting"
+import type { QuestSortColumn } from "../utils/questSorting"
 import type { SortDirection } from "../utils/sorting"
 
 interface QuestsPageProps {
+    campaignId: string
     quests: CampaignQuestListItem[]
 }
 
-function compareStatuses(
-    a: CampaignQuestListItem,
-    b: CampaignQuestListItem,
-    direction: SortDirection,
-): number {
-    if (
-        a.status_code === null &&
-        b.status_code === null
-    ) {
-        return 0
-    }
-
-    if (a.status_code === null) {
-        return 1
-    }
-
-    if (b.status_code === null) {
-        return -1
-    }
-
-    return applyDirection(
-        direction,
-        a.status_code.localeCompare(
-            b.status_code,
-        ),
-    )
-}
-
-const columns: SortableTableColumn<CampaignQuestListItem>[] = [
-    {
-        key: "quest_name",
-        label: "Name",
-        compare: (a, b, direction) =>
-            applyDirection(
-                direction,
-                (a.name).localeCompare(b.name)
-            ),
-        render: (quest) => (
-            <Link to={encodeURIComponent(quest.quest_id)}>{quest.name}</Link>
-        ),
-    },
-    {
-        key: "quest_status",
-        label: "Status",
-        compare: compareStatuses,
-        render: (quest) => quest.status_code ?? "No status recorded",
-    }
-]
-
 export function QuestsPage({
-    quests
+    campaignId,
+    quests,
 }: QuestsPageProps) {
+    const [sortColumn, setSortColumn] = useState<QuestSortColumn>("name")
+    const [direction, setDirection] = useState<SortDirection>("asc")
+
+    const sortColumnId = useId()
+    const directionId = useId()
+
+    const sortedQuests = sortQuests(quests, sortColumn, direction)
+
     return (
         <section aria-labelledby="quests-heading">
             <h1 id="quests-heading">Quests</h1>
+
             {quests.length > 0 ? (
-                <SortableTable
-                    caption="Quests"
-                    columns={columns}
-                    rows={quests}
-                    getRowKey={(quest) => quest.quest_id}
-                    initialSort={{ column: "quest_name", direction: "asc" }}
-                />
+                <>
+                    <div
+                        className="quests-page__sort-controls"
+                        role="group"
+                        aria-label="Sort quests"
+                    >
+                        <div className="quests-page__sort-field">
+                            <label htmlFor={sortColumnId}>Sort by</label>
+                            <select
+                                id={sortColumnId}
+                                value={sortColumn}
+                                onChange={(event) =>
+                                    setSortColumn(
+                                        event.currentTarget
+                                            .value as QuestSortColumn,
+                                    )
+                                }
+                            >
+                                <option value="name">Name</option>
+                                <option value="status">Status</option>
+                            </select>
+                        </div>
+
+                        <div className="quests-page__sort-field">
+                            <label htmlFor={directionId}>Direction</label>
+                            <select
+                                id={directionId}
+                                value={direction}
+                                onChange={(event) =>
+                                    setDirection(
+                                        event.currentTarget
+                                            .value as SortDirection,
+                                    )
+                                }
+                            >
+                                <option value="asc">Ascending</option>
+                                <option value="desc">Descending</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <CardGrid ariaLabel="Quests" className="quest-card-grid">
+                        {sortedQuests.map((quest) => (
+                            <QuestCard
+                                key={quest.quest_id}
+                                campaignId={campaignId}
+                                quest={quest}
+                            />
+                        ))}
+                    </CardGrid>
+                </>
             ) : (
                 <p>No quests are available for this campaign and perspective.</p>
             )}
