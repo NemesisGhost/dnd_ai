@@ -4,6 +4,8 @@
 
 This document defines the first-class web experience for the persistent tabletop roleplaying world platform. The portal is the primary out-of-session interface for players, GMs, assistant GMs, and observers. FoundryVTT remains the primary in-session tactical client. Discord is deferred until demonstrated demand justifies a later thin-client integration.
 
+This document is the product-level authority for portal behavior, information architecture, authorization boundaries, and screen responsibilities. [`UI_STYLE_GUIDE.md`](UI_STYLE_GUIDE.md) defines the shared visual language, card and detail-page anatomy, responsive presentation, theme-token usage, and component-level presentation standards used to implement this design.
+
 The portal must let an authorized user:
 
 - understand the current campaign quickly;
@@ -25,7 +27,8 @@ The defining authorization rule is:
 4. **Truth and awareness remain distinct.** Canonical truth, belief, rumor, knowledge possession, user visibility, and administrative permission are separately represented.
 5. **Roles are not ownership.** Player, GM, and observer roles establish defaults; semantic character relationships and resource grants determine detailed access.
 6. **Every important answer is traceable.** Summaries and answers identify perspective, effective time, source records, and rules citations when applicable.
-7. **The MVP is useful, not encyclopedic.** Begin with lists, cards, detail pages, links, and focused GM tools. Interactive maps, graph explorers, and a generalized CMS are later enhancements.
+7. **The MVP is useful, not encyclopedic.** Begin with concise collection cards, route-based detail pages, links, and focused GM tools. Interactive maps, graph explorers, and a generalized CMS are later enhancements.
+8. **Progressive detail is addressable.** Collection cards summarize authorized records; opening a card navigates to a refreshable, bookmarkable detail route that performs its own current authorization check. A visual “expansion” never depends solely on cached list data.
 
 ## 3. Users and roles
 
@@ -79,14 +82,18 @@ The shared header contains:
 
 Changing perspective refreshes the page from the server. It is not a client-only filter over previously downloaded data.
 
-### 4.1 Reusable presentation primitives
+### 4.1 Reusable presentation system
 
-Two distinct, reusable `portal/src/components` primitives support the screens below rather than each screen inventing its own layout:
+A small set of reusable `portal/src/components` primitives supports the screens below rather than each screen inventing its own layout. The exact component names may evolve, but their responsibilities remain separate:
 
 - **`CampaignContextPanel`** answers "what campaign context and viewing perspective am I using?" It is one compact, infobox-styled panel divided into four stacked sections — **World, Campaign, Timeline, Character**, in that order — each showing the current selection plus a few compact read-only detail rows for it. The hierarchy is causal: changing a higher selection repopulates the lower options and clears the lower selection. **World** is a read-only value and **Timeline** a disabled control until the backend exposes authorized worlds/timelines and their selection APIs; **Campaign** is a live selector over the authorized campaigns from session bootstrap, and switching it preserves the current top-level section (discarding any detail id) and clears the character for the target campaign; **Character** reuses the established character-perspective context/selector and shows compact live character facts. The panel is presentation-oriented — the surrounding layout (`CampaignLayout`) owns the routing and perspective wiring. It collapses behind a native disclosure control on narrow screens and is meant for a right-hand column or the shared shell.
 - **`InfoBox`** answers "what are the important facts about the entity on this page?" It is a generic, Wiki-style label/value panel (title, optional subtitle/image/status, label/value sections, related links) with no built-in knowledge of any entity type; per-entity wrappers (e.g. `CampaignInfoBox`) translate an authorized domain record into the generic model and are responsible for authorization-safe field selection.
+- **Collection-card primitives** answer "which authorized record should I open?" A responsive card grid presents concise, domain-mapped cards for world entities, knowledge, quests, campaigns, and other browsable collections. Cards use real links, expose only fields present in the audience-safe list contract, and do not fetch or imply inaccessible detail records.
+- **Detail-panel primitives** answer "how is this authorized record organized?" A full-page detail layout composes stat cards, semantic fact groups, compact lists or tables, and bounded panels under one page heading. Domain-specific wrappers decide which authorized fields belong in each panel; a generic primitive never reflects over an arbitrary API object.
 
-The two concepts stay distinct: context describes the viewer's current vantage point, while an infobox describes the subject of the page. `InfoBox` remains the generic primitive for page subjects; `CampaignContextPanel` composes its own compact per-section detail rather than embedding `InfoBox` instances. Neither infers access, filters hidden records, or exposes internal identifiers or authorization metadata — that remains the server's responsibility.
+These concepts stay distinct: context describes the viewer's current vantage point; an infobox describes compact facts about a subject; a collection card supports discovery and navigation; and a detail surface organizes the complete authorized view. `InfoBox` remains available for compact subject summaries and the context panel retains its specialized structure. None infers access, filters hidden records, reflects over arbitrary fields, or exposes internal identifiers or authorization metadata — that remains the server's responsibility.
+
+Activating a navigable card changes route and loads the detail contract for that campaign and perspective. The detail page may visually continue the selected card's category, title, status, and surface treatment so that it feels expanded, but correctness, deep linking, refresh, browser Back/Forward behavior, and authorization do not depend on animation.
 
 ## 5. Core screens
 
@@ -147,14 +154,16 @@ Browse authorized:
 
 MVP presentation:
 
-- type-filtered lists;
+- type-filtered card collections;
 - text search over authorized records;
-- compact result cards;
-- detail pages;
+- concise result cards showing only audience-safe list fields;
+- campaign-scoped, route-based detail pages when an authoritative detail contract exists;
 - related-resource links;
 - breadcrumbs for location containment.
 
-Detail pages display only sections the user may access. They distinguish established canon, knowledge in the current perspective, rumor/belief, uncertainty, and source provenance without indicating that additional hidden sections exist.
+World cards identify the entity's human-readable category/type, name, and authorized short summary. They do not infer containment, relationships, population, organization membership, visibility, or other details from identifiers or category codes. Converting a list to cards may proceed before detail support exists; a card becomes a detail link only after the server exposes a directly loadable, audience-safe detail contract for that category.
+
+Detail pages display only sections the user may access. They use bounded panels for the authorized overview, current state, containment, relationships, known history, related resources, and provenance supplied by the detail response. Irrelevant or unavailable panels are omitted without suggesting that hidden sections exist. The page distinguishes established canon, knowledge in the current perspective, rumor/belief, uncertainty, and source provenance only where the current contract deliberately exposes those distinctions.
 
 ### 5.5 Character workspace
 
@@ -189,6 +198,17 @@ Capabilities are independent:
 
 The screen labels why access exists, such as “Primary controller,” “Co-controller,” or “Viewer through Party A.”
 
+The character Sheet view uses a responsive tabletop-inspired information hierarchy rather than one long sequence of tables:
+
+- identity, build, ruleset, class, and level facts form the page header;
+- hit points, proficiency bonus, movement, and spellcasting values use compact stat cards when present;
+- every ability has its own card containing the score, prominent modifier, saving-throw modifier, and an explicit save-proficiency state;
+- skills, other proficiencies, languages, senses, conditions, resources, features, and spellcasting profiles use separately headed panels;
+- spells are grouped by level, preserve their contract-provided identity, and display known/prepared state without relying on color;
+- sparse but valid characters retain character-level facts and deliberate empty states rather than losing the entire sheet.
+
+The portal does not invent familiar sheet values such as armor class, initiative, hit dice, attacks, equipment, background, alignment, or personality traits until authoritative audience-safe contracts provide them.
+
 ### 5.6 Knowledge
 
 Views:
@@ -213,7 +233,15 @@ Each item shows, when permitted:
 
 The UI never labels a player-facing claim “false” merely because the GM's canonical record says so. GM mode can compare canonical truth with character beliefs. Player mode shows only the belief state available to the selected perspective.
 
-### 5.7 Quest detail
+Knowledge collections use cards. A card may show the authorized statement, type, scope, awareness, confidence, willingness-to-share state, and truth status only when those fields are meaningful and deliberately included for the current audience. Null values are omitted or neutrally described; they are never translated into a suggestion that hidden information exists.
+
+Opening a knowledge card as a full detail surface requires an explicit detail route and an authoritative detail contract, or a documented API guarantee that the list item is the complete directly retrievable detail representation. The portal does not construct a refresh-dependent detail page from a collection page's in-memory record. Future detail panels may include discovery context, subject, sources, related records, and GM truth comparison only when separately authorized.
+
+### 5.7 Quests and quest detail
+
+The quest collection uses concise cards. The current list contract supplies a quest name and status, so list cards do not invent descriptions, objective counts, rewards, participants, or locations from data absent from that contract. Each card links to the established campaign-scoped quest detail route.
+
+The full quest detail surface visually continues the selected card and organizes the authorized contract into separately headed stage and objective regions. It preserves server-provided stage sequence and objective order; it does not alphabetize narrative progression.
 
 Player/observer sections:
 
@@ -232,6 +260,8 @@ GM-only sections, when authorized:
 - possible outcomes and rewards;
 - event mappings;
 - visibility preview.
+
+With the current read-only contract, the implemented detail surface may include only the quest title/status, stages, descriptions, and objectives with their requirement level, completion mode, quantity, and status. The richer sections above remain product goals and appear only after matching audience-safe backend fields exist. Hidden stages, objectives, sequence gaps, and aggregate counts are not exposed.
 
 ### 5.8 Session detail
 
@@ -439,6 +469,11 @@ Explanations are themselves filtered; they must not reveal a hidden intermediary
 - Autocomplete never receives forbidden names or identifiers.
 - Counts describe only accessible records.
 - Pagination totals exclude inaccessible records.
+- Browsable collections default to responsive cards whose fields come only from the audience-safe list contract.
+- A card uses a real link when a detail route exists; navigation is not simulated with a clickable `div`.
+- Activating a card loads a campaign-scoped detail contract and performs a current authorization check; list data and client state are not proof of detail access.
+- Hovering or focusing a card does not preload sensitive detail content unless a later reviewed design provides an equally strong authorization and cache-invalidation guarantee.
+- Cards remain concise previews rather than miniature detail pages. Long descriptions, nested collections, and multi-section data belong on the routed detail surface.
 - Relationship graphs omit hidden nodes and edges without leaving unexplained placeholders.
 - Direct routes to inaccessible resources return the same non-disclosing result as nonexistent resources, except in authorized administrative diagnostics.
 - Export and print actions repeat server authorization at request time.
@@ -461,16 +496,32 @@ Every major screen defines:
 
 Optimistic updates are limited to low-risk presentation changes. Canonical mutations show pending, accepted, rejected, or failed command status and remain idempotent when retried.
 
+Collection and detail transitions additionally obey these rules:
+
+- navigating to a different record never leaves the previous record's details visible beneath a new URL;
+- loading preserves the application shell and current context without exposing stale subject content;
+- empty states describe only the absence of accessible results;
+- missing and inaccessible detail records share one non-disclosing unavailable presentation;
+- recoverable errors display safe wording and a retry action without exposing internal diagnostics;
+- browser Back returns to the collection, preserving URL-backed filters and search state where practical;
+- a refreshed detail URL loads independently of the collection page that linked to it.
+
 ## 11. Responsive and accessible behavior
 
 - Support desktop, tablet, and phone layouts.
 - Collapse primary navigation into a labeled menu on small screens.
 - Keep perspective indicators visible near the page title even when the main navigation collapses.
+- Reflow card collections and detail panels from multiple columns to one without page-level horizontal scrolling.
+- Allow only inherently wide tables to scroll inside a bounded local container.
+- Preserve meaningful source order when a multi-column detail layout becomes a single column.
 - Use semantic headings, landmarks, tables, forms, and buttons.
+- Use semantic lists for card collections and native links for card navigation.
 - Support keyboard navigation and visible focus.
 - Do not encode canon/rumor/secret/status distinctions by color alone.
+- Do not encode proficiency, known/prepared state, confidence, or selection by color alone.
 - Announce async answer completion, access errors, and validation errors to assistive technology.
 - Preserve readable source citations and audit tables with responsive wrapping or bounded horizontal scrolling where necessary.
+- Respect reduced-motion preferences; optional card-to-detail visual transitions are enhancements, never navigation dependencies.
 
 ## 12. Security and privacy requirements
 
@@ -530,10 +581,15 @@ Defer until demonstrated need:
 - A user can access multiple characters, and a character can be associated with multiple users.
 - A fact can be visible to multiple users through different authorized paths.
 - Player, GM, and observer dashboards differ correctly.
+- World, Knowledge, Quest, and similar collection screens use concise, responsive, keyboard-accessible cards where applicable.
+- Navigable cards use refreshable detail routes, preserve browser navigation behavior, and perform fresh authorization rather than expanding cached list data alone.
+- Character sheets use responsive ability/stat cards and separately headed information panels while retaining valid sparse-data states.
+- Quest detail preserves server-provided stage/objective order and does not disclose hidden stages, objectives, counts, or sequence gaps.
+- World and Knowledge full-detail navigation is enabled only when corresponding audience-safe detail contracts are available.
 - Search, counts, links, errors, relationships, and Ask responses do not reveal inaccessible resources.
 - Revoking a role, character relationship, group membership, or grant removes access on the next request and invalidates affected cached summaries.
 - A player can request recaps, quest status, world details, character knowledge, and cited rules answers.
 - A GM can request a preparation brief and preview the portal as a selected user/character perspective.
 - A GM can manage memberships, roles, user-character relationships, and resource grants with an audit trail.
 - Authorized import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
-- All critical flows are keyboard-accessible and usable on desktop and mobile layouts.
+- All critical flows are keyboard-accessible, theme-compatible, and usable at phone, tablet, and desktop widths.
