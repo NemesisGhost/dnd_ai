@@ -72,15 +72,9 @@ interface SpellLevelGroup {
 function groupSpellsByLevel(
     spells: CharacterSheetSpell[],
 ): SpellLevelGroup[] {
-    const sorted = [...spells].sort(
-        (a, b) =>
-            a.level - b.level ||
-            a.display_name.localeCompare(b.display_name),
-    )
-
     const groups = new Map<number, CharacterSheetSpell[]>()
 
-    for (const spell of sorted) {
+    for (const spell of spells) {
         const existing = groups.get(spell.level)
         if (existing !== undefined) {
             existing.push(spell)

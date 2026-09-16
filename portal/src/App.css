@@ -1008,19 +1008,27 @@
 }
 
 /* Shared detail-panel grid: most panels reflow to a compact column,
-   while wide panels (tables, spellcasting) span every column. */
+   while wide panels (tables, spellcasting) span every column.
+   min-width: 0 overrides the default content-based automatic minimum
+   size on the grid item/track so a panel can shrink below the
+   intrinsic width of a wide table it contains; the table then scrolls
+   inside its own .character-sheet__table-scroll wrapper instead of
+   forcing the grid (and the page) wider. */
 .character-sheet__panel-grid {
   display: grid;
   grid-template-columns:
     repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
   gap: 1rem;
+  min-width: 0;
 }
 
 .character-sheet__panel-grid .detail-panel--wide {
   grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .character-sheet__table-scroll {
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
 }

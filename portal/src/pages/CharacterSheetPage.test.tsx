@@ -5,7 +5,10 @@ import {
     sparseCharacterSheetFixture,
 } from "../fixtures/characterSheet"
 import type { CharacterDetail } from "../types/character"
-import type { CharacterSheet } from "../types/characterSheet"
+import type {
+    CharacterSheet,
+    CharacterSheetSpell,
+} from "../types/characterSheet"
 import { CharacterSheetPage } from "./CharacterSheetPage"
 
 const richCharacter: CharacterDetail = {
@@ -302,6 +305,60 @@ describe("CharacterSheetPage", () => {
 
         expect(screen.getByText("Vicious Mockery")).toBeInTheDocument()
         expect(screen.getByText("Detect Magic")).toBeInTheDocument()
+    })
+
+    it("preserves the backend's same-level spell order instead of alphabetizing by display name", () => {
+        const zephyrStrike: CharacterSheetSpell = {
+            ...characterSheetFixture.spellcasting_profiles[0].spells[1],
+            spell_id: "spell-zephyr-strike",
+            code: "zephyr_strike",
+            display_name: "Zephyr Strike",
+            level: 1,
+        }
+
+        const arcaneLock: CharacterSheetSpell = {
+            ...characterSheetFixture.spellcasting_profiles[0].spells[1],
+            spell_id: "spell-arcane-lock",
+            code: "arcane_lock",
+            display_name: "Arcane Lock",
+            level: 1,
+        }
+
+        const sheetWithOrderedSpells: CharacterSheet = {
+            ...characterSheetFixture,
+            spellcasting_profiles: [
+                {
+                    ...characterSheetFixture.spellcasting_profiles[0],
+                    // Server/code order is Zephyr Strike then Arcane
+                    // Lock -- the reverse of alphabetical display-name
+                    // order -- so a naive re-sort by name would be
+                    // detectable here.
+                    spells: [zephyrStrike, arcaneLock],
+                },
+            ],
+        }
+
+        renderPage(sheetWithOrderedSpells)
+
+        const levelOneHeading = screen.getByRole("heading", {
+            level: 4,
+            name: "Level 1",
+        })
+
+        const levelOneGroup = levelOneHeading.closest(
+            ".spellcasting-profile__level-group",
+        ) as HTMLElement
+
+        const spellNames = within(levelOneGroup)
+            .getAllByRole("listitem")
+            .map(
+                (item) =>
+                    item.querySelector(
+                        ".character-sheet__fact-list-primary",
+                    )?.textContent,
+            )
+
+        expect(spellNames).toEqual(["Zephyr Strike", "Arcane Lock"])
     })
 
     it("shows known/prepared state explicitly for each spell", () => {
