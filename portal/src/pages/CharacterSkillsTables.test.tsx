@@ -22,7 +22,7 @@ describe("CharacterSkillsTables", () => {
         expect(within(table).getAllByRole("row")).toHaveLength(8)
     })
 
-    it.each([[500, 1], [920, 2], [1400, 3]])(
+    it.each([[500, 1], [1100, 2], [1700, 3]])(
         "uses container width %i for %i tables", (width, count) => {
             let callback: ResizeObserverCallback = () => {}
             const disconnect = vi.fn()
@@ -45,4 +45,28 @@ describe("CharacterSkillsTables", () => {
             expect(disconnect).toHaveBeenCalledOnce()
         },
     )
+
+    it("shows a checked, disabled checkbox labeled Proficient for a proficient skill", () => {
+        render(<CharacterSkillsTables skills={[characterSheetFixture.skills[0]]} />)
+        const checkbox = screen.getByRole("checkbox", { name: "Proficient" })
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeDisabled()
+        expect(screen.queryByText("×2")).not.toBeInTheDocument()
+    })
+
+    it("shows a checked checkbox labeled Expertise with a ×2 mark for an expertise skill", () => {
+        const skill = { ...characterSheetFixture.skills[0], is_proficient: true, is_expertise: true }
+        render(<CharacterSkillsTables skills={[skill]} />)
+        const checkbox = screen.getByRole("checkbox", { name: "Expertise" })
+        expect(checkbox).toBeChecked()
+        expect(screen.getByText("×2")).toBeInTheDocument()
+    })
+
+    it("shows an unchecked checkbox labeled Not proficient without a ×2 mark", () => {
+        const skill = { ...characterSheetFixture.skills[0], is_proficient: false, is_expertise: false }
+        render(<CharacterSkillsTables skills={[skill]} />)
+        const checkbox = screen.getByRole("checkbox", { name: "Not proficient" })
+        expect(checkbox).not.toBeChecked()
+        expect(screen.queryByText("×2")).not.toBeInTheDocument()
+    })
 })

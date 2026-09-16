@@ -222,14 +222,16 @@ describe("CharacterSheetPage", () => {
             .getByText("History")
             .closest("tr") as HTMLElement
 
-        const cells = within(historyRow).getAllByRole("cell")
-        expect(cells.map((cell) => cell.textContent)).toEqual([
-            "History",
-            "INT",
-            "Expertise",
-            "+7",
-            "17",
-        ])
+        expect(within(historyRow).getByText("INT")).toBeInTheDocument()
+        expect(within(historyRow).getByText("+7")).toBeInTheDocument()
+        expect(within(historyRow).getByText("17")).toBeInTheDocument()
+
+        const checkbox = within(historyRow).getByRole("checkbox", {
+            name: "Expertise",
+        })
+        expect(checkbox).toBeChecked()
+        expect(checkbox).toBeDisabled()
+        expect(within(historyRow).getByText("×2")).toBeInTheDocument()
     })
 
     it("shows separate panels for other proficiencies, languages, senses, conditions, and resources", () => {

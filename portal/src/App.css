@@ -1027,6 +1027,38 @@
   min-width: 0;
 }
 
+/* Mixed section: Features & Traits share one full-width row with the
+   remaining small panels, reflowing from two columns to one. */
+.character-sheet__panel-grid .character-sheet__mixed-section {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.character-sheet__mixed-section {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.character-sheet__stacked-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.character-sheet__feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
 .character-sheet__table-scroll {
   min-width: 0;
   max-width: 100%;
@@ -1275,18 +1307,45 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-start;
-  gap: 1rem;
+  gap: 1.25rem;
   min-width: 0;
 }
 
+/* Each table reads as its own bordered card so the split between
+   tables stays visible whether they sit side by side or wrap onto
+   their own lines. */
 .character-skills-tables__table {
-  flex: 0 0 min(100%, 28rem);
-  width: min(100%, 28rem);
-  max-width: 28rem;
+  flex: 0 0 min(100%, 32rem);
+  width: min(100%, 32rem);
+  max-width: 32rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-muted);
 }
 
 .character-skills-tables__table table {
-  min-width: 28rem;
+  min-width: 32rem;
+}
+
+/* Keep skill names (and other short values) on one line rather than
+   wrapping mid-word inside a narrow column. */
+.character-skills-tables__table th,
+.character-skills-tables__table td {
+  white-space: nowrap;
+}
+
+.character-skills-tables__table input[type="checkbox"] {
+  vertical-align: middle;
+}
+
+.character-skills-tables__expertise-mark {
+  margin-left: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  background-color: var(--color-surface);
+  border-radius: 0.25rem;
 }
 
 .character-sheet__disclosure-grid {

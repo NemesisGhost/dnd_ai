@@ -3,7 +3,7 @@ import type { CharacterSheetSkill } from "../types/characterSheet"
 import formatSignedNumber from "../utils/signedNumbers"
 import { distributeSkills } from "./characterSheetPresentation"
 
-const MIN_TABLE_WIDTH = 28 * 16
+const MIN_TABLE_WIDTH = 32 * 16
 const GAP = 16
 const ABILITIES: Record<string, string> = {
     strength: "STR", dexterity: "DEX", constitution: "CON",
@@ -12,6 +12,12 @@ const ABILITIES: Record<string, string> = {
 
 function tableCount(width: number): number {
     return Math.max(1, Math.min(3, Math.floor((width + GAP) / (MIN_TABLE_WIDTH + GAP))))
+}
+
+function describeProficiency(skill: CharacterSheetSkill): string {
+    if (skill.is_expertise) return "Expertise"
+    if (skill.is_proficient) return "Proficient"
+    return "Not proficient"
 }
 
 export function CharacterSkillsTables({ skills }: { skills: CharacterSheetSkill[] }) {
@@ -44,7 +50,19 @@ export function CharacterSkillsTables({ skills }: { skills: CharacterSheetSkill[
                             <tr key={skill.skill_id}>
                                 <td>{skill.display_name}</td>
                                 <td>{ABILITIES[skill.governing_ability_code] ?? skill.governing_ability_code.slice(0, 3).toUpperCase()}</td>
-                                <td>{skill.is_expertise ? "Expertise" : skill.is_proficient ? "Proficient" : "Not proficient"}</td>
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        checked={skill.is_proficient || skill.is_expertise}
+                                        disabled
+                                        aria-label={describeProficiency(skill)}
+                                    />
+                                    {skill.is_expertise && (
+                                        <span className="character-skills-tables__expertise-mark" aria-hidden="true">
+                                            ×2
+                                        </span>
+                                    )}
+                                </td>
                                 <td>{formatSignedNumber(skill.bonus)}</td>
                                 <td>{skill.passive_score ?? "Not recorded"}</td>
                             </tr>
