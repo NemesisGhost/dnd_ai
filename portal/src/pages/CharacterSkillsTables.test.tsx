@@ -22,7 +22,7 @@ describe("CharacterSkillsTables", () => {
         expect(within(table).getAllByRole("row")).toHaveLength(8)
     })
 
-    it.each([[500, 1], [1100, 2], [1700, 3]])(
+    it.each([[500, 1], [1200, 2], [1800, 3]])(
         "uses container width %i for %i tables", (width, count) => {
             let callback: ResizeObserverCallback = () => {}
             const disconnect = vi.fn()

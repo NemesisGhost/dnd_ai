@@ -3,7 +3,7 @@ import type { CharacterSheetSkill } from "../types/characterSheet"
 import formatSignedNumber from "../utils/signedNumbers"
 import { distributeSkills } from "./characterSheetPresentation"
 
-const MIN_TABLE_WIDTH = 32 * 16
+const MIN_TABLE_WIDTH = 36 * 16
 const GAP = 16
 const ABILITIES: Record<string, string> = {
     strength: "STR", dexterity: "DEX", constitution: "CON",

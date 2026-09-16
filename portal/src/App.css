@@ -1315,9 +1315,9 @@
    tables stays visible whether they sit side by side or wrap onto
    their own lines. */
 .character-skills-tables__table {
-  flex: 0 0 min(100%, 32rem);
-  width: min(100%, 32rem);
-  max-width: 32rem;
+  flex: 0 0 min(100%, 36rem);
+  width: min(100%, 36rem);
+  max-width: 36rem;
   padding: 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
@@ -1325,7 +1325,7 @@
 }
 
 .character-skills-tables__table table {
-  min-width: 32rem;
+  min-width: 36rem;
 }
 
 /* Keep skill names (and other short values) on one line rather than
