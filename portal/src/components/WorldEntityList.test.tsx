@@ -12,6 +12,7 @@ import {
     it,
     vi,
 } from "vitest"
+import { MemoryRouter } from "react-router"
 import type { WorldEntityPage } from "../types/world"
 import { WorldEntityList } from "./WorldEntityList"
 
@@ -31,71 +32,84 @@ const page: WorldEntityPage = {
             name: "The Sundering",
             summary: null,
         },
+        {
+            entity_id: "org-1",
+            category: "organization",
+            entity_type_code: "business",
+            name: "The Cartographers' Guild",
+            summary: null,
+        },
     ],
     next_cursor: "next-page-cursor",
 }
 
-describe("WorldEntityList", () => {
-    it("renders each entity's name, readable category/type, and summary", () => {
-        render(
+function renderList(props: Partial<React.ComponentProps<typeof WorldEntityList>> = {}) {
+    return render(
+        <MemoryRouter>
             <WorldEntityList
+                campaignId="campaign-a"
                 page={page}
                 onNextPage={vi.fn()}
-            />,
-        )
+                {...props}
+            />
+        </MemoryRouter>,
+    )
+}
 
-        expect(
-            screen.getByRole("heading", {
-                name: "Glass Harbor",
-                level: 2,
-            }),
-        ).toBeInTheDocument()
+describe("WorldEntityList", () => {
+    it("renders each entity's name, readable category/type, and summary as a card", () => {
+        renderList()
 
-        expect(
-            screen.getByText("Location - City"),
-        ).toBeInTheDocument()
-
+        expect(screen.getByText("Glass Harbor")).toBeInTheDocument()
+        expect(screen.getByText("Location - City")).toBeInTheDocument()
         expect(
             screen.getByText(
                 "A harbor built around ancient glass towers.",
             ),
         ).toBeInTheDocument()
 
+        expect(screen.getByText("The Sundering")).toBeInTheDocument()
+        expect(screen.getByText("Event - Historical Event")).toBeInTheDocument()
+
+        expect(screen.queryByText("location-1")).not.toBeInTheDocument()
+        expect(screen.queryByText("event-1")).not.toBeInTheDocument()
+    })
+
+    it("links supported categories to a campaign-scoped World detail route", () => {
+        renderList()
+
         expect(
-            screen.getByRole("heading", {
-                name: "The Sundering",
-                level: 2,
+            screen.getByRole("link", { name: /Glass Harbor/ }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/world/location/location-1",
+        )
+
+        expect(
+            screen.getByRole("link", { name: /The Sundering/ }),
+        ).toHaveAttribute("href", "/app/campaign-a/world/event/event-1")
+    })
+
+    it("renders an unsupported category (organization) as a non-interactive card", () => {
+        renderList()
+
+        expect(
+            screen.queryByRole("link", {
+                name: /The Cartographers' Guild/,
             }),
-        ).toBeInTheDocument()
-
-        expect(
-            screen.getByText(
-                "Event - Historical Event",
-            ),
-        ).toBeInTheDocument()
-
-        expect(
-            screen.getByText("No summary recorded."),
-        ).toBeInTheDocument()
-
-        expect(
-            screen.queryByText("location-1"),
         ).not.toBeInTheDocument()
         expect(
-            screen.queryByText("event-1"),
-        ).not.toBeInTheDocument()
+            screen.getByText("The Cartographers' Guild"),
+        ).toBeInTheDocument()
     })
 
     it("renders an empty state without disclosing entities", () => {
-        render(
-            <WorldEntityList
-                page={{
-                    items: [],
-                    next_cursor: null,
-                }}
-                onNextPage={vi.fn()}
-            />,
-        )
+        renderList({
+            page: {
+                items: [],
+                next_cursor: null,
+            },
+        })
 
         expect(
             screen.getByText(
@@ -103,9 +117,7 @@ describe("WorldEntityList", () => {
             ),
         ).toBeInTheDocument()
 
-        expect(
-            screen.queryByRole("list"),
-        ).not.toBeInTheDocument()
+        expect(screen.queryByRole("list")).not.toBeInTheDocument()
 
         expect(
             screen.queryByRole("button", {
@@ -118,10 +130,13 @@ describe("WorldEntityList", () => {
         const onNextPage = vi.fn()
 
         const { rerender } = render(
-            <WorldEntityList
-                page={page}
-                onNextPage={onNextPage}
-            />,
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={page}
+                    onNextPage={onNextPage}
+                />
+            </MemoryRouter>,
         )
 
         fireEvent.click(
@@ -133,13 +148,16 @@ describe("WorldEntityList", () => {
         expect(onNextPage).toHaveBeenCalledTimes(1)
 
         rerender(
-            <WorldEntityList
-                page={{
-                    ...page,
-                    next_cursor: null,
-                }}
-                onNextPage={onNextPage}
-            />,
+            <MemoryRouter>
+                <WorldEntityList
+                    campaignId="campaign-a"
+                    page={{
+                        ...page,
+                        next_cursor: null,
+                    }}
+                    onNextPage={onNextPage}
+                />
+            </MemoryRouter>,
         )
 
         expect(
@@ -159,13 +177,7 @@ describe("WorldEntityList", () => {
         })
 
         it("marks the results region busy and keeps the previous page visible", () => {
-            render(
-                <WorldEntityList
-                    page={page}
-                    refreshing
-                    onNextPage={vi.fn()}
-                />,
-            )
+            renderList({ refreshing: true })
 
             expect(
                 screen.getByRole("region", {
@@ -173,20 +185,19 @@ describe("WorldEntityList", () => {
                 }),
             ).toHaveAttribute("aria-busy", "true")
 
-            expect(
-                screen.getByRole("heading", {
-                    name: "Glass Harbor",
-                }),
-            ).toBeInTheDocument()
+            expect(screen.getByText("Glass Harbor")).toBeInTheDocument()
         })
 
         it("disables Next page while refreshing and re-enables it once settled", () => {
             const { rerender } = render(
-                <WorldEntityList
-                    page={page}
-                    refreshing
-                    onNextPage={vi.fn()}
-                />,
+                <MemoryRouter>
+                    <WorldEntityList
+                        campaignId="campaign-a"
+                        page={page}
+                        refreshing
+                        onNextPage={vi.fn()}
+                    />
+                </MemoryRouter>,
             )
 
             expect(
@@ -196,11 +207,14 @@ describe("WorldEntityList", () => {
             ).toBeDisabled()
 
             rerender(
-                <WorldEntityList
-                    page={page}
-                    refreshing={false}
-                    onNextPage={vi.fn()}
-                />,
+                <MemoryRouter>
+                    <WorldEntityList
+                        campaignId="campaign-a"
+                        page={page}
+                        refreshing={false}
+                        onNextPage={vi.fn()}
+                    />
+                </MemoryRouter>,
             )
 
             expect(
@@ -211,13 +225,7 @@ describe("WorldEntityList", () => {
         })
 
         it("does not show the updating indicator immediately", () => {
-            render(
-                <WorldEntityList
-                    page={page}
-                    refreshing
-                    onNextPage={vi.fn()}
-                />,
-            )
+            renderList({ refreshing: true })
 
             expect(
                 screen.queryByText("Updating results…"),
@@ -225,13 +233,7 @@ describe("WorldEntityList", () => {
         })
 
         it("shows the updating indicator once the refresh runs long enough to notice", () => {
-            render(
-                <WorldEntityList
-                    page={page}
-                    refreshing
-                    onNextPage={vi.fn()}
-                />,
-            )
+            renderList({ refreshing: true })
 
             act(() => {
                 vi.advanceTimersByTime(200)
@@ -244,11 +246,14 @@ describe("WorldEntityList", () => {
 
         it("hides the updating indicator once the refresh finishes", () => {
             const { rerender } = render(
-                <WorldEntityList
-                    page={page}
-                    refreshing
-                    onNextPage={vi.fn()}
-                />,
+                <MemoryRouter>
+                    <WorldEntityList
+                        campaignId="campaign-a"
+                        page={page}
+                        refreshing
+                        onNextPage={vi.fn()}
+                    />
+                </MemoryRouter>,
             )
 
             act(() => {
@@ -260,11 +265,14 @@ describe("WorldEntityList", () => {
             ).toBeInTheDocument()
 
             rerender(
-                <WorldEntityList
-                    page={page}
-                    refreshing={false}
-                    onNextPage={vi.fn()}
-                />,
+                <MemoryRouter>
+                    <WorldEntityList
+                        campaignId="campaign-a"
+                        page={page}
+                        refreshing={false}
+                        onNextPage={vi.fn()}
+                    />
+                </MemoryRouter>,
             )
 
             expect(

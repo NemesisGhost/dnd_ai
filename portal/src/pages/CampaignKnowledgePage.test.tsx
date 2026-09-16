@@ -216,11 +216,9 @@ describe("CampaignKnowledgePage", () => {
         ).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", {
-                name: knowledgePageFixture.items[0]
-                    .statement,
-                level: 2,
-            }),
+            screen.getByText(
+                knowledgePageFixture.items[0].statement,
+            ),
         ).toBeInTheDocument()
     })
 

@@ -42,3 +42,17 @@ export interface KnowledgeSearchParameters {
     cursor?: string | null
     limit?: number
 }
+
+// Matches the backend's KnowledgeResponse (GET .../knowledge/{id}) —
+// deliberately narrower than KnowledgeListItem: no scope, discovery, or
+// source/subject ids, since the detail endpoint does not return them.
+export interface KnowledgeDetail {
+    knowledge_item_id: string
+    knowledge_type_code: string
+    statement: string
+    truth_status_code: string | null
+    sensitivity: string | null
+    awareness_level: string | null
+    confidence: number | null
+    willing_to_share: boolean | null
+}

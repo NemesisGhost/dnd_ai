@@ -1422,3 +1422,269 @@
 @media (max-width: 22rem) {
   .stat-card--hit-points { grid-column: auto; }
 }
+
+/* Shared collection card grid (World, Knowledge, Quests). auto-fit with a
+   responsive minimum keeps the collection using the full page width while
+   individual cards stay bounded and readable — never a narrow fixed max
+   width on the overall content. */
+.card-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  list-style: none;
+}
+
+.world-card-grid,
+.knowledge-card-grid {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.quest-card-grid {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+}
+
+/* Shared collection card surface. A fully-linked card uses one Link
+   covering the whole surface; a non-interactive card (no supported detail
+   route yet) keeps the same visual treatment without the hover/focus
+   affordance. */
+.entity-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface);
+}
+
+.entity-card__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.entity-card__link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.entity-card__link:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: -3px;
+  border-radius: 0.5rem;
+}
+
+.entity-card--static {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--color-text-muted);
+}
+
+.entity-card__eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.entity-card__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.entity-card__summary {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.entity-card__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.entity-card__status {
+  margin: 0.25rem 0 0;
+  padding: 0.1rem 0.5rem;
+  align-self: flex-start;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text);
+  background-color: var(--color-surface-muted);
+  border-radius: 0.25rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .entity-card__link {
+    transition: background-color 0.15s ease-out;
+  }
+}
+
+/* World / Knowledge / Quest full-detail page headers: eyebrow + single h1,
+   consistent with the character-sheet header treatment. */
+.world-detail__eyebrow,
+.knowledge-detail__eyebrow,
+.quest-detail__eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.world-detail__summary {
+  margin: 0.25rem 0 1rem;
+  max-width: 60rem;
+  color: var(--color-text-muted);
+}
+
+.world-detail__panel-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  min-width: 0;
+}
+
+.world-detail__breadcrumbs {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.quest-detail__status {
+  margin: 0 0 1rem;
+  color: var(--color-text-muted);
+}
+
+.quest-detail__stage-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  min-width: 0;
+}
+
+.quest-detail__stage-description {
+  margin: 0 0 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.quest-detail__objective-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+/* Expandable objective card — same visual/accessibility precedent as the
+   character sheet's disclosure cards (native <details>/<summary>, explicit
+   expand/collapse indicator text, visible keyboard focus, no color-only
+   state). */
+.quest-objective-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-muted);
+}
+
+.quest-objective-card summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.quest-objective-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.quest-objective-card summary:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.quest-objective-card summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.quest-objective-card summary strong {
+  flex-basis: 100%;
+}
+
+.quest-objective-card summary span:not(.quest-objective-card__indicator) {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.quest-objective-card__indicator {
+  margin-left: auto;
+}
+
+.quest-objective-card__indicator::after {
+  content: "Expand +";
+  font-size: 0.8rem;
+}
+
+.quest-objective-card[open] .quest-objective-card__indicator::after {
+  content: "Collapse −";
+}
+
+.quest-objective-card__body {
+  padding: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+/* Compact card-compatible quest sort controls, replacing the previous
+   sortable table's column-header buttons. */
+.quests-page__sort-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-end;
+  margin: 1rem 0 0;
+}
+
+.quests-page__sort-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.quests-page__sort-field select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}

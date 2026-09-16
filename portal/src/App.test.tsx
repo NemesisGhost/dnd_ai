@@ -34,7 +34,32 @@ import type {
   CampaignSummary,
 } from "./types/campaignSummary"
 
-import type { WorldEntityPage } from "./types/world"
+import type { LocationDetail, WorldEntityPage } from "./types/world"
+import type { KnowledgeDetail } from "./types/knowledge"
+
+const {
+  fetchLocationDetailMock,
+  fetchKnowledgeDetailMock,
+} = vi.hoisted(() => ({
+  fetchLocationDetailMock: vi.fn(),
+  fetchKnowledgeDetailMock: vi.fn(),
+}))
+
+vi.mock("./api/world", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api/world")>()
+  return {
+    ...actual,
+    fetchLocationDetail: fetchLocationDetailMock,
+  }
+})
+
+vi.mock("./api/knowledge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api/knowledge")>()
+  return {
+    ...actual,
+    fetchKnowledgeDetail: fetchKnowledgeDetailMock,
+  }
+})
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -166,7 +191,40 @@ const worldEntityPage = {
   next_cursor: null,
 } satisfies WorldEntityPage
 
+const locationDetailFixture = {
+  location_id: "location-1",
+  name: "Glass Harbor",
+  summary: "A harbor surrounded by ancient glass towers.",
+  location_type_code: "city",
+  parent_location_id: null,
+  breadcrumbs: [],
+  population: null,
+  building_use: null,
+  danger_level: null,
+  is_searched: null,
+  is_destroyed: null,
+  alarm_level: null,
+  condition_notes: null,
+} satisfies LocationDetail
+
+const knowledgeDetailFixture = {
+  knowledge_item_id: knowledgePageFixture.items[0].knowledge_item_id,
+  knowledge_type_code: knowledgePageFixture.items[0].knowledge_type_code,
+  statement: knowledgePageFixture.items[0].statement,
+  truth_status_code: null,
+  sensitivity: null,
+  awareness_level: knowledgePageFixture.items[0].awareness_level,
+  confidence: knowledgePageFixture.items[0].confidence,
+  willing_to_share: knowledgePageFixture.items[0].willing_to_share,
+} satisfies KnowledgeDetail
+
 beforeEach(() => {
+  fetchLocationDetailMock.mockReset()
+  fetchLocationDetailMock.mockResolvedValue(locationDetailFixture)
+
+  fetchKnowledgeDetailMock.mockReset()
+  fetchKnowledgeDetailMock.mockResolvedValue(knowledgeDetailFixture)
+
   localStorage.removeItem("dnd-ai-theme")
 
   useSessionBootstrapMock.mockReset()
@@ -423,7 +481,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("link", {
-        name: "Restore the Glass Ossuary",
+        name: /Restore the Glass Ossuary/,
       }),
     ).toHaveAttribute(
       "href",
@@ -452,7 +510,7 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByText("Status: active"),
+      screen.getByText("Status: Active"),
     ).toBeInTheDocument()
 
     expect(
@@ -617,10 +675,7 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.getByRole("heading", {
-        name: "Glass Harbor",
-        level: 2,
-      }),
+      screen.getByText("Glass Harbor"),
     ).toBeInTheDocument()
   })
 
@@ -657,5 +712,82 @@ describe("portal routing", () => {
         knowledgePageFixture.items[0].statement,
       ),
     ).toBeInTheDocument()
+  })
+
+  it("routes a World location detail through its addressable route", async () => {
+    renderAppAt("/app/mundivita/world/location/location-1")
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Glass Harbor",
+    })
+
+    expect(fetchLocationDetailMock).toHaveBeenCalledWith(
+      "mundivita",
+      "location-1",
+      expect.any(AbortSignal),
+    )
+
+    expect(
+      screen.getByRole("link", { name: "Back to World" }),
+    ).toHaveAttribute("href", "/app/mundivita/world")
+  })
+
+  it("fails closed for an invalid World detail category", () => {
+    renderAppAt("/app/mundivita/world/organization/org-1")
+
+    expect(
+      screen.getByText("World detail unavailable"),
+    ).toBeInTheDocument()
+
+    expect(fetchLocationDetailMock).not.toHaveBeenCalled()
+  })
+
+  it("routes a Knowledge item detail through its addressable route", async () => {
+    renderAppAt("/app/mundivita/knowledge/knowledge-a")
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: knowledgePageFixture.items[0].statement,
+    })
+
+    expect(fetchKnowledgeDetailMock).toHaveBeenCalledWith(
+      "mundivita",
+      "knowledge-a",
+      "character-ixamarra",
+      null,
+      expect.any(AbortSignal),
+    )
+
+    expect(
+      screen.getByRole("link", { name: "Back to Knowledge" }),
+    ).toHaveAttribute("href", "/app/mundivita/knowledge")
+  })
+
+  it("does not disclose campaign chrome for an unknown campaign's World detail route", () => {
+    renderAppAt(
+      "/app/not-a-real-campaign/world/location/location-1",
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Campaign not found",
+      }),
+    ).toBeInTheDocument()
+
+    expect(fetchLocationDetailMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps Ask disabled and makes no Ask-related request on campaign routes", () => {
+    renderAppAt("/app/mundivita/home")
+
+    expect(
+      screen.queryByRole("link", { name: "Ask" }),
+    ).not.toBeInTheDocument()
+
+    const disabledAsk = screen.getByTitle(
+      "Unavailable until Phase 12 is verified",
+    )
+    expect(disabledAsk).toHaveAttribute("aria-disabled", "true")
   })
 })

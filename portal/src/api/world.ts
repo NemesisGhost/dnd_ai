@@ -1,4 +1,8 @@
 import type {
+    EventDetail,
+    ItemDetail,
+    LocationDetail,
+    ReligionDetail,
     WorldEntityPage,
     WorldEntitySearchParameters,
 } from "../types/world"
@@ -81,4 +85,72 @@ export async function fetchWorldEntities(
     }
 
     return (await response.json()) as WorldEntityPage
+}
+
+async function fetchWorldDetail<T>(
+    path: string,
+    signal?: AbortSignal,
+): Promise<T> {
+    const response = await fetch(path, {
+        method: "GET",
+        headers: {
+            Accept: "application/json",
+        },
+        cache: "no-store",
+        signal,
+    })
+
+    if (!response.ok) {
+        throw new WorldRequestError(response.status)
+    }
+
+    return (await response.json()) as T
+}
+
+export async function fetchLocationDetail(
+    campaignId: string,
+    locationId: string,
+    signal?: AbortSignal,
+): Promise<LocationDetail> {
+    return fetchWorldDetail<LocationDetail>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/locations/${encodeURIComponent(locationId)}`,
+        signal,
+    )
+}
+
+export async function fetchReligionDetail(
+    campaignId: string,
+    religionId: string,
+    signal?: AbortSignal,
+): Promise<ReligionDetail> {
+    return fetchWorldDetail<ReligionDetail>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/religions/${encodeURIComponent(religionId)}`,
+        signal,
+    )
+}
+
+export async function fetchItemDetail(
+    campaignId: string,
+    itemInstanceId: string,
+    signal?: AbortSignal,
+): Promise<ItemDetail> {
+    return fetchWorldDetail<ItemDetail>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/items/${encodeURIComponent(itemInstanceId)}`,
+        signal,
+    )
+}
+
+export async function fetchEventDetail(
+    campaignId: string,
+    eventId: string,
+    signal?: AbortSignal,
+): Promise<EventDetail> {
+    return fetchWorldDetail<EventDetail>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/events/${encodeURIComponent(eventId)}`,
+        signal,
+    )
 }

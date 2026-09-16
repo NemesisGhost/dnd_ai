@@ -1,4 +1,5 @@
 import type {
+    KnowledgeDetail,
     KnowledgePage,
     KnowledgeSearchParameters,
 } from "../types/knowledge"
@@ -107,4 +108,62 @@ export async function fetchKnowledgeItems(
     }
 
     return (await response.json()) as KnowledgePage
+}
+
+function buildKnowledgeDetailPath(
+    campaignId: string,
+    knowledgeItemId: string,
+    characterId: string | null,
+    partyId: string | null,
+): string {
+    const encodedCampaignId = encodeURIComponent(campaignId)
+    const encodedItemId = encodeURIComponent(knowledgeItemId)
+
+    const searchParameters = new URLSearchParams()
+
+    if (characterId !== null) {
+        searchParameters.set("character_id", characterId)
+    }
+
+    if (partyId !== null) {
+        searchParameters.set("party_id", partyId)
+    }
+
+    const queryString = searchParameters.toString()
+
+    const path =
+        `/api/campaigns/${encodedCampaignId}/knowledge/${encodedItemId}`
+
+    return queryString === "" ? path : `${path}?${queryString}`
+}
+
+export async function fetchKnowledgeDetail(
+    campaignId: string,
+    knowledgeItemId: string,
+    characterId: string | null,
+    partyId: string | null,
+    signal?: AbortSignal,
+): Promise<KnowledgeDetail> {
+    const response = await fetch(
+        buildKnowledgeDetailPath(
+            campaignId,
+            knowledgeItemId,
+            characterId,
+            partyId,
+        ),
+        {
+            method: "GET",
+            headers: {
+                Accept: "application/json",
+            },
+            cache: "no-store",
+            signal,
+        },
+    )
+
+    if (!response.ok) {
+        throw new KnowledgeRequestError(response.status)
+    }
+
+    return (await response.json()) as KnowledgeDetail
 }

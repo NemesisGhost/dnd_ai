@@ -5,8 +5,9 @@ import {
     it,
     vi,
 } from "vitest"
-import type { KnowledgePage } from "../types/knowledge"
+import type { KnowledgeDetail, KnowledgePage } from "../types/knowledge"
 import {
+    fetchKnowledgeDetail,
     fetchKnowledgeItems,
     KnowledgeRequestError,
 } from "./knowledge"
@@ -208,5 +209,82 @@ describe("fetchKnowledgeItems", () => {
         await expect(request).rejects.toBeInstanceOf(
             KnowledgeRequestError,
         )
+    })
+})
+
+describe("fetchKnowledgeDetail", () => {
+    const itemFixture: KnowledgeDetail = {
+        knowledge_item_id: "knowledge-a",
+        knowledge_type_code: "fact",
+        statement: "The Glass Ossuary lies beneath the Rootspire.",
+        truth_status_code: null,
+        sensitivity: null,
+        awareness_level: "understood",
+        confidence: 85,
+        willing_to_share: true,
+    }
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it("requests the detail route with no perspective parameters when none are given", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(itemFixture), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await expect(
+            fetchKnowledgeDetail("campaign-a", "knowledge-a", null, null),
+        ).resolves.toEqual(itemFixture)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/campaigns/campaign-a/knowledge/knowledge-a",
+            {
+                method: "GET",
+                headers: { Accept: "application/json" },
+                cache: "no-store",
+                signal: undefined,
+            },
+        )
+    })
+
+    it("encodes the character and party perspective as query parameters", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(itemFixture), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        )
+
+        vi.stubGlobal("fetch", fetchMock)
+
+        await fetchKnowledgeDetail(
+            "campaign/a b",
+            "knowledge:c d",
+            "character-a",
+            "party-a",
+        )
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/campaigns/campaign%2Fa%20b/knowledge/knowledge%3Ac%20d" +
+                "?character_id=character-a&party_id=party-a",
+            expect.objectContaining({ method: "GET" }),
+        )
+    })
+
+    it("throws a typed error for an unsuccessful response, matching missing and unauthorized alike", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
+        )
+
+        await expect(
+            fetchKnowledgeDetail("campaign-a", "missing-item", null, null),
+        ).rejects.toBeInstanceOf(KnowledgeRequestError)
     })
 })
