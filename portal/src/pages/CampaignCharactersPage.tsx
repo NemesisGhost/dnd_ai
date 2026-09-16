@@ -1,7 +1,8 @@
 import { useParams } from "react-router"
 import { CharacterBoundary } from "../components/CharacterBoundary"
+import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
-import { CharacterDetailPage } from "./CharacterDetailPage"
+import { CharacterSheetPage } from "./CharacterSheetPage"
 import PlaceholderPage from "./PlaceholderPage"
 
 export function CampaignCharactersPage() {
@@ -38,9 +39,17 @@ export function CampaignCharactersPage() {
             characterId={characterId}
         >
             {(character) => (
-                <CharacterDetailPage
-                    character={character}
-                />
+                <CharacterSheetBoundary
+                    campaignId={campaignId}
+                    characterId={characterId}
+                >
+                    {(sheet) => (
+                        <CharacterSheetPage
+                            sheet={sheet}
+                            character={character}
+                        />
+                    )}
+                </CharacterSheetBoundary>
             )}
         </CharacterBoundary>
     )
