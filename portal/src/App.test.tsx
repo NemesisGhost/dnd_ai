@@ -649,6 +649,29 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
   })
 
+  it("shows an accessible logout control in the authenticated chrome", () => {
+    renderAppAt("/")
+
+    expect(
+      within(screen.getByRole("banner")).getByRole("button", {
+        name: "Log out",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("hides the logout control when unauthenticated", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "unauthenticated" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/login")
+
+    expect(
+      screen.queryByRole("button", { name: "Log out" }),
+    ).not.toBeInTheDocument()
+  })
+
   it("routes World through the authorized World boundary", () => {
     renderAppAt("/app/mundivita/world")
 
@@ -789,5 +812,90 @@ describe("portal routing", () => {
       "Unavailable until Phase 12 is verified",
     )
     expect(disabledAsk).toHaveAttribute("aria-disabled", "true")
+  })
+})
+
+describe("heading hierarchy", () => {
+  // The persistent "D&D AI Portal" banner (App.tsx) is chrome, not a
+  // heading — each route surface supplies exactly one h1 of its own.
+  // Phase 13D acceptance defect #3: the banner was previously an h1,
+  // producing two h1 elements on every route.
+
+  it("has exactly one h1 on a normal list route", () => {
+    renderAppAt("/app/mundivita/quests")
+
+    expect(
+      screen.getAllByRole("heading", { level: 1 }),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Quests" }),
+    ).toBeInTheDocument()
+  })
+
+  it("has exactly one h1 on a detail route", () => {
+    renderAppAt("/app/mundivita/quests/quest-detail")
+
+    expect(
+      screen.getAllByRole("heading", { level: 1 }),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: "Restore the Glass Ossuary",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("has exactly one h1 while the session is loading", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "loading" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/app/mundivita/home")
+
+    expect(
+      screen.getAllByRole("heading", { level: 1 }),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Loading portal" }),
+    ).toBeInTheDocument()
+  })
+
+  it("has exactly one h1 when the session errors", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "error", error: new Error("boom") },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/app/mundivita/home")
+
+    expect(
+      screen.getAllByRole("heading", { level: 1 }),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Portal unavailable" }),
+    ).toBeInTheDocument()
+  })
+
+  it("has exactly one h1 on the login page", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "unauthenticated" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/login")
+
+    expect(
+      screen.getAllByRole("heading", { level: 1 }),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "D&D AI World" }),
+    ).toBeInTheDocument()
   })
 })

@@ -81,7 +81,10 @@ existing `GET .../characters/{character_id}` response deliberately stays
 Overview/Current-State-shaped (unchanged by this addition, for backward
 compatibility, and because it is also part of the bounded Foundry-facing
 surface — see `_ENCOUNTER_READ_SCOPE` above) rather than growing a large
-nested mechanical-build payload onto it. The sheet route requires the same
+nested mechanical-build payload onto it. The sheet route applies the same coarser entity-targeted `campaign.view`
+deny gate described above before anything else — indistinguishable from a
+nonexistent character even for a caller who separately holds `canon.edit`
+or `character.view_full` — then requires the same
 *full* character-view tier `get_character_inventory_endpoint` requires
 (`resolve_character_view_tier` returning `False` is insufficient here too,
 for the identical reason: a full mechanical build is not summary-shaped
@@ -504,6 +507,14 @@ def get_character_sheet_endpoint(
     ],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> CharacterSheetResponse:
+    if not access.has_capability(_CHARACTER_VIEW_CAPABILITY, entity_id=character_id):
+        # The same entity-targeted `campaign.view` deny the character
+        # detail and inventory routes honor — a subresource of a character
+        # the caller may not see must itself be indistinguishable from
+        # nonexistent, even when the caller separately holds canon.edit or
+        # character.view_full.
+        raise NotFoundError()
+
     if not resolve_character_view_tier(access, character_id=character_id):
         # The summary tier alone is not enough to see the mechanical sheet
         # — see this module's docstring. Raised identically to "neither
