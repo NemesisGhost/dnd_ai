@@ -1,4 +1,25 @@
-import type { CharacterSheetSkill } from "../types/characterSheet"
+import type { CharacterSheetAbilityScore, CharacterSheetSkill } from "../types/characterSheet"
+
+const ABILITY_DISPLAY_ORDER = [
+    "strength", "dexterity", "constitution",
+    "intelligence", "wisdom", "charisma",
+]
+
+function abilityOrderIndex(code: string): number {
+    const index = ABILITY_DISPLAY_ORDER.indexOf(code)
+    return index === -1 ? ABILITY_DISPLAY_ORDER.length : index
+}
+
+// Force the conventional STR/DEX/CON/INT/WIS/CHA reading order
+// regardless of the order the backend returns; abilities outside that
+// set (a future ruleset) keep their relative order at the end.
+export function sortAbilityScores(
+    abilityScores: CharacterSheetAbilityScore[],
+): CharacterSheetAbilityScore[] {
+    return [...abilityScores].sort(
+        (a, b) => abilityOrderIndex(a.ability_code) - abilityOrderIndex(b.ability_code),
+    )
+}
 
 export function humanizeCode(code: string): string {
     return code.split("_").filter(Boolean)

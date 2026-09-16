@@ -203,6 +203,28 @@ describe("CharacterSheetPage", () => {
         expect(within(card).getByText("Not proficient")).toBeInTheDocument()
     })
 
+    it("forces STR, DEX, CON, INT, WIS, CHA ability card order regardless of contract order", () => {
+        const shuffledSheet: CharacterSheet = {
+            ...characterSheetFixture,
+            ability_scores: [...characterSheetFixture.ability_scores].reverse(),
+        }
+
+        renderPage(shuffledSheet)
+
+        const abilityHeadings = screen
+            .getAllByRole("article")
+            .map((card) => card.querySelector("h3")?.textContent)
+            .filter((name): name is string =>
+                ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]
+                    .includes(name ?? ""),
+            )
+
+        expect(abilityHeadings).toEqual([
+            "Strength", "Dexterity", "Constitution",
+            "Intelligence", "Wisdom", "Charisma",
+        ])
+    })
+
     it("does not put any raw ability id in the DOM", () => {
         const { container } = renderPage()
 

@@ -6,7 +6,7 @@ import { CharacterDetailsPanel } from "./CharacterDetailsPanel"
 import { CharacterSkillsTables } from "./CharacterSkillsTables"
 import { FeatureCard } from "./FeatureCard"
 import { SpellCard } from "./SpellCard"
-import { humanizeCode } from "./characterSheetPresentation"
+import { humanizeCode, sortAbilityScores } from "./characterSheetPresentation"
 import { HitPointsMeter } from "../components/HitPointsMeter"
 import { StatCard } from "../components/StatCard"
 import type { CharacterDetail } from "../types/character"
@@ -148,6 +148,7 @@ export function CharacterSheetPage({
 }: CharacterSheetPageProps) {
     const conditions = character.conditions
     const resources = character.resources
+    const orderedAbilityScores = sortAbilityScores(sheet.ability_scores)
 
     const hasKnownDeathSaves =
         character.death_save_successes !== null &&
@@ -215,7 +216,7 @@ export function CharacterSheetPage({
                     emptyState={<p>No ability scores recorded.</p>}
                 >
                     <div className="character-sheet__ability-grid">
-                        {sheet.ability_scores.map((ability) => {
+                        {orderedAbilityScores.map((ability) => {
                             const savingThrow = sheet.saving_throws.find(
                                 (candidate) =>
                                     candidate.ability_id ===
