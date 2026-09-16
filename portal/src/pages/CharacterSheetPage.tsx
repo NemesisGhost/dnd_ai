@@ -1,4 +1,4 @@
-import { useId } from "react"
+import { useId, type ReactNode } from "react"
 import { AbilityScoreCard } from "../components/AbilityScoreCard"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
@@ -20,6 +20,35 @@ import formatSignedNumber from "../utils/signedNumbers"
 interface CharacterSheetPageProps {
     sheet: CharacterSheet
     character: CharacterDetail
+}
+
+interface CharacterSheetSubsectionProps {
+    title: string
+    isEmpty?: boolean
+    emptyState?: ReactNode
+    children: ReactNode
+}
+
+// A headed subrecord inside one shared "Other Details" DetailPanel --
+// same idea as SpellcastingProfileSection's per-profile <h3>, one
+// level below the panel's own <h2>.
+function CharacterSheetSubsection({
+    title,
+    isEmpty = false,
+    emptyState,
+    children,
+}: CharacterSheetSubsectionProps) {
+    const headingId = useId()
+
+    return (
+        <section
+            className="character-sheet__detail-subsection"
+            aria-labelledby={headingId}
+        >
+            <h3 id={headingId}>{title}</h3>
+            {isEmpty ? emptyState : children}
+        </section>
+    )
 }
 
 interface SpellLevelGroup {
@@ -226,22 +255,8 @@ export function CharacterSheetPage({
                 </DetailPanel>
 
                 <div className="character-sheet__mixed-section">
-                    <DetailPanel
-                        title="Features & Traits"
-                        isEmpty={sheet.features.length === 0}
-                        emptyState={<p>No features recorded.</p>}
-                    >
-                        <ul className="character-sheet__feature-list">
-                            {sheet.features.map((feature) => (
-                                <li key={feature.feature_id}>
-                                    <FeatureCard feature={feature} />
-                                </li>
-                            ))}
-                        </ul>
-                    </DetailPanel>
-
-                    <div className="character-sheet__stacked-panels">
-                        <DetailPanel
+                    <DetailPanel title="Other Details">
+                        <CharacterSheetSubsection
                             title="Other Proficiencies"
                             isEmpty={sheet.other_proficiencies.length === 0}
                             emptyState={
@@ -271,9 +286,9 @@ export function CharacterSheetPage({
                                     ),
                                 )}
                             </ul>
-                        </DetailPanel>
+                        </CharacterSheetSubsection>
 
-                        <DetailPanel
+                        <CharacterSheetSubsection
                             title="Languages"
                             isEmpty={sheet.languages.length === 0}
                             emptyState={<p>No languages recorded.</p>}
@@ -285,9 +300,9 @@ export function CharacterSheetPage({
                                     </li>
                                 ))}
                             </ul>
-                        </DetailPanel>
+                        </CharacterSheetSubsection>
 
-                        <DetailPanel
+                        <CharacterSheetSubsection
                             title="Senses"
                             isEmpty={sheet.senses.length === 0}
                             emptyState={<p>No senses recorded.</p>}
@@ -299,9 +314,9 @@ export function CharacterSheetPage({
                                     value: `${sense.range_feet} ft`,
                                 }))}
                             />
-                        </DetailPanel>
+                        </CharacterSheetSubsection>
 
-                        <DetailPanel
+                        <CharacterSheetSubsection
                             title="Conditions"
                             isEmpty={
                                 conditions === null ||
@@ -335,9 +350,9 @@ export function CharacterSheetPage({
                                     ))}
                                 </ul>
                             )}
-                        </DetailPanel>
+                        </CharacterSheetSubsection>
 
-                        <DetailPanel
+                        <CharacterSheetSubsection
                             title="Resources"
                             isEmpty={
                                 resources === null || resources.length === 0
@@ -365,8 +380,22 @@ export function CharacterSheetPage({
                                     ))}
                                 </ul>
                             )}
-                        </DetailPanel>
-                    </div>
+                        </CharacterSheetSubsection>
+                    </DetailPanel>
+
+                    <DetailPanel
+                        title="Features & Traits"
+                        isEmpty={sheet.features.length === 0}
+                        emptyState={<p>No features recorded.</p>}
+                    >
+                        <ul className="character-sheet__feature-list">
+                            {sheet.features.map((feature) => (
+                                <li key={feature.feature_id}>
+                                    <FeatureCard feature={feature} />
+                                </li>
+                            ))}
+                        </ul>
+                    </DetailPanel>
                 </div>
 
                 <DetailPanel

@@ -1027,8 +1027,9 @@
   min-width: 0;
 }
 
-/* Mixed section: Features & Traits share one full-width row with the
-   remaining small panels, reflowing from two columns to one. */
+/* Mixed section: the grouped "Other Details" box and Features &
+   Traits share one full-width row, reflowing from two columns to
+   one. */
 .character-sheet__panel-grid .character-sheet__mixed-section {
   grid-column: 1 / -1;
   min-width: 0;
@@ -1043,11 +1044,29 @@
   min-width: 0;
 }
 
-.character-sheet__stacked-panels {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  min-width: 0;
+/* Repeated headed subrecord (Other Proficiencies, Languages, Senses,
+   Conditions, Resources) inside the shared "Other Details" panel --
+   same idea as .spellcasting-profile, one level below the panel's
+   own heading. */
+.character-sheet__detail-subsection {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.character-sheet__detail-subsection:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.character-sheet__detail-subsection h3 {
+  margin: 0 0 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .character-sheet__feature-list {
@@ -1315,9 +1334,9 @@
    tables stays visible whether they sit side by side or wrap onto
    their own lines. */
 .character-skills-tables__table {
-  flex: 0 0 min(100%, 36rem);
-  width: min(100%, 36rem);
-  max-width: 36rem;
+  flex: 0 0 min(100%, 38rem);
+  width: min(100%, 38rem);
+  max-width: 38rem;
   padding: 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;

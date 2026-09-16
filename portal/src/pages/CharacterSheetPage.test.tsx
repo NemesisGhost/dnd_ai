@@ -234,38 +234,72 @@ describe("CharacterSheetPage", () => {
         expect(within(historyRow).getByText("×2")).toBeInTheDocument()
     })
 
-    it("shows separate panels for other proficiencies, languages, senses, conditions, and resources", () => {
+    it("groups other proficiencies, languages, senses, conditions, and resources into one Other Details panel", () => {
         renderPage()
 
+        const panel = screen
+            .getByRole("heading", { level: 2, name: "Other Details" })
+            .closest(".detail-panel") as HTMLElement
+
         expect(
-            screen.getByRole("heading", {
-                level: 2,
+            within(panel).getByRole("heading", {
+                level: 3,
                 name: "Other Proficiencies",
             }),
         ).toBeInTheDocument()
-        expect(screen.getByText("Lute")).toBeInTheDocument()
+        expect(within(panel).getByText("Lute")).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", { level: 2, name: "Languages" }),
+            within(panel).getByRole("heading", {
+                level: 3,
+                name: "Languages",
+            }),
         ).toBeInTheDocument()
-        expect(screen.getByText("Draconic")).toBeInTheDocument()
+        expect(within(panel).getByText("Draconic")).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", { level: 2, name: "Senses" }),
+            within(panel).getByRole("heading", {
+                level: 3,
+                name: "Senses",
+            }),
         ).toBeInTheDocument()
-        expect(screen.getByText("Darkvision")).toBeInTheDocument()
-        expect(screen.getByText("60 ft")).toBeInTheDocument()
+        expect(within(panel).getByText("Darkvision")).toBeInTheDocument()
+        expect(within(panel).getByText("60 ft")).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", { level: 2, name: "Conditions" }),
+            within(panel).getByRole("heading", {
+                level: 3,
+                name: "Conditions",
+            }),
         ).toBeInTheDocument()
-        expect(screen.getByText("Poisoned")).toBeInTheDocument()
-        expect(screen.getByText(/Giant spider bite/)).toBeInTheDocument()
+        expect(within(panel).getByText("Poisoned")).toBeInTheDocument()
+        expect(
+            within(panel).getByText(/Giant spider bite/),
+        ).toBeInTheDocument()
 
         expect(
-            screen.getByRole("heading", { level: 2, name: "Resources" }),
+            within(panel).getByRole("heading", {
+                level: 3,
+                name: "Resources",
+            }),
         ).toBeInTheDocument()
-        expect(screen.getByText("Inspiration Die")).toBeInTheDocument()
+        expect(
+            within(panel).getByText("Inspiration Die"),
+        ).toBeInTheDocument()
+    })
+
+    it("puts the Other Details panel before Features & Traits", () => {
+        renderPage()
+
+        const headings = screen
+            .getAllByRole("heading", { level: 2 })
+            .map((heading) => heading.textContent)
+
+        const otherDetailsIndex = headings.indexOf("Other Details")
+        const featuresIndex = headings.indexOf("Features & Traits")
+
+        expect(otherDetailsIndex).toBeGreaterThanOrEqual(0)
+        expect(featuresIndex).toBeGreaterThan(otherDetailsIndex)
     })
 
     it("preserves valid empty conditions and resources states", () => {
