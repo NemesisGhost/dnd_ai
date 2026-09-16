@@ -203,7 +203,10 @@ describe("CharacterSheetPage", () => {
         expect(within(card).getByText("Not proficient")).toBeInTheDocument()
     })
 
-    it("forces STR, DEX, CON, INT, WIS, CHA ability card order regardless of contract order", () => {
+    it("renders ability score cards in the contract-provided response order", () => {
+        // ability_scores is an ordered server response — reverse it so a
+        // canonical-order regression (re-sorting to STR/DEX/CON/INT/WIS/CHA)
+        // would be detectable here.
         const shuffledSheet: CharacterSheet = {
             ...characterSheetFixture,
             ability_scores: [...characterSheetFixture.ability_scores].reverse(),
@@ -220,8 +223,8 @@ describe("CharacterSheetPage", () => {
             )
 
         expect(abilityHeadings).toEqual([
-            "Strength", "Dexterity", "Constitution",
-            "Intelligence", "Wisdom", "Charisma",
+            "Charisma", "Wisdom", "Intelligence",
+            "Constitution", "Dexterity", "Strength",
         ])
     })
 
@@ -256,72 +259,60 @@ describe("CharacterSheetPage", () => {
         expect(within(historyRow).getByText("×2")).toBeInTheDocument()
     })
 
-    it("groups other proficiencies, languages, senses, conditions, and resources into one Other Details panel", () => {
+    it("gives Other Proficiencies, Languages, Senses, Conditions, and Resources each their own top-level DetailPanel", () => {
         renderPage()
 
-        const panel = screen
-            .getByRole("heading", { level: 2, name: "Other Details" })
-            .closest(".detail-panel") as HTMLElement
+        const domainHeadingNames = [
+            "Other Proficiencies",
+            "Languages",
+            "Senses",
+            "Conditions",
+            "Resources",
+            "Features & Traits",
+        ]
+
+        const panels = domainHeadingNames.map((name) => {
+            const heading = screen.getByRole("heading", {
+                level: 2,
+                name,
+            })
+            return heading.closest(".detail-panel") as HTMLElement
+        })
+
+        // No two of these headings share the same panel element -- each is
+        // its own bounded top-level DetailPanel, not a shared region.
+        expect(new Set(panels).size).toBe(domainHeadingNames.length)
 
         expect(
-            within(panel).getByRole("heading", {
-                level: 3,
-                name: "Other Proficiencies",
+            screen.queryByRole("heading", {
+                level: 2,
+                name: "Other Details",
             }),
-        ).toBeInTheDocument()
-        expect(within(panel).getByText("Lute")).toBeInTheDocument()
+        ).not.toBeInTheDocument()
 
-        expect(
-            within(panel).getByRole("heading", {
-                level: 3,
-                name: "Languages",
-            }),
-        ).toBeInTheDocument()
-        expect(within(panel).getByText("Draconic")).toBeInTheDocument()
+        const [
+            proficienciesPanel,
+            languagesPanel,
+            sensesPanel,
+            conditionsPanel,
+            resourcesPanel,
+        ] = panels
 
-        expect(
-            within(panel).getByRole("heading", {
-                level: 3,
-                name: "Senses",
-            }),
-        ).toBeInTheDocument()
-        expect(within(panel).getByText("Darkvision")).toBeInTheDocument()
-        expect(within(panel).getByText("60 ft")).toBeInTheDocument()
+        expect(within(proficienciesPanel).getByText("Lute")).toBeInTheDocument()
 
+        expect(within(languagesPanel).getByText("Draconic")).toBeInTheDocument()
+
+        expect(within(sensesPanel).getByText("Darkvision")).toBeInTheDocument()
+        expect(within(sensesPanel).getByText("60 ft")).toBeInTheDocument()
+
+        expect(within(conditionsPanel).getByText("Poisoned")).toBeInTheDocument()
         expect(
-            within(panel).getByRole("heading", {
-                level: 3,
-                name: "Conditions",
-            }),
-        ).toBeInTheDocument()
-        expect(within(panel).getByText("Poisoned")).toBeInTheDocument()
-        expect(
-            within(panel).getByText(/Giant spider bite/),
+            within(conditionsPanel).getByText(/Giant spider bite/),
         ).toBeInTheDocument()
 
         expect(
-            within(panel).getByRole("heading", {
-                level: 3,
-                name: "Resources",
-            }),
+            within(resourcesPanel).getByText("Inspiration Die"),
         ).toBeInTheDocument()
-        expect(
-            within(panel).getByText("Inspiration Die"),
-        ).toBeInTheDocument()
-    })
-
-    it("puts the Other Details panel before Features & Traits", () => {
-        renderPage()
-
-        const headings = screen
-            .getAllByRole("heading", { level: 2 })
-            .map((heading) => heading.textContent)
-
-        const otherDetailsIndex = headings.indexOf("Other Details")
-        const featuresIndex = headings.indexOf("Features & Traits")
-
-        expect(otherDetailsIndex).toBeGreaterThanOrEqual(0)
-        expect(featuresIndex).toBeGreaterThan(otherDetailsIndex)
     })
 
     it("preserves valid empty conditions and resources states", () => {

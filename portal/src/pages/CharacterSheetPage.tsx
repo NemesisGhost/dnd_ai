@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react"
+import { useId } from "react"
 import { AbilityScoreCard } from "../components/AbilityScoreCard"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
@@ -6,7 +6,7 @@ import { CharacterDetailsPanel } from "./CharacterDetailsPanel"
 import { CharacterSkillsTables } from "./CharacterSkillsTables"
 import { FeatureCard } from "./FeatureCard"
 import { SpellCard } from "./SpellCard"
-import { humanizeCode, sortAbilityScores } from "./characterSheetPresentation"
+import { humanizeCode } from "./characterSheetPresentation"
 import { HitPointsMeter } from "../components/HitPointsMeter"
 import { StatCard } from "../components/StatCard"
 import type { CharacterDetail } from "../types/character"
@@ -20,35 +20,6 @@ import formatSignedNumber from "../utils/signedNumbers"
 interface CharacterSheetPageProps {
     sheet: CharacterSheet
     character: CharacterDetail
-}
-
-interface CharacterSheetSubsectionProps {
-    title: string
-    isEmpty?: boolean
-    emptyState?: ReactNode
-    children: ReactNode
-}
-
-// A headed subrecord inside one shared "Other Details" DetailPanel --
-// same idea as SpellcastingProfileSection's per-profile <h3>, one
-// level below the panel's own <h2>.
-function CharacterSheetSubsection({
-    title,
-    isEmpty = false,
-    emptyState,
-    children,
-}: CharacterSheetSubsectionProps) {
-    const headingId = useId()
-
-    return (
-        <section
-            className="character-sheet__detail-subsection"
-            aria-labelledby={headingId}
-        >
-            <h3 id={headingId}>{title}</h3>
-            {isEmpty ? emptyState : children}
-        </section>
-    )
 }
 
 interface SpellLevelGroup {
@@ -148,7 +119,6 @@ export function CharacterSheetPage({
 }: CharacterSheetPageProps) {
     const conditions = character.conditions
     const resources = character.resources
-    const orderedAbilityScores = sortAbilityScores(sheet.ability_scores)
 
     const hasKnownDeathSaves =
         character.death_save_successes !== null &&
@@ -216,7 +186,7 @@ export function CharacterSheetPage({
                     emptyState={<p>No ability scores recorded.</p>}
                 >
                     <div className="character-sheet__ability-grid">
-                        {orderedAbilityScores.map((ability) => {
+                        {sheet.ability_scores.map((ability) => {
                             const savingThrow = sheet.saving_throws.find(
                                 (candidate) =>
                                     candidate.ability_id ===
@@ -255,149 +225,143 @@ export function CharacterSheetPage({
                     <CharacterSkillsTables skills={sheet.skills} />
                 </DetailPanel>
 
-                <div className="character-sheet__mixed-section">
-                    <DetailPanel title="Other Details">
-                        <CharacterSheetSubsection
-                            title="Other Proficiencies"
-                            isEmpty={sheet.other_proficiencies.length === 0}
-                            emptyState={
-                                <p>No other proficiencies recorded.</p>
-                            }
-                        >
-                            <ul className="character-sheet__fact-list">
-                                {sheet.other_proficiencies.map(
-                                    (proficiency) => (
-                                        <li
-                                            key={`${proficiency.proficiency_type_code}-${proficiency.target_label}`}
-                                        >
-                                            <span className="character-sheet__fact-list-primary">
-                                                {proficiency.target_label}
-                                            </span>{" "}
+                <DetailPanel
+                    title="Other Proficiencies"
+                    isEmpty={sheet.other_proficiencies.length === 0}
+                    emptyState={<p>No other proficiencies recorded.</p>}
+                >
+                    <ul className="character-sheet__fact-list">
+                        {sheet.other_proficiencies.map(
+                            (proficiency) => (
+                                <li
+                                    key={`${proficiency.proficiency_type_code}-${proficiency.target_label}`}
+                                >
+                                    <span className="character-sheet__fact-list-primary">
+                                        {proficiency.target_label}
+                                    </span>{" "}
+                                    <span className="character-sheet__fact-list-secondary">
+                                        (
+                                        {
+                                            proficiency.proficiency_type_display_name
+                                        }
+                                        {proficiency.is_expertise
+                                            ? ", Expertise"
+                                            : ""}
+                                        )
+                                    </span>
+                                </li>
+                            ),
+                        )}
+                    </ul>
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Languages"
+                    isEmpty={sheet.languages.length === 0}
+                    emptyState={<p>No languages recorded.</p>}
+                >
+                    <ul className="character-sheet__fact-list">
+                        {sheet.languages.map((language) => (
+                            <li key={language.language_id}>
+                                {language.display_name}
+                            </li>
+                        ))}
+                    </ul>
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Senses"
+                    isEmpty={sheet.senses.length === 0}
+                    emptyState={<p>No senses recorded.</p>}
+                >
+                    <FactGrid
+                        items={sheet.senses.map((sense) => ({
+                            key: sense.sense_type,
+                            label: humanizeCode(sense.sense_type),
+                            value: `${sense.range_feet} ft`,
+                        }))}
+                    />
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Conditions"
+                    isEmpty={
+                        conditions === null ||
+                        conditions.length === 0
+                    }
+                    emptyState={
+                        <p>
+                            {conditions === null
+                                ? "Not recorded."
+                                : "No conditions are currently recorded."}
+                        </p>
+                    }
+                >
+                    {conditions !== null && (
+                        <ul className="character-sheet__fact-list">
+                            {conditions.map((condition) => (
+                                <li key={condition.condition_code}>
+                                    <span className="character-sheet__fact-list-primary">
+                                        {humanizeCode(
+                                            condition.condition_code,
+                                        )}
+                                    </span>
+                                    {condition.source_description !==
+                                        null && (
                                             <span className="character-sheet__fact-list-secondary">
-                                                (
-                                                {
-                                                    proficiency.proficiency_type_display_name
-                                                }
-                                                {proficiency.is_expertise
-                                                    ? ", Expertise"
-                                                    : ""}
-                                                )
+                                                {" — "}
+                                                {condition.source_description}
                                             </span>
-                                        </li>
-                                    ),
-                                )}
-                            </ul>
-                        </CharacterSheetSubsection>
-
-                        <CharacterSheetSubsection
-                            title="Languages"
-                            isEmpty={sheet.languages.length === 0}
-                            emptyState={<p>No languages recorded.</p>}
-                        >
-                            <ul className="character-sheet__fact-list">
-                                {sheet.languages.map((language) => (
-                                    <li key={language.language_id}>
-                                        {language.display_name}
-                                    </li>
-                                ))}
-                            </ul>
-                        </CharacterSheetSubsection>
-
-                        <CharacterSheetSubsection
-                            title="Senses"
-                            isEmpty={sheet.senses.length === 0}
-                            emptyState={<p>No senses recorded.</p>}
-                        >
-                            <FactGrid
-                                items={sheet.senses.map((sense) => ({
-                                    key: sense.sense_type,
-                                    label: humanizeCode(sense.sense_type),
-                                    value: `${sense.range_feet} ft`,
-                                }))}
-                            />
-                        </CharacterSheetSubsection>
-
-                        <CharacterSheetSubsection
-                            title="Conditions"
-                            isEmpty={
-                                conditions === null ||
-                                conditions.length === 0
-                            }
-                            emptyState={
-                                <p>
-                                    {conditions === null
-                                        ? "Not recorded."
-                                        : "No conditions are currently recorded."}
-                                </p>
-                            }
-                        >
-                            {conditions !== null && (
-                                <ul className="character-sheet__fact-list">
-                                    {conditions.map((condition) => (
-                                        <li key={condition.condition_code}>
-                                            <span className="character-sheet__fact-list-primary">
-                                                {humanizeCode(
-                                                    condition.condition_code,
-                                                )}
-                                            </span>
-                                            {condition.source_description !==
-                                                null && (
-                                                    <span className="character-sheet__fact-list-secondary">
-                                                        {" — "}
-                                                        {condition.source_description}
-                                                    </span>
-                                                )}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </CharacterSheetSubsection>
-
-                        <CharacterSheetSubsection
-                            title="Resources"
-                            isEmpty={
-                                resources === null || resources.length === 0
-                            }
-                            emptyState={
-                                <p>
-                                    {resources === null
-                                        ? "Not recorded."
-                                        : "No resources are currently recorded."}
-                                </p>
-                            }
-                        >
-                            {resources !== null && (
-                                <ul className="character-sheet__fact-list">
-                                    {resources.map((resource) => (
-                                        <li key={resource.resource_code}>
-                                            <span className="character-sheet__fact-list-primary">
-                                                {humanizeCode(
-                                                    resource.resource_code,
-                                                )}
-                                            </span>{" "}
-                                            {resource.current_amount} /{" "}
-                                            {resource.maximum_amount}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </CharacterSheetSubsection>
-                    </DetailPanel>
-
-                    <DetailPanel
-                        title="Features & Traits"
-                        isEmpty={sheet.features.length === 0}
-                        emptyState={<p>No features recorded.</p>}
-                    >
-                        <ul className="character-sheet__feature-list">
-                            {sheet.features.map((feature) => (
-                                <li key={feature.feature_id}>
-                                    <FeatureCard feature={feature} />
+                                        )}
                                 </li>
                             ))}
                         </ul>
-                    </DetailPanel>
-                </div>
+                    )}
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Resources"
+                    isEmpty={
+                        resources === null || resources.length === 0
+                    }
+                    emptyState={
+                        <p>
+                            {resources === null
+                                ? "Not recorded."
+                                : "No resources are currently recorded."}
+                        </p>
+                    }
+                >
+                    {resources !== null && (
+                        <ul className="character-sheet__fact-list">
+                            {resources.map((resource) => (
+                                <li key={resource.resource_code}>
+                                    <span className="character-sheet__fact-list-primary">
+                                        {humanizeCode(
+                                            resource.resource_code,
+                                        )}
+                                    </span>{" "}
+                                    {resource.current_amount} /{" "}
+                                    {resource.maximum_amount}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </DetailPanel>
+
+                <DetailPanel
+                    title="Features & Traits"
+                    isEmpty={sheet.features.length === 0}
+                    emptyState={<p>No features recorded.</p>}
+                >
+                    <ul className="character-sheet__feature-list">
+                        {sheet.features.map((feature) => (
+                            <li key={feature.feature_id}>
+                                <FeatureCard feature={feature} />
+                            </li>
+                        ))}
+                    </ul>
+                </DetailPanel>
 
                 <DetailPanel
                     title="Spellcasting"
