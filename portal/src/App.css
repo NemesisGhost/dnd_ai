@@ -1686,3 +1686,82 @@
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
 }
+
+/* Access overview (Phase 13E-A): a dense list of per-member disclosure
+   cards, matching the character-sheet feature list's proven "collapsed
+   summary, expand for detail" treatment (see .character-disclosure-card
+   above) without coupling this page to character-sheet presentation. */
+.access-page__description {
+  margin: 0.5rem 0 0;
+  color: var(--color-text-muted);
+}
+
+.access-page__member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  list-style: none;
+}
+
+.access-member-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface-muted);
+}
+
+.access-member-card summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.access-member-card summary::-webkit-details-marker { display: none; }
+.access-member-card summary:hover { background: var(--color-surface-hover); }
+.access-member-card summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.access-member-card summary strong { flex-basis: 100%; }
+.access-member-card summary span:not(.access-member-card__indicator) {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.access-member-card__indicator { margin-left: auto; }
+.access-member-card__indicator::after { content: "Expand +"; font-size: 0.8rem; }
+.access-member-card[open] .access-member-card__indicator::after { content: "Collapse −"; }
+
+.access-member-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+.access-member-card__body h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.access-member-card__body ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.access-member-card__body p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.access-member-card__joined {
+  font-size: 0.8rem;
+}
