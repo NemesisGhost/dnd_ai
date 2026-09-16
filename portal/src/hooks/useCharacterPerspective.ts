@@ -92,8 +92,62 @@ export function useCharacterPerspective({
         reload()
     }
 
+    // Unlike selectCharacter, this never reloads the bootstrap: it exists
+    // to reconcile the visible perspective with a character id a route
+    // already trusts the server to authorize (e.g. from a URL), not to
+    // perform a new user-driven selection.
+    function syncCharacterFromUrl(
+        campaignId: string,
+        characterId: string,
+    ): void {
+        if (state.status !== "authenticated") {
+            return
+        }
+
+        const { bootstrap } = state
+
+        const campaign = bootstrap.campaigns.find(
+            (candidate) =>
+                candidate.campaign_id === campaignId,
+        )
+
+        if (campaign === undefined) {
+            return
+        }
+
+        const isAuthorized = campaign.character_perspectives.some(
+            (character) => character.character_id === characterId,
+        )
+
+        if (!isAuthorized) {
+            return
+        }
+
+        setSelection((currentSelection) => {
+            const alreadyMatches =
+                currentSelection !== null &&
+                currentSelection.userId === bootstrap.user.user_id &&
+                currentSelection.browserSessionId ===
+                bootstrap.browser_session_id &&
+                currentSelection.campaignId === campaignId &&
+                currentSelection.characterId === characterId
+
+            if (alreadyMatches) {
+                return currentSelection
+            }
+
+            return {
+                userId: bootstrap.user.user_id,
+                browserSessionId: bootstrap.browser_session_id,
+                campaignId,
+                characterId,
+            }
+        })
+    }
+
     return {
         getSelectedCharacterId,
         selectCharacter,
+        syncCharacterFromUrl,
     }
 }

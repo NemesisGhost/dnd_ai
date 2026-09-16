@@ -1,4 +1,5 @@
 import type { CampaignQuestListItem } from "../types/quest"
+import { humanizeCode } from "../utils/humanize"
 import { EntityCard } from "./EntityCard"
 
 interface QuestCardProps {
@@ -10,7 +11,10 @@ interface QuestCardProps {
 // never invents a description, objective count, reward, participant, or
 // location (UI_STYLE_GUIDE.md §12.1).
 export function QuestCard({ campaignId, quest }: QuestCardProps) {
-    const status = quest.status_code ?? "No status recorded"
+    const status =
+        quest.status_code !== null
+            ? humanizeCode(quest.status_code)
+            : "No status recorded"
 
     return (
         <EntityCard

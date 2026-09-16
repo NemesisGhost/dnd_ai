@@ -71,6 +71,7 @@ function resolveAuthorizedParties(
 
 interface KnowledgeItemListProps {
     campaignId: string
+    characterId: string | null
     partyId: string | null
     page: KnowledgeResultsPage
     refreshing: boolean
@@ -79,6 +80,7 @@ interface KnowledgeItemListProps {
 
 function KnowledgeItemList({
     campaignId,
+    characterId,
     partyId,
     page,
     refreshing,
@@ -102,6 +104,7 @@ function KnowledgeItemList({
                             key={item.knowledge_item_id}
                             campaignId={campaignId}
                             item={item}
+                            characterId={characterId}
                             partyId={partyId}
                         />
                     ))}
@@ -221,6 +224,7 @@ function CampaignKnowledgeContent({
                 {(page, refreshing) => (
                     <KnowledgeItemList
                         campaignId={campaignId}
+                        characterId={characterId}
                         partyId={partyId}
                         page={page}
                         refreshing={refreshing}

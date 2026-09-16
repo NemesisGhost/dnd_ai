@@ -25,10 +25,26 @@ describe("QuestCard", () => {
         expect(
             screen.getByText("Restore the Lens Array"),
         ).toBeInTheDocument()
-        expect(screen.getByText("active")).toBeInTheDocument()
+        expect(screen.getByText("Active")).toBeInTheDocument()
         expect(
             screen.getByRole("link", { name: /Restore the Lens Array/ }),
         ).toHaveAttribute("href", "/app/campaign-a/quests/quest-a")
+    })
+
+    it("humanizes an underscore-separated status code", () => {
+        renderCard({
+            quest_id: "quest-d",
+            name: "Chart the Undercroft",
+            status_code: "in_progress",
+        })
+
+        expect(screen.getByText("In Progress")).toBeInTheDocument()
+        expect(screen.queryByText("in_progress")).not.toBeInTheDocument()
+        expect(
+            screen.getByRole("link", {
+                name: "Chart the Undercroft, In Progress",
+            }),
+        ).toBeInTheDocument()
     })
 
     it("falls back to a no-status label when status is null", () => {

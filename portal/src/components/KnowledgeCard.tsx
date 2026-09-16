@@ -5,6 +5,10 @@ import { EntityCard } from "./EntityCard"
 interface KnowledgeCardProps {
     campaignId: string
     item: KnowledgeListItem
+    /** The currently selected character perspective, carried into the
+     * detail link's URL so a direct refresh/bookmark reproduces the same
+     * authorized character-dependent view (UI_STYLE_GUIDE.md §11.2). */
+    characterId: string | null
     /** The currently selected party filter, carried into the detail link's
      * URL so a direct refresh/bookmark reproduces the same authorized
      * party-filtered view (UI_STYLE_GUIDE.md §11.2). */
@@ -14,21 +18,26 @@ interface KnowledgeCardProps {
 function buildDetailPath(
     campaignId: string,
     knowledgeItemId: string,
+    characterId: string | null,
     partyId: string | null,
 ): string {
     const path =
         `/app/${encodeURIComponent(campaignId)}` +
         `/knowledge/${encodeURIComponent(knowledgeItemId)}`
 
-    if (partyId === null) {
-        return path
+    const searchParameters = new URLSearchParams()
+
+    if (characterId !== null) {
+        searchParameters.set("character_id", characterId)
     }
 
-    const searchParameters = new URLSearchParams({
-        party_id: partyId,
-    })
+    if (partyId !== null) {
+        searchParameters.set("party_id", partyId)
+    }
 
-    return `${path}?${searchParameters.toString()}`
+    const query = searchParameters.toString()
+
+    return query === "" ? path : `${path}?${query}`
 }
 
 // Domain-specific wrapper mapping one authorized KnowledgeListItem into the
@@ -38,6 +47,7 @@ function buildDetailPath(
 export function KnowledgeCard({
     campaignId,
     item,
+    characterId,
     partyId,
 }: KnowledgeCardProps) {
     const metadata: string[] = [`Scope: ${humanizeCode(item.scope)}`]
@@ -72,6 +82,7 @@ export function KnowledgeCard({
             to={buildDetailPath(
                 campaignId,
                 item.knowledge_item_id,
+                characterId,
                 partyId,
             )}
             linkLabel={item.statement}

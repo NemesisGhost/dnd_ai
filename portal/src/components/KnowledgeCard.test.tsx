@@ -20,13 +20,18 @@ const baseItem: KnowledgeListItem = {
     subject_entity_id: null,
 }
 
-function renderCard(item: KnowledgeListItem, partyId: string | null = null) {
+function renderCard(
+    item: KnowledgeListItem,
+    characterId: string | null = null,
+    partyId: string | null = null,
+) {
     return render(
         <MemoryRouter>
             <ul>
                 <KnowledgeCard
                     campaignId="campaign-a"
                     item={item}
+                    characterId={characterId}
                     partyId={partyId}
                 />
             </ul>
@@ -46,7 +51,7 @@ describe("KnowledgeCard", () => {
         expect(screen.getByText("Willing to share")).toBeInTheDocument()
     })
 
-    it("links to the detail route without a party_id when none is selected", () => {
+    it("links to the detail route without a query string when neither character nor party is selected", () => {
         renderCard(baseItem)
 
         expect(
@@ -57,8 +62,19 @@ describe("KnowledgeCard", () => {
         )
     })
 
+    it("carries the selected character perspective into the detail link", () => {
+        renderCard(baseItem, "character-a")
+
+        expect(
+            screen.getByRole("link", { name: baseItem.statement }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character-a",
+        )
+    })
+
     it("carries the selected party filter into the detail link", () => {
-        renderCard(baseItem, "party-a")
+        renderCard(baseItem, null, "party-a")
 
         expect(
             screen.getByRole("link", { name: baseItem.statement }),
@@ -66,6 +82,38 @@ describe("KnowledgeCard", () => {
             "href",
             "/app/campaign-a/knowledge/knowledge-a?party_id=party-a",
         )
+    })
+
+    it("carries both the selected character and party into the detail link", () => {
+        renderCard(baseItem, "character-a", "party-a")
+
+        expect(
+            screen.getByRole("link", { name: baseItem.statement }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character-a&party_id=party-a",
+        )
+    })
+
+    it("safely URL-encodes character and party ids", () => {
+        renderCard(baseItem, "character a/b", "party a&b")
+
+        expect(
+            screen.getByRole("link", { name: baseItem.statement }),
+        ).toHaveAttribute(
+            "href",
+            "/app/campaign-a/knowledge/knowledge-a?character_id=character+a%2Fb&party_id=party+a%26b",
+        )
+    })
+
+    it("never shows the character or party id as card content or in the accessible name", () => {
+        renderCard(baseItem, "character-a", "party-a")
+
+        expect(screen.queryByText("character-a")).not.toBeInTheDocument()
+        expect(screen.queryByText("party-a")).not.toBeInTheDocument()
+        expect(
+            screen.getByRole("link", { name: baseItem.statement }).textContent,
+        ).not.toMatch(/character-a|party-a/)
     })
 
     it("omits nullable awareness/confidence/sharing facts rather than showing a placeholder", () => {
