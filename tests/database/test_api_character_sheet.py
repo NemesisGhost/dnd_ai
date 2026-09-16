@@ -471,6 +471,44 @@ def test_a_character_targeted_canon_edit_deny_overrides_a_role_derived_gm(
     assert response.json()["error"]["code"] == "not_found"
 
 
+def test_an_entity_targeted_campaign_view_deny_overrides_canon_edit_and_view_full(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Phase 13D acceptance defect #1: the sheet route previously skipped
+    the coarser entity-targeted `campaign.view` deny gate that character
+    detail and inventory already honored (`access.has_capability(
+    _CHARACTER_VIEW_CAPABILITY, entity_id=character_id)`), so a caller who
+    independently held `canon.edit` (the GM) or `character.view_full` (the
+    full-tier viewer) could still reach the sheet. Proven for both."""
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.character_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.character_id,
+            grantee_campaign_membership_id=f.full_view_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as client:
+        gm_response = client.get(_sheet_url(f))
+    with client_factory(f.full_view_user_id) as client:
+        full_view_response = client.get(_sheet_url(f))
+
+    assert gm_response.status_code == 404
+    assert gm_response.json()["error"]["code"] == "not_found"
+    assert full_view_response.status_code == 404
+    assert full_view_response.json()["error"]["code"] == "not_found"
+
+
 # ---------------------------------------------------------------------------
 # Cross-world ownership and existence
 # ---------------------------------------------------------------------------

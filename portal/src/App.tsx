@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router"
 import "./App.css"
 import { ThemeSelector } from "./themes/ThemeSelector"
+import { LogoutButton } from "./components/LogoutButton"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { LoginPage } from "./pages/LoginPage"
@@ -21,10 +22,15 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 className="app-header__title">
+        {/* Not an h1: each route supplies its own single page-level
+            heading (docs/PLAN.md accessibility exit criterion) — this is
+            persistent site-identity chrome, not a heading in the document
+            outline. */}
+        <p className="app-header__title">
           D&amp;D AI Portal
-        </h1>
+        </p>
         <ThemeSelector />
+        <LogoutButton />
       </header>
 
       <Routes>

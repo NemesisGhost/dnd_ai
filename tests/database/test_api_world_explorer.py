@@ -1047,6 +1047,82 @@ def test_entity_targeted_deny_also_hides_character_full_tier_and_inventory(
         assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.npc_id}").status_code == 200
 
 
+def test_entity_targeted_deny_is_consistent_across_detail_sheet_inventory_and_search(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Phase 13D acceptance defect #1: `/sheet` previously skipped the
+    entity-targeted `campaign.view` deny gate that `/characters/{id}` and
+    `/characters/{id}/inventory` already honored, so a caller who
+    independently held `canon.edit` or `character.view_full` for a denied
+    character could still reach mechanical build data through the sheet
+    alone. This proves all three routes — plus World Explorer search — now
+    agree, and that the non-disclosing 404 body is identical across them,
+    for a GM who holds role-derived `canon.edit` (full tier) on `f.pc_id`."""
+
+    def _sheet_url() -> str:
+        return f"/campaigns/{f.campaign_id}/characters/{f.pc_id}/sheet"
+
+    def _detail_url() -> str:
+        return f"/campaigns/{f.campaign_id}/characters/{f.pc_id}"
+
+    def _inventory_url() -> str:
+        return f"/campaigns/{f.campaign_id}/characters/{f.pc_id}/inventory"
+
+    with client_factory(f.gm_user_id) as gm:
+        # Baseline: the GM's role-derived canon.edit grants full tier
+        # everywhere, and the character is discoverable in search.
+        assert gm.get(_detail_url()).status_code == 200
+        assert gm.get(_inventory_url()).status_code == 200
+        assert gm.get(_sheet_url()).status_code == 200
+        search_ids = {
+            item["entity_id"]
+            for item in gm.get(_search(f), params={"category": "character", "limit": 100}).json()[
+                "items"
+            ]
+        }
+        assert str(f.pc_id) in search_ids
+
+    with postgres_engine.begin() as setup:
+        make_resource_grant(
+            setup,
+            f.campaign_id,
+            f.view_capability_id,
+            entity_id=f.pc_id,
+            grantee_campaign_membership_id=f.gm_membership_id,
+            effect="deny",
+        )
+
+    with client_factory(f.gm_user_id) as gm:
+        detail_response = gm.get(_detail_url())
+        inventory_response = gm.get(_inventory_url())
+        sheet_response = gm.get(_sheet_url())
+        search_ids = {
+            item["entity_id"]
+            for item in gm.get(_search(f), params={"category": "character", "limit": 100}).json()[
+                "items"
+            ]
+        }
+
+    assert detail_response.status_code == 404
+    assert inventory_response.status_code == 404
+    assert sheet_response.status_code == 404
+    assert str(f.pc_id) not in search_ids
+
+    # The fixed, non-disclosing body must be identical across all three
+    # routes — a caller must never be able to tell them apart by response
+    # shape, even though they return different content on success.
+    bodies = [detail_response.json(), inventory_response.json(), sheet_response.json()]
+    codes = {body["error"]["code"] for body in bodies}
+    messages = {body["error"]["message"] for body in bodies}
+    assert len(codes) == 1
+    assert len(messages) == 1
+
+    # An undenied character remains fully readable everywhere.
+    with client_factory(f.gm_user_id) as gm:
+        assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.npc_id}").status_code == 200
+        assert gm.get(f"/campaigns/{f.campaign_id}/characters/{f.npc_id}/sheet").status_code == 200
+
+
 def test_character_detail_deny_is_lifted_when_the_grant_is_revoked(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:

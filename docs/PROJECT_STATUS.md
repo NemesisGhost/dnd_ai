@@ -15,7 +15,7 @@ reverified.
 | Core FastAPI/API slice (Phase 10) | Complete | Preserve authentication, authorization, audit, idempotency, and non-disclosure boundaries |
 | Foundry MVP (Phase 11) | Pairing, per-device credentials, scoped access, synchronization, module, and automated coverage are implemented | Run and record the documented live Foundry v13 acceptance exercise |
 | AI/NPC MVP (Phase 12) | Schema, reference corpus, provider abstraction, NPC turn/proposals, and audience-aware synthesis are implemented | Run a real-provider smoke test and create `PHASE12_VERIFICATION.md` |
-| Web portal (Phase 13) | 13A-13D complete: shell, local session/bootstrap, campaign/perspective context, and six live read-only campaign screens | 13E GM tools, 13F Foundry device UI, 13G AI surfaces, and 13H E2E/production packaging |
+| Web portal (Phase 13) | 13A-13C complete. 13D implemented (shell, local session/bootstrap, campaign/perspective context, and six live read-only campaign screens); a 13D acceptance review found and corrected four defects (Character Sheet authorization parity with Detail/Inventory, portal logout, heading hierarchy, and this status line's own premature "complete" claim) — see PLAN.md §13 | 13E GM tools, 13F Foundry device UI, 13G AI surfaces, and 13H E2E/production packaging |
 | Local production deployment (Phase 14) | PostgreSQL, one-off migrations, and a single-worker API are available in Compose | Package the portal and worker, add reverse proxy/TLS, secrets/monitoring, backup/restore, and rollback evidence |
 | Controlled import (Phase 15) | Not started | Complete the staged review and command-backed promotion workflow |
 
