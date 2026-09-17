@@ -22,8 +22,10 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.api.access import resolve_party_perspective
 from dnd_ai.api.world_explorer import resolve_world_character_visibility
+from dnd_ai.commands.local_auth import authenticate_local_user, create_browser_session
 from dnd_ai.domain.access import resolve_access_context
-from dnd_ai.domain.passwords import hash_password
+from dnd_ai.domain.passwords import PasswordPolicyError, hash_password
+from dnd_ai.queries.access_overview import get_campaign_access_overview
 from dnd_ai.queries.bootstrap import CampaignBootstrapView, get_session_bootstrap
 from dnd_ai.queries.character import get_character_view
 from dnd_ai.queries.character_sheet import get_character_sheet_view
@@ -50,6 +52,7 @@ from tests.factories import (
     make_campaign,
     make_entity,
     make_event,
+    make_platform_administrator,
     make_session,
     make_timeline,
     make_user,
@@ -57,16 +60,49 @@ from tests.factories import (
     make_world_time,
 )
 
+# `_run()` now provisions the Phase 13E-A dev accounts too and requires a
+# password for them (see setup_phase13c_dev_data._resolve_phase13e_dev_
+# password) — a fixed, obviously-a-test-fixture literal, exactly like the
+# hardcoded password `_make_local_account` already uses below. Never read
+# from an environment variable here: these tests exercise `_run()`
+# directly against the ephemeral per-session test database, not through
+# `main()`'s own CLI/environment-variable plumbing — the environment-
+# variable contract itself (`PHASE13E_DEV_ACCOUNT_PASSWORD`) is exercised
+# below by calling `_resolve_phase13e_dev_password()` directly, the same
+# "test the guard function directly" shape `test_production_environment_
+# refusal_is_enforced`/`test_remote_database_target_is_refused` already
+# establish for the other environment guards.
+_TEST_DEV_PASSWORD = "Phase13E-Dev-Fixture-Password-1"
 
-def _make_local_account(connection: Connection, *, display_name: str = "Dev Tester") -> uuid.UUID:
+
+def _make_local_account(
+    connection: Connection,
+    *,
+    display_name: str = "Dev Tester",
+    is_platform_administrator: bool = True,
+) -> uuid.UUID:
     """A minimal `security.users` row with an active local (issuer='local')
     identity and password credential — the exact shape `setup_phase13c_dev_
     data._resolve_user` requires. Raw inserts, matching tests/factories.py's
     own documented "testing database enforcement" exception: this test is
     specifically exercising the setup script's own database logic, not the
     local-auth activation flow (already covered by
-    tests/database/test_local_auth_commands.py)."""
-    user_id = make_user(connection, display_name)
+    tests/database/test_local_auth_commands.py).
+
+    Defaults to `is_platform_administrator=True`: `_run()` now
+    unconditionally provisions the Phase 13E-A dev accounts via the real
+    `dnd_ai.commands.local_auth._create_local_account_impl`, which itself
+    requires the acting `--user-id` account to already be a platform
+    administrator — true for the real dev environment's own pre-existing
+    account (confirmed by direct inspection), so every caller of `_run()`
+    needs it now, not only the Phase 13E-A tests below. Pass `False`
+    explicitly for a test that specifically needs a non-administrator
+    account (none currently do)."""
+    user_id = (
+        make_platform_administrator(connection, display_name)
+        if is_platform_administrator
+        else make_user(connection, display_name)
+    )
     connection.execute(
         text(
             "INSERT INTO security.external_identities (user_id, issuer, subject) "
@@ -84,14 +120,29 @@ def _make_local_account(connection: Connection, *, display_name: str = "Dev Test
     return user_id
 
 
+def _all_created_on_first_run(lines: list[str]) -> bool:
+    """`_run()`'s own first-run report is "every line is `[created]`" for
+    every fixture section except one: the Phase 13E-A disabled-account row
+    reports a status *transition* (`[reconciled ...] disabled: ...`, not
+    `[created]`) even on the very first run — disabling an
+    already-created-active account is not itself a creation. Every
+    pre-existing "first run created everything" assertion in this file
+    goes through this helper instead of a bare blanket check, so that
+    legitimate exception does not have to be special-cased at every call
+    site."""
+    return all(
+        "[created]" in line or ("disabled:" in line and "[reconciled" in line) for line in lines
+    )
+
+
 def test_run_is_idempotent_and_bootstrap_recognizes_the_result(db_connection: Connection) -> None:
     user_id = _make_local_account(db_connection)
 
-    first = _run(db_connection, user_id=user_id)
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert first.lines, "first run should have created every record"
-    assert all("[created]" in line for line in first.lines), first.lines
+    assert _all_created_on_first_run(first.lines), first.lines
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert all("[reused" in line for line in second.lines), second.lines
     # Same number of records recognized both times — nothing duplicated.
     assert len(second.lines) == len(first.lines)
@@ -160,11 +211,11 @@ def test_character_a_and_b_current_state_matches_the_documented_fixture(
     character-detail endpoint itself uses, not a re-implementation of it."""
     user_id = _make_local_account(db_connection)
 
-    first = _run(db_connection, user_id=user_id)
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert first.lines, "first run should have created every record"
-    assert all("[created]" in line for line in first.lines), first.lines
+    assert _all_created_on_first_run(first.lines), first.lines
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert all("[reused" in line for line in second.lines), second.lines
     assert len(second.lines) == len(first.lines)
 
@@ -222,7 +273,7 @@ def test_rerun_reconciles_character_a_state_condition_and_resource_after_drift(
     value back to the documented fixture state and reports each as
     "reconciled" rather than "reused"."""
     user_id = _make_local_account(db_connection, display_name="Dev Tester Two")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     timeline_a_id, world_id, character_a_id, _character_b_id = _resolve_campaign_a_characters(
         db_connection, user_id=user_id
@@ -253,7 +304,7 @@ def test_rerun_reconciles_character_a_state_condition_and_resource_after_drift(
         {"timeline": timeline_a_id, "character": character_a_id},
     )
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     reconciled_lines = [line for line in second.lines if "[reconciled" in line]
     assert len(reconciled_lines) == 3, second.lines
     assert any("character state: Phase13C Character A" in line for line in reconciled_lines), (
@@ -292,11 +343,11 @@ def test_character_a_and_b_sheets_match_the_documented_fixture(db_connection: Co
     module already applies to its own rows."""
     user_id = _make_local_account(db_connection, display_name="Dev Tester Three")
 
-    first = _run(db_connection, user_id=user_id)
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert first.lines, "first run should have created every record"
-    assert all("[created]" in line for line in first.lines), first.lines
+    assert _all_created_on_first_run(first.lines), first.lines
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     assert all("[reused" in line for line in second.lines), second.lines
     assert len(second.lines) == len(first.lines)
 
@@ -404,7 +455,7 @@ def test_preview_mode_rolls_back_all_new_session_world_time_and_event_rows(
     user_id = _make_local_account(db_connection, display_name="Preview Tester")
 
     savepoint = db_connection.begin_nested()
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     campaigns = _campaigns(db_connection, user_id=user_id)
     assert (
@@ -458,7 +509,7 @@ def test_apply_creates_the_expected_campaign_a_and_campaign_b_sessions(
     and the list data supports the portal's newest-first, nulls-last
     ordering."""
     user_id = _make_local_account(db_connection, display_name="Apply Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
 
     a_sessions = list_campaign_sessions(
@@ -490,7 +541,7 @@ def test_session_detail_carries_the_recap_and_its_linked_events_in_backend_order
     the events come back in deliberate world-time chronological order —
     which for Session 1 is the reverse of their alphabetical name order."""
     user_id = _make_local_account(db_connection, display_name="Detail Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
     campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
 
@@ -519,7 +570,7 @@ def test_the_nullable_session_has_no_title_timestamps_summary_or_events(
 ) -> None:
     """Item 7: Session 3 exercises every empty state at once."""
     user_id = _make_local_account(db_connection, display_name="Nullable Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
     campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
 
@@ -548,7 +599,7 @@ def test_the_campaign_b_session_belongs_only_to_campaign_b(
     (the same non-disclosing `SessionNotFoundError` a nonexistent session
     raises), and resolves normally under Campaign B's id."""
     user_id = _make_local_account(db_connection, display_name="Cross Campaign Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
     campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
     campaign_b_id = campaigns[_CAMPAIGN_B].campaign_id
@@ -580,9 +631,9 @@ def test_running_apply_twice_creates_no_duplicate_sessions_world_times_or_events
     other row this fixture creates."""
     user_id = _make_local_account(db_connection, display_name="Idempotent Sessions Tester")
 
-    first = _run(db_connection, user_id=user_id)
-    second = _run(db_connection, user_id=user_id)
-    assert all("[created]" in line for line in first.lines), first.lines
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    assert _all_created_on_first_run(first.lines), first.lines
     assert all("[reused" in line for line in second.lines), second.lines
     assert len(first.lines) == len(second.lines)
 
@@ -623,7 +674,7 @@ def test_rerun_reconciles_session_fields_and_event_ordering_after_drift(
     (The linked events and their world times are schema-immutable, so those
     are covered by the idempotency test, not here.)"""
     user_id = _make_local_account(db_connection, display_name="Reconcile Sessions Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
     campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
 
@@ -652,7 +703,7 @@ def test_rerun_reconciles_session_fields_and_event_ordering_after_drift(
         {"session": by_number[3].session_id},
     )
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     reconciled = [line for line in second.lines if "[reconciled" in line]
     assert any(f"session {_CAMPAIGN_A} #1" in line for line in reconciled), reconciled
     assert any(f"session {_CAMPAIGN_A} #3" in line for line in reconciled), reconciled
@@ -711,8 +762,8 @@ def test_unrelated_pre_existing_session_and_event_records_remain_unchanged(
         name="Not a fixture event",
     )
 
-    _run(db_connection, user_id=user_id)
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     session_row = db_connection.execute(
         text("SELECT title, summary FROM campaign.sessions WHERE session_id = :s"),
@@ -827,7 +878,7 @@ def test_preview_mode_rolls_back_all_new_quest_rows(db_connection: Connection) -
     user_id = _make_local_account(db_connection, display_name="Quest Preview Tester")
 
     savepoint = db_connection.begin_nested()
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert {
@@ -871,7 +922,7 @@ def test_apply_creates_the_expected_quests_stages_and_objectives(
     null-status), the detailed quest's three ordered stages, and its six
     objectives with the documented lookup codes."""
     user_id = _make_local_account(db_connection, display_name="Quest Apply Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     items = {i.name: i for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}
@@ -936,9 +987,9 @@ def test_running_apply_twice_creates_no_duplicate_quest_rows(db_connection: Conn
     other row this fixture creates."""
     user_id = _make_local_account(db_connection, display_name="Quest Idempotent Tester")
 
-    first = _run(db_connection, user_id=user_id)
-    second = _run(db_connection, user_id=user_id)
-    assert all("[created]" in line for line in first.lines), first.lines
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    assert _all_created_on_first_run(first.lines), first.lines
     assert all("[reused" in line for line in second.lines), second.lines
     assert len(first.lines) == len(second.lines)
 
@@ -968,7 +1019,7 @@ def test_rerun_reconciles_mutable_quest_rows_after_drift(db_connection: Connecti
     reported as "reconciled" — and the real queries then show the restored
     values."""
     user_id = _make_local_account(db_connection, display_name="Quest Reconcile Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert campaign_a.timeline_id is not None
     glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
@@ -1006,7 +1057,7 @@ def test_rerun_reconciles_mutable_quest_rows_after_drift(db_connection: Connecti
         {"q": glass_id},
     )
 
-    second = _run(db_connection, user_id=user_id)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     reconciled = [line for line in second.lines if "[reconciled" in line]
     assert any(f"quest state {_QUEST_A_ACTIVE!r} (campaign-wide)" in line for line in reconciled), (
         reconciled
@@ -1036,7 +1087,7 @@ def test_a_name_collision_with_non_fixture_data_fails_safely(db_connection: Conn
     collision — the re-run aborts with guidance rather than guessing which
     row is the fixture's."""
     user_id = _make_local_account(db_connection, display_name="Quest Collision Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     world_a = db_connection.execute(
         text("SELECT world_id FROM core.entities WHERE canonical_name = :n"),
@@ -1049,14 +1100,14 @@ def test_a_name_collision_with_non_fixture_data_fails_safely(db_connection: Conn
     make_entity(db_connection, world_a, continent_type_id, name=_QUEST_A_ACTIVE)
 
     with pytest.raises(SystemExit, match="collision"):
-        _run(db_connection, user_id=user_id)
+        _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
 
 def test_campaign_a_and_b_quests_remain_isolated(db_connection: Connection) -> None:
     """Item 6: Campaign B's quest is tracked only on Timeline B and never
     appears in Campaign A's list, and vice versa."""
     user_id = _make_local_account(db_connection, display_name="Quest Isolation Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert campaign_b.timeline_id is not None
 
@@ -1082,7 +1133,7 @@ def test_production_list_query_returns_the_expected_campaign_a_quests(
     Campaign A fixture quests, ordered by canonical_name (the production
     contract), with the documented statuses."""
     user_id = _make_local_account(db_connection, display_name="Quest List Query Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
 
     items = _list_a(db_connection, campaign_a, is_gm=is_gm)
@@ -1098,7 +1149,7 @@ def test_production_detail_query_preserves_stage_sequence_order(db_connection: C
     """Item 8: `get_quest_view` returns "Restore the Glass Ossuary"'s stages
     in sequence order, which is deliberately the reverse of alphabetical."""
     user_id = _make_local_account(db_connection, display_name="Quest Detail Query Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert campaign_a.timeline_id is not None
     glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
@@ -1127,7 +1178,7 @@ def test_production_visibility_filtering_is_preserved(db_connection: Connection)
     `hidden_until_discovered` objectives are returned only with
     `include_hidden=True`."""
     user_id = _make_local_account(db_connection, display_name="Quest Visibility Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert campaign_a.timeline_id is not None
     glass_id = {i.name: i.quest_id for i in _list_a(db_connection, campaign_a, is_gm=is_gm)}[
@@ -1172,7 +1223,7 @@ def test_the_campaign_b_quest_is_not_disclosed_through_campaign_a_list(
     read-only production-query verification, exercised here as a real
     regression test rather than a printed expectation."""
     user_id = _make_local_account(db_connection, display_name="Quest Cross Campaign Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, campaign_b, world_a, is_gm = _quest_context(db_connection, user_id=user_id)
     assert campaign_a.timeline_id is not None and campaign_b.timeline_id is not None
 
@@ -1349,7 +1400,7 @@ def test_wk_apply_makes_every_world_explorer_category_reachable(db_connection: C
     are all reachable through the real `search_world_entities` query — valid
     subtype rows and foreign keys, ordered as production orders them."""
     user_id = _make_local_account(db_connection, display_name="WK Apply Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
 
     cards = _search_all(db_connection, campaign_a, world_a)
@@ -1383,9 +1434,9 @@ def test_wk_apply_makes_every_world_explorer_category_reachable(db_connection: C
 def test_wk_is_idempotent(db_connection: Connection) -> None:
     """A second apply reuses every world/knowledge row — nothing duplicated."""
     user_id = _make_local_account(db_connection, display_name="WK Idempotent Tester")
-    first = _run(db_connection, user_id=user_id)
-    second = _run(db_connection, user_id=user_id)
-    assert all("[created]" in line for line in first.lines), first.lines
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    assert _all_created_on_first_run(first.lines), first.lines
     assert all("[reused" in line for line in second.lines), second.lines
     assert len(first.lines) == len(second.lines)
 
@@ -1410,7 +1461,7 @@ def test_wk_location_hierarchy_breadcrumbs(db_connection: Connection) -> None:
     """`get_location_view` returns the four-level containment trail for the
     deepest fixture location."""
     user_id = _make_local_account(db_connection, display_name="WK Breadcrumb Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
     assert campaign_a.timeline_id is not None
 
@@ -1449,7 +1500,7 @@ def test_wk_knowledge_truth_versus_belief_separation(db_connection: Connection) 
     truth_status; the player party-perspective sees only the party's own
     interpretation with no ground truth."""
     user_id = _make_local_account(db_connection, display_name="WK Belief Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, character_a, _character_b, party_id = _wk_context(
         db_connection, user_id=user_id
     )
@@ -1484,7 +1535,7 @@ def test_wk_knowledge_truth_versus_belief_separation(db_connection: Connection) 
 
 def test_wk_private_party_public_recipient_semantics(db_connection: Connection) -> None:
     user_id = _make_local_account(db_connection, display_name="WK Recipient Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, character_a, character_b, party_id = _wk_context(
         db_connection, user_id=user_id
     )
@@ -1527,7 +1578,7 @@ def test_wk_private_party_public_recipient_semantics(db_connection: Connection) 
 
 def test_wk_recent_carries_visible_source_provenance(db_connection: Connection) -> None:
     user_id = _make_local_account(db_connection, display_name="WK Provenance Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, character_a, _b, party_id = _wk_context(db_connection, user_id=user_id)
 
     recent = _knowledge(
@@ -1552,7 +1603,7 @@ def test_wk_campaign_a_and_b_isolation(db_connection: Connection) -> None:
     Campaign A; the world-canon Saltreach location does, by the documented
     world-scoped model."""
     user_id = _make_local_account(db_connection, display_name="WK Isolation Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaigns = _campaigns(db_connection, user_id=user_id)
     campaign_a = campaigns[_CAMPAIGN_A]
     campaign_b = campaigns[_CAMPAIGN_B]
@@ -1602,7 +1653,7 @@ def test_wk_campaign_a_and_b_isolation(db_connection: Connection) -> None:
 
 def test_wk_draft_event_is_gm_only(db_connection: Connection) -> None:
     user_id = _make_local_account(db_connection, display_name="WK Draft Tester")
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
     campaign_a, world_a, *_ = _wk_context(db_connection, user_id=user_id)
 
     gm = {
@@ -1628,8 +1679,8 @@ def test_wk_preserves_unrelated_world_rows(db_connection: Connection) -> None:
     continent_type = lookup_id(db_connection, "core", "entity_types", "entity_type_id", "continent")
     other_entity = make_entity(db_connection, other_world_id, continent_type, name="Auremar")
 
-    _run(db_connection, user_id=user_id)
-    _run(db_connection, user_id=user_id)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
 
     assert (
         db_connection.execute(
@@ -1646,3 +1697,465 @@ def test_wk_preserves_unrelated_world_rows(db_connection: Connection) -> None:
         ).scalar()
         == 2
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 13E-A access-overview manual-verification fixture
+# ---------------------------------------------------------------------------
+
+
+def _phase13e_login_name(connection: Connection, login_name: str) -> uuid.UUID | None:
+    return connection.execute(
+        text("""
+            SELECT ei.user_id FROM security.external_identities ei
+            WHERE ei.issuer = 'local' AND ei.subject = :login AND ei.revoked_at IS NULL
+        """),
+        {"login": login_name},
+    ).scalar()
+
+
+def _phase13e_lifecycle_status(connection: Connection, user_id: uuid.UUID) -> str:
+    status = connection.execute(
+        text("""
+            SELECT ls.code FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user
+        """),
+        {"user": user_id},
+    ).scalar()
+    assert isinstance(status, str)
+    return status
+
+
+def _phase13e_open_membership(
+    connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID | None:
+    return connection.execute(
+        text("""
+            SELECT campaign_membership_id FROM security.campaign_memberships
+            WHERE campaign_id = :campaign AND user_id = :user AND ended_at IS NULL
+        """),
+        {"campaign": campaign_id, "user": user_id},
+    ).scalar()
+
+
+def test_phase13e_dev_password_env_var_missing_fails_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 3/12: no `PHASE13E_DEV_ACCOUNT_PASSWORD` at all — refused before
+    any database connection is even opened, matching `test_production_
+    environment_refusal_is_enforced`'s own direct-guard-function shape."""
+    monkeypatch.delenv("PHASE13E_DEV_ACCOUNT_PASSWORD", raising=False)
+    with pytest.raises(SystemExit):
+        setup_phase13c_dev_data._resolve_phase13e_dev_password()
+
+
+def test_phase13e_dev_password_failing_policy_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set-but-too-short value is refused by the same local password
+    policy every other command in `dnd_ai.commands.local_auth` enforces —
+    never a bespoke, weaker check invented just for this script."""
+    monkeypatch.setenv("PHASE13E_DEV_ACCOUNT_PASSWORD", "short")
+    with pytest.raises(SystemExit):
+        setup_phase13c_dev_data._resolve_phase13e_dev_password()
+    with pytest.raises(PasswordPolicyError):
+        setup_phase13c_dev_data.validate_password_policy("short")
+
+
+def test_phase13e_dev_password_resolves_when_set_and_valid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE13E_DEV_ACCOUNT_PASSWORD", _TEST_DEV_PASSWORD)
+    assert setup_phase13c_dev_data._resolve_phase13e_dev_password() == _TEST_DEV_PASSWORD
+
+
+def test_phase13e_preview_mode_rolls_back_every_new_access_fixture_row(
+    db_connection: Connection,
+) -> None:
+    """The identical SQL path, then a rollback (a `SAVEPOINT`, the same
+    shape `test_preview_mode_rolls_back_all_new_session_world_time_and_
+    event_rows` already establishes) leaves no Phase 13E-A account,
+    membership, role, relationship, or grant behind."""
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Preview Tester", is_platform_administrator=True
+    )
+
+    savepoint = db_connection.begin_nested()
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    assert (
+        _phase13e_login_name(db_connection, setup_phase13c_dev_data._PHASE13E_GM2_LOGIN_NAME)
+        is not None
+    )
+
+    savepoint.rollback()
+
+    for login_name in (
+        setup_phase13c_dev_data._PHASE13E_GM2_LOGIN_NAME,
+        setup_phase13c_dev_data._PHASE13E_PLAYER_A_LOGIN_NAME,
+        setup_phase13c_dev_data._PHASE13E_OBSERVER_A_LOGIN_NAME,
+        setup_phase13c_dev_data._PHASE13E_PLAYER_B_LOGIN_NAME,
+        setup_phase13c_dev_data._PHASE13E_DISABLED_LOGIN_NAME,
+    ):
+        assert _phase13e_login_name(db_connection, login_name) is None
+
+
+def test_phase13e_apply_creates_the_expected_accounts_memberships_and_roles(
+    db_connection: Connection,
+) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Apply Tester", is_platform_administrator=True
+    )
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
+    campaign_b_id = campaigns[_CAMPAIGN_B].campaign_id
+
+    gm2_id = _phase13e_login_name(db_connection, setup_phase13c_dev_data._PHASE13E_GM2_LOGIN_NAME)
+    player_a_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_PLAYER_A_LOGIN_NAME
+    )
+    observer_a_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_OBSERVER_A_LOGIN_NAME
+    )
+    player_b_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_PLAYER_B_LOGIN_NAME
+    )
+    disabled_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_DISABLED_LOGIN_NAME
+    )
+    assert gm2_id is not None
+    assert player_a_id is not None
+    assert observer_a_id is not None
+    assert player_b_id is not None
+    assert disabled_id is not None
+
+    # Campaign membership: GM2/Player A/Observer A/Disabled in Campaign A
+    # only; Player B in Campaign B only.
+    assert _phase13e_open_membership(db_connection, campaign_id=campaign_a_id, user_id=gm2_id)
+    assert (
+        _phase13e_open_membership(db_connection, campaign_id=campaign_b_id, user_id=gm2_id) is None
+    )
+    assert _phase13e_open_membership(db_connection, campaign_id=campaign_a_id, user_id=player_a_id)
+    assert (
+        _phase13e_open_membership(db_connection, campaign_id=campaign_b_id, user_id=player_a_id)
+        is None
+    )
+    assert _phase13e_open_membership(
+        db_connection, campaign_id=campaign_a_id, user_id=observer_a_id
+    )
+    assert _phase13e_open_membership(db_connection, campaign_id=campaign_b_id, user_id=player_b_id)
+    assert (
+        _phase13e_open_membership(db_connection, campaign_id=campaign_a_id, user_id=player_b_id)
+        is None
+    )
+    assert _phase13e_open_membership(db_connection, campaign_id=campaign_a_id, user_id=disabled_id)
+
+    # Effective capabilities via the real authorization resolver — never a
+    # re-implementation of it.
+    gm2_access = resolve_access_context(db_connection, user_id=gm2_id, campaign_id=campaign_a_id)
+    assert gm2_access is not None and gm2_access.has_capability("access.manage")
+
+    player_a_access = resolve_access_context(
+        db_connection, user_id=player_a_id, campaign_id=campaign_a_id
+    )
+    assert player_a_access is not None and not player_a_access.has_capability("access.manage")
+
+    observer_a_access = resolve_access_context(
+        db_connection, user_id=observer_a_id, campaign_id=campaign_a_id
+    )
+    assert observer_a_access is not None and not observer_a_access.has_capability("access.manage")
+
+    player_b_access = resolve_access_context(
+        db_connection, user_id=player_b_id, campaign_id=campaign_b_id
+    )
+    assert player_b_access is not None and not player_b_access.has_capability("access.manage")
+
+
+def test_phase13e_player_a_has_the_owner_relationship_to_character_a(
+    db_connection: Connection,
+) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Relationship Tester", is_platform_administrator=True
+    )
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
+    player_a_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_PLAYER_A_LOGIN_NAME
+    )
+    assert player_a_id is not None
+    player_a_membership_id = _phase13e_open_membership(
+        db_connection, campaign_id=campaign_a_id, user_id=player_a_id
+    )
+    assert player_a_membership_id is not None
+
+    relationship_type = db_connection.execute(
+        text("""
+            SELECT rt.code FROM security.membership_character_relationships mcr
+            JOIN security.character_relationship_types rt
+                ON rt.character_relationship_type_id = mcr.character_relationship_type_id
+            WHERE mcr.campaign_membership_id = :membership AND mcr.revoked_at IS NULL
+        """),
+        {"membership": player_a_membership_id},
+    ).scalar()
+    assert relationship_type == "owner"
+
+    observer_a_id = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_OBSERVER_A_LOGIN_NAME
+    )
+    assert observer_a_id is not None
+    observer_a_membership_id = _phase13e_open_membership(
+        db_connection, campaign_id=campaign_a_id, user_id=observer_a_id
+    )
+    assert observer_a_membership_id is not None
+    assert (
+        db_connection.execute(
+            text("""
+                SELECT count(*) FROM security.membership_character_relationships
+                WHERE campaign_membership_id = :membership AND revoked_at IS NULL
+            """),
+            {"membership": observer_a_membership_id},
+        ).scalar()
+        == 0
+    )
+
+
+def test_phase13e_access_overview_shows_the_visible_grant_and_excludes_the_revoked_one(
+    db_connection: Connection,
+) -> None:
+    """Ties this fixture directly to the real Phase 13E-A production query
+    (`dnd_ai.queries.access_overview.get_campaign_access_overview`) —
+    never a hand-written lookalike."""
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Grant Tester", is_platform_administrator=True
+    )
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a = campaigns[_CAMPAIGN_A]
+    assert campaign_a.timeline_id is not None
+
+    members = get_campaign_access_overview(
+        db_connection, campaign_id=campaign_a.campaign_id, timeline_id=campaign_a.timeline_id
+    )
+    by_name = {m.display_name: m for m in members}
+
+    observer = by_name[setup_phase13c_dev_data._PHASE13E_OBSERVER_A_DISPLAY_NAME]
+    assert len(observer.grants) == 1
+    assert (
+        observer.grants[0].capability_code
+        == setup_phase13c_dev_data._PHASE13E_VISIBLE_GRANT_CAPABILITY_CODE
+    )
+    assert observer.grants[0].target_type == "character"
+
+    player_a = by_name[setup_phase13c_dev_data._PHASE13E_PLAYER_A_DISPLAY_NAME]
+    assert player_a.grants == ()
+
+    # The disabled account's membership still appears, with an ordinary
+    # "Active" membership status — the overview never consults
+    # security.users.lifecycle_status_id (docs/PHASE13E_ACCESS_CONTRACT.md
+    # §3). This is the documented contract, not a defect.
+    disabled = by_name[setup_phase13c_dev_data._PHASE13E_DISABLED_DISPLAY_NAME]
+    assert disabled.status_display_name == "Active"
+
+
+def test_phase13e_disabled_account_cannot_authenticate_and_loses_its_session(
+    db_connection: Connection,
+) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Disable Tester", is_platform_administrator=True
+    )
+
+    # A session created *before* the disabling run, to prove disabling
+    # revokes an already-issued session — not merely that a never-
+    # logged-in account has none.
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    disabled_id_before = _phase13e_login_name(
+        db_connection, setup_phase13c_dev_data._PHASE13E_DISABLED_LOGIN_NAME
+    )
+    assert disabled_id_before is not None
+    session = create_browser_session(db_connection, user_id=disabled_id_before)
+
+    # Re-running disables it again (idempotent no-op per that command's own
+    # docstring) and must revoke this just-created session too.
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    assert _phase13e_lifecycle_status(db_connection, disabled_id_before) == "inactive"
+    revoked_at = db_connection.execute(
+        text("SELECT revoked_at FROM security.browser_sessions WHERE browser_session_id = :s"),
+        {"s": session.browser_session_id},
+    ).scalar()
+    assert revoked_at is not None
+
+    assert (
+        authenticate_local_user(
+            db_connection,
+            login_name=setup_phase13c_dev_data._PHASE13E_DISABLED_LOGIN_NAME,
+            raw_password=_TEST_DEV_PASSWORD,
+        )
+        is None
+    )
+    # An active Phase13E account authenticates correctly with the shared
+    # dev password — proof the failure above is the disabled status, not a
+    # broken password.
+    assert (
+        authenticate_local_user(
+            db_connection,
+            login_name=setup_phase13c_dev_data._PHASE13E_PLAYER_A_LOGIN_NAME,
+            raw_password=_TEST_DEV_PASSWORD,
+        )
+        is not None
+    )
+
+
+def test_phase13e_running_apply_twice_creates_no_duplicates(db_connection: Connection) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Idempotency Tester", is_platform_administrator=True
+    )
+    first = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    second = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    def _phase13e_lines(summary: setup_phase13c_dev_data._Summary) -> list[str]:
+        return [
+            line
+            for line in summary.lines
+            if any(
+                marker in line
+                for marker in (
+                    "dev account",
+                    "role 'campaign_owner'",
+                    "role 'player'",
+                    "role 'observer'",
+                    "'owner' relationship",
+                    "grant:",
+                    "disabled:",
+                    "membership:",
+                )
+            )
+        ]
+
+    first_phase13e_lines = _phase13e_lines(first)
+    # Every Phase 13E-A row is freshly created on the first run except
+    # "disabled:" — disabling an active account is a status *transition*
+    # (`_ensure_phase13e_account_disabled` reports it as `changed=True`,
+    # not `created=True`, matching `_Summary.add`'s own "reconciled"
+    # semantics), not a new row.
+    assert all(
+        "[created]" in line or line.strip().startswith("[reconciled")
+        for line in first_phase13e_lines
+    )
+    assert any("disabled:" in line and "[reconciled" in line for line in first_phase13e_lines)
+
+    campaigns = _campaigns(db_connection, user_id=user_id)
+    campaign_a_id = campaigns[_CAMPAIGN_A].campaign_id
+    campaign_b_id = campaigns[_CAMPAIGN_B].campaign_id
+
+    def _counts() -> tuple[int, int, int, int]:
+        account_count = db_connection.execute(
+            text("""
+                SELECT count(*) FROM security.external_identities
+                WHERE issuer = 'local' AND subject LIKE 'phase13e.%' AND revoked_at IS NULL
+            """)
+        ).scalar()
+        membership_count = db_connection.execute(
+            text("""
+                SELECT count(*) FROM security.campaign_memberships cm
+                JOIN security.external_identities ei ON ei.user_id = cm.user_id
+                WHERE cm.campaign_id IN (:a, :b) AND cm.ended_at IS NULL
+                  AND ei.issuer = 'local' AND ei.subject LIKE 'phase13e.%' AND ei.revoked_at IS NULL
+            """),
+            {"a": campaign_a_id, "b": campaign_b_id},
+        ).scalar()
+        role_count = db_connection.execute(
+            text("""
+                SELECT count(*) FROM security.membership_roles mr
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = mr.campaign_membership_id
+                JOIN security.external_identities ei ON ei.user_id = cm.user_id
+                WHERE cm.campaign_id IN (:a, :b) AND mr.revoked_at IS NULL
+                  AND ei.issuer = 'local' AND ei.subject LIKE 'phase13e.%' AND ei.revoked_at IS NULL
+            """),
+            {"a": campaign_a_id, "b": campaign_b_id},
+        ).scalar()
+        grant_count = db_connection.execute(
+            text("""
+                SELECT count(*) FROM security.resource_grants rg
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = rg.grantee_campaign_membership_id
+                JOIN security.external_identities ei ON ei.user_id = cm.user_id
+                WHERE cm.campaign_id IN (:a, :b)
+                  AND ei.issuer = 'local' AND ei.subject LIKE 'phase13e.%' AND ei.revoked_at IS NULL
+            """),
+            {"a": campaign_a_id, "b": campaign_b_id},
+        ).scalar()
+        assert isinstance(account_count, int)
+        assert isinstance(membership_count, int)
+        assert isinstance(role_count, int)
+        assert isinstance(grant_count, int)
+        return account_count, membership_count, role_count, grant_count
+
+    counts_after_first = _counts()
+
+    second_phase13e_lines = _phase13e_lines(second)
+    assert all(("[reused" in line or "[reconciled" in line) for line in second_phase13e_lines), (
+        second_phase13e_lines
+    )
+
+    counts_after_second = _counts()
+    assert counts_after_second == counts_after_first
+
+
+def test_phase13e_existing_admin_account_is_never_modified(db_connection: Connection) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Admin Guard Tester", is_platform_administrator=True
+    )
+    before = (
+        db_connection.execute(
+            text("""
+            SELECT u.display_name, ls.code AS lifecycle, lc.password_hash
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            LEFT JOIN security.local_credentials lc ON lc.user_id = u.user_id
+            WHERE u.user_id = :user
+        """),
+            {"user": user_id},
+        )
+        .mappings()
+        .one()
+    )
+
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    after = (
+        db_connection.execute(
+            text("""
+            SELECT u.display_name, ls.code AS lifecycle, lc.password_hash
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            LEFT JOIN security.local_credentials lc ON lc.user_id = u.user_id
+            WHERE u.user_id = :user
+        """),
+            {"user": user_id},
+        )
+        .mappings()
+        .one()
+    )
+
+    assert after["display_name"] == before["display_name"]
+    assert after["lifecycle"] == "active" == before["lifecycle"]
+    assert after["password_hash"] == before["password_hash"]
+
+
+def test_phase13e_script_output_never_contains_the_dev_password(
+    db_connection: Connection,
+) -> None:
+    user_id = _make_local_account(
+        db_connection, display_name="Phase13E Secret Guard Tester", is_platform_administrator=True
+    )
+    summary = _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    combined_output = "\n".join(summary.lines + summary.report + summary.access_report)
+    assert _TEST_DEV_PASSWORD not in combined_output

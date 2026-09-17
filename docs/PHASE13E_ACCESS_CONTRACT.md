@@ -80,3 +80,41 @@ No backend read/write contract exists yet for:
 - A UI for any of the existing mutation endpoints in §2 (role assignment/revocation, character-relationship grant/revocation, resource-grant creation/revocation, invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions).
 
 None of the above is implemented by 13E-A. This increment is read-only.
+
+## 6. Manual-validation development fixture accounts
+
+**Development-only. Never applicable to a real deployment.** `scripts/setup_phase13c_dev_data.py` (the same idempotent, preview-by-default Phase 13C/13D fixture script) now also provisions five deterministic local accounts so the Phase 13E-A Access overview can be exercised by hand against a real local PostgreSQL server — the local dev database otherwise contains only the pre-existing administrator/GM account, which cannot alone exercise a non-GM path, a second campaign's isolation, or a disabled account.
+
+### Safe invocation
+
+The script already refuses to run against anything but a local/self-hosted development database (`DND_AI_ENVIRONMENT` must be a local/dev value; a non-loopback `DATABASE_URL` host or a production-looking database name aborts unless `DND_AI_ALLOW_NONLOCAL_DEV_DATA=1` explicitly acknowledges it) and prints a password-redacted summary of the resolved target before any write. It now also requires `PHASE13E_DEV_ACCOUNT_PASSWORD` — checked before any database connection is opened at all:
+
+```powershell
+$env:PHASE13E_DEV_ACCOUNT_PASSWORD = Read-Host "Phase 13E development account password"
+uv run python scripts/setup_phase13c_dev_data.py --user-id <existing-admin-user-id>            # preview (rolled back)
+uv run python scripts/setup_phase13c_dev_data.py --user-id <existing-admin-user-id> --apply    # write
+```
+
+- **Never commit a real value.** `PHASE13E_DEV_ACCOUNT_PASSWORD` belongs only in your own shell session, or in the gitignored `.env` (see `.env.example`'s own placeholder) — never in a tracked file, never printed by this script, never in a commit.
+- **Rerun safely at any time.** Every step is create-or-reuse by a fixed, deterministic key (normalized login name; `(campaign, user)` for a membership; `(membership, role)` for a role; `(campaign, grantee, capability, character)` for a grant) — a second `--apply` reuses every row, creates nothing new, and never rotates an already-created account's password. The one exception, `_ensure_phase13e_account_disabled`, is itself idempotent (disabling an already-disabled account is a documented no-op).
+- **Recognize the intended local database** by the printed `target database (password redacted): ...` line before any write — it must name your own local/self-hosted PostgreSQL server (`127.0.0.1:5432` by default per `docs/DEVELOPMENT.md` §3.1), never a shared or production-looking host/database name.
+
+### Seeded accounts
+
+| Login | Display name | Campaign | Role (capability) | Character relationship | Explicit grant |
+|---|---|---|---|---|---|
+| `phase13e.gm2` | Phase13E Dev GM2 | Phase13C Campaign A | `campaign_owner` (`access.manage`) | none | none |
+| `phase13e.player_a` | Phase13E Dev Player A | Phase13C Campaign A | `player` (`campaign.view` only) | `owner` relationship to Phase13C Character A | one revoked grant (`character.view_summary`) — must not appear on the overview |
+| `phase13e.observer_a` | Phase13E Dev Observer A | Phase13C Campaign A | `observer` (`campaign.view` only) | none | one active grant (`character.view_full` on Phase13C Character A) — must appear |
+| `phase13e.player_b` | Phase13E Dev Player B | Phase13C Campaign B | `player` (`campaign.view` only) | none (Campaign B has no character fixture of its own) | none |
+| `phase13e.disabled` | Phase13E Dev Disabled Player | Phase13C Campaign A | `player` (`campaign.view` only), then disabled | none | none |
+
+All five share the one password supplied via `PHASE13E_DEV_ACCOUNT_PASSWORD` for that run. The pre-existing administrator/GM account is never modified — no password, login identifier, membership, role, capability, or session change.
+
+### Expected access behavior
+
+- **GM2** can log in and open the Access page directly, with no platform-administrator privilege needed — it holds `access.manage` only through the ordinary `campaign_owner` role.
+- **Player A** and **Observer A** hold no `access.manage`: the Access nav item must not appear for either, and a direct `GET /campaigns/{campaign_a_id}/access-overview` request must return `403`.
+- **Cross-campaign isolation:** Player A never sees Campaign B in their campaign list (no membership, no relationship reaching it); Player B never sees Campaign A, and vice versa.
+- **Grants:** on Campaign A's Access overview, Observer A shows exactly one grant (`View Character Full Detail`); Player A shows none — the revoked grant is excluded, proving the same exclusion `tests/database/test_api_access_overview.py` already covers automatically.
+- **Disabled account:** `phase13e.disabled` cannot authenticate and holds no usable browser session, but its Campaign A membership still appears on the Access overview with an ordinary "Active" *membership* status — `dnd_ai.queries.access_overview` deliberately never consults account-wide `security.users.lifecycle_status_id` (see §3 above). This is the documented contract, not a defect; the fixture does not invent a "disabled" label the implemented response does not provide.
