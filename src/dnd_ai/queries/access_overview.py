@@ -11,7 +11,13 @@ access as a whole. Each nested collection applies the identical
 revoked/expired/timeline filter `resolve_access_context` already uses
 (`revoked_at IS NULL`, `expires_at IS NULL OR expires_at > now()`,
 `timeline_id IS NULL OR timeline_id = :timeline_id`), so this overview never
-shows a relationship or grant that would not currently apply.
+shows a relationship or grant that would not currently apply. The explicit
+resource-grants query additionally requires `cap.is_active`, matching
+`resolve_access_context`'s own resource-grant resolution exactly — an
+explicit grant of a deactivated capability confers no effective access
+there, so it must not appear here as a current grant either (a review
+correction; the first cut joined `security.capabilities` for its
+`code`/`display_name` but omitted this check).
 
 Deliberately out of scope for this first increment (documented here rather
 than silently omitted):
@@ -206,6 +212,7 @@ def get_campaign_access_overview(
               AND rg.revoked_at IS NULL
               AND (rg.expires_at IS NULL OR rg.expires_at > now())
               AND (rg.timeline_id IS NULL OR rg.timeline_id = :timeline_id)
+              AND cap.is_active
             ORDER BY rg.granted_at, rg.resource_grant_id
         """),
         {"campaign_id": campaign_id, "timeline_id": timeline_id},

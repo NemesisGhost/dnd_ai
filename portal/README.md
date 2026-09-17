@@ -12,9 +12,13 @@ wired to live campaign-scoped API endpoints, each behind a shared
 (non-discoverable), error-with-retry, and background-refreshing states. The
 automated suite (`npm test`, `npm run lint`, `npm run build`) and a live
 multi-role browser pass have both passed — see
-[Phase 13C/13D verification](#phase-13c13d-verification) below. 13E (GM
-access tools), 13F (Foundry connections/device UI), 13G (Phase 12 surfaces),
-and 13H (E2E coverage and production packaging) have not started.
+[Phase 13C/13D verification](#phase-13c13d-verification) below. **13E (GM
+access tools) is in progress**: increment 13E-A replaced the Access
+screen's placeholder with a live, read-only campaign access overview (see
+below); every 13E mutation workflow (account/role/relationship/grant
+changes, invitations, preview-as-user) remains undelivered. 13F (Foundry
+connections/device UI), 13G (Phase 12 surfaces), and 13H (E2E coverage and
+production packaging) have not started.
 
 The portal currently includes:
 
@@ -42,7 +46,11 @@ The portal currently includes:
   views) and authorized party, with search and keyset pagination.
 - A visibly disabled Ask feature while the server manifest disables it.
 - Light/dark theme switching.
-- Placeholder pages for later portal increments (Ask, Access management).
+- A read-only Access screen (13E-A) showing the active campaign's current
+  members, roles, character relationships, and explicit resource grants —
+  see [Access overview (13E-A)](#access-overview-13e-a) below. No
+  access-management mutations exist yet.
+- A placeholder page for the later Ask increment (Phase 12-gated).
 - Automated tests covering routing, session and perspective behavior, and
   each screen's loading, empty, denied, and error states.
 
@@ -166,10 +174,11 @@ Authenticated campaign routes:
 - `/app/:campaignId/sessions/:sessionId`
 - `/app/:campaignId/knowledge`
 - `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
-- `/app/:campaignId/access` (placeholder — Phase 13E)
+- `/app/:campaignId/access` — live, read-only campaign access overview
+  (13E-A; see [Access overview (13E-A)](#access-overview-13e-a) below)
 
-Every route above except `ask` and `access` is a live, API-backed screen.
-Campaign IDs from URLs are matched against the current bootstrap's
+Every route above except `ask` is a live, API-backed screen. Campaign IDs
+from URLs are matched against the current bootstrap's
 authorized campaign list. Unavailable campaigns receive a generic
 unavailable/not-found state.
 
@@ -259,6 +268,23 @@ perspectives:
   search, category/view filters, and keyset pagination return correct live
   results.
 - A simulated request failure shows the error state and a working retry.
+
+## Access overview (13E-A)
+
+`/app/:campaignId/access` is a live, read-only screen backed by
+`GET /campaigns/{campaignId}/access-overview` (server-side capability
+`access.manage` — the same capability that already gates the Access nav
+item's visibility). It shows, per currently active campaign member: their
+display name and membership status, active roles, current character
+relationships, and explicit membership-targeted resource grants, all with
+human-readable labels. Identifiers in the response DTO (membership,
+character, role, and grant IDs) exist only for record identity — the page
+never renders them as visible text, only as React keys.
+
+Out of scope for this increment, deferred to a later Phase 13E increment:
+every mutation (no account/role/relationship/grant changes, invitations,
+or preview-as-user), access-group-targeted grants, and platform-wide
+account lifecycle status.
 
 ## Learning checkpoints
 

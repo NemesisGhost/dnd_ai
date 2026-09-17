@@ -34,6 +34,7 @@ from tests.factories import (
     make_access_group_membership,
     make_campaign,
     make_campaign_membership,
+    make_capability,
     make_character,
     make_membership_character_relationship,
     make_membership_role,
@@ -129,6 +130,29 @@ class Fixture:
             {"r": "Overview test visibility", "id": self.grant_id},
         )
 
+        # A fresh, non-protected capability used only by one explicit
+        # grant — proves grant/capability-active parity with
+        # dnd_ai.domain.access.resolve_access_context (a review
+        # correction): an otherwise-current grant of a *deactivated*
+        # capability confers no effective access there, so it must not
+        # appear here as a current grant either. Left active by default;
+        # a dedicated test below deactivates it. The fixture's own
+        # cleanup deletes this capability row explicitly by id regardless
+        # of its active state at teardown, since security.capabilities is
+        # a shared lookup table, not scoped by campaign/timeline like the
+        # rows the rest of that cleanup deletes by that scope.
+        self.deactivatable_capability_id = make_capability(
+            connection, code=f"test.access_overview_deactivatable_{uuid.uuid4().hex[:8]}"
+        )
+        self.deactivatable_capability_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            self.deactivatable_capability_id,
+            grantee_campaign_membership_id=self.member_membership_id,
+            character_id=self.character_id,
+            granted_by_membership_id=self.admin_membership_id,
+        )
+
         # A member whose role/relationship/grant are all revoked — proves
         # current-state filtering excludes each independently while the
         # membership itself still appears.
@@ -222,6 +246,13 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 )
             """),
             {"t": fixture.timeline_id},
+        )
+        # security.capabilities is a shared lookup table, not scoped by
+        # campaign/timeline like the rows above — the fixture's own
+        # deactivatable capability is deleted explicitly by id.
+        cleanup.execute(
+            text("DELETE FROM security.capabilities WHERE capability_id = :c"),
+            {"c": fixture.deactivatable_capability_id},
         )
         cleanup.execute(
             text("""
@@ -383,8 +414,11 @@ def test_authorized_gm_sees_the_full_overview(
     assert relationship["relationship_type_display_name"] == "Primary Controller"
     assert relationship["character_id"] == str(f.character_id)
 
-    assert len(member["grants"]) == 1
-    grant = member["grants"][0]
+    # Two grants: the assertions below exercise `grant_id`'s fields; the
+    # deactivatable-capability grant is exercised separately in the
+    # current-state filtering tests below.
+    assert len(member["grants"]) == 2
+    grant = next(g for g in member["grants"] if g["resource_grant_id"] == str(f.grant_id))
     assert grant["capability_code"] == "campaign.view"
     assert grant["capability_display_name"] == "View Campaign"
     assert grant["effect"] == "allow"
@@ -440,6 +474,37 @@ def test_an_access_group_targeted_grant_is_never_attributed_to_a_member(
     for member in response.json()["members"]:
         for grant in member["grants"]:
             assert grant["resource_grant_id"] != str(f.group_grant_id)
+
+
+def test_a_grant_of_a_deactivated_capability_is_excluded_while_an_active_one_remains(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    """Parity with `dnd_ai.domain.access.resolve_access_context`, which
+    requires `cap.is_active` when resolving a caller's own resource-grant
+    effects — an explicit grant of a deactivated capability confers no
+    effective access there, so it must not appear here as a current grant
+    either, even though the grant row itself is otherwise fully current
+    (not revoked, not expired, correctly timeline-scoped, and targets an
+    open membership)."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE security.capabilities SET is_active = false WHERE capability_id = :c"),
+            {"c": f.deactivatable_capability_id},
+        )
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+
+    member = _member(response.json(), f.member_membership_id)
+    grant_ids = {grant["resource_grant_id"] for grant in member["grants"]}
+
+    # The deactivated capability's otherwise-current grant is gone...
+    assert str(f.deactivatable_capability_grant_id) not in grant_ids
+    # ...while the equivalent grant to a still-active capability remains.
+    assert str(f.grant_id) in grant_ids
 
 
 # ---------------------------------------------------------------------------
