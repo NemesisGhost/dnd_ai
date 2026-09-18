@@ -9,6 +9,14 @@ interface RoleChangeAnnouncement {
     message: string
 }
 
+// Every role-mutation control (change/add/revoke) reports its own outcome
+// text through this one path (Phase 13E-B checkpoint 2) — a single
+// persistent announcement mechanism rather than three parallel ones, so
+// "starting another operation clears or supersedes stale success
+// messaging deliberately" and "does not retain stale Access records merely
+// to keep an announcement visible" both hold identically regardless of
+// which control produced the message.
+
 export function CampaignAccessPage() {
     const { campaignId } =
         useParams<{ campaignId: string }>()
@@ -51,10 +59,16 @@ export function CampaignAccessPage() {
             ? announcement.message
             : ""
 
-    function handleRoleChanged(retry: () => void): void {
+    function handleRoleChanged(
+        retry: () => void,
+        message: string,
+    ): void {
+        // Starting (or completing) another operation always replaces
+        // whatever announcement was showing — a fresh call here, whatever
+        // its text, is never merged with or appended to a stale one.
         setAnnouncement({
             campaignId: activeCampaignId,
-            message: "Role updated.",
+            message,
         })
         // The authoritative refresh runs immediately — this announcement
         // exists to survive it, never to delay it.
@@ -76,8 +90,8 @@ export function CampaignAccessPage() {
                     <AccessPage
                         campaignId={activeCampaignId}
                         overview={overview}
-                        onChanged={() =>
-                            handleRoleChanged(retry)
+                        onChanged={(message) =>
+                            handleRoleChanged(retry, message)
                         }
                     />
                 )}

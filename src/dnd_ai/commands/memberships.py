@@ -53,6 +53,21 @@ into a 500. Pre-checking here, the same way `dnd_ai.commands._shared.
 validate_campaign_party`/`.validate_session_campaign` pre-check their own
 cross-scope invariants, is what keeps the client-facing status code
 correct.
+
+Phase 13E-B checkpoint 2 (complete role-assignment management for existing
+members — add one additional role, revoke one existing role, both without
+touching the membership itself) hardens `assign_membership_role()` to the
+same "currently true" eligibility bar `change_membership_role()` already
+enforces for its own target/candidate roles: the target membership must be
+open and in the `active` membership status, its underlying user account
+must currently be platform-active (`MembershipNotActiveError`), and the
+role being assigned must be currently `is_active` in addition to being
+usable by this campaign's scope (`RoleNotUsableByCampaignError`, extended).
+`revoke_membership_role()` now returns `RevokeMembershipRoleResult` so its
+caller can tell an actual revocation apart from the pre-existing harmless
+no-op on an already-revoked row — needed so `dnd_ai.api.memberships`'
+route can write exactly one audit record per real state change rather than
+one per HTTP call. See each function's own docstring for the full contract.
 """
 
 import uuid
@@ -79,6 +94,44 @@ class MembershipNotInCampaignError(DomainAuthorizationError):
     `safe_message`."""
 
 
+class MembershipNotActiveError(DomainAuthorizationError):
+    """Raised by `assign_membership_role()` (Phase 13E-B checkpoint 2) when
+    the target `campaign_membership_id`, though it does belong to
+    `campaign_id` (checked first, as `MembershipNotInCampaignError`), is not
+    currently an eligible, open membership to assign a role to — grouped,
+    identically, so a caller can never learn which condition applied:
+
+    - the membership has ended (`ended_at IS NOT NULL`);
+    - its membership status is not currently `active`
+      (`security.membership_statuses.code <> 'active'` or `.is_active`
+      false) — the identical membership half of `MembershipRoleNotActiveError`'s
+      own "currently true" definition, applied here to a bare membership
+      rather than one of its existing role rows;
+    - **or** its underlying user account is not currently active
+      (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code
+      <> 'active'`) — the identical account-usability check `dnd_ai.domain.
+      access.resolve_user_by_external_identity`/`.is_platform_administrator`/
+      `.resolve_foundry_system_principal` already apply to every login path
+      in this codebase, applied here so a disabled platform account is never
+      handed a *new* campaign role even though its already-open membership
+      row and any roles it already held remain visible on the access
+      overview (`dnd_ai.queries.access_overview` deliberately never
+      consults account-wide lifecycle status for *display* — see that
+      module's own docstring — but granting new authority to an account
+      that cannot even authenticate is a different question this write path
+      answers independently).
+
+    409, matching `MembershipRoleNotActiveError`'s own conflict contract for
+    the same "this may have been fine a moment ago, and the caller cannot
+    tell from the outside which condition now blocks it" family of checks —
+    never the base class's default 404, since the membership's existence
+    and campaign scope are already established by the time this raises."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
+
+
 class RoleNotUsableByCampaignError(DomainAuthorizationError):
     """Raised by `assign_membership_role()`/`change_membership_role()` when
     a target `role_id` is neither a system template (`security.roles.
@@ -96,7 +149,17 @@ class RoleNotUsableByCampaignError(DomainAuthorizationError):
     for why relying on that trigger's raw `IntegrityError` alone would
     surface as an unclassified 500 instead. The supplied ids are included
     only in the constructor's `detail` argument (`str(self)`), never in
-    `safe_message`."""
+    `safe_message`.
+
+    `assign_membership_role()` (Phase 13E-B checkpoint 2 hardening) applies
+    the identical scope-plus-`is_active` check `change_membership_role()`
+    already applied to its own `new_role_id` — the original checkpoint-1-era
+    `assign_membership_role()` checked scope only, so a caller could assign
+    an already-deactivated campaign-scoped or system-template role, silently
+    diverging from `dnd_ai.queries.access_overview.
+    list_assignable_campaign_roles`'s own `is_active`-filtered "what may
+    actually be assigned" contract. Matching that contract exactly (rather
+    than merely scope) closes the gap."""
 
 
 class MembershipRoleNotActiveError(DomainAuthorizationError):
@@ -204,36 +267,102 @@ def assign_membership_role(
     `granted_by_membership_id` (always the caller's own resolved
     `AccessContext.campaign_membership_id`, never caller-supplied — so it
     is same-campaign by construction and needs no separate check the way
-    `campaign_membership_id`/`role_id` do). Raises
-    `MembershipNotInCampaignError` for a `campaign_membership_id` outside
-    `campaign_id`, or `RoleNotUsableByCampaignError` for a `role_id` that
-    is neither a system template nor scoped to `campaign_id` — both before
-    any row is written. A retry assigning the same still-active role again
-    is rejected as a 409 by `ux_membership_roles_active` (existing
-    `IntegrityError` handler)."""
-    membership_campaign_id = connection.execute(
-        text(
-            "SELECT campaign_id FROM security.campaign_memberships "
-            "WHERE campaign_membership_id = :membership"
-        ),
-        {"membership": campaign_membership_id},
-    ).scalar()
-    if membership_campaign_id is None or membership_campaign_id != campaign_id:
+    `campaign_membership_id`/`role_id` do).
+
+    Raises `MembershipNotInCampaignError` for a nonexistent
+    `campaign_membership_id`, or one outside `campaign_id` (checked first,
+    so this stays indistinguishable from "it never existed" for an
+    unauthorized caller). Raises `MembershipNotActiveError` (409, Phase
+    13E-B checkpoint 2) if the membership itself is not currently an
+    eligible, open target — ended, its own status not `active`, or its
+    underlying user account not currently active; see that error's own
+    docstring for the full "currently true" definition. Raises
+    `RoleNotUsableByCampaignError` (404) for a `role_id` that is neither a
+    system template nor scoped to `campaign_id`, or is not currently
+    `is_active` — identical to `change_membership_role()`'s own scope-plus-
+    activeness check on its `new_role_id`. A retry assigning the same
+    still-active role again is rejected as a 409 by `ux_membership_roles_
+    active` (existing `IntegrityError` handler) — deliberately not
+    pre-checked here, matching this module's own documented "database-
+    enforced invariants this module deliberately does not duplicate"
+    policy.
+
+    Locks the target membership row and, separately, its owning user row
+    (`FOR UPDATE OF cm`/`FOR UPDATE OF u`) before evaluating the membership-
+    eligibility check above, and locks the candidate role row (`FOR
+    UPDATE`) before evaluating its own — so a concurrent ending of this
+    membership, a concurrent deactivation of its owning user account, or a
+    concurrent deactivation of the candidate role cannot slip in between
+    this function's own read and its later `INSERT`: whichever transaction
+    acquires the relevant row lock first forces the other to wait, then
+    re-observes the first's committed effect rather than a stale, moment-
+    of-check snapshot. Locks are always acquired membership-then-role (the
+    same order `change_membership_role()` uses for its own target-row/
+    candidate-role pair), so the two commands can never deadlock against
+    each other."""
+    membership_row = (
+        connection.execute(
+            text("""
+                SELECT cm.campaign_id, cm.ended_at, cm.user_id,
+                       ms.code AS membership_status_code, ms.is_active AS membership_status_is_active
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :membership
+                FOR UPDATE OF cm
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if membership_row is None or membership_row["campaign_id"] != campaign_id:
         raise MembershipNotInCampaignError(
             f"membership {campaign_membership_id} does not belong to campaign {campaign_id} "
-            f"(actual campaign: {membership_campaign_id})"
+            f"(actual campaign: {membership_row['campaign_id'] if membership_row is not None else None})"
+        )
+
+    membership_is_eligible = (
+        membership_row["ended_at"] is None
+        and membership_row["membership_status_code"] == "active"
+        and membership_row["membership_status_is_active"]
+    )
+    if not membership_is_eligible:
+        raise MembershipNotActiveError(
+            f"membership {campaign_membership_id} is not currently an eligible, open "
+            "membership to assign a role to"
+        )
+
+    user_lifecycle_status_code = connection.execute(
+        text("""
+            SELECT ls.code
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user
+            FOR UPDATE OF u
+        """),
+        {"user": membership_row["user_id"]},
+    ).scalar()
+    if user_lifecycle_status_code != "active":
+        raise MembershipNotActiveError(
+            f"membership {campaign_membership_id}'s user {membership_row['user_id']} is not "
+            "currently an active platform account"
         )
 
     role_row = (
         connection.execute(
-            text("SELECT campaign_id FROM security.roles WHERE role_id = :role"),
+            text(
+                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+            ),
             {"role": role_id},
         )
         .mappings()
         .one_or_none()
     )
-    if role_row is None or (
-        role_row["campaign_id"] is not None and role_row["campaign_id"] != campaign_id
+    if (
+        role_row is None
+        or (role_row["campaign_id"] is not None and role_row["campaign_id"] != campaign_id)
+        or not role_row["is_active"]
     ):
         raise RoleNotUsableByCampaignError(
             f"role {role_id} is not usable by campaign {campaign_id} "
@@ -258,28 +387,47 @@ def assign_membership_role(
     return AssignMembershipRoleResult(membership_role_id=membership_role_id)
 
 
+@dataclass(frozen=True)
+class RevokeMembershipRoleResult:
+    """`revoked` (Phase 13E-B checkpoint 2) is `True` only when this
+    specific call transitioned the row from active to revoked — `False`
+    for the documented harmless-no-op case (already revoked). `dnd_ai.api.
+    memberships.revoke_membership_role_endpoint` uses this to write exactly
+    one `audit.change_log` row per *actual* revocation, never one per HTTP
+    call — see that route's own docstring for why the pre-existing
+    unconditional audit write was a real (if narrow) duplicate-audit gap on
+    an ordinary retry with no `Idempotency-Key` reuse."""
+
+    revoked: bool
+
+
 def revoke_membership_role(
     connection: Connection, *, membership_role_id: uuid.UUID, campaign_id: uuid.UUID
-) -> None:
+) -> RevokeMembershipRoleResult:
     """Revokes `membership_role_id` (sets `revoked_at`), or does nothing if
     it was already revoked — a retry is a harmless no-op, needing no
-    idempotency-key store. Raises `MembershipNotInCampaignError` for a
-    nonexistent `membership_role_id` or one belonging to a different
-    campaign than `campaign_id`. Raises a plain `ValueError` (mapped by
-    the existing generic handler to a fixed 400, like every other
-    unclassified domain validation failure in this codebase) if revoking
-    it would leave an *active* campaign with no membership holding
-    `access.manage` — mirroring `security.
+    idempotency-key store to stay state-idempotent (see `RevokeMembership
+    RoleResult.revoked` above for how a caller distinguishes the two
+    outcomes without this function itself needing one). Raises
+    `MembershipNotInCampaignError` for a nonexistent `membership_role_id` or
+    one belonging to a different campaign than `campaign_id`. Raises a
+    plain `ValueError` (mapped by the existing generic handler to a fixed
+    400, like every other unclassified domain validation failure in this
+    codebase) if revoking it would leave an *active* campaign with no
+    membership holding `access.manage` — mirroring `security.
     assert_campaign_retains_access_manager()`'s own "only active campaigns
     are checked" scope exactly, via the same read-only `security.
     campaign_has_access_manager()` helper that function's own docstring
-    names as the pre-check counterpart. Locks the target row (`FOR UPDATE`)
-    before evaluating either check, so a concurrent revoke of a different
-    role in the same campaign cannot race past this one."""
+    names as the pre-check counterpart; skipped entirely when this call is
+    itself a no-op, since an already-revoked row cannot newly violate an
+    invariant nothing about this call changed. Locks the target row (`FOR
+    UPDATE`) before evaluating either check, so a concurrent revoke or
+    change of the identical row, or a concurrent revoke of a different role
+    in the same campaign, cannot race past this one."""
     row = (
         connection.execute(
             text("""
-                SELECT cm.campaign_id
+                SELECT cm.campaign_id, mr.revoked_at
                 FROM security.membership_roles mr
                 JOIN security.campaign_memberships cm
                     ON cm.campaign_membership_id = mr.campaign_membership_id
@@ -297,6 +445,10 @@ def revoke_membership_role(
             f"(actual campaign: {row['campaign_id'] if row is not None else None})"
         )
 
+    already_revoked = row["revoked_at"] is not None
+    if already_revoked:
+        return RevokeMembershipRoleResult(revoked=False)
+
     connection.execute(
         text(
             "UPDATE security.membership_roles SET revoked_at = now() "
@@ -313,6 +465,8 @@ def revoke_membership_role(
             f"{campaign_id} with no membership holding access.manage"
         ),
     )
+
+    return RevokeMembershipRoleResult(revoked=True)
 
 
 def _assert_active_campaign_retains_access_manager(

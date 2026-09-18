@@ -1,79 +1,66 @@
 import { useId, useState } from "react"
-import { useChangeMembershipRole } from "../hooks/useChangeMembershipRole"
-import type {
-    AccessRoleSummary,
-    AssignableRole,
-} from "../types/accessOverview"
+import { useAssignMembershipRole } from "../hooks/useAssignMembershipRole"
+import type { AssignableRole } from "../types/accessOverview"
 
-interface MemberRoleEditorProps {
+interface AddMemberRoleProps {
     campaignId: string
     campaignName: string
+    campaignMembershipId: string
     memberDisplayName: string
-    role: AccessRoleSummary
     assignableRoles: AssignableRole[]
     onChanged: (message: string) => void
 }
 
 function statusMessage(
-    kind:
-        | "pending"
-        | "success"
-        | "denied"
-        | "conflict"
-        | "validation"
-        | "error",
+    kind: "pending" | "success" | "denied" | "conflict" | "error",
 ): string {
     switch (kind) {
         case "pending":
-            return "Saving role change…"
+            return "Adding role…"
         case "success":
-            return "Role updated."
+            return "Role added."
         case "denied":
             return "You do not have permission to make this change."
         case "conflict":
-            return "This role assignment changed elsewhere. Reload the page to see the current state."
-        case "validation":
-            return "That role can no longer be assigned. Reload the page to see the current choices."
+            return "This member's roles changed elsewhere. Reload the page to see the current state."
         case "error":
-            return "The role change could not be saved. Try again."
+            return "The role could not be added. Try again."
     }
 }
 
-// One editor per currently active role assignment (never per member): the
-// backend contract changes exactly one `membership_role_id` at a time, so
-// the UI never offers a single control that could silently replace every
-// role a member holds — see dnd_ai.commands.memberships.
-// change_membership_role's own docstring.
-export function MemberRoleEditor({
+// One control per member (never per role, unlike MemberRoleEditor/
+// RevokeMemberRole below): "add a role" names a member and a role to add,
+// not an existing assignment to act on. `assignableRoles` here is already
+// narrowed to roles this member does not currently hold actively — see
+// AccessPage's own derivation — so every option offered is a genuine,
+// currently-possible addition; the server independently re-validates
+// everything regardless (dnd_ai.commands.memberships.assign_membership_role).
+export function AddMemberRole({
     campaignId,
     campaignName,
+    campaignMembershipId,
     memberDisplayName,
-    role,
     assignableRoles,
     onChanged,
-}: MemberRoleEditorProps) {
+}: AddMemberRoleProps) {
     const selectId = useId()
     const statusId = useId()
 
     const [isEditing, setIsEditing] = useState(false)
-    const [selectedRoleId, setSelectedRoleId] =
-        useState(role.role_id)
+    const [selectedRoleId, setSelectedRoleId] = useState(
+        assignableRoles[0]?.role_id ?? "",
+    )
 
-    const { status, submit, reset } = useChangeMembershipRole(
+    const { status, submit, reset } = useAssignMembershipRole(
         campaignId,
-        () => onChanged("Role updated."),
+        () => onChanged("Role added."),
     )
 
     const isPending = status.kind === "pending"
-    // Selecting the role the assignment already holds is not a change at
-    // all — disabled here so the no-op never reaches the server in the
-    // first place; dnd_ai.commands.memberships.change_membership_role
-    // still rejects it server-side (422) as defense in depth.
-    const isUnchangedSelection = selectedRoleId === role.role_id
 
     if (assignableRoles.length === 0) {
-        // Nothing the contract marks as an eligible target — never show a
-        // control with nowhere safe to send it.
+        // Every role this campaign could offer is already held — never
+        // show a control with nothing left to add.
         return null
     }
 
@@ -84,11 +71,13 @@ export function MemberRoleEditor({
                 className="access-role-editor__trigger"
                 onClick={() => {
                     reset()
-                    setSelectedRoleId(role.role_id)
+                    setSelectedRoleId(
+                        assignableRoles[0]?.role_id ?? "",
+                    )
                     setIsEditing(true)
                 }}
             >
-                Change role
+                Add role
             </button>
         )
     }
@@ -98,15 +87,15 @@ export function MemberRoleEditor({
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (isUnchangedSelection) {
+                if (selectedRoleId === "") {
                     return
                 }
-                submit(role.membership_role_id, selectedRoleId)
+                submit(campaignMembershipId, selectedRoleId)
             }}
         >
             <label htmlFor={selectId}>
-                Change {memberDisplayName}'s{" "}
-                {role.display_name} role in {campaignName}
+                Add a role for {memberDisplayName} in{" "}
+                {campaignName}
             </label>
 
             <select
@@ -119,12 +108,12 @@ export function MemberRoleEditor({
                     )
                 }}
             >
-                {assignableRoles.map((assignableRole) => (
+                {assignableRoles.map((role) => (
                     <option
-                        key={assignableRole.role_id}
-                        value={assignableRole.role_id}
+                        key={role.role_id}
+                        value={role.role_id}
                     >
-                        {assignableRole.display_name}
+                        {role.display_name}
                     </option>
                 ))}
             </select>
@@ -132,10 +121,12 @@ export function MemberRoleEditor({
             <div className="access-role-editor__actions">
                 <button
                     type="submit"
-                    disabled={isPending || isUnchangedSelection}
+                    disabled={
+                        isPending || selectedRoleId === ""
+                    }
                     aria-busy={isPending}
                 >
-                    {isPending ? "Saving…" : "Save"}
+                    {isPending ? "Adding…" : "Add"}
                 </button>
 
                 <button
@@ -143,7 +134,6 @@ export function MemberRoleEditor({
                     disabled={isPending}
                     onClick={() => {
                         reset()
-                        setSelectedRoleId(role.role_id)
                         setIsEditing(false)
                     }}
                 >
@@ -156,7 +146,6 @@ export function MemberRoleEditor({
                 className={
                     status.kind === "denied" ||
                     status.kind === "conflict" ||
-                    status.kind === "validation" ||
                     status.kind === "error"
                         ? "access-role-editor__status access-role-editor__status--error"
                         : "access-role-editor__status"

@@ -63,7 +63,11 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
 from dnd_ai.api.audit import record_change_log
-from dnd_ai.commands.memberships import change_membership_role, revoke_membership_role
+from dnd_ai.commands.memberships import (
+    assign_membership_role,
+    change_membership_role,
+    revoke_membership_role,
+)
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -440,6 +444,256 @@ def test_a_new_role_deactivation_cannot_race_it_being_assigned_by_a_change(
         _cleanup_retention_fixture(engine, timeline_id, world_id)
 
 
+def test_a_membership_ending_cannot_race_an_assign_targeting_it(
+    postgres_engine: Engine,
+) -> None:
+    """`assign_membership_role()`'s own `FOR UPDATE OF cm` lock on the
+    target membership (Phase 13E-B checkpoint 2 hardening) must make a
+    concurrent ending of that same membership block, not silently
+    interleave with the eligibility check — the assign-role counterpart to
+    this module's `change_membership_role` current-role-deactivation
+    tests above."""
+    engine = postgres_engine
+    slug = f"conc-assign-membership-end-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        world_id = make_world(setup, slug=slug)
+        timeline_id = make_timeline(setup, world_id, is_primary=True)
+        campaign_id = make_campaign(
+            setup, timeline_id, "Race Campaign", lifecycle_status_code="pending"
+        )
+        role_id = make_role(setup, campaign_id=campaign_id, code=f"role_{uuid.uuid4().hex[:8]}")
+        user_id = make_user(setup, "Race Target User")
+        membership_id = make_campaign_membership(setup, campaign_id, user_id)
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Holds FOR UPDATE OF cm on membership_id.
+            assign_membership_role(
+                first,
+                campaign_membership_id=membership_id,
+                role_id=role_id,
+                campaign_id=campaign_id,
+                granted_by_membership_id=membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text(
+                        "UPDATE security.campaign_memberships SET ended_at = now() "
+                        "WHERE campaign_membership_id = :m"
+                    ),
+                    {"m": membership_id},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the membership-ending update to block on assign_membership_role's "
+                f"own row lock, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+        # Unblocked now — ending the membership succeeds once the assign committed.
+        with engine.begin() as third:
+            third.execute(
+                text(
+                    "UPDATE security.campaign_memberships SET ended_at = now() "
+                    "WHERE campaign_membership_id = :m"
+                ),
+                {"m": membership_id},
+            )
+    finally:
+        _cleanup_retention_fixture(engine, timeline_id, world_id)
+
+
+def test_a_role_deactivation_cannot_race_it_being_assigned(
+    postgres_engine: Engine,
+) -> None:
+    """`assign_membership_role()`'s separate `FOR UPDATE` on the candidate
+    `role_id` row must make a concurrent deactivation of that role block
+    too, not just the membership lock."""
+    engine = postgres_engine
+    slug = f"conc-assign-role-deactivate-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        world_id = make_world(setup, slug=slug)
+        timeline_id = make_timeline(setup, world_id, is_primary=True)
+        campaign_id = make_campaign(
+            setup, timeline_id, "Race Campaign", lifecycle_status_code="pending"
+        )
+        role_id = make_role(setup, campaign_id=campaign_id, code=f"role_{uuid.uuid4().hex[:8]}")
+        user_id = make_user(setup, "Race Target User")
+        membership_id = make_campaign_membership(setup, campaign_id, user_id)
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            assign_membership_role(
+                first,
+                campaign_membership_id=membership_id,
+                role_id=role_id,
+                campaign_id=campaign_id,
+                granted_by_membership_id=membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("UPDATE security.roles SET is_active = false WHERE role_id = :r"),
+                    {"r": role_id},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the deactivation to block on assign_membership_role's own lock "
+                f"of the candidate role, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+        with engine.begin() as third:
+            third.execute(
+                text("UPDATE security.roles SET is_active = false WHERE role_id = :r"),
+                {"r": role_id},
+            )
+    finally:
+        _cleanup_retention_fixture(engine, timeline_id, world_id)
+
+
+def test_an_account_disablement_cannot_race_an_assign_targeting_its_membership(
+    postgres_engine: Engine,
+) -> None:
+    """`assign_membership_role()`'s separate `FOR UPDATE OF u` lock on the
+    target membership's own `security.users` row must make a concurrent
+    disablement of that account block too — the same shape
+    `dnd_ai.commands.local_auth._set_local_account_lifecycle_status_impl`'s
+    own `SELECT ... FOR UPDATE` already uses for its side of this race."""
+    engine = postgres_engine
+    slug = f"conc-assign-account-disable-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        world_id = make_world(setup, slug=slug)
+        timeline_id = make_timeline(setup, world_id, is_primary=True)
+        campaign_id = make_campaign(
+            setup, timeline_id, "Race Campaign", lifecycle_status_code="pending"
+        )
+        role_id = make_role(setup, campaign_id=campaign_id, code=f"role_{uuid.uuid4().hex[:8]}")
+        user_id = make_user(setup, "Race Target User")
+        membership_id = make_campaign_membership(setup, campaign_id, user_id)
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            assign_membership_role(
+                first,
+                campaign_membership_id=membership_id,
+                role_id=role_id,
+                campaign_id=campaign_id,
+                granted_by_membership_id=membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("""
+                        UPDATE security.users
+                        SET lifecycle_status_id = (
+                            SELECT lifecycle_status_id FROM core.lifecycle_statuses
+                            WHERE code = 'inactive'
+                        )
+                        WHERE user_id = :u
+                    """),
+                    {"u": user_id},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the account disablement to block on assign_membership_role's own "
+                f"lock of the target membership's user row, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+        with engine.begin() as third:
+            third.execute(
+                text("""
+                    UPDATE security.users
+                    SET lifecycle_status_id = (
+                        SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'inactive'
+                    )
+                    WHERE user_id = :u
+                """),
+                {"u": user_id},
+            )
+    finally:
+        _cleanup_retention_fixture(engine, timeline_id, world_id)
+
+
+def test_two_concurrent_revokes_of_the_identical_row_serialize(
+    postgres_engine: Engine,
+) -> None:
+    """Same-row coverage for revoke-vs-revoke specifically (the pre-existing
+    change-vs-revoke same-row test above already covers that pairing):
+    `revoke_membership_role()`'s own `FOR UPDATE` on its target row must
+    make a second, concurrent revoke of the identical row block, then
+    observe the first's committed effect (already revoked) once unblocked
+    — never an interleaved write, and never a raised error for the second
+    caller (the documented harmless-no-op case)."""
+    engine = postgres_engine
+    slug = f"conc-revoke-revoke-same-row-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        world_id = make_world(setup, slug=slug)
+        timeline_id = make_timeline(setup, world_id, is_primary=True)
+        campaign_id = make_campaign(
+            setup, timeline_id, "Race Campaign", lifecycle_status_code="pending"
+        )
+        role_id = make_role(setup, campaign_id=campaign_id, code=f"role_{uuid.uuid4().hex[:8]}")
+        user_id = make_user(setup, "Race Target User")
+        membership_id = make_campaign_membership(setup, campaign_id, user_id)
+        membership_role_id = make_membership_role(setup, membership_id, role_id)
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            # Holds FOR UPDATE OF mr on membership_role_id without committing.
+            revoke_membership_role(
+                first, membership_role_id=membership_role_id, campaign_id=campaign_id
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                revoke_membership_role(
+                    second, membership_role_id=membership_role_id, campaign_id=campaign_id
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the concurrent revoke to block on the identical row's FOR UPDATE "
+                f"lock, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+        # Unblocked, and the row is already revoked (by the committed first
+        # revoke) — the documented no-op behavior applies, reported via
+        # RevokeMembershipRoleResult.revoked rather than a fresh error.
+        with engine.begin() as third:
+            result = revoke_membership_role(
+                third, membership_role_id=membership_role_id, campaign_id=campaign_id
+            )
+            assert result.revoked is False
+    finally:
+        _cleanup_retention_fixture(engine, timeline_id, world_id)
+
+
 # ---------------------------------------------------------------------------
 # 2. Campaign access-manager retention invariant under real concurrency
 # ---------------------------------------------------------------------------
@@ -606,6 +860,83 @@ def test_a_change_and_a_revoke_racing_different_management_granting_rows_cannot_
             f"retention trigger specifically (both sides' in-process pre-checks are "
             f"provably a no-op under barrier coordination — see this module's "
             f"docstring), got: {rejected[0].error!r}"
+        )
+        assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
+            rejected[0].error
+        ), f"expected the rejection to name the retention invariant, got: {rejected[0].error!r}"
+
+        with engine.connect() as verify:
+            assert _manager_count(verify, rf.campaign_id) == 1
+            assert _audit_row_count(verify, rf.world_id) == 1
+    finally:
+        _cleanup_retention_fixture(engine, rf.timeline_id, rf.world_id)
+
+
+def test_two_concurrent_revokes_of_different_management_granting_rows_cannot_both_leave_zero_managers(
+    postgres_engine: Engine,
+) -> None:
+    """The revoke-vs-revoke counterpart to the change-vs-change and
+    change-vs-revoke retention tests above: two managers, each revoking
+    their own distinct management-granting row, racing to commit
+    concurrently. Exactly one may succeed."""
+    engine = postgres_engine
+    slug = f"conc-revoke-revoke-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        rf = RetentionRaceFixture(setup, slug)
+
+    try:
+
+        def revoke_first(connection: Connection) -> None:
+            revoke_membership_role(
+                connection,
+                membership_role_id=rf.first_membership_role_id,
+                campaign_id=rf.campaign_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.first_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.first_user_id,
+                correlation_id=None,
+                command_name=_REVOKE_COMMAND_NAME,
+                event_id=None,
+            )
+
+        def revoke_second(connection: Connection) -> None:
+            revoke_membership_role(
+                connection,
+                membership_role_id=rf.second_membership_role_id,
+                campaign_id=rf.campaign_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.second_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.second_user_id,
+                correlation_id=None,
+                command_name=_REVOKE_COMMAND_NAME,
+                event_id=None,
+            )
+
+        outcomes = _run_with_precommit_barrier(
+            engine, {"first": revoke_first, "second": revoke_second}
+        )
+
+        committed = [o for o in outcomes.values() if o.committed]
+        rejected = [o for o in outcomes.values() if not o.committed]
+        assert len(committed) == 1, f"expected exactly one commit, got: {outcomes}"
+        assert len(rejected) == 1, f"expected exactly one rejection, got: {outcomes}"
+        assert isinstance(rejected[0].error, CONSTRAINT_ERRORS), (
+            f"expected the rejected revoke to fail via the database's own deferred "
+            f"retention trigger specifically, got: {rejected[0].error!r}"
         )
         assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
             rejected[0].error

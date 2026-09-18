@@ -26,11 +26,13 @@ this purpose, distinct from every other command router's `canon.edit`
 Idempotency: `create_campaign_membership`/`assign_membership_role` use the
 same durable, PostgreSQL-backed `security.idempotent_requests` mechanism
 every other Phase 10 write endpoint uses — see `dnd_ai.api.items`'s module
-docstring for the full concurrency argument. `revoke_membership_role`
-needs no idempotency-key store: `dnd_ai.commands.memberships.
-revoke_membership_role` is already a no-op on a retry, the same reasoning
-`dnd_ai.api.encounters`' `end` route already relies on for its own
-naturally-idempotent command.
+docstring for the full concurrency argument. `revoke_membership_role_
+endpoint` (Phase 13E-B checkpoint 2 correction) now uses the identical
+mechanism too — see that route's own docstring for the duplicate-audit gap
+this closes; `dnd_ai.commands.memberships.revoke_membership_role` remains
+state-idempotent on its own (an ordinary retry with no key reused still
+converges on the same revoked state), but state-idempotency alone was not
+enough to keep the *audit trail* free of one row per HTTP retry.
 
 Auditing: every successful call inserts one `audit.change_log` row
 (`dnd_ai.api.audit.record_change_log`). `entity_id` is always `None` —
@@ -41,7 +43,13 @@ contract, "the `core.entities` row this change concerns, *when there is
 one*" (migration 007). `world_id` is resolved server-side from the
 campaign's own pinned timeline (`dnd_ai.api._shared.timeline_world_id`),
 the same "never trust a caller-supplied world/timeline pairing" rule every
-other command router already applies.
+other command router already applies. `revoke_membership_role_endpoint`
+writes its row only when `dnd_ai.commands.memberships.
+RevokeMembershipRoleResult.revoked` is `True` — never on the pre-existing
+harmless no-op path (an already-revoked target) — so a retry that reaches
+the command a second time (a fresh `Idempotency-Key`, or none at all)
+converges on the same state without a second audit row, even outside of an
+idempotent replay.
 """
 
 import uuid
@@ -250,7 +258,8 @@ def assign_membership_role_endpoint(
 
 @router.post(
     "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke",
-    status_code=204,
+    response_model=MembershipRoleResponse,
+    status_code=200,
 )
 def revoke_membership_role_endpoint(
     campaign_id: uuid.UUID,
@@ -259,25 +268,83 @@ def revoke_membership_role_endpoint(
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> None:
-    revoke_membership_role(
+) -> MembershipRoleResponse:
+    """Revokes one existing, currently-active role assignment — the portal
+    Access page's "revoke role" action (Phase 13E-B checkpoint 2). Self-
+    revocation is permitted, with no special-case check here or in the
+    command: the campaign's own retention invariant is what actually
+    protects an active campaign from ending up with no `access.manage`
+    holder, exactly as it already does for `change_membership_role_
+    endpoint`. `200`, not the pre-checkpoint-2 `204`: this route's response
+    now carries a body — see "Response contract change" below.
+
+    Response contract change (Phase 13E-B checkpoint 2 correction): this
+    route previously returned a bare `204 No Content` and accepted no
+    `Idempotency-Key`, on the theory that `revoke_membership_role`'s own
+    state-idempotency (a retry against an already-revoked row is a harmless
+    no-op) made a durable key unnecessary. That reasoning covered *state*
+    but not the *audit trail*: every call — including a plain retry with no
+    key at all — wrote its own `audit.change_log` row unconditionally, so
+    an ordinary network retry (the exact "unknown outcome, retry" case this
+    application's own idempotency story exists for) could durably record
+    two revocation events for one real revocation. Fixed two ways, matching
+    every other mutating endpoint in this module: (1) an `Idempotency-Key`
+    replay returns the original cached response verbatim, never re-running
+    the command at all; (2) even *without* a matching key, the audit write
+    below is now conditioned on `RevokeMembershipRoleResult.revoked`, so a
+    second call that lands on an already-revoked row (whether or not it
+    reuses a key) writes no second row. A `MembershipRoleResponse` echoing
+    `membership_role_id` back (reusing the existing assign-role response
+    shape) gives `begin_idempotent_request`/`complete_idempotent_request`
+    something to cache, which a bodyless `204` could not."""
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {"membership_role_id": str(membership_role_id)}
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_REVOKE_ROLE_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return MembershipRoleResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
+    result = revoke_membership_role(
         connection, membership_role_id=membership_role_id, campaign_id=campaign_id
     )
 
-    record_change_log(
-        connection,
-        change_action_code=_UPDATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_roles",
-        record_id=membership_role_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_REVOKE_ROLE_COMMAND_NAME,
-        event_id=None,
-    )
+    if result.revoked:
+        record_change_log(
+            connection,
+            change_action_code=_UPDATED_CHANGE_ACTION,
+            schema_name="security",
+            table_name="membership_roles",
+            record_id=membership_role_id,
+            entity_id=None,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+            command_name=_REVOKE_ROLE_COMMAND_NAME,
+            event_id=None,
+        )
+
+    response = MembershipRoleResponse(membership_role_id=membership_role_id)
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response
 
 
 @router.post(

@@ -1,5 +1,7 @@
 import { useId } from "react"
+import { AddMemberRole } from "../components/AddMemberRole"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
+import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
 import type {
@@ -20,7 +22,7 @@ interface MemberAccessCardProps {
     campaignId: string
     campaignName: string
     assignableRoles: AssignableRole[]
-    onChanged: () => void
+    onChanged: (message: string) => void
 }
 
 function MemberAccessCard({
@@ -37,6 +39,16 @@ function MemberAccessCard({
     const roleSummary = member.roles
         .map((role) => role.display_name)
         .join(", ")
+
+    // Presentation only, never authorization: the server independently
+    // revalidates every add-role request regardless of what this list
+    // offers (dnd_ai.commands.memberships.assign_membership_role).
+    const heldRoleIds = new Set(
+        member.roles.map((role) => role.role_id),
+    )
+    const rolesAvailableToAdd = assignableRoles.filter(
+        (role) => !heldRoleIds.has(role.role_id),
+    )
 
     return (
         <details className="access-member-card">
@@ -67,12 +79,27 @@ function MemberAccessCard({
                                         assignableRoles={assignableRoles}
                                         onChanged={onChanged}
                                     />
+                                    <RevokeMemberRole
+                                        campaignId={campaignId}
+                                        memberDisplayName={member.display_name}
+                                        role={role}
+                                        onChanged={onChanged}
+                                    />
                                 </li>
                             ))}
                         </ul>
                     ) : (
                         <p>No roles assigned.</p>
                     )}
+
+                    <AddMemberRole
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        campaignMembershipId={member.campaign_membership_id}
+                        memberDisplayName={member.display_name}
+                        assignableRoles={rolesAvailableToAdd}
+                        onChanged={onChanged}
+                    />
                 </section>
 
                 <section aria-labelledby={relationshipsHeadingId}>
@@ -139,7 +166,7 @@ function MemberAccessCard({
 interface AccessPageProps {
     campaignId: string
     overview: CampaignAccessOverview
-    onChanged: () => void
+    onChanged: (message: string) => void
 }
 
 export function AccessPage({
@@ -163,9 +190,9 @@ export function AccessPage({
 
             <p className="access-page__description">
                 Current members, roles, character relationships, and
-                explicit grants for this campaign. Role changes are
-                available below; other access changes are not available
-                here yet.
+                explicit grants for this campaign. Adding, changing, and
+                removing an existing member's roles is available below;
+                other access changes are not available here yet.
             </p>
 
             {overview.members.length > 0 ? (
