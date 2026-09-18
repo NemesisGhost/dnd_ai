@@ -27,10 +27,30 @@ never mocked, never a single shared connection:
    would *individually* look safe (each still sees the other's
    not-yet-committed manager role) can never *both* commit when their
    combined effect leaves an active campaign with zero qualifying
-   `access.manage` holders — real threads racing to commit, not a
-   test-controlled ordering, so the outcome is asserted aggregately
-   (exactly one commit, exactly one rejection) rather than by predicting a
-   winner.
+   `access.manage` holders.
+
+   Each racing worker targets a *distinct* management-granting row and, for
+   `change_membership_role`, a *distinct* candidate new role — naming the
+   same new-role row for both workers would let `change_membership_role`'s
+   own `FOR UPDATE` on that shared row silently serialize the two workers
+   (the second blocks until the first fully commits), which lets each
+   side's own in-process pre-check (`_assert_active_campaign_retains_
+   access_manager`, a plain `ValueError`) resolve the whole scenario
+   sequentially — never exercising the *combined-effect* race this section
+   exists to prove at all (a review finding against an earlier version of
+   this file). `_run_with_precommit_barrier` below closes that gap
+   properly: both workers run their own `change_membership_role`/`revoke_
+   membership_role` call and audit write to completion — including each
+   one's own in-process pre-check, which is therefore guaranteed to *pass*
+   for both sides (neither has committed yet, so each still sees the other
+   as an active manager) — and only then, synchronized by a two-party
+   `threading.Barrier`, are both released to call `connection.commit()`
+   concurrently. Because the pre-check is provably a no-op for both sides
+   under this coordination, the loser can only ever be rejected by the
+   database's own deferred constraint trigger — the specific mechanism
+   this section exists to regression-test. Removing that trigger, or its
+   `campaign.campaigns` `FOR UPDATE` lock, makes both workers commit
+   successfully and fails these tests' `len(rejected) == 1` assertion.
 """
 
 import threading
@@ -60,18 +80,6 @@ pytestmark = pytest.mark.database
 
 CONSTRAINT_ERRORS = (IntegrityError, InternalError, ProgrammingError)
 
-# The retention invariant can reject the losing side through either of two
-# independent mechanisms, and which one fires is a genuine timing outcome
-# of the real race, not something a test should predict or control: this
-# module's own app-level pre-check (`_assert_active_campaign_retains_
-# access_manager`, a plain `ValueError` — see dnd_ai.commands.memberships)
-# fires if the loser's pre-check happens to run *after* the winner has
-# already committed, while the pre-existing DB-level deferred constraint
-# trigger (an IntegrityError-shaped CONSTRAINT_ERRORS exception) fires if
-# both sides reach their own writes before either commits. Both are the
-# identical retention invariant, just caught at a different point.
-RETENTION_REJECTION_ERRORS = (*CONSTRAINT_ERRORS, ValueError)
-
 _CHANGE_COMMAND_NAME = "change_membership_role"
 _REVOKE_COMMAND_NAME = "revoke_membership_role"
 _UPDATED_ACTION = "updated"
@@ -84,20 +92,42 @@ class _ThreadOutcome:
     error: BaseException | None
 
 
-def _run_concurrently(
-    operations: dict[str, Callable[[], None]],
+def _run_with_precommit_barrier(
+    engine: Engine,
+    operations: dict[str, Callable[[Connection], None]],
 ) -> dict[str, _ThreadOutcome]:
-    """Runs each zero-arg callable in its own thread, started together and
-    joined together, so both genuinely race to commit rather than running
-    sequentially. Returns each label's outcome — never raises on a
-    callable's own exception, since a rejected commit is an *expected*
-    branch here, not a test-harness failure."""
+    """Runs each callable in its own thread, on its own connection (opened
+    and begun before the callable runs, closed after commit/rollback) —
+    never a connection handed off across threads. Every worker pauses at a
+    shared `threading.Barrier` sized to the number of operations,
+    immediately after its own callable returns and *before* its own
+    `connection.commit()`. A `Barrier.wait()` call only returns once every
+    party has reached it, so by the time any worker is allowed to proceed
+    to commit, every worker's own write (and, for `change_membership_role`/
+    `revoke_membership_role`, its own in-process retention pre-check) is
+    already complete — proving both writes reached the pre-commit point
+    before any commit is released, rather than merely hoping two threads
+    started close enough together. Every worker then calls its own
+    `connection.commit()` immediately after the barrier releases, so both
+    commits are attempted concurrently, genuinely racing PostgreSQL's own
+    commit-time serialization. See this module's docstring.
+
+    Never raises on a callable's own exception, or on a broken barrier (one
+    worker failing before reaching it leaves the others waiting until the
+    barrier's own timeout, then raises `BrokenBarrierError` for them) —
+    both are recorded as that worker's outcome, not a test-harness
+    failure."""
+    barrier = threading.Barrier(len(operations), timeout=15.0)
     results: dict[str, _ThreadOutcome] = {}
     lock = threading.Lock()
 
-    def _worker(label: str, operation: Callable[[], None]) -> None:
+    def _worker(label: str, operation: Callable[[Connection], None]) -> None:
         try:
-            operation()
+            with engine.connect() as connection:
+                connection.begin()
+                operation(connection)
+                barrier.wait()
+                connection.commit()
         except Exception as exc:  # noqa: BLE001 - reported to the main thread, not swallowed
             with lock:
                 results[label] = _ThreadOutcome(label=label, committed=False, error=exc)
@@ -111,9 +141,9 @@ def _run_concurrently(
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=15.0)
+        thread.join(timeout=25.0)
     for thread in threads:
-        assert not thread.is_alive(), "a concurrency test thread did not finish within 15s"
+        assert not thread.is_alive(), "a concurrency test thread did not finish within 25s"
 
     return results
 
@@ -122,7 +152,22 @@ class RetentionRaceFixture:
     """An *active* campaign with exactly two independent members, each
     holding their own `access.manage`-granting role assignment — the
     minimum needed to race two different management-granting rows against
-    each other."""
+    each other.
+
+    Every row either worker's `change_membership_role()` call could lock is
+    given a *distinct* copy per worker — a distinct current (manager-
+    granting) role as well as a distinct candidate new role, not just the
+    latter. `change_membership_role()` takes `FOR UPDATE OF mr, cm, r`,
+    where `r` is the target assignment's *current* role — if both workers'
+    memberships held the identical manager role, that shared row alone
+    would serialize the two workers ahead of (and independently of) the
+    barrier below: the second worker would block *inside* `change_
+    membership_role()` itself, waiting on a lock only the first worker's
+    eventual commit releases, while the first worker simultaneously waits
+    at the barrier for the second to arrive — a real deadlock, broken only
+    by the barrier's own timeout (`BrokenBarrierError` for both sides, a
+    review finding against an earlier version of this fixture that reused
+    one shared `manager_role_id` for both memberships)."""
 
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
@@ -138,23 +183,39 @@ class RetentionRaceFixture:
             connection, "security", "capabilities", "capability_id", "campaign.view"
         )
 
-        self.manager_role_id = make_role(
-            connection, campaign_id=self.campaign_id, code=f"manager_{uuid.uuid4().hex[:8]}"
+        # Two distinct manager-granting roles — see this class's own
+        # docstring for why a single shared one deadlocks the barrier
+        # below.
+        self.first_manager_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"manager1_{uuid.uuid4().hex[:8]}"
         )
-        make_role_capability(connection, self.manager_role_id, access_manage_id)
-        make_role_capability(connection, self.manager_role_id, view_capability_id)
+        make_role_capability(connection, self.first_manager_role_id, access_manage_id)
+        make_role_capability(connection, self.first_manager_role_id, view_capability_id)
 
-        self.non_manager_role_id = make_role(
-            connection, campaign_id=self.campaign_id, code=f"nonmanager_{uuid.uuid4().hex[:8]}"
+        self.second_manager_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"manager2_{uuid.uuid4().hex[:8]}"
         )
-        make_role_capability(connection, self.non_manager_role_id, view_capability_id)
+        make_role_capability(connection, self.second_manager_role_id, access_manage_id)
+        make_role_capability(connection, self.second_manager_role_id, view_capability_id)
+
+        # Two distinct non-manager roles — the change-role target for each
+        # worker, equally distinct for the identical reason.
+        self.first_non_manager_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"nonmanager1_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, self.first_non_manager_role_id, view_capability_id)
+
+        self.second_non_manager_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"nonmanager2_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, self.second_non_manager_role_id, view_capability_id)
 
         self.first_user_id = make_user(connection, "Concurrency Manager One")
         self.first_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.first_user_id
         )
         self.first_membership_role_id = make_membership_role(
-            connection, self.first_membership_id, self.manager_role_id
+            connection, self.first_membership_id, self.first_manager_role_id
         )
 
         self.second_user_id = make_user(connection, "Concurrency Manager Two")
@@ -162,7 +223,7 @@ class RetentionRaceFixture:
             connection, self.campaign_id, self.second_user_id
         )
         self.second_membership_role_id = make_membership_role(
-            connection, self.second_membership_id, self.manager_role_id
+            connection, self.second_membership_id, self.second_manager_role_id
         )
 
 
@@ -387,6 +448,16 @@ def test_a_new_role_deactivation_cannot_race_it_being_assigned_by_a_change(
 def test_two_concurrent_changes_to_different_management_granting_rows_cannot_both_leave_zero_managers(
     postgres_engine: Engine,
 ) -> None:
+    """Both workers target distinct rows throughout — distinct membership
+    rows, distinct current roles, and (unlike an earlier version of this
+    test) distinct candidate new roles — so no incidental shared-row lock
+    can serialize them ahead of the barrier below. `_run_with_precommit_
+    barrier` then guarantees both workers' own `change_membership_role`
+    calls (and their own in-process retention pre-checks, which are
+    therefore provably a no-op for both sides — see this module's
+    docstring) complete before either is allowed to commit, so the
+    rejection below can only come from the database's own deferred
+    retention trigger."""
     engine = postgres_engine
     slug = f"conc-change-change-{uuid.uuid4().hex[:8]}"
     with engine.begin() as setup:
@@ -394,70 +465,63 @@ def test_two_concurrent_changes_to_different_management_granting_rows_cannot_bot
 
     try:
 
-        def change_first() -> None:
-            # Each thread owns its own connection end-to-end — a SQLAlchemy
-            # Connection must never be used concurrently by two threads at
-            # once, so it is opened, used, and closed entirely within the
-            # single thread that races it, never handed off from the main
-            # thread that only orchestrates the race.
-            with engine.connect() as connection:
-                connection.begin()
-                change_membership_role(
-                    connection,
-                    membership_role_id=rf.first_membership_role_id,
-                    campaign_id=rf.campaign_id,
-                    new_role_id=rf.non_manager_role_id,
-                    granted_by_membership_id=rf.first_membership_id,
-                )
-                record_change_log(
-                    connection,
-                    change_action_code=_UPDATED_ACTION,
-                    schema_name="security",
-                    table_name="membership_roles",
-                    record_id=rf.first_membership_role_id,
-                    entity_id=None,
-                    world_id=rf.world_id,
-                    actor_user_id=rf.first_user_id,
-                    correlation_id=None,
-                    command_name=_CHANGE_COMMAND_NAME,
-                    event_id=None,
-                )
-                connection.commit()
+        def change_first(connection: Connection) -> None:
+            change_membership_role(
+                connection,
+                membership_role_id=rf.first_membership_role_id,
+                campaign_id=rf.campaign_id,
+                new_role_id=rf.first_non_manager_role_id,
+                granted_by_membership_id=rf.first_membership_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.first_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.first_user_id,
+                correlation_id=None,
+                command_name=_CHANGE_COMMAND_NAME,
+                event_id=None,
+            )
 
-        def change_second() -> None:
-            with engine.connect() as connection:
-                connection.begin()
-                change_membership_role(
-                    connection,
-                    membership_role_id=rf.second_membership_role_id,
-                    campaign_id=rf.campaign_id,
-                    new_role_id=rf.non_manager_role_id,
-                    granted_by_membership_id=rf.second_membership_id,
-                )
-                record_change_log(
-                    connection,
-                    change_action_code=_UPDATED_ACTION,
-                    schema_name="security",
-                    table_name="membership_roles",
-                    record_id=rf.second_membership_role_id,
-                    entity_id=None,
-                    world_id=rf.world_id,
-                    actor_user_id=rf.second_user_id,
-                    correlation_id=None,
-                    command_name=_CHANGE_COMMAND_NAME,
-                    event_id=None,
-                )
-                connection.commit()
+        def change_second(connection: Connection) -> None:
+            change_membership_role(
+                connection,
+                membership_role_id=rf.second_membership_role_id,
+                campaign_id=rf.campaign_id,
+                new_role_id=rf.second_non_manager_role_id,
+                granted_by_membership_id=rf.second_membership_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.second_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.second_user_id,
+                correlation_id=None,
+                command_name=_CHANGE_COMMAND_NAME,
+                event_id=None,
+            )
 
-        outcomes = _run_concurrently({"first": change_first, "second": change_second})
+        outcomes = _run_with_precommit_barrier(
+            engine, {"first": change_first, "second": change_second}
+        )
 
         committed = [o for o in outcomes.values() if o.committed]
         rejected = [o for o in outcomes.values() if not o.committed]
         assert len(committed) == 1, f"expected exactly one commit, got: {outcomes}"
         assert len(rejected) == 1, f"expected exactly one rejection, got: {outcomes}"
-        assert isinstance(rejected[0].error, RETENTION_REJECTION_ERRORS), (
-            f"expected the rejected change to fail via the retention invariant "
-            f"(either mechanism — see RETENTION_REJECTION_ERRORS), got: {rejected[0].error!r}"
+        assert isinstance(rejected[0].error, CONSTRAINT_ERRORS), (
+            f"expected the rejected change to fail via the database's own deferred "
+            f"retention trigger specifically (both sides' in-process pre-checks are "
+            f"provably a no-op under barrier coordination — see this module's "
+            f"docstring), got: {rejected[0].error!r}"
         )
         assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
             rejected[0].error
@@ -480,63 +544,68 @@ def test_a_change_and_a_revoke_racing_different_management_granting_rows_cannot_
 
     try:
 
-        def change_first() -> None:
-            with engine.connect() as connection:
-                connection.begin()
-                change_membership_role(
-                    connection,
-                    membership_role_id=rf.first_membership_role_id,
-                    campaign_id=rf.campaign_id,
-                    new_role_id=rf.non_manager_role_id,
-                    granted_by_membership_id=rf.first_membership_id,
-                )
-                record_change_log(
-                    connection,
-                    change_action_code=_UPDATED_ACTION,
-                    schema_name="security",
-                    table_name="membership_roles",
-                    record_id=rf.first_membership_role_id,
-                    entity_id=None,
-                    world_id=rf.world_id,
-                    actor_user_id=rf.first_user_id,
-                    correlation_id=None,
-                    command_name=_CHANGE_COMMAND_NAME,
-                    event_id=None,
-                )
-                connection.commit()
+        def change_first(connection: Connection) -> None:
+            change_membership_role(
+                connection,
+                membership_role_id=rf.first_membership_role_id,
+                campaign_id=rf.campaign_id,
+                new_role_id=rf.first_non_manager_role_id,
+                granted_by_membership_id=rf.first_membership_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.first_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.first_user_id,
+                correlation_id=None,
+                command_name=_CHANGE_COMMAND_NAME,
+                event_id=None,
+            )
 
-        def revoke_second() -> None:
-            with engine.connect() as connection:
-                connection.begin()
-                revoke_membership_role(
-                    connection,
-                    membership_role_id=rf.second_membership_role_id,
-                    campaign_id=rf.campaign_id,
-                )
-                record_change_log(
-                    connection,
-                    change_action_code=_UPDATED_ACTION,
-                    schema_name="security",
-                    table_name="membership_roles",
-                    record_id=rf.second_membership_role_id,
-                    entity_id=None,
-                    world_id=rf.world_id,
-                    actor_user_id=rf.second_user_id,
-                    correlation_id=None,
-                    command_name=_REVOKE_COMMAND_NAME,
-                    event_id=None,
-                )
-                connection.commit()
+        def revoke_second(connection: Connection) -> None:
+            revoke_membership_role(
+                connection,
+                membership_role_id=rf.second_membership_role_id,
+                campaign_id=rf.campaign_id,
+            )
+            record_change_log(
+                connection,
+                change_action_code=_UPDATED_ACTION,
+                schema_name="security",
+                table_name="membership_roles",
+                record_id=rf.second_membership_role_id,
+                entity_id=None,
+                world_id=rf.world_id,
+                actor_user_id=rf.second_user_id,
+                correlation_id=None,
+                command_name=_REVOKE_COMMAND_NAME,
+                event_id=None,
+            )
 
-        outcomes = _run_concurrently({"change": change_first, "revoke": revoke_second})
+        # No shared-row lock connects these two calls at all (revoke_
+        # membership_role locks only its own target row, no role row) — so
+        # nothing accidentally serializes them the way two change calls
+        # sharing a new-role row would. The barrier is still required here
+        # (finding 7): without it, relying on both threads merely *starting*
+        # close together is not deterministic — the OS could still let one
+        # run to completion, including commit, before the other begins.
+        outcomes = _run_with_precommit_barrier(
+            engine, {"change": change_first, "revoke": revoke_second}
+        )
 
         committed = [o for o in outcomes.values() if o.committed]
         rejected = [o for o in outcomes.values() if not o.committed]
         assert len(committed) == 1, f"expected exactly one commit, got: {outcomes}"
         assert len(rejected) == 1, f"expected exactly one rejection, got: {outcomes}"
-        assert isinstance(rejected[0].error, RETENTION_REJECTION_ERRORS), (
-            f"expected the rejected side to fail via the retention invariant "
-            f"(either mechanism — see RETENTION_REJECTION_ERRORS), got: {rejected[0].error!r}"
+        assert isinstance(rejected[0].error, CONSTRAINT_ERRORS), (
+            f"expected the rejected side to fail via the database's own deferred "
+            f"retention trigger specifically (both sides' in-process pre-checks are "
+            f"provably a no-op under barrier coordination — see this module's "
+            f"docstring), got: {rejected[0].error!r}"
         )
         assert "access.manage" in str(rejected[0].error) or "access_manager" in str(
             rejected[0].error
