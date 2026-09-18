@@ -20,6 +20,7 @@ export async function changeMembershipRole(
     membershipRoleId: string,
     newRoleId: string,
     csrfToken: string,
+    idempotencyKey: string,
     signal?: AbortSignal,
 ): Promise<ChangeMembershipRoleResponse> {
     const encodedCampaignId = encodeURIComponent(campaignId)
@@ -41,6 +42,7 @@ export async function changeMembershipRole(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-CSRF-Token": csrfToken,
+                "Idempotency-Key": idempotencyKey,
             },
             body: JSON.stringify(body),
         },

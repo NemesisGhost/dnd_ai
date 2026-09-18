@@ -125,6 +125,85 @@ class Fixture:
             connection, self.other_campaign_id, foreign_membership_user_id
         )
 
+        # --- Active-state boundary fixtures (correction pass): each names
+        # exactly one condition the documented eligibility check must
+        # reject, isolated from every other condition. ---
+
+        # An assignment whose expires_at is already in the past — still
+        # revoked_at IS NULL, current role active, membership active; only
+        # expiry makes it ineligible.
+        self.expired_user_id = make_user(connection, "Membership API Expired Target")
+        self.expired_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.expired_user_id
+        )
+        self.expired_membership_role_id = make_membership_role(
+            connection, self.expired_membership_id, self.player_role_id
+        )
+        connection.execute(
+            text(
+                "UPDATE security.membership_roles "
+                "SET granted_at = now() - interval '2 days', "
+                "    expires_at = now() - interval '1 day' "
+                "WHERE membership_role_id = :mr"
+            ),
+            {"mr": self.expired_membership_role_id},
+        )
+
+        # An assignment whose *current* role has since been deactivated.
+        self.deactivatable_current_role_id = make_role(
+            connection,
+            campaign_id=self.campaign_id,
+            code=f"deactivatable_current_{uuid.uuid4().hex[:8]}",
+        )
+        self.inactive_current_role_user_id = make_user(
+            connection, "Membership API Inactive Current Role Target"
+        )
+        self.inactive_current_role_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.inactive_current_role_user_id
+        )
+        self.inactive_current_role_membership_role_id = make_membership_role(
+            connection,
+            self.inactive_current_role_membership_id,
+            self.deactivatable_current_role_id,
+        )
+        connection.execute(
+            text("UPDATE security.roles SET is_active = false WHERE role_id = :r"),
+            {"r": self.deactivatable_current_role_id},
+        )
+
+        # A membership marked ended (ended_at set) but still carrying an
+        # otherwise-current role assignment.
+        self.ended_user_id = make_user(connection, "Membership API Ended Target")
+        self.ended_membership_id = make_campaign_membership(
+            connection,
+            self.campaign_id,
+            self.ended_user_id,
+            status_code="departed",
+            ended=True,
+        )
+        self.ended_membership_role_id = make_membership_role(
+            connection, self.ended_membership_id, self.player_role_id
+        )
+
+        # A membership in a non-"active" status (suspended) but *not*
+        # ended — isolates the status-code check from the ended_at check.
+        self.suspended_user_id = make_user(connection, "Membership API Suspended Target")
+        self.suspended_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.suspended_user_id, status_code="suspended"
+        )
+        self.suspended_membership_role_id = make_membership_role(
+            connection, self.suspended_membership_id, self.player_role_id
+        )
+
+        # An inactive role — the *new_role_id* target of a rejection test.
+        self.inactive_new_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"inactive_new_{uuid.uuid4().hex[:8]}"
+        )
+        connection.execute(
+            text("UPDATE security.roles SET is_active = false WHERE role_id = :r"),
+            {"r": self.inactive_new_role_id},
+        )
+
         # A member with no role/capability at all — proves ForbiddenError,
         # distinct from a non-member's NotFoundError.
         self.capless_user_id = make_user(connection, "Membership API Capless Member")
@@ -260,6 +339,10 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.outsider_user_id,
                     fixture.active_admin_user_id,
                     fixture.active_second_admin_user_id,
+                    fixture.expired_user_id,
+                    fixture.inactive_current_role_user_id,
+                    fixture.ended_user_id,
+                    fixture.suspended_user_id,
                 ]
             },
         )
@@ -639,6 +722,218 @@ def test_changing_an_already_revoked_role_assignment_is_a_conflict(
             json={"new_role_id": str(f.second_role_id)},
         )
     assert response.status_code == 409, response.text
+
+
+# ---------------------------------------------------------------------------
+# Active-state boundary (correction pass): expired assignment, ended/
+# non-active membership, inactive current/new role, all non-disclosing.
+# ---------------------------------------------------------------------------
+
+
+def test_changing_an_expired_role_assignment_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.expired_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.expired_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+
+
+def test_changing_an_assignment_whose_current_role_is_inactive_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.inactive_current_role_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.inactive_current_role_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+
+
+def test_changing_a_role_on_an_ended_membership_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.ended_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.ended_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+
+
+def test_changing_a_role_on_a_non_active_membership_status_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Isolates the membership-status-code check from ended_at: `suspended_
+    membership_id` is open (`ended_at IS NULL`) but its status is
+    `suspended`, not `active`."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.suspended_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.suspended_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+
+
+def test_changing_to_an_inactive_new_role_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.inactive_new_role_id)},
+        )
+    assert response.status_code == 404, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.existing_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+
+
+# ---------------------------------------------------------------------------
+# Same-role no-op (correction pass): rejected before any write, and never
+# lets an Idempotency-Key be durably consumed by the no-op.
+# ---------------------------------------------------------------------------
+
+
+def test_changing_to_the_current_role_is_rejected_as_a_no_op(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.initial_role_id)},
+        )
+    assert response.status_code == 422, response.text
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT role_id, revoked_at FROM security.membership_roles "
+                "WHERE membership_role_id = :mr"
+            ),
+            {"mr": f.existing_membership_role_id},
+        ).one()
+        assert row.role_id == f.initial_role_id
+        assert row.revoked_at is None
+        row_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles WHERE campaign_membership_id = :m"
+            ),
+            {"m": f.existing_membership_id},
+        ).scalar_one()
+        assert row_count == 1
+
+
+def test_a_no_op_change_does_not_persist_an_idempotency_reservation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A no-op attempt under an `Idempotency-Key` must never durably reserve
+    that key — the whole request's transaction, including the reservation
+    INSERT, rolls back together with the rejected command (`dnd_ai.api.deps.
+    get_connection`). Reusing the same key for a genuinely different
+    (non-no-op) request must therefore still run the real command, not
+    replay a cached no-op "success"."""
+    key = f"no-op-change-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        no_op = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.initial_role_id)},
+            headers={"Idempotency-Key": key},
+        )
+        assert no_op.status_code == 422, no_op.text
+
+        with postgres_engine.connect() as verify:
+            reservation_count = verify.execute(
+                text(
+                    "SELECT count(*) FROM security.idempotent_requests WHERE idempotency_key = :key"
+                ),
+                {"key": key},
+            ).scalar_one()
+            assert reservation_count == 0
+
+        real_change = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+            headers={"Idempotency-Key": key},
+        )
+    assert real_change.status_code == 201, real_change.text
+
+
+# ---------------------------------------------------------------------------
+# Rollback (correction pass): every rejection leaves no partial write, no
+# audit entry, and no idempotency reservation behind.
+# ---------------------------------------------------------------------------
+
+
+def test_a_rejected_change_leaves_no_audit_entry_or_idempotency_reservation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"rejected-change-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.expired_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+            headers={"Idempotency-Key": key},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        reservation_count = verify.execute(
+            text("SELECT count(*) FROM security.idempotent_requests WHERE idempotency_key = :key"),
+            {"key": key},
+        ).scalar_one()
+        assert reservation_count == 0
+
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE table_name = 'membership_roles' AND record_id = :mr"
+            ),
+            {"mr": f.expired_membership_role_id},
+        ).scalar_one()
+        assert audit_count == 0
+
+        row_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles WHERE campaign_membership_id = :m"
+            ),
+            {"m": f.expired_membership_id},
+        ).scalar_one()
+        assert row_count == 1
 
 
 def test_a_member_without_access_manage_cannot_change_a_role(

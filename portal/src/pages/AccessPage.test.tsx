@@ -300,6 +300,37 @@ describe("AccessPage", () => {
         ])
     })
 
+    it("disables Save until the selection changes away from the current role", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.click(saveButton)
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        expect(saveButton).toBeEnabled()
+
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "7c2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        expect(saveButton).toBeDisabled()
+    })
+
     it("requires an explicit Save action and never submits on selection change alone", () => {
         const fetchMock = vi.fn()
         vi.stubGlobal("fetch", fetchMock)
@@ -358,6 +389,11 @@ describe("AccessPage", () => {
         fireEvent.click(
             screen.getAllByRole("button", { name: "Change role" })[0],
         )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
         fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
         await waitFor(() => {
@@ -402,6 +438,11 @@ describe("AccessPage", () => {
         fireEvent.click(
             screen.getAllByRole("button", { name: "Change role" })[0],
         )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
         fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
         expect(

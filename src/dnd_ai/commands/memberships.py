@@ -61,7 +61,7 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
 
@@ -82,21 +82,40 @@ class MembershipNotInCampaignError(DomainAuthorizationError):
 class RoleNotUsableByCampaignError(DomainAuthorizationError):
     """Raised by `assign_membership_role()`/`change_membership_role()` when
     a target `role_id` is neither a system template (`security.roles.
-    campaign_id IS NULL`) nor scoped to the target campaign — including a
-    nonexistent role, identically, so a caller can never distinguish
-    "doesn't exist" from "belongs to a different campaign." Mirrors
-    `security.enforce_membership_role_scope()`'s own database-level check,
-    applied proactively — see this module's docstring for why relying on
-    that trigger's raw `IntegrityError` alone would surface as an
-    unclassified 500 instead. The supplied ids are included only in the
-    constructor's `detail` argument (`str(self)`), never in
+    campaign_id IS NULL`) nor scoped to the target campaign, **or** is not
+    currently `is_active` — including a nonexistent role, identically, so a
+    caller can never distinguish "doesn't exist" from "belongs to a
+    different campaign" from "has been deactivated." An inactive role was
+    never a legitimate assignment target in the first place (unlike
+    `MembershipRoleNotActiveError` below, which covers a target that *was*
+    valid a moment ago and has since gone stale) — grouping it with the
+    existing "not usable by this campaign" cases keeps that same
+    non-disclosing 404 shape rather than introducing a new one. Mirrors
+    `security.enforce_membership_role_scope()`'s own database-level check
+    for the scope half, applied proactively — see this module's docstring
+    for why relying on that trigger's raw `IntegrityError` alone would
+    surface as an unclassified 500 instead. The supplied ids are included
+    only in the constructor's `detail` argument (`str(self)`), never in
     `safe_message`."""
 
 
 class MembershipRoleNotActiveError(DomainAuthorizationError):
     """Raised by `change_membership_role()` when the target
-    `membership_role_id` is already revoked — most plausibly a second
-    caller's concurrent change/revoke of the same assignment landing first.
+    `membership_role_id` is not currently an eligible, active assignment to
+    change: already revoked, expired (`expires_at` in the past), its
+    current role deactivated (`security.roles.is_active = false`), or its
+    membership ended or no longer in the active membership status
+    (`security.campaign_memberships.ended_at IS NOT NULL`, or `security.
+    membership_statuses.code <> 'active'`/`.is_active = false`) — the
+    identical "currently true" definition `dnd_ai.queries.access_overview.
+    get_campaign_access_overview`'s own roles query already uses to decide
+    what counts as a member's *current* role, applied here so this mutation
+    can never act on a row the read side would no longer show as active.
+    All of these raise identically, so a caller can never learn *which*
+    condition applied — only that the assignment is no longer a valid
+    target. Most plausibly a second caller's concurrent change/revoke (or a
+    role/membership deactivation) landing first.
+
     Deliberately a *conflict*, not the base class's default 404: the
     membership role unambiguously existed and belonged to this campaign
     (that check runs first, still as `MembershipNotInCampaignError`/404),
@@ -112,6 +131,29 @@ class MembershipRoleNotActiveError(DomainAuthorizationError):
     safe_status_code = 409
     safe_error_code = "conflict"
     safe_message = "The request could not be completed due to a conflicting change."
+
+
+class ChangeMembershipRoleNoOpError(SafeMessageError):
+    """Raised by `change_membership_role()` when `new_role_id` names the
+    same role the target `membership_role_id` already, currently holds —
+    checked before any write, so a no-op request never revokes/reinserts a
+    row, never writes an audit entry, and (critically) never lets its
+    caller — `dnd_ai.api.memberships`' own route — reach `complete_
+    idempotent_request()`, so an `Idempotency-Key` submitted for a no-op is
+    never durably cached as a "successful" no-op result; a caller that
+    corrects its selection and retries with the *same* key still gets the
+    real command run. A plain `SafeMessageError`, not `DomainAuthorization
+    Error`: nothing about this case is a disclosure risk — the caller
+    already knows both the target assignment and the role it named, so
+    there is nothing to hide by being specific. Mapped to 422 (`safe_
+    status_code` override below) — "malformed or invalid role request" —
+    never 409: this is not a race with anything external, the request as
+    submitted simply asks for no effective change, which is knowable from
+    the request alone."""
+
+    safe_status_code = 422
+    safe_error_code = "invalid_role_change"
+    safe_message = "The selected role is already this member's current role for this assignment."
 
 
 @dataclass(frozen=True)
@@ -337,39 +379,70 @@ def change_membership_role(
     `membership_role_id` or one belonging to a different campaign than
     `campaign_id` (checked first, so this stays indistinguishable from "it
     never existed" for an unauthorized caller). Raises
-    `MembershipRoleNotActiveError` (409) if `membership_role_id` is already
-    revoked — most plausibly a second caller's concurrent change/revoke of
-    the same assignment landing first; see that error's own docstring.
-    Raises `RoleNotUsableByCampaignError` for a `new_role_id` that is
-    neither a system template nor scoped to `campaign_id` — identical to
-    `assign_membership_role()`'s own check. Raises a plain `ValueError`
-    (400) if the change would leave an *active* campaign with no membership
-    holding `access.manage` — the identical retention invariant
-    `revoke_membership_role()` enforces, evaluated *after* both the revoke
-    and the new assignment have applied within this same transaction, so a
-    change that merely moves `access.manage` from one still-active
-    assignment to another (rather than removing it) is never rejected. A
-    retry naming a `new_role_id` the membership already holds actively
-    (from some other assignment) is rejected as a 409 by
-    `ux_membership_roles_active` (existing `IntegrityError` handler) —
-    deliberately not pre-checked here, matching this module's own
-    documented "database-enforced invariants this module deliberately does
-    not duplicate" policy.
+    `MembershipRoleNotActiveError` (409) if `membership_role_id` is not
+    currently an eligible, active assignment — already revoked, expired,
+    its current role deactivated, or its membership ended or no longer in
+    the active membership status; see that error's own docstring for the
+    full "currently true" definition (matching the access-overview read
+    side exactly, so this mutation can never act on a row the read side
+    would no longer show as active). Raises `RoleNotUsableByCampaignError`
+    for a `new_role_id` that is neither a system template nor scoped to
+    `campaign_id`, or is not currently `is_active` — identical to `assign_
+    membership_role()`'s own scope check, extended to activeness. Raises
+    `ChangeMembershipRoleNoOpError` (422) if `new_role_id` names the role
+    `membership_role_id` already, currently holds — checked before any
+    write; see that error's own docstring for why this matters for
+    idempotency. Raises a plain `ValueError` (400) if the change would
+    leave an *active* campaign with no membership holding `access.manage`
+    — the identical retention invariant `revoke_membership_role()`
+    enforces, evaluated *after* both the revoke and the new assignment
+    have applied within this same transaction, so a change that merely
+    moves `access.manage` from one still-active assignment to another
+    (rather than removing it) is never rejected. A retry naming a
+    `new_role_id` the membership already holds actively (from some other
+    assignment) is rejected as a 409 by `ux_membership_roles_active`
+    (existing `IntegrityError` handler) — deliberately not pre-checked
+    here, matching this module's own documented "database-enforced
+    invariants this module deliberately does not duplicate" policy.
 
-    Locks the target row (`FOR UPDATE`) before evaluating any check, so a
-    concurrent change/revoke of the same assignment, or of a different role
-    on the same membership, cannot race past this one."""
+    Every check above runs, and every row lock below is taken, before any
+    write — a rejection therefore never leaves a partial write behind, and
+    (since `dnd_ai.api.deps.get_connection` rolls the whole request's
+    transaction back on any exception) never leaves a stray idempotency-key
+    reservation or audit entry either, regardless of which check raised.
+
+    Locks the target row, its owning membership, and its current role (`FOR
+    UPDATE OF mr, cm, r`) before evaluating any eligibility check, and
+    separately locks the candidate new role row before evaluating its own
+    — so a concurrent change/revoke of this exact assignment, a concurrent
+    deactivation of its current or new role, or a concurrent ending of its
+    membership cannot race between this function's own check and write:
+    whichever transaction acquires the relevant row lock first forces the
+    other to wait, then re-observes the first's committed effect rather
+    than the moment-of-check snapshot. The campaign-wide `access.manage`
+    retention invariant is a separate concern with its own, pre-existing
+    concurrency guarantee — `security.assert_campaign_retains_access_
+    manager()`'s `campaign.campaigns` row lock, invoked by the `DEFERRABLE
+    INITIALLY DEFERRED` constraint trigger on `security.membership_roles`
+    (migration 080) — which this function relies on rather than duplicates;
+    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument."""
     row = (
         connection.execute(
             text("""
-                SELECT cm.campaign_id, mr.campaign_membership_id, mr.role_id, mr.revoked_at,
-                       r.code AS role_code
+                SELECT cm.campaign_id, cm.ended_at,
+                       ms.code AS membership_status_code,
+                       ms.is_active AS membership_status_is_active,
+                       mr.campaign_membership_id, mr.role_id, mr.revoked_at,
+                       (mr.expires_at IS NOT NULL AND mr.expires_at <= now()) AS role_is_expired,
+                       r.code AS role_code, r.is_active AS role_is_active
                 FROM security.membership_roles mr
                 JOIN security.campaign_memberships cm
                     ON cm.campaign_membership_id = mr.campaign_membership_id
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
                 JOIN security.roles r ON r.role_id = mr.role_id
                 WHERE mr.membership_role_id = :membership_role
-                FOR UPDATE OF mr
+                FOR UPDATE OF mr, cm, r
             """),
             {"membership_role": membership_role_id},
         )
@@ -381,25 +454,46 @@ def change_membership_role(
             f"membership role {membership_role_id} does not belong to campaign {campaign_id} "
             f"(actual campaign: {row['campaign_id'] if row is not None else None})"
         )
-    if row["revoked_at"] is not None:
+
+    target_is_eligible = (
+        row["revoked_at"] is None
+        and not row["role_is_expired"]
+        and row["role_is_active"]
+        and row["ended_at"] is None
+        and row["membership_status_code"] == "active"
+        and row["membership_status_is_active"]
+    )
+    if not target_is_eligible:
         raise MembershipRoleNotActiveError(
-            f"membership role {membership_role_id} is already revoked"
+            f"membership role {membership_role_id} is not currently an eligible, active "
+            "assignment to change"
         )
 
     new_role_row = (
         connection.execute(
-            text("SELECT campaign_id, code FROM security.roles WHERE role_id = :role"),
+            text(
+                "SELECT campaign_id, code, is_active FROM security.roles "
+                "WHERE role_id = :role FOR UPDATE"
+            ),
             {"role": new_role_id},
         )
         .mappings()
         .one_or_none()
     )
-    if new_role_row is None or (
-        new_role_row["campaign_id"] is not None and new_role_row["campaign_id"] != campaign_id
+    if (
+        new_role_row is None
+        or (new_role_row["campaign_id"] is not None and new_role_row["campaign_id"] != campaign_id)
+        or not new_role_row["is_active"]
     ):
         raise RoleNotUsableByCampaignError(
             f"role {new_role_id} is not usable by campaign {campaign_id} "
             f"(actual campaign: {new_role_row['campaign_id'] if new_role_row is not None else None})"
+        )
+
+    if new_role_id == row["role_id"]:
+        raise ChangeMembershipRoleNoOpError(
+            f"role {new_role_id} is already the current role for membership role "
+            f"{membership_role_id}"
         )
 
     connection.execute(

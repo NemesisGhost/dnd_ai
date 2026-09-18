@@ -114,18 +114,78 @@ access-management mutation).
   already uses for the identical invariant, so the two routes stay
   consistent rather than the newer one inventing a different contract for
   the same failure.
-- **Concurrency/staleness:** the target `membership_role_id` row is locked
-  (`FOR UPDATE`) before any check runs, so a concurrent change/revoke of
-  the same assignment cannot race past this one. If it was already revoked
-  (most plausibly a second manager's concurrent change/revoke landing
-  first), this route raises `MembershipRoleNotActiveError`, mapped to
-  **409** — a genuine "this changed under you" conflict, distinct from the
-  400 above.
+- **Active-state boundary (correction pass):** the target `membership_role_id`
+  must currently be an *eligible, active* assignment — the identical
+  "currently true" definition §3's `roles` field already uses to decide
+  what to show as a member's current role, so this mutation can never act
+  on a row the read side would no longer show as active:
+  - not already revoked (`revoked_at IS NULL`);
+  - not expired (`expires_at IS NULL OR expires_at > now()`);
+  - its *current* role still `is_active`;
+  - its owning membership not ended (`ended_at IS NULL`) and in the
+    `active` membership status (`security.membership_statuses.code =
+    'active'` and `.is_active`).
+
+  Any of these failing raises `MembershipRoleNotActiveError`, mapped to
+  **409** — identically for all of them (already revoked, expired, current
+  role deactivated, or membership ended/non-active), so a caller can never
+  learn *which* condition applied, only that the assignment is no longer a
+  valid target. The candidate `new_role_id` is held to the same activeness
+  bar: an inactive role is rejected by the *existing* `RoleNotUsableByCampaignError`
+  (**404**) — grouped with "not usable by this campaign" rather than a new
+  shape, since an inactive role was never a legitimate target in the first
+  place (unlike the 409 cases above, which *were* valid a moment ago).
+- **Same-role no-op (correction pass):** if `new_role_id` names the role
+  `membership_role_id` already, currently holds, the request is rejected
+  as `ChangeMembershipRoleNoOpError`, mapped to **422** ("malformed or
+  invalid role request"), checked before any write. No revoke, no new row,
+  no audit entry — and critically, no idempotency-key completion, so a
+  caller who corrects their selection and retries with the *same*
+  `Idempotency-Key` still gets the real command run rather than a cached
+  "successful" no-op. The portal disables Save for this exact case so it
+  is rarely reached at all; the server-side check is defense in depth.
+- **Concurrency (correction pass):** two independent guarantees, both
+  proven by real-connection PostgreSQL regression tests
+  (`tests/database/test_membership_role_concurrency.py`):
+  - *Eligibility-check/write race:* the target row, its owning membership,
+    and its current role are locked together (`FOR UPDATE OF mr, cm, r`)
+    before any eligibility check runs, and the candidate `new_role_id` row
+    is separately locked (`FOR UPDATE`) before its own check — so a
+    concurrent deactivation of either role, or a concurrent ending of the
+    membership, cannot slip in between this function's own read and
+    write. A concurrent change/revoke of the identical `membership_role_id`
+    is serialized the same way (same-row coverage) — the loser observes
+    the winner's committed effect (already-revoked) once unblocked, never
+    an interleaved write.
+  - *Campaign `access.manage` retention:* this checkpoint adds no locking
+    of its own for this — it relies entirely on the pre-existing
+    `security.assert_campaign_retains_access_manager()` (migration 080),
+    which locks `campaign.campaigns` `FOR UPDATE` and is invoked by a
+    `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `security.
+    membership_roles`, evaluated against the fully-committed final state
+    at commit time. Two concurrent changes (or a change racing a revoke)
+    against *different* management-granting rows can never both commit
+    when their combined effect would leave an active campaign with zero
+    qualifying managers — the loser is rejected either by this route's own
+    app-level pre-check (a **400** `ValueError`, if its check happens to
+    run after the winner already committed) or by the database's deferred
+    trigger (a **5xx**-mapped `IntegrityError`, if both sides write before
+    either commits) — which mechanism catches it is a genuine timing
+    outcome of the real race, not something either the application or a
+    caller controls.
 - **Idempotency:** the same durable, PostgreSQL-backed
   `security.idempotent_requests` mechanism `assign_membership_role`/
   `create_campaign_membership` already use — an `Idempotency-Key` replay
   returns the original response verbatim rather than re-running the
-  command.
+  command. The portal (correction pass) now generates and sends this
+  header itself: one opaque key (`crypto.randomUUID()`) per logical
+  `(membership_role_id, new_role_id)` edit, reused verbatim across a retry
+  of that exact selection (an unknown network outcome), regenerated the
+  moment the selection changes (a different role row, or a different
+  target role on the same row), and cleared entirely on confirmed success
+  — so a later edit, even one that happens to choose the identical role
+  again, always gets a fresh key rather than risking a replay of a stale
+  cached response. See `portal/src/hooks/useChangeMembershipRole.ts`.
 - **Cross-campaign/unknown-role rejection:** identical to `assign_membership_role`'s
   existing checks — a `membership_role_id` outside `campaign_id`, or a
   `new_role_id` neither a system template nor scoped to `campaign_id`
@@ -231,7 +291,23 @@ above already exercise every rule §3a documents:
   same non-disclosing contract §3a documents.
 - **Idempotent replay:** repeating the same change request with the same
   `Idempotency-Key` returns the original response unchanged, without
-  creating a second new role-assignment row.
+  creating a second new role-assignment row. The portal itself now
+  generates and reuses this header automatically — no manual header
+  entry is needed to exercise it by hand; a genuine network retry (e.g.
+  toggling dev tools offline mid-Save) is the observable case.
+- **Same-role no-op (correction pass):** in the Change-role control, the
+  Save button stays disabled while the selected role equals the row's
+  current role — there is no UI path to submit a no-op at all. A direct
+  `POST .../roles/{membership_role_id}/change` with `new_role_id` equal
+  to the row's current role returns 422 and leaves the row untouched.
+- **Active-state boundary (correction pass):** these conditions are not
+  reachable through the seeded dev accounts without a direct database
+  edit (none of the five accounts' assignments are expired, ended, or
+  role-deactivated), so this checkpoint's PostgreSQL-backed tests
+  (`tests/database/test_api_memberships.py`) are the authoritative
+  coverage for expired assignments, ended/non-active memberships, and
+  inactive current/new roles — all rejected with a non-disclosing 409/404
+  per §3a, never a 5xx.
 
 ### Expected access behavior
 

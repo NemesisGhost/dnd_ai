@@ -85,6 +85,7 @@ describe("useChangeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            expect.any(String),
             expect.any(AbortSignal),
         )
         expect(onSuccess).not.toHaveBeenCalled()
@@ -270,7 +271,7 @@ describe("useChangeMembershipRole", () => {
         expect(result.current.status).toEqual({ kind: "pending" })
 
         const signal = changeMembershipRoleMock.mock
-            .calls[0]?.[4] as AbortSignal
+            .calls[0]?.[5] as AbortSignal
 
         rerender({ campaignId: "campaign-b" })
 
@@ -297,11 +298,182 @@ describe("useChangeMembershipRole", () => {
         })
 
         const signal = changeMembershipRoleMock.mock
-            .calls[0]?.[4] as AbortSignal
+            .calls[0]?.[5] as AbortSignal
         expect(signal.aborted).toBe(false)
 
         unmount()
 
         expect(signal.aborted).toBe(true)
+    })
+
+    describe("idempotency key", () => {
+        it("reuses the same key when retrying the identical selection", async () => {
+            changeMembershipRoleMock
+                .mockRejectedValueOnce(new Error("network down"))
+                .mockResolvedValueOnce({
+                    membership_role_id: "new-role-assignment",
+                })
+
+            const { result } = renderHook(() =>
+                useChangeMembershipRole("campaign-a", vi.fn()),
+            )
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "error" })
+            })
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "success" })
+            })
+
+            const firstKey = changeMembershipRoleMock.mock.calls[0]?.[4]
+            const secondKey = changeMembershipRoleMock.mock.calls[1]?.[4]
+            expect(typeof firstKey).toBe("string")
+            expect(secondKey).toEqual(firstKey)
+        })
+
+        it("generates a different key for a different new_role_id on the same row", async () => {
+            changeMembershipRoleMock
+                .mockRejectedValueOnce(new Error("network down"))
+                .mockResolvedValueOnce({
+                    membership_role_id: "new-role-assignment",
+                })
+
+            const { result } = renderHook(() =>
+                useChangeMembershipRole("campaign-a", vi.fn()),
+            )
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "error" })
+            })
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-c")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "success" })
+            })
+
+            const firstKey = changeMembershipRoleMock.mock.calls[0]?.[4]
+            const secondKey = changeMembershipRoleMock.mock.calls[1]?.[4]
+            expect(secondKey).not.toEqual(firstKey)
+        })
+
+        it("generates a different key for a different target membership_role_id", async () => {
+            changeMembershipRoleMock
+                .mockRejectedValueOnce(new Error("network down"))
+                .mockResolvedValueOnce({
+                    membership_role_id: "new-role-assignment",
+                })
+
+            const { result } = renderHook(() =>
+                useChangeMembershipRole("campaign-a", vi.fn()),
+            )
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "error" })
+            })
+
+            act(() => {
+                result.current.submit("membership-role-z", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "success" })
+            })
+
+            const firstKey = changeMembershipRoleMock.mock.calls[0]?.[4]
+            const secondKey = changeMembershipRoleMock.mock.calls[1]?.[4]
+            expect(secondKey).not.toEqual(firstKey)
+        })
+
+        it("generates a fresh key after a successful completion, even for the identical selection", async () => {
+            changeMembershipRoleMock
+                .mockResolvedValueOnce({
+                    membership_role_id: "first-assignment",
+                })
+                .mockResolvedValueOnce({
+                    membership_role_id: "second-assignment",
+                })
+
+            const { result } = renderHook(() =>
+                useChangeMembershipRole("campaign-a", vi.fn()),
+            )
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "success" })
+            })
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(changeMembershipRoleMock).toHaveBeenCalledTimes(2)
+            })
+
+            const firstKey = changeMembershipRoleMock.mock.calls[0]?.[4]
+            const secondKey = changeMembershipRoleMock.mock.calls[1]?.[4]
+            expect(secondKey).not.toEqual(firstKey)
+        })
+
+        it("does not reuse a key across a campaign change, even for the identical selection", async () => {
+            let resolveFirst!: (value: {
+                membership_role_id: string
+            }) => void
+            changeMembershipRoleMock
+                .mockReturnValueOnce(
+                    new Promise((resolve) => {
+                        resolveFirst = resolve
+                    }),
+                )
+                .mockResolvedValueOnce({
+                    membership_role_id: "second-assignment",
+                })
+
+            const { result, rerender } = renderHook(
+                ({ campaignId }) =>
+                    useChangeMembershipRole(campaignId, vi.fn()),
+                { initialProps: { campaignId: "campaign-a" } },
+            )
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            expect(result.current.status).toEqual({ kind: "pending" })
+
+            rerender({ campaignId: "campaign-b" })
+            expect(result.current.status).toEqual({ kind: "idle" })
+
+            act(() => {
+                result.current.submit("membership-role-a", "role-b")
+            })
+            await waitFor(() => {
+                expect(changeMembershipRoleMock).toHaveBeenCalledTimes(2)
+            })
+
+            const firstKey = changeMembershipRoleMock.mock.calls[0]?.[4]
+            const secondKey = changeMembershipRoleMock.mock.calls[1]?.[4]
+            expect(secondKey).not.toEqual(firstKey)
+
+            // Resolve the first (aborted, campaign-a) request harmlessly —
+            // it must never be left as an unresolved dangling promise.
+            await act(async () => {
+                resolveFirst({ membership_role_id: "first-assignment" })
+            })
+        })
     })
 })

@@ -63,6 +63,11 @@ export function MemberRoleEditor({
         useChangeMembershipRole(campaignId, onChanged)
 
     const isPending = status.kind === "pending"
+    // Selecting the role the assignment already holds is not a change at
+    // all — disabled here so the no-op never reaches the server in the
+    // first place; dnd_ai.commands.memberships.change_membership_role
+    // still rejects it server-side (422) as defense in depth.
+    const isUnchangedSelection = selectedRoleId === role.role_id
 
     if (assignableRoles.length === 0) {
         // Nothing the contract marks as an eligible target — never show a
@@ -91,6 +96,9 @@ export function MemberRoleEditor({
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
+                if (isUnchangedSelection) {
+                    return
+                }
                 submit(role.membership_role_id, selectedRoleId)
             }}
         >
@@ -122,7 +130,7 @@ export function MemberRoleEditor({
             <div className="access-role-editor__actions">
                 <button
                     type="submit"
-                    disabled={isPending}
+                    disabled={isPending || isUnchangedSelection}
                     aria-busy={isPending}
                 >
                     {isPending ? "Saving…" : "Save"}

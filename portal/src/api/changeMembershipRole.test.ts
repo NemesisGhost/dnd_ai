@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 describe("changeMembershipRole", () => {
-    it("posts to the campaign-scoped change-role route with the CSRF header, JSON body, and same-origin credentials", async () => {
+    it("posts to the campaign-scoped change-role route with the CSRF header, Idempotency-Key header, JSON body, and same-origin credentials", async () => {
         const controller = new AbortController()
 
         const fetchMock = vi.fn().mockResolvedValue(
@@ -37,6 +37,7 @@ describe("changeMembershipRole", () => {
                 "membership-role/1",
                 "role-2",
                 "fixture-csrf-token",
+                "fixture-idempotency-key",
                 controller.signal,
             ),
         ).resolves.toEqual({
@@ -55,6 +56,7 @@ describe("changeMembershipRole", () => {
                     Accept: "application/json",
                     "Content-Type": "application/json",
                     "X-CSRF-Token": "fixture-csrf-token",
+                    "Idempotency-Key": "fixture-idempotency-key",
                 },
                 body: JSON.stringify({ new_role_id: "role-2" }),
             },
@@ -80,6 +82,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         expect(fetchMock).toHaveBeenCalledWith(
@@ -99,6 +102,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         await expect(request).rejects.toBeInstanceOf(
@@ -121,6 +125,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         await expect(request).rejects.toMatchObject({
@@ -140,6 +145,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         await expect(request).rejects.toMatchObject({
@@ -159,6 +165,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         await expect(request).rejects.toMatchObject({
@@ -178,6 +185,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
         )
 
         await expect(request).rejects.toMatchObject({
@@ -204,6 +212,7 @@ describe("changeMembershipRole", () => {
             "membership-role-a",
             "role-b",
             "fixture-csrf-token",
+            "fixture-idempotency-key",
             controller.signal,
         )
 
