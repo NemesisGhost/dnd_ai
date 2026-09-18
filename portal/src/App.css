@@ -1687,6 +1687,16 @@
   border-radius: 0.25rem;
 }
 
+/* Persistent, campaign-scoped role-change announcement (Phase 13E-B):
+   mounted above the overview boundary for the whole life of the Access
+   page so a role-change success is still observable while the boundary
+   below it swaps to its own loading state. */
+.campaign-access-page__announcement {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
 /* Access overview (Phase 13E-A): a dense list of per-member disclosure
    cards, matching the character-sheet feature list's proven "collapsed
    summary, expand for detail" treatment (see .character-disclosure-card
