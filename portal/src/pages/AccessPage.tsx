@@ -1,0 +1,146 @@
+import { useId } from "react"
+import { humanizeCode } from "../utils/humanize"
+import type {
+    CampaignAccessMember,
+    CampaignAccessOverview,
+} from "../types/accessOverview"
+
+function formatTimestamp(timestamp: string): string {
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+    }).format(new Date(timestamp))
+}
+
+interface MemberAccessCardProps {
+    member: CampaignAccessMember
+}
+
+function MemberAccessCard({ member }: MemberAccessCardProps) {
+    const rolesHeadingId = useId()
+    const relationshipsHeadingId = useId()
+    const grantsHeadingId = useId()
+
+    const roleSummary = member.roles
+        .map((role) => role.display_name)
+        .join(", ")
+
+    return (
+        <details className="access-member-card">
+            <summary>
+                <strong>{member.display_name}</strong>
+                <span>{member.status_display_name}</span>
+                {roleSummary !== "" && <span>{roleSummary}</span>}
+                <span
+                    className="access-member-card__indicator"
+                    aria-hidden="true"
+                />
+            </summary>
+
+            <div className="access-member-card__body">
+                <section aria-labelledby={rolesHeadingId}>
+                    <h3 id={rolesHeadingId}>Roles</h3>
+
+                    {member.roles.length > 0 ? (
+                        <ul>
+                            {member.roles.map((role) => (
+                                <li key={role.role_id}>
+                                    {role.display_name}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p>No roles assigned.</p>
+                    )}
+                </section>
+
+                <section aria-labelledby={relationshipsHeadingId}>
+                    <h3 id={relationshipsHeadingId}>
+                        Character relationships
+                    </h3>
+
+                    {member.character_relationships.length > 0 ? (
+                        <ul>
+                            {member.character_relationships.map(
+                                (relationship) => (
+                                    <li
+                                        key={
+                                            relationship
+                                                .membership_character_relationship_id
+                                        }
+                                    >
+                                        {
+                                            relationship.character_display_name
+                                        }{" "}
+                                        —{" "}
+                                        {
+                                            relationship.relationship_type_display_name
+                                        }
+                                    </li>
+                                ),
+                            )}
+                        </ul>
+                    ) : (
+                        <p>No character relationships.</p>
+                    )}
+                </section>
+
+                <section aria-labelledby={grantsHeadingId}>
+                    <h3 id={grantsHeadingId}>Explicit grants</h3>
+
+                    {member.grants.length > 0 ? (
+                        <ul>
+                            {member.grants.map((grant) => (
+                                <li key={grant.resource_grant_id}>
+                                    <strong>
+                                        {grant.capability_display_name}
+                                    </strong>{" "}
+                                    ({humanizeCode(grant.effect)}) —{" "}
+                                    {humanizeCode(grant.target_type)}
+                                    {grant.reason !== null &&
+                                        ` · ${grant.reason}`}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p>No explicit grants.</p>
+                    )}
+                </section>
+
+                <p className="access-member-card__joined">
+                    Joined {formatTimestamp(member.joined_at)}
+                </p>
+            </div>
+        </details>
+    )
+}
+
+interface AccessPageProps {
+    overview: CampaignAccessOverview
+}
+
+export function AccessPage({ overview }: AccessPageProps) {
+    return (
+        <section aria-labelledby="access-heading">
+            <h1 id="access-heading">Access</h1>
+
+            <p className="access-page__description">
+                Current members, roles, character relationships, and
+                explicit grants for this campaign. This is a read-only
+                overview — access changes are not available here yet.
+            </p>
+
+            {overview.members.length > 0 ? (
+                <ul className="access-page__member-list">
+                    {overview.members.map((member) => (
+                        <li key={member.campaign_membership_id}>
+                            <MemberAccessCard member={member} />
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <p>No campaign members are currently recorded.</p>
+            )}
+        </section>
+    )
+}

@@ -204,6 +204,87 @@ and with the non-GM `include_ground_truth=False` + resolved-perspective
 inputs a player's request produces, and prints both — never a hand-written
 lookalike query.
 
+Also supports manual, browser-driven verification of the Phase 13E-A
+read-only campaign access overview (`GET /campaigns/{id}/access-overview`,
+`dnd_ai.api.access_overview`/`dnd_ai.queries.access_overview`) — the local
+development database otherwise contains only the pre-existing `--user-id`
+account, which cannot by itself exercise a non-GM path, a second campaign's
+isolation, or a disabled account. Five deterministic, development-only
+local accounts are created (see the `_PHASE13E_*` constants above), all
+sharing one password read from `PHASE13E_DEV_ACCOUNT_PASSWORD` — never the
+pre-existing `--user-id` account's own password, and never persisted,
+logged, or printed by this script (`_resolve_phase13e_dev_password`
+refuses to run at all, before any database connection is even opened, if
+that environment variable is unset or fails the local password policy):
+
+  "Phase13E Dev GM2" (`phase13e.gm2`): a second Campaign A member holding
+  the `campaign_owner` role — the only system-template role carrying
+  `access.manage` (confirmed against `security.role_capabilities`; see
+  `docs/PHASE13E_ACCESS_CONTRACT.md` §4) — so a non-`--user-id` account can
+  exercise the authorized Access-page path. No membership in Campaign B.
+
+  "Phase13E Dev Player A" (`phase13e.player_a`): a Campaign A member
+  holding the plain `player` role (`campaign.view` only, no
+  `access.manage`) plus an `owner`-type character relationship to
+  Character A (the same relationship type/capability seed this script
+  already establishes for `--user-id`'s own perspectives — see
+  `_ensure_relationship_type_capabilities`). No membership in, or
+  character relationship reaching, Campaign B.
+
+  "Phase13E Dev Observer A" (`phase13e.observer_a`): a Campaign A member
+  holding the `observer` role (`campaign.view` only). No character
+  relationship — observer policy does not require one. No membership in
+  Campaign B. Also the grantee of the visible explicit-grant fixture below.
+
+  "Phase13E Dev Player B" (`phase13e.player_b`): a Campaign B member
+  holding the plain `player` role. No membership in, or character
+  relationship reaching, Campaign A. Paired with Player A above for the
+  manual cross-campaign-isolation check. No relationship to a "Campaign B
+  character" is created: the existing Campaign B seed data has none of its
+  own (Character A/B are Timeline A/Campaign A fixtures) — inventing one
+  merely to populate this account would be exactly the "add speculative
+  data" this workstream's own instructions rule out.
+
+  "Phase13E Dev Disabled Player" (`phase13e.disabled`): created active with
+  an ordinary Campaign A `player` membership, then disabled via the real
+  `dnd_ai.commands.local_auth._disable_local_account_impl` (revokes every
+  browser session in the same transaction) — proving both that it can no
+  longer authenticate *and* that its campaign membership still appears on
+  the Access overview with an ordinary "Active" *membership* status,
+  because `dnd_ai.queries.access_overview` deliberately never consults
+  `security.users.lifecycle_status_id` (see that module's own docstring
+  and `docs/PHASE13E_ACCESS_CONTRACT.md` §3) — this fixture does not invent
+  a "disabled" label the implemented contract does not provide.
+
+Two explicit `security.resource_grants` rows demonstrate the overview's own
+grants list, both targeting Character A only (never Campaign B, never
+`access.manage`): one active grant (`character.view_full`, to Observer A)
+that the overview must show, and one grant created and then immediately
+revoked (`character.view_summary`, to Player A) that the overview must
+never show — the same revoked-grant exclusion
+`tests/database/test_api_access_overview.py` already proves automatically,
+here reproduced for hands-on UI verification.
+
+Every account/membership/role/relationship/grant here is create-or-reuse
+by its own fixed, deterministic key (normalized login name; `(campaign,
+user)` for a membership; `(membership, role)` for a role assignment;
+`(campaign, grantee, capability, character)` for a grant) — a second
+`--apply` run creates nothing new and never rotates an existing account's
+password (`_get_or_create_phase13e_dev_account` only ever calls
+`activate_local_account`'s composable form the *first* time a login name
+is created). Disabling is the one exception, and needs no such check: the
+underlying command is already idempotent (a re-disable, and revoking
+already-revoked sessions, both succeed as no-ops), so re-running this
+script leaves an already-disabled account exactly as disabled. Nothing
+here ever creates, disables, reactivates, or changes the password of the
+pre-existing `--user-id` account itself.
+
+`_print_access_verification` runs the real `dnd_ai.queries.access_overview.
+get_campaign_access_overview` after an applied run and prints its result
+for Campaign A — safe, non-secret state only (display names, statuses,
+role/relationship/grant labels): never a password, activation/reset token,
+session identifier, or password hash.
+
 Not a general-purpose seeding framework — every name and shape here is
 specific to this one fixture (see the `_WORLD_*`/`_CAMPAIGN_*`/`_CHARACTER_*`/
 `_CAMPAIGN_A_SESSIONS`/`_CAMPAIGN_B_SESSIONS`/`_CAMPAIGN_A_QUESTS`/
@@ -322,10 +403,23 @@ from dnd_ai.api.access import resolve_party_perspective
 from dnd_ai.api.audit import record_change_log
 from dnd_ai.api.world_explorer import resolve_world_character_visibility
 from dnd_ai.commands._shared import lookup_id
-from dnd_ai.commands.access_grants import grant_character_relationship
+from dnd_ai.commands.access_grants import (
+    create_resource_grant,
+    grant_character_relationship,
+    revoke_resource_grant,
+)
 from dnd_ai.commands.campaigns import create_campaign, grant_timeline_bootstrap
+from dnd_ai.commands.local_auth import (
+    _activate_local_account_impl,
+    _create_local_account_impl,
+    _disable_local_account_impl,
+    normalize_login_name,
+)
+from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
 from dnd_ai.config import settings
 from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.passwords import PasswordPolicyError, validate_password_policy
+from dnd_ai.queries.access_overview import get_campaign_access_overview
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 from dnd_ai.queries.knowledge_browse import KnowledgeListItem, list_knowledge
 from dnd_ai.queries.quest import QuestNotFoundError, get_quest_view, list_campaign_quests
@@ -360,6 +454,56 @@ _RULESET_CODE = "dnd5e"
 _RELATIONSHIP_TYPE_CODE = "owner"
 
 _CREATED_CHANGE_ACTION = "created"
+
+# --------------------------------------------------------------------------
+# Phase 13E-A access-overview manual-verification fixture
+# --------------------------------------------------------------------------
+#
+# Five deterministic development-only local accounts, all sharing one
+# password read from this environment variable — never the pre-existing
+# --user-id account's own password, and never persisted, logged, or
+# printed by this script. See the module docstring's own Phase 13E-A
+# section for the full rationale.
+_PHASE13E_DEV_PASSWORD_ENV_VAR = "PHASE13E_DEV_ACCOUNT_PASSWORD"
+
+_PHASE13E_GM2_LOGIN_NAME = "phase13e.gm2"
+_PHASE13E_GM2_DISPLAY_NAME = "Phase13E Dev GM2"
+
+_PHASE13E_PLAYER_A_LOGIN_NAME = "phase13e.player_a"
+_PHASE13E_PLAYER_A_DISPLAY_NAME = "Phase13E Dev Player A"
+
+_PHASE13E_OBSERVER_A_LOGIN_NAME = "phase13e.observer_a"
+_PHASE13E_OBSERVER_A_DISPLAY_NAME = "Phase13E Dev Observer A"
+
+_PHASE13E_PLAYER_B_LOGIN_NAME = "phase13e.player_b"
+_PHASE13E_PLAYER_B_DISPLAY_NAME = "Phase13E Dev Player B"
+
+_PHASE13E_DISABLED_LOGIN_NAME = "phase13e.disabled"
+_PHASE13E_DISABLED_DISPLAY_NAME = "Phase13E Dev Disabled Player"
+
+# The only system-template role carrying access.manage (confirmed by
+# inspecting security.role_capabilities — see docs/PHASE13E_ACCESS_CONTRACT.md
+# §4) — assigning it is "the actual existing role... that gives access to
+# the Phase 13E-A Access page," not an invented role.
+_PHASE13E_ACCESS_MANAGE_ROLE_CODE = "campaign_owner"
+_PHASE13E_PLAYER_ROLE_CODE = "player"
+_PHASE13E_OBSERVER_ROLE_CODE = "observer"
+
+# The visible explicit grant: an existing capability (already used
+# elsewhere by GM-only character detail), targeting Character A only —
+# never access.manage, never touching Campaign B.
+_PHASE13E_VISIBLE_GRANT_CAPABILITY_CODE = "character.view_full"
+_PHASE13E_VISIBLE_GRANT_REASON = (
+    "Phase13E-A dev fixture: explicit grant, visible on the Access overview."
+)
+# The negative case: created, then immediately revoked — proves a revoked
+# grant is excluded from GET /campaigns/{id}/access-overview (matching
+# tests/database/test_api_access_overview.py's own revoked-grant coverage,
+# here for manual/UI verification instead of an automated assertion).
+_PHASE13E_REVOKED_GRANT_CAPABILITY_CODE = "character.view_summary"
+_PHASE13E_REVOKED_GRANT_REASON = (
+    "Phase13E-A dev fixture: revoked grant, must not appear on the Access overview."
+)
 
 
 @dataclass(frozen=True)
@@ -1391,6 +1535,11 @@ class _Summary:
     # The same kind of quick reference, for the Phase 13D World Explorer +
     # Knowledge fixtures — printed under its own header (see `main`).
     world_report: list[str] = field(default_factory=list)
+    # The same kind of quick reference, for the Phase 13E-A access-overview
+    # fixture — printed under its own header (see `main`). Never carries a
+    # password or any other secret; see the module docstring's Phase 13E-A
+    # section.
+    access_report: list[str] = field(default_factory=list)
 
     def note(self, line: str) -> None:
         self.report.append(line)
@@ -1400,6 +1549,9 @@ class _Summary:
 
     def note_world(self, line: str) -> None:
         self.world_report.append(line)
+
+    def note_access(self, line: str) -> None:
+        self.access_report.append(line)
 
     def add(
         self,
@@ -1496,6 +1648,45 @@ def _database_url() -> str:
     url = settings.database_url
     assert url is not None
     return url
+
+
+def _resolve_phase13e_dev_password() -> str:
+    """The one shared password for every Phase 13E-A development account
+    below — read from `PHASE13E_DEV_ACCOUNT_PASSWORD`, never guessed,
+    never defaulted, never the pre-existing `--user-id` account's own
+    password, and never written to a tracked file. Checked here, before
+    any argument-derived database connection is opened (this function
+    itself opens none), so a missing/invalid value fails before any
+    mutation is even attempted — the same "fail closed before any write"
+    posture `_require_non_production`/`_require_local_target` already
+    apply to the database target itself. `main()` calls this
+    unconditionally (preview mode still runs every insert, inside a
+    transaction it then rolls back, exactly like every other fixture
+    section this script already applies that discipline to)."""
+    password = os.environ.get(_PHASE13E_DEV_PASSWORD_ENV_VAR)
+    if not password:
+        print(
+            f"Refusing to run: {_PHASE13E_DEV_PASSWORD_ENV_VAR} is not set in the environment. "
+            "This script provisions Phase 13E-A development accounts (docs/PHASE13E_ACCESS_"
+            "CONTRACT.md) and needs a password for them — never the pre-existing --user-id "
+            "account's own password, and never invented or persisted by this script. Set it in "
+            "this PowerShell session only (never in a tracked file, never echoed to a log) and "
+            "re-run:\n\n"
+            f"  $env:{_PHASE13E_DEV_PASSWORD_ENV_VAR} = Read-Host "
+            f'"Phase 13E development account password"\n',
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        validate_password_policy(password)
+    except PasswordPolicyError as exc:
+        print(
+            f"Refusing to run: {_PHASE13E_DEV_PASSWORD_ENV_VAR} does not satisfy the local "
+            f"account password policy ({exc.safe_message}) Choose a different value and re-run.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    return password
 
 
 def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
@@ -3774,6 +3965,655 @@ def _ensure_character_relationship(
 
 
 # --------------------------------------------------------------------------
+# Phase 13E-A access-overview manual-verification fixture
+# --------------------------------------------------------------------------
+#
+# See the module docstring's own Phase 13E-A section for the full scenario
+# list and rationale. Every helper below is create-or-reuse by its own
+# fixed, deterministic key — never a guessed id — matching the discipline
+# every other fixture section in this script already follows.
+
+
+def _get_or_create_phase13e_dev_account(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    admin_user_id: uuid.UUID,
+    login_name: str,
+    display_name: str,
+    dev_password: str,
+) -> uuid.UUID:
+    """Create-or-reuse one Phase 13E-A development account by its
+    normalized login name — the account's own natural key, since
+    `security.users` carries no other stable, human-chosen identifier.
+    Reused through the real `dnd_ai.commands.local_auth` account-creation/
+    activation commands, via their composable `_impl` forms (that
+    module's own docstring: "an API route with its own request-scoped
+    transaction calls this directly instead of opening a second,
+    independent transaction via the public wrapper" — this script is
+    exactly such a caller, keeping every check and insert inside its own
+    single preview/apply transaction). `admin_user_id` must already be a
+    platform administrator (`_create_local_account_impl`'s own check) —
+    true for the pre-existing `--user-id` account in every environment
+    this script has been run against.
+
+    On reuse, the account's existing password is never touched —
+    `dev_password` only ever sets a *new* account's first password, the
+    one time `_create_local_account_impl`/`_activate_local_account_impl`
+    run for it. A later run with a different `PHASE13E_DEV_ACCOUNT_
+    PASSWORD` value does not rotate an already-created account's
+    password; see the module docstring for why that is deliberate."""
+    normalized_login_name = normalize_login_name(login_name)
+    existing_user_id = connection.execute(
+        text("""
+            SELECT ei.user_id
+            FROM security.external_identities ei
+            WHERE ei.issuer = 'local' AND ei.subject = :login AND ei.revoked_at IS NULL
+        """),
+        {"login": normalized_login_name},
+    ).scalar()
+    if existing_user_id is not None:
+        assert isinstance(existing_user_id, uuid.UUID)
+        summary.add(
+            created=False,
+            label=f"dev account {display_name!r} ({normalized_login_name})",
+            record_id=existing_user_id,
+        )
+        return existing_user_id
+
+    issued = _create_local_account_impl(
+        connection,
+        created_by_user_id=admin_user_id,
+        login_name=normalized_login_name,
+        display_name=display_name,
+    )
+    _activate_local_account_impl(
+        connection, raw_activation_token=issued.raw_token, raw_password=dev_password
+    )
+    record_change_log(
+        connection,
+        change_action_code=_CREATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="users",
+        record_id=issued.user_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=admin_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+    )
+    summary.add(
+        created=True,
+        label=f"dev account {display_name!r} ({normalized_login_name})",
+        record_id=issued.user_id,
+    )
+    return issued.user_id
+
+
+def _ensure_phase13e_membership(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    user_id: uuid.UUID,
+    label: str,
+    actor_user_id: uuid.UUID,
+) -> uuid.UUID:
+    """Create-or-reuse an open `security.campaign_memberships` row for
+    `(campaign_id, user_id)` via the real `dnd_ai.commands.memberships.
+    create_campaign_membership` — the same natural key `security.
+    campaign_memberships.ux_campaign_memberships_open` already enforces at
+    the database level, checked here first so a second run reuses instead
+    of hitting that unique-violation 409."""
+    existing_membership_id = connection.execute(
+        text("""
+            SELECT campaign_membership_id FROM security.campaign_memberships
+            WHERE campaign_id = :campaign AND user_id = :user AND ended_at IS NULL
+        """),
+        {"campaign": campaign_id, "user": user_id},
+    ).scalar()
+    if existing_membership_id is not None:
+        assert isinstance(existing_membership_id, uuid.UUID)
+        summary.add(created=False, label=f"membership: {label}", record_id=existing_membership_id)
+        return existing_membership_id
+
+    result = create_campaign_membership(connection, campaign_id=campaign_id, user_id=user_id)
+    record_change_log(
+        connection,
+        change_action_code=_CREATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="campaign_memberships",
+        record_id=result.campaign_membership_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=actor_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+    )
+    summary.add(created=True, label=f"membership: {label}", record_id=result.campaign_membership_id)
+    return result.campaign_membership_id
+
+
+def _resolve_system_role_id(connection: Connection, role_code: str) -> uuid.UUID:
+    """Resolves a system-template role (`security.roles.campaign_id IS
+    NULL`) by code — narrower than the generic `lookup_id` helper, which
+    has no way to express the `campaign_id IS NULL` half of `security.
+    roles`' own partial-unique `ux_roles_system_code` index (that table has
+    no plain `UNIQUE(code)`, unlike every lookup `lookup_id` is otherwise
+    used for). Every role this fixture assigns is a system template
+    (`campaign_owner`/`player`/`observer`), so this is always the correct,
+    unambiguous row."""
+    role_id = connection.execute(
+        text("SELECT role_id FROM security.roles WHERE campaign_id IS NULL AND code = :code"),
+        {"code": role_code},
+    ).scalar()
+    if role_id is None:
+        raise SystemExit(
+            f"security.roles has no system-template row with code = {role_code!r} — expected "
+            "to already exist from migration 080/085/086's own seeding."
+        )
+    assert isinstance(role_id, uuid.UUID)
+    return role_id
+
+
+def _ensure_phase13e_role(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    role_code: str,
+    granted_by_membership_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    label: str,
+) -> uuid.UUID:
+    """Create-or-reuse an active `security.membership_roles` row for
+    `(campaign_membership_id, role_code)` via the real `dnd_ai.commands.
+    memberships.assign_membership_role` — checked first against `security.
+    membership_roles.ux_membership_roles_active`'s own natural key so a
+    second run reuses instead of hitting that unique-violation 409."""
+    role_id = _resolve_system_role_id(connection, role_code)
+    existing_role_id = connection.execute(
+        text("""
+            SELECT membership_role_id FROM security.membership_roles
+            WHERE campaign_membership_id = :membership AND role_id = :role
+              AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+        """),
+        {"membership": campaign_membership_id, "role": role_id},
+    ).scalar()
+    if existing_role_id is not None:
+        assert isinstance(existing_role_id, uuid.UUID)
+        summary.add(created=False, label=f"role '{role_code}': {label}", record_id=existing_role_id)
+        return existing_role_id
+
+    result = assign_membership_role(
+        connection,
+        campaign_membership_id=campaign_membership_id,
+        role_id=role_id,
+        campaign_id=campaign_id,
+        granted_by_membership_id=granted_by_membership_id,
+    )
+    record_change_log(
+        connection,
+        change_action_code=_CREATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="membership_roles",
+        record_id=result.membership_role_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=actor_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+    )
+    summary.add(
+        created=True, label=f"role '{role_code}': {label}", record_id=result.membership_role_id
+    )
+    return result.membership_role_id
+
+
+def _ensure_phase13e_character_relationship(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    world_id: uuid.UUID,
+    granted_by_membership_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    label: str,
+) -> uuid.UUID:
+    """The same create-or-reuse shape as `_ensure_character_relationship`
+    above, generalized to a caller-supplied `granted_by_membership_id`
+    (a GM's own membership, not the grantee's own — unlike `--user-id`'s
+    self-owned Character A/B, a player does not grant their own
+    relationship). Uses `_RELATIONSHIP_TYPE_CODE` ("owner"), the one
+    relationship type this script's `_ensure_relationship_type_
+    capabilities` seeds with the full `character.*` capability set — the
+    only relationship type currently capable of authorizing a character
+    perspective at all in a fresh environment."""
+    relationship_type_id = lookup_id(
+        connection,
+        "security",
+        "character_relationship_types",
+        "character_relationship_type_id",
+        _RELATIONSHIP_TYPE_CODE,
+    )
+    existing = connection.execute(
+        text("""
+            SELECT 1 FROM security.membership_character_relationships
+            WHERE campaign_membership_id = :membership
+              AND character_id = :character
+              AND character_relationship_type_id = :type
+              AND revoked_at IS NULL
+        """),
+        {
+            "membership": campaign_membership_id,
+            "character": character_id,
+            "type": relationship_type_id,
+        },
+    ).scalar()
+    if existing is not None:
+        summary.add(
+            created=False,
+            label=f"'{_RELATIONSHIP_TYPE_CODE}' relationship: {label}",
+            record_id=character_id,
+        )
+        return character_id
+
+    result = grant_character_relationship(
+        connection,
+        campaign_membership_id=campaign_membership_id,
+        character_id=character_id,
+        relationship_type_code=_RELATIONSHIP_TYPE_CODE,
+        campaign_id=campaign_id,
+        expected_world_id=world_id,
+        granted_by_membership_id=granted_by_membership_id,
+    )
+    record_change_log(
+        connection,
+        change_action_code=_CREATED_CHANGE_ACTION,
+        schema_name="security",
+        table_name="membership_character_relationships",
+        record_id=result.membership_character_relationship_id,
+        entity_id=None,
+        world_id=world_id,
+        actor_user_id=actor_user_id,
+        correlation_id=None,
+        command_name=_COMMAND_NAME,
+        event_id=None,
+    )
+    summary.add(
+        created=True,
+        label=f"'{_RELATIONSHIP_TYPE_CODE}' relationship: {label}",
+        record_id=result.membership_character_relationship_id,
+    )
+    return result.membership_character_relationship_id
+
+
+def _ensure_phase13e_resource_grant(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    campaign_id: uuid.UUID,
+    world_id: uuid.UUID,
+    grantee_campaign_membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    capability_code: str,
+    granted_by_membership_id: uuid.UUID,
+    reason: str,
+    label: str,
+    revoked: bool,
+) -> uuid.UUID:
+    """Create-or-reuse one Phase 13E-A explicit character-scoped resource
+    grant, matched by its own fixed `(campaign, grantee, capability,
+    character)` shape rather than a guessed id — never a raw `INSERT`;
+    always the real `dnd_ai.commands.access_grants.create_resource_grant`/
+    `revoke_resource_grant`. `revoked` selects which of the two Phase 13E-A
+    demonstration grants this call maintains: the visible one
+    (`character.view_full`, left active) or the excluded negative case
+    (`character.view_summary`, revoked immediately after creation) — see
+    the module docstring's Phase 13E-A section. On reuse, brings an
+    existing row to the desired `revoked` state if it is not already
+    there (idempotent either direction), rather than assuming a prior
+    run already left it correctly."""
+    capability_id = lookup_id(
+        connection, "security", "capabilities", "capability_id", capability_code
+    )
+    existing = (
+        connection.execute(
+            text("""
+                SELECT resource_grant_id, revoked_at FROM security.resource_grants
+                WHERE campaign_id = :campaign
+                  AND grantee_campaign_membership_id = :grantee
+                  AND capability_id = :capability
+                  AND character_id = :character
+            """),
+            {
+                "campaign": campaign_id,
+                "grantee": grantee_campaign_membership_id,
+                "capability": capability_id,
+                "character": character_id,
+            },
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if existing is not None:
+        grant_id = existing["resource_grant_id"]
+        assert isinstance(grant_id, uuid.UUID)
+        already_revoked = existing["revoked_at"] is not None
+        if revoked and not already_revoked:
+            revoke_resource_grant(connection, resource_grant_id=grant_id, campaign_id=campaign_id)
+            summary.add(created=False, changed=True, label=f"grant: {label}", record_id=grant_id)
+        else:
+            summary.add(created=False, label=f"grant: {label}", record_id=grant_id)
+        return grant_id
+
+    result = create_resource_grant(
+        connection,
+        campaign_id=campaign_id,
+        grantee_campaign_membership_id=grantee_campaign_membership_id,
+        grantee_access_group_id=None,
+        capability_code=capability_code,
+        effect="allow",
+        expected_world_id=world_id,
+        granted_by_membership_id=granted_by_membership_id,
+        character_id=character_id,
+        reason=reason,
+    )
+    if revoked:
+        revoke_resource_grant(
+            connection, resource_grant_id=result.resource_grant_id, campaign_id=campaign_id
+        )
+    summary.add(created=True, label=f"grant: {label}", record_id=result.resource_grant_id)
+    return result.resource_grant_id
+
+
+def _ensure_phase13e_account_disabled(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    admin_user_id: uuid.UUID,
+    target_user_id: uuid.UUID,
+    label: str,
+) -> None:
+    """Idempotently disables `target_user_id` via the real `dnd_ai.
+    commands.local_auth._disable_local_account_impl` — safe to call on
+    every run without its own pre-check: that command's own docstring
+    documents both halves as no-ops on repetition (re-disabling an
+    already-disabled account, and revoking already-revoked sessions)."""
+    result = _disable_local_account_impl(
+        connection, admin_user_id=admin_user_id, target_user_id=target_user_id
+    )
+    summary.add(
+        created=False,
+        changed=(result.previous_lifecycle_status_code != result.new_lifecycle_status_code),
+        label=f"disabled: {label}",
+        record_id=target_user_id,
+    )
+
+
+def _ensure_phase13e_access_fixtures(
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    campaign_a_id: uuid.UUID,
+    campaign_a_membership_id: uuid.UUID,
+    campaign_b_id: uuid.UUID,
+    campaign_b_membership_id: uuid.UUID,
+    character_a_id: uuid.UUID,
+    admin_user_id: uuid.UUID,
+    dev_password: str,
+) -> None:
+    """Provisions every Phase 13E-A development account, membership, role,
+    character relationship, and explicit grant described in the module
+    docstring's own Phase 13E-A section, then records a password-free
+    quick-reference block (`summary.note_access`) for manual browser
+    verification. `campaign_a_membership_id`/`campaign_b_membership_id`
+    are the pre-existing `--user-id` account's own memberships — used
+    only as the GM-side `granted_by_membership_id` for every role/
+    relationship/grant below, never as a target of any change."""
+    gm2_user_id = _get_or_create_phase13e_dev_account(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        login_name=_PHASE13E_GM2_LOGIN_NAME,
+        display_name=_PHASE13E_GM2_DISPLAY_NAME,
+        dev_password=dev_password,
+    )
+    gm2_membership_id = _ensure_phase13e_membership(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        user_id=gm2_user_id,
+        label=_PHASE13E_GM2_DISPLAY_NAME,
+        actor_user_id=admin_user_id,
+    )
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_membership_id=gm2_membership_id,
+        role_code=_PHASE13E_ACCESS_MANAGE_ROLE_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        actor_user_id=admin_user_id,
+        label=_PHASE13E_GM2_DISPLAY_NAME,
+    )
+
+    player_a_user_id = _get_or_create_phase13e_dev_account(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        login_name=_PHASE13E_PLAYER_A_LOGIN_NAME,
+        display_name=_PHASE13E_PLAYER_A_DISPLAY_NAME,
+        dev_password=dev_password,
+    )
+    player_a_membership_id = _ensure_phase13e_membership(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        user_id=player_a_user_id,
+        label=_PHASE13E_PLAYER_A_DISPLAY_NAME,
+        actor_user_id=admin_user_id,
+    )
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_membership_id=player_a_membership_id,
+        role_code=_PHASE13E_PLAYER_ROLE_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        actor_user_id=admin_user_id,
+        label=_PHASE13E_PLAYER_A_DISPLAY_NAME,
+    )
+    _ensure_phase13e_character_relationship(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_membership_id=player_a_membership_id,
+        character_id=character_a_id,
+        world_id=world_id,
+        granted_by_membership_id=campaign_a_membership_id,
+        actor_user_id=admin_user_id,
+        label=f"{_PHASE13E_PLAYER_A_DISPLAY_NAME} -> {_CHARACTER_A_NAME}",
+    )
+
+    observer_a_user_id = _get_or_create_phase13e_dev_account(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        login_name=_PHASE13E_OBSERVER_A_LOGIN_NAME,
+        display_name=_PHASE13E_OBSERVER_A_DISPLAY_NAME,
+        dev_password=dev_password,
+    )
+    observer_a_membership_id = _ensure_phase13e_membership(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        user_id=observer_a_user_id,
+        label=_PHASE13E_OBSERVER_A_DISPLAY_NAME,
+        actor_user_id=admin_user_id,
+    )
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_membership_id=observer_a_membership_id,
+        role_code=_PHASE13E_OBSERVER_ROLE_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        actor_user_id=admin_user_id,
+        label=_PHASE13E_OBSERVER_A_DISPLAY_NAME,
+    )
+
+    player_b_user_id = _get_or_create_phase13e_dev_account(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        login_name=_PHASE13E_PLAYER_B_LOGIN_NAME,
+        display_name=_PHASE13E_PLAYER_B_DISPLAY_NAME,
+        dev_password=dev_password,
+    )
+    player_b_membership_id = _ensure_phase13e_membership(
+        connection,
+        summary,
+        campaign_id=campaign_b_id,
+        user_id=player_b_user_id,
+        label=_PHASE13E_PLAYER_B_DISPLAY_NAME,
+        actor_user_id=admin_user_id,
+    )
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_b_id,
+        campaign_membership_id=player_b_membership_id,
+        role_code=_PHASE13E_PLAYER_ROLE_CODE,
+        granted_by_membership_id=campaign_b_membership_id,
+        actor_user_id=admin_user_id,
+        label=_PHASE13E_PLAYER_B_DISPLAY_NAME,
+    )
+
+    disabled_user_id = _get_or_create_phase13e_dev_account(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        login_name=_PHASE13E_DISABLED_LOGIN_NAME,
+        display_name=_PHASE13E_DISABLED_DISPLAY_NAME,
+        dev_password=dev_password,
+    )
+    disabled_membership_id = _ensure_phase13e_membership(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        user_id=disabled_user_id,
+        label=_PHASE13E_DISABLED_DISPLAY_NAME,
+        actor_user_id=admin_user_id,
+    )
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        campaign_membership_id=disabled_membership_id,
+        role_code=_PHASE13E_PLAYER_ROLE_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        actor_user_id=admin_user_id,
+        label=_PHASE13E_DISABLED_DISPLAY_NAME,
+    )
+    _ensure_phase13e_account_disabled(
+        connection,
+        summary,
+        admin_user_id=admin_user_id,
+        target_user_id=disabled_user_id,
+        label=_PHASE13E_DISABLED_DISPLAY_NAME,
+    )
+
+    _ensure_phase13e_resource_grant(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        world_id=world_id,
+        grantee_campaign_membership_id=observer_a_membership_id,
+        character_id=character_a_id,
+        capability_code=_PHASE13E_VISIBLE_GRANT_CAPABILITY_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        reason=_PHASE13E_VISIBLE_GRANT_REASON,
+        label=f"{_PHASE13E_OBSERVER_A_DISPLAY_NAME} -> {_CHARACTER_A_NAME} (visible)",
+        revoked=False,
+    )
+    _ensure_phase13e_resource_grant(
+        connection,
+        summary,
+        campaign_id=campaign_a_id,
+        world_id=world_id,
+        grantee_campaign_membership_id=player_a_membership_id,
+        character_id=character_a_id,
+        capability_code=_PHASE13E_REVOKED_GRANT_CAPABILITY_CODE,
+        granted_by_membership_id=campaign_a_membership_id,
+        reason=_PHASE13E_REVOKED_GRANT_REASON,
+        label=f"{_PHASE13E_PLAYER_A_DISPLAY_NAME} -> {_CHARACTER_A_NAME} (revoked, must not appear)",
+        revoked=True,
+    )
+
+    summary.note_access(
+        f"All Phase13E dev accounts share one password from the "
+        f"{_PHASE13E_DEV_PASSWORD_ENV_VAR} environment variable used for this run — never "
+        "printed here or anywhere else by this script."
+    )
+    summary.note_access("")
+    summary.note_access(
+        f"GM2 — access.manage via '{_PHASE13E_ACCESS_MANAGE_ROLE_CODE}': "
+        f"login={_PHASE13E_GM2_LOGIN_NAME!r} user_id={gm2_user_id} "
+        f"membership={gm2_membership_id} campaign={_CAMPAIGN_A_NAME!r}. "
+        "Log in as this account and open the Access page directly — no admin needed."
+    )
+    summary.note_access(
+        f"Player A — '{_PHASE13E_PLAYER_ROLE_CODE}' role, 'owner' relationship to "
+        f"{_CHARACTER_A_NAME!r}: login={_PHASE13E_PLAYER_A_LOGIN_NAME!r} "
+        f"user_id={player_a_user_id} membership={player_a_membership_id} "
+        f"campaign={_CAMPAIGN_A_NAME!r}. No access.manage — the Access nav item must not "
+        f"appear, and GET /campaigns/{campaign_a_id}/access-overview must return 403."
+    )
+    summary.note_access(
+        f"Observer A — '{_PHASE13E_OBSERVER_ROLE_CODE}' role, plus one visible explicit grant "
+        f"('{_PHASE13E_VISIBLE_GRANT_CAPABILITY_CODE}' on {_CHARACTER_A_NAME!r}): "
+        f"login={_PHASE13E_OBSERVER_A_LOGIN_NAME!r} user_id={observer_a_user_id} "
+        f"membership={observer_a_membership_id} campaign={_CAMPAIGN_A_NAME!r}. No access.manage "
+        "— same 403 expectation as Player A."
+    )
+    summary.note_access(
+        f"Player B — '{_PHASE13E_PLAYER_ROLE_CODE}' role, no relationship (Campaign B has no "
+        f"character fixture of its own): login={_PHASE13E_PLAYER_B_LOGIN_NAME!r} "
+        f"user_id={player_b_user_id} membership={player_b_membership_id} "
+        f"campaign={_CAMPAIGN_B_NAME!r}. No membership or relationship reaches Campaign A."
+    )
+    summary.note_access(
+        f"Disabled — '{_PHASE13E_PLAYER_ROLE_CODE}' role in {_CAMPAIGN_A_NAME!r}, then disabled: "
+        f"login={_PHASE13E_DISABLED_LOGIN_NAME!r} user_id={disabled_user_id} "
+        f"membership={disabled_membership_id}. Cannot authenticate (every browser session "
+        "revoked). Its Campaign A membership still appears on the Access overview with an "
+        "ordinary 'Active' *membership* status — the overview never consults account-wide "
+        "lifecycle status (docs/PHASE13E_ACCESS_CONTRACT.md §3); this is the documented "
+        "contract, not a defect."
+    )
+    summary.note_access("")
+    summary.note_access(
+        f"Manual cross-campaign isolation: log in as {_PHASE13E_PLAYER_A_LOGIN_NAME!r} and "
+        f"confirm {_CAMPAIGN_B_NAME!r} never appears in the campaign list; log in as "
+        f"{_PHASE13E_PLAYER_B_LOGIN_NAME!r} and confirm the same for {_CAMPAIGN_A_NAME!r}."
+    )
+    summary.note_access(
+        f"Manual grants check: as GM2 or {_PHASE13E_GM2_LOGIN_NAME!r}'s own admin equivalent, "
+        f"open Campaign A's Access page — Observer A shows one grant "
+        f"('{_PHASE13E_VISIBLE_GRANT_CAPABILITY_CODE}'); Player A shows none (the revoked grant "
+        "must not appear)."
+    )
+
+
+# --------------------------------------------------------------------------
 # Phase 13D World Explorer + Knowledge fixtures
 # --------------------------------------------------------------------------
 
@@ -5071,7 +5911,7 @@ def _note_world_knowledge_reference_block(
     n("     statement ('...to cut the treasury's salvage-levy losses...') plus truth_status.")
 
 
-def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
+def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _Summary:
     summary = _Summary()
 
     user = _resolve_user(connection, user_id)
@@ -5101,7 +5941,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         name=_CAMPAIGN_A_NAME,
         user=user,
     )
-    campaign_b_id, _campaign_b_membership_id = _get_or_create_campaign(
+    campaign_b_id, campaign_b_membership_id = _get_or_create_campaign(
         connection,
         summary,
         timeline_id=timeline_b_id,
@@ -5287,6 +6127,22 @@ def _run(connection: Connection, *, user_id: uuid.UUID) -> _Summary:
         campaign_b_id=campaign_b_id,
         character_a_id=character_a_id,
         character_b_id=character_b_id,
+    )
+
+    # ----------------------------------------------------------------------
+    # Phase 13E-A access-overview manual-verification fixture
+    # ----------------------------------------------------------------------
+    _ensure_phase13e_access_fixtures(
+        connection,
+        summary,
+        world_id=world_id,
+        campaign_a_id=campaign_a_id,
+        campaign_a_membership_id=campaign_a_membership_id,
+        campaign_b_id=campaign_b_id,
+        campaign_b_membership_id=campaign_b_membership_id,
+        character_a_id=character_a_id,
+        admin_user_id=user.user_id,
+        dev_password=dev_password,
     )
 
     return summary
@@ -5735,6 +6591,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Cheapest, purely local check first — no database connection needed,
+    # and it must fail before any is opened (see this function's own
+    # docstring).
+    dev_password = _resolve_phase13e_dev_password()
+
     _require_non_production()
     _require_local_target()
 
@@ -5747,7 +6608,7 @@ def main(argv: list[str] | None = None) -> int:
     with engine.connect() as connection:
         transaction = connection.begin()
         try:
-            summary = _run(connection, user_id=args.user_id)
+            summary = _run(connection, user_id=args.user_id, dev_password=dev_password)
         except BaseException:
             transaction.rollback()
             raise
@@ -5769,11 +6630,15 @@ def main(argv: list[str] | None = None) -> int:
             "(for manual portal verification) --"
         )
         print("\n".join(summary.world_report))
+    if summary.access_report:
+        print("\n-- Phase 13E-A access fixture quick reference (for manual portal verification) --")
+        print("\n".join(summary.access_report))
     if args.apply:
         print("\nAPPLIED - changes committed.")
         _print_bootstrap_verification(user_id=args.user_id)
         _print_quest_verification(user_id=args.user_id)
         _print_world_knowledge_verification(user_id=args.user_id)
+        _print_access_verification(user_id=args.user_id)
     else:
         print("\nPREVIEW ONLY - every change above was rolled back. Re-run with --apply to write.")
     return 0
@@ -6251,6 +7116,48 @@ def _print_world_knowledge_verification(*, user_id: uuid.UUID) -> None:
         f"Campaign B sees {len(public_b)} "
         f"(beacon lore present: {any('beacon-keeper' in i.statement.lower() for i in public_b)})"
     )
+
+
+def _print_access_verification(*, user_id: uuid.UUID) -> None:
+    """Re-opens a fresh, read-only connection and runs the REAL production
+    `dnd_ai.queries.access_overview.get_campaign_access_overview` for
+    Campaign A, exactly as `GET /campaigns/{id}/access-overview` would
+    resolve it for `user_id` — never a hand-written lookalike query. Prints
+    only safe, non-secret state (display names, membership/role/
+    relationship/grant labels): never a password, activation/reset token,
+    session identifier, or password hash. This is database/query
+    verification, not the browser/cookie-authenticated HTTP path; it does
+    not by itself prove the endpoint behaves identically over HTTP."""
+    engine = create_engine(_database_url())
+    with engine.connect() as connection:
+        connection.execute(text("SET default_transaction_read_only = on"))
+        view = get_session_bootstrap(connection, user_id=user_id)
+        campaign_a = next(c for c in view.campaigns if c.campaign_name == _CAMPAIGN_A_NAME)
+        assert campaign_a.timeline_id is not None
+        members = get_campaign_access_overview(
+            connection, campaign_id=campaign_a.campaign_id, timeline_id=campaign_a.timeline_id
+        )
+    print(f"\n-- get_campaign_access_overview(campaign={_CAMPAIGN_A_NAME!r}) --")
+    for member in members:
+        roles = ", ".join(role.display_name for role in member.roles) or "(none)"
+        relationships = (
+            ", ".join(
+                f"{rel.character_display_name} ({rel.relationship_type_display_name})"
+                for rel in member.character_relationships
+            )
+            or "(none)"
+        )
+        grants = (
+            ", ".join(
+                f"{grant.capability_display_name} on a {grant.target_type}"
+                for grant in member.grants
+            )
+            or "(none)"
+        )
+        print(
+            f"  {member.display_name!r} status={member.status_display_name!r} "
+            f"roles=[{roles}] relationships=[{relationships}] grants=[{grants}]"
+        )
 
 
 if __name__ == "__main__":

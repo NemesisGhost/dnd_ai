@@ -17,6 +17,7 @@ import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
+import { CampaignAccessPage } from "./pages/CampaignAccessPage"
 
 function App() {
   return (
@@ -134,12 +135,7 @@ function App() {
 
           <Route
             path="access"
-            element={
-              <PlaceholderPage
-                title="Access management"
-                description="GM account, role, relationship, and grant management will appear here."
-              />
-            }
+            element={<CampaignAccessPage />}
           />
 
           <Route
