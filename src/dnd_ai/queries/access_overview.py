@@ -1,5 +1,7 @@
 """Read-only GM campaign access overview (Phase 13E-A, docs/PLAN.md Phase 13
-"13E — GM access tools").
+"13E — GM access tools") plus `list_assignable_campaign_roles`, the small
+read-contract addition Phase 13E-B's first mutation checkpoint needs so the
+portal never has to hardcode which roles it may offer for a role change.
 
 `get_campaign_access_overview` assembles, for one campaign, every currently
 open membership (`security.campaign_memberships.ended_at IS NULL`) together
@@ -67,6 +69,7 @@ _GRANT_TARGET_COLUMNS = (
 
 @dataclass(frozen=True)
 class MemberRoleView:
+    membership_role_id: uuid.UUID
     role_id: uuid.UUID
     code: str
     display_name: str
@@ -93,6 +96,13 @@ class MemberResourceGrantView:
     reason: str | None
     granted_at: datetime
     expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AssignableRoleView:
+    role_id: uuid.UUID
+    code: str
+    display_name: str
 
 
 @dataclass(frozen=True)
@@ -140,7 +150,8 @@ def get_campaign_access_overview(
     roles_by_membership: dict[uuid.UUID, list[MemberRoleView]] = {}
     for row in connection.execute(
         text("""
-            SELECT mr.campaign_membership_id, r.role_id, r.code, r.display_name
+            SELECT mr.campaign_membership_id, mr.membership_role_id, r.role_id, r.code,
+                   r.display_name
             FROM security.membership_roles mr
             JOIN security.roles r ON r.role_id = mr.role_id
             JOIN security.campaign_memberships cm
@@ -156,7 +167,10 @@ def get_campaign_access_overview(
     ).mappings():
         roles_by_membership.setdefault(row["campaign_membership_id"], []).append(
             MemberRoleView(
-                role_id=row["role_id"], code=row["code"], display_name=row["display_name"]
+                membership_role_id=row["membership_role_id"],
+                role_id=row["role_id"],
+                code=row["code"],
+                display_name=row["display_name"],
             )
         )
 
@@ -246,4 +260,37 @@ def get_campaign_access_overview(
             grants=tuple(grants_by_membership.get(row["campaign_membership_id"], [])),
         )
         for row in member_rows
+    )
+
+
+def list_assignable_campaign_roles(
+    connection: Connection, *, campaign_id: uuid.UUID
+) -> tuple[AssignableRoleView, ...]:
+    """Every role `dnd_ai.commands.memberships.assign_membership_role()`/
+    `change_membership_role()` would actually accept for `campaign_id`
+    right now: a system template (`security.roles.campaign_id IS NULL`) or
+    one scoped to this specific campaign, and currently `is_active` — the
+    identical scope those commands' own `RoleNotUsableByCampaignError`
+    check enforces, queried here read-only so the portal never has to
+    hardcode or guess the assignable set (docs/PLAN.md Phase 13E-B "Read-
+    contract support": present only server-authorized role choices, never
+    every internal role for frontend convenience). No hierarchy or
+    delegation narrows this further — this codebase's role model is flat
+    (`dnd_ai.commands.memberships`' own module docstring), so every role
+    `access.manage` may assign is equally assignable regardless of which
+    membership holds `access.manage`, including the caller's own."""
+    return tuple(
+        AssignableRoleView(
+            role_id=row["role_id"], code=row["code"], display_name=row["display_name"]
+        )
+        for row in connection.execute(
+            text("""
+                SELECT role_id, code, display_name
+                FROM security.roles
+                WHERE (campaign_id IS NULL OR campaign_id = :campaign_id)
+                  AND is_active
+                ORDER BY sort_order, display_name
+            """),
+            {"campaign_id": campaign_id},
+        ).mappings()
     )

@@ -42,18 +42,27 @@ const overviewFixture: CampaignAccessOverview = {
             grants: [],
         },
     ],
+    assignable_roles: [],
 }
 
 function renderBoundary() {
     render(
         <AccessOverviewBoundary campaignId="campaign-a">
-            {(overview) => (
+            {(overview, retry) => (
                 <ul>
                     {overview.members.map((member) => (
                         <li key={member.campaign_membership_id}>
                             {member.display_name}
                         </li>
                     ))}
+                    <li>
+                        <button
+                            type="button"
+                            onClick={retry}
+                        >
+                            Refresh
+                        </button>
+                    </li>
                 </ul>
             )}
         </AccessOverviewBoundary>,
@@ -176,5 +185,23 @@ describe("AccessOverviewBoundary", () => {
                 name: "Try again",
             }),
         ).not.toBeInTheDocument()
+    })
+
+    it("passes the hook's retry function through to the success-state children", () => {
+        useAccessOverviewMock.mockReturnValue({
+            state: {
+                status: "success",
+                overview: overviewFixture,
+            },
+            retry: retryMock,
+        })
+
+        renderBoundary()
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Refresh" }),
+        )
+
+        expect(retryMock).toHaveBeenCalledTimes(1)
     })
 })

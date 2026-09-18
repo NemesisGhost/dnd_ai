@@ -61,6 +61,7 @@ const firstCampaignOverview: CampaignAccessOverview = {
             grants: [],
         },
     ],
+    assignable_roles: [],
 }
 
 const secondCampaignOverview: CampaignAccessOverview = {
@@ -76,6 +77,7 @@ const secondCampaignOverview: CampaignAccessOverview = {
             grants: [],
         },
     ],
+    assignable_roles: [],
 }
 
 beforeEach(() => {

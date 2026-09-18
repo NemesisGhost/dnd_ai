@@ -23,6 +23,7 @@ const overviewFixture: CampaignAccessOverview = {
             joined_at: "2026-01-01T00:00:00Z",
             roles: [
                 {
+                    membership_role_id: "membership-role-a",
                     role_id: "role-a",
                     code: "player",
                     display_name: "Player",
@@ -30,6 +31,13 @@ const overviewFixture: CampaignAccessOverview = {
             ],
             character_relationships: [],
             grants: [],
+        },
+    ],
+    assignable_roles: [
+        {
+            role_id: "role-a",
+            code: "player",
+            display_name: "Player",
         },
     ],
 }
