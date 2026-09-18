@@ -1,6 +1,9 @@
 import { useId } from "react"
+import { MemberRoleEditor } from "../components/MemberRoleEditor"
+import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
 import type {
+    AssignableRole,
     CampaignAccessMember,
     CampaignAccessOverview,
 } from "../types/accessOverview"
@@ -14,9 +17,19 @@ function formatTimestamp(timestamp: string): string {
 
 interface MemberAccessCardProps {
     member: CampaignAccessMember
+    campaignId: string
+    campaignName: string
+    assignableRoles: AssignableRole[]
+    onChanged: () => void
 }
 
-function MemberAccessCard({ member }: MemberAccessCardProps) {
+function MemberAccessCard({
+    member,
+    campaignId,
+    campaignName,
+    assignableRoles,
+    onChanged,
+}: MemberAccessCardProps) {
     const rolesHeadingId = useId()
     const relationshipsHeadingId = useId()
     const grantsHeadingId = useId()
@@ -46,6 +59,14 @@ function MemberAccessCard({ member }: MemberAccessCardProps) {
                             {member.roles.map((role) => (
                                 <li key={role.role_id}>
                                     {role.display_name}
+                                    <MemberRoleEditor
+                                        campaignId={campaignId}
+                                        campaignName={campaignName}
+                                        memberDisplayName={member.display_name}
+                                        role={role}
+                                        assignableRoles={assignableRoles}
+                                        onChanged={onChanged}
+                                    />
                                 </li>
                             ))}
                         </ul>
@@ -116,25 +137,50 @@ function MemberAccessCard({ member }: MemberAccessCardProps) {
 }
 
 interface AccessPageProps {
+    campaignId: string
     overview: CampaignAccessOverview
+    onChanged: () => void
 }
 
-export function AccessPage({ overview }: AccessPageProps) {
+export function AccessPage({
+    campaignId,
+    overview,
+    onChanged,
+}: AccessPageProps) {
+    const { state: sessionState } = useSession()
+
+    const campaignName =
+        sessionState.status === "authenticated"
+            ? (sessionState.bootstrap.campaigns.find(
+                  (campaign) =>
+                      campaign.campaign_id === campaignId,
+              )?.campaign_name ?? "this campaign")
+            : "this campaign"
+
     return (
         <section aria-labelledby="access-heading">
             <h1 id="access-heading">Access</h1>
 
             <p className="access-page__description">
                 Current members, roles, character relationships, and
-                explicit grants for this campaign. This is a read-only
-                overview — access changes are not available here yet.
+                explicit grants for this campaign. Role changes are
+                available below; other access changes are not available
+                here yet.
             </p>
 
             {overview.members.length > 0 ? (
                 <ul className="access-page__member-list">
                     {overview.members.map((member) => (
                         <li key={member.campaign_membership_id}>
-                            <MemberAccessCard member={member} />
+                            <MemberAccessCard
+                                member={member}
+                                campaignId={campaignId}
+                                campaignName={campaignName}
+                                assignableRoles={
+                                    overview.assignable_roles
+                                }
+                                onChanged={onChanged}
+                            />
                         </li>
                     ))}
                 </ul>

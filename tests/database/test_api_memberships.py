@@ -75,7 +75,9 @@ class Fixture:
         self.admin_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.admin_user_id
         )
-        make_membership_role(connection, self.admin_membership_id, admin_role_id)
+        self.admin_membership_role_id = make_membership_role(
+            connection, self.admin_membership_id, admin_role_id
+        )
 
         # A plain campaign-scoped role, usable only by self.campaign_id.
         self.player_role_id = make_role(
@@ -97,6 +99,24 @@ class Fixture:
         self.existing_user_id = make_user(connection, "Membership API Existing Member")
         self.existing_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.existing_user_id
+        )
+        # A dedicated pre-assigned role — the target of change-role calls
+        # below. Deliberately *not* player_role_id: several pre-existing
+        # assign-role tests independently assign player_role_id to this
+        # same existing_membership_id, and a pre-assigned row here would
+        # collide with those (ux_membership_roles_active).
+        self.initial_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"initial_{uuid.uuid4().hex[:8]}"
+        )
+        self.existing_membership_role_id = make_membership_role(
+            connection, self.existing_membership_id, self.initial_role_id
+        )
+        # A second, independent role usable by self.campaign_id — both the
+        # change-role target and, assigned alongside initial_role_id on the
+        # same membership, proof that changing one active role never
+        # touches another the same membership independently holds.
+        self.second_role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"second_{uuid.uuid4().hex[:8]}"
         )
 
         # A membership belonging only to the *other* campaign.
@@ -120,18 +140,41 @@ class Fixture:
         self.active_campaign_id = make_campaign(
             connection, self.timeline_id, "Active Campaign", lifecycle_status_code="active"
         )
-        active_owner_role_id = make_role(
+        self.active_owner_role_id = make_role(
             connection, campaign_id=self.active_campaign_id, code=f"owner_{uuid.uuid4().hex[:8]}"
         )
-        make_role_capability(connection, active_owner_role_id, access_manage_id)
-        make_role_capability(connection, active_owner_role_id, view_capability_id)
+        make_role_capability(connection, self.active_owner_role_id, access_manage_id)
+        make_role_capability(connection, self.active_owner_role_id, view_capability_id)
         self.active_admin_user_id = make_user(connection, "Membership API Active Admin")
         self.active_admin_membership_id = make_campaign_membership(
             connection, self.active_campaign_id, self.active_admin_user_id
         )
         self.active_admin_membership_role_id = make_membership_role(
-            connection, self.active_admin_membership_id, active_owner_role_id
+            connection, self.active_admin_membership_id, self.active_owner_role_id
         )
+        # A second membership on the same active campaign, deliberately
+        # left roleless here — active_admin_user_id is this campaign's
+        # *sole* access.manage holder by default, matching every existing
+        # last-manager test's assumption. A test that needs a second
+        # manager (proving self-change is permitted when the caller is
+        # *not* the last one) assigns active_owner_role_id to this
+        # membership itself, locally — see
+        # test_self_change_away_from_access_manage_succeeds_when_not_the_
+        # last_manager below.
+        self.active_second_admin_user_id = make_user(
+            connection, "Membership API Active Second Admin"
+        )
+        self.active_second_admin_membership_id = make_campaign_membership(
+            connection, self.active_campaign_id, self.active_second_admin_user_id
+        )
+        # A non-manager role usable by the active campaign — the target of
+        # change-role calls that move a member away from access.manage.
+        self.active_player_role_id = make_role(
+            connection,
+            campaign_id=self.active_campaign_id,
+            code=f"active_player_{uuid.uuid4().hex[:8]}",
+        )
+        make_role_capability(connection, self.active_player_role_id, view_capability_id)
 
 
 @pytest.fixture
@@ -216,6 +259,7 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
                     fixture.active_admin_user_id,
+                    fixture.active_second_admin_user_id,
                 ]
             },
         )
@@ -250,6 +294,14 @@ def _revoke_url(
 ) -> str:
     return (
         f"/campaigns/{campaign_id or f.campaign_id}/memberships/roles/{membership_role_id}/revoke"
+    )
+
+
+def _change_url(
+    f: Fixture, membership_role_id: uuid.UUID, campaign_id: uuid.UUID | None = None
+) -> str:
+    return (
+        f"/campaigns/{campaign_id or f.campaign_id}/memberships/roles/{membership_role_id}/change"
     )
 
 
@@ -462,3 +514,310 @@ def test_revoking_the_last_access_manager_role_on_an_active_campaign_is_rejected
             {"mr": f.active_admin_membership_role_id},
         ).scalar_one()
         assert revoked_at is None
+
+
+# ---------------------------------------------------------------------------
+# change_membership_role (Phase 13E-B checkpoint 1)
+# ---------------------------------------------------------------------------
+
+
+def test_changing_a_role_succeeds_and_preserves_temporal_history(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 201, response.text
+    new_membership_role_id = uuid.UUID(response.json()["membership_role_id"])
+    assert new_membership_role_id != f.existing_membership_role_id
+
+    with postgres_engine.connect() as verify:
+        old_row = verify.execute(
+            text(
+                "SELECT role_id, revoked_at FROM security.membership_roles "
+                "WHERE membership_role_id = :mr"
+            ),
+            {"mr": f.existing_membership_role_id},
+        ).one()
+        assert old_row.role_id == f.initial_role_id
+        assert old_row.revoked_at is not None
+
+        new_row = verify.execute(
+            text(
+                "SELECT campaign_membership_id, role_id, granted_by_membership_id, revoked_at "
+                "FROM security.membership_roles WHERE membership_role_id = :mr"
+            ),
+            {"mr": new_membership_role_id},
+        ).one()
+        assert new_row.campaign_membership_id == f.existing_membership_id
+        assert new_row.role_id == f.second_role_id
+        assert new_row.granted_by_membership_id == f.admin_membership_id
+        assert new_row.revoked_at is None
+
+
+def test_changing_one_role_preserves_another_active_role_on_the_same_membership(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        other_membership_role_id = make_membership_role(
+            connection, f.existing_membership_id, f.system_role_id
+        )
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 201, response.text
+
+    with postgres_engine.connect() as verify:
+        untouched_revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": other_membership_role_id},
+        ).scalar_one()
+        assert untouched_revoked_at is None
+
+
+def test_changing_a_role_to_the_same_role_it_already_holds_elsewhere_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        make_membership_role(connection, f.existing_membership_id, f.second_role_id)
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_changing_a_role_scoped_to_a_different_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.foreign_role_id)},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_changing_to_an_unknown_role_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(uuid.uuid4())},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_changing_a_role_assignment_from_a_different_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.active_admin_membership_role_id, campaign_id=f.campaign_id),
+            json={"new_role_id": str(f.player_role_id)},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_changing_an_already_revoked_role_assignment_is_a_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        revoke = client.post(_revoke_url(f, f.existing_membership_role_id))
+        assert revoke.status_code == 204, revoke.text
+
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_a_member_without_access_manage_cannot_change_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 403, response.text
+
+
+def test_a_non_member_cannot_change_a_role(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_a_sequential_replay_of_change_role_returns_the_original_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"change-role-{uuid.uuid4().hex[:8]}"
+    body = {"new_role_id": str(f.second_role_id)}
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json=body,
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json=body,
+            headers={"Idempotency-Key": key},
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json() == first.json()
+
+    with postgres_engine.connect() as verify:
+        # Exactly one new row was created — the replay did not re-run the
+        # command a second time.
+        count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles "
+                "WHERE campaign_membership_id = :m AND role_id = :r AND revoked_at IS NULL"
+            ),
+            {"m": f.existing_membership_id, "r": f.second_role_id},
+        ).scalar_one()
+        assert count == 1
+
+
+def test_changing_the_last_access_manager_role_on_an_active_campaign_to_a_non_manager_role_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Mirrors `test_revoking_the_last_access_manager_role_on_an_active_
+    campaign_is_rejected` — the identical retention invariant, evaluated
+    after the change (revoke-old + assign-new) rather than after a bare
+    revoke. `active_admin_user_id` is `active_campaign_id`'s sole
+    `access.manage` holder by fixture default (`active_second_admin_
+    membership_id` is left roleless unless a test assigns it one — see
+    `test_self_change_away_from_access_manage_succeeds_when_not_the_last_
+    manager` below), so changing it away from the manager role would leave
+    the active campaign with none."""
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.active_admin_membership_role_id, campaign_id=f.active_campaign_id),
+            json={"new_role_id": str(f.active_player_role_id)},
+        )
+    assert response.status_code == 400, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.active_admin_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is None
+        new_role_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles "
+                "WHERE campaign_membership_id = :m AND role_id = :r"
+            ),
+            {"m": f.active_admin_membership_id, "r": f.active_player_role_id},
+        ).scalar_one()
+        assert new_role_count == 0
+
+
+def test_self_change_away_from_access_manage_succeeds_when_not_the_last_manager(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Assigns `active_owner_role_id` to `active_second_admin_membership_id`
+    first, so `active_admin_user_id` is no longer the campaign's sole
+    manager — then `active_admin_user_id` changing their own role away from
+    access.manage is permitted. Self-change is not blanket-restricted, only
+    the retention invariant is enforced (see the rejection counterpart
+    above, where no second manager exists)."""
+    with postgres_engine.begin() as connection:
+        make_membership_role(
+            connection, f.active_second_admin_membership_id, f.active_owner_role_id
+        )
+
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.active_admin_membership_role_id, campaign_id=f.active_campaign_id),
+            json={"new_role_id": str(f.active_player_role_id)},
+        )
+    assert response.status_code == 201, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.active_admin_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is not None
+
+
+def test_self_change_is_permitted_on_a_non_active_campaign_even_dropping_the_sole_manager(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`f.campaign_id` is `pending`, not `active` — the retention invariant
+    only applies to active campaigns (matching `revoke_membership_role`'s
+    own documented scope), so `admin_user_id`, its sole access.manage
+    holder, may change their own role away from it here."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.admin_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 201, response.text
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.membership_roles WHERE membership_role_id = :mr"),
+            {"mr": f.admin_membership_role_id},
+        ).scalar_one()
+        assert revoked_at is not None
+
+
+def test_audit_change_log_records_the_role_transition_without_secrets(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_url(f, f.existing_membership_role_id),
+            json={"new_role_id": str(f.second_role_id)},
+        )
+    assert response.status_code == 201, response.text
+    new_membership_role_id = uuid.UUID(response.json()["membership_role_id"])
+
+    with postgres_engine.connect() as verify:
+        row = (
+            verify.execute(
+                text("""
+                SELECT ca.code AS action_code, cl.table_name, cl.record_id, cl.actor_user_id,
+                       cl.previous_status, cl.new_status, cl.changed_fields
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.table_name = 'membership_roles' AND cl.record_id = :record
+                ORDER BY cl.recorded_at DESC
+                LIMIT 1
+            """),
+                {"record": new_membership_role_id},
+            )
+            .mappings()
+            .one()
+        )
+        assert row["action_code"] == "updated"
+        assert row["actor_user_id"] == f.admin_user_id
+        assert row["previous_status"] is not None
+        assert row["new_status"] is not None
+        assert row["previous_status"] != row["new_status"]
+        assert str(f.existing_membership_role_id) in str(row["changed_fields"])
+        # No secret-shaped content ever reaches this record.
+        serialized = str(row)
+        assert "password" not in serialized.lower()
+        assert "csrf" not in serialized.lower()
+        assert "token" not in serialized.lower()

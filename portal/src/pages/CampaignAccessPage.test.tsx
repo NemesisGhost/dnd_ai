@@ -12,11 +12,14 @@ import {
     it,
     vi,
 } from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
-const { boundaryPropsSpy } = vi.hoisted(() => ({
+const { boundaryPropsSpy, retryMock } = vi.hoisted(() => ({
     boundaryPropsSpy: vi.fn(),
+    retryMock: vi.fn(),
 }))
 
 vi.mock(
@@ -29,35 +32,50 @@ vi.mock(
             campaignId: string
             children: (
                 overview: CampaignAccessOverview,
+                retry: () => void,
             ) => ReactNode
         }) => {
             boundaryPropsSpy(campaignId)
-            return children({ members: [] })
+            return children(
+                { members: [], assignable_roles: [] },
+                retryMock,
+            )
         },
     }),
 )
 
 beforeEach(() => {
     boundaryPropsSpy.mockClear()
+    retryMock.mockClear()
 })
 
 function renderPage(
     initialEntry = "/app/campaign-one/access",
 ) {
     render(
-        <MemoryRouter initialEntries={[initialEntry]}>
-            <Routes>
-                <Route
-                    path="/app/:campaignId/access"
-                    element={<CampaignAccessPage />}
-                />
+        <SessionContext.Provider
+            value={{
+                state: {
+                    status: "authenticated",
+                    bootstrap: sessionBootstrapFixture,
+                },
+                reload: vi.fn(),
+            }}
+        >
+            <MemoryRouter initialEntries={[initialEntry]}>
+                <Routes>
+                    <Route
+                        path="/app/:campaignId/access"
+                        element={<CampaignAccessPage />}
+                    />
 
-                <Route
-                    path="/access"
-                    element={<CampaignAccessPage />}
-                />
-            </Routes>
-        </MemoryRouter>,
+                    <Route
+                        path="/access"
+                        element={<CampaignAccessPage />}
+                    />
+                </Routes>
+            </MemoryRouter>
+        </SessionContext.Provider>,
     )
 }
 

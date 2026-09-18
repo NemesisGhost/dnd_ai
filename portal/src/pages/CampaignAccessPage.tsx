@@ -18,8 +18,12 @@ export function CampaignAccessPage() {
 
     return (
         <AccessOverviewBoundary campaignId={campaignId}>
-            {(overview) => (
-                <AccessPage overview={overview} />
+            {(overview, retry) => (
+                <AccessPage
+                    campaignId={campaignId}
+                    overview={overview}
+                    onChanged={retry}
+                />
             )}
         </AccessOverviewBoundary>
     )

@@ -9,6 +9,7 @@ interface AccessOverviewBoundaryProps {
     campaignId: string
     children: (
         overview: CampaignAccessOverview,
+        retry: () => void,
     ) => ReactNode
 }
 
@@ -63,5 +64,5 @@ export function AccessOverviewBoundary({
         )
     }
 
-    return <>{children(state.overview)}</>
+    return <>{children(state.overview, retry)}</>
 }

@@ -1,4 +1,11 @@
 export interface AccessRoleSummary {
+    membership_role_id: string
+    role_id: string
+    code: string
+    display_name: string
+}
+
+export interface AssignableRole {
     role_id: string
     code: string
     display_name: string
@@ -38,4 +45,5 @@ export interface CampaignAccessMember {
 
 export interface CampaignAccessOverview {
     members: CampaignAccessMember[]
+    assignable_roles: AssignableRole[]
 }

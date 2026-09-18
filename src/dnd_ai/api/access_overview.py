@@ -16,6 +16,15 @@ This is a pure read: no idempotency key, no `audit.change_log` row, no
 mutation. The mutation endpoints remain `dnd_ai.api.memberships`/
 `.access_grants`/`.campaign_invitations`, unchanged by this module.
 
+`assignable_roles` (Phase 13E-B) is the read-contract counterpart to
+`dnd_ai.api.memberships`' new `change_membership_role` mutation: every role
+currently usable by this campaign (`dnd_ai.queries.access_overview.
+list_assignable_campaign_roles`), so the portal's role-change control never
+has to hardcode or guess the assignable set. Campaign-level, not per-member
+— this codebase's role model carries no hierarchy, so every role
+`access.manage` may assign is equally assignable to any member (see that
+query function's own docstring).
+
 Non-disclosure: a caller without an active membership, or without
 `access.manage`, gets the same fixed 404/403 `require_campaign_capability`
 already gives every other `access.manage` route — this route adds no new
@@ -33,7 +42,10 @@ from pydantic import BaseModel
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
-from dnd_ai.queries.access_overview import get_campaign_access_overview
+from dnd_ai.queries.access_overview import (
+    get_campaign_access_overview,
+    list_assignable_campaign_roles,
+)
 
 from .access import require_campaign_capability
 from .deps import get_connection
@@ -52,6 +64,13 @@ _ACCESS_MANAGE_CAPABILITY = "access.manage"
 
 
 class RoleSummaryResponse(BaseModel):
+    membership_role_id: uuid.UUID
+    role_id: uuid.UUID
+    code: str
+    display_name: str
+
+
+class AssignableRoleResponse(BaseModel):
     role_id: uuid.UUID
     code: str
     display_name: str
@@ -91,6 +110,7 @@ class CampaignMemberSummaryResponse(BaseModel):
 
 class CampaignAccessOverviewResponse(BaseModel):
     members: list[CampaignMemberSummaryResponse]
+    assignable_roles: list[AssignableRoleResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +133,14 @@ def get_campaign_access_overview_endpoint(
     members = get_campaign_access_overview(
         connection, campaign_id=campaign_id, timeline_id=access.timeline_id
     )
+    assignable_roles = list_assignable_campaign_roles(connection, campaign_id=campaign_id)
     return CampaignAccessOverviewResponse(
+        assignable_roles=[
+            AssignableRoleResponse(
+                role_id=role.role_id, code=role.code, display_name=role.display_name
+            )
+            for role in assignable_roles
+        ],
         members=[
             CampaignMemberSummaryResponse(
                 campaign_membership_id=member.campaign_membership_id,
@@ -123,7 +150,10 @@ def get_campaign_access_overview_endpoint(
                 joined_at=member.joined_at,
                 roles=[
                     RoleSummaryResponse(
-                        role_id=role.role_id, code=role.code, display_name=role.display_name
+                        membership_role_id=role.membership_role_id,
+                        role_id=role.role_id,
+                        code=role.code,
+                        display_name=role.display_name,
                     )
                     for role in member.roles
                 ],
@@ -158,5 +188,5 @@ def get_campaign_access_overview_endpoint(
                 ],
             )
             for member in members
-        ]
+        ],
     )

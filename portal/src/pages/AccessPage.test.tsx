@@ -1,7 +1,23 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import {
+    fireEvent,
+    render,
+    screen,
+    waitFor,
+} from "@testing-library/react"
+import {
+    afterEach,
+    describe,
+    expect,
+    it,
+    vi,
+} from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { AccessPage } from "./AccessPage"
+
+const campaignId = sessionBootstrapFixture.campaigns[0].campaign_id
+const campaignName = sessionBootstrapFixture.campaigns[0].campaign_name
 
 const fullOverview: CampaignAccessOverview = {
     members: [
@@ -14,6 +30,8 @@ const fullOverview: CampaignAccessOverview = {
             joined_at: "2026-01-01T00:00:00Z",
             roles: [
                 {
+                    membership_role_id:
+                        "6b1f7e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
                     role_id:
                         "7c2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
                     code: "campaign_owner",
@@ -59,12 +77,79 @@ const fullOverview: CampaignAccessOverview = {
             character_relationships: [],
             grants: [],
         },
+        {
+            campaign_membership_id:
+                "2b7f3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            display_name: "Multi Role Member",
+            status_code: "active",
+            status_display_name: "Active",
+            joined_at: "2026-01-05T00:00:00Z",
+            roles: [
+                {
+                    membership_role_id:
+                        "3c8f4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    role_id:
+                        "7c2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    code: "campaign_owner",
+                    display_name: "Campaign Owner",
+                },
+                {
+                    membership_role_id:
+                        "4d9f5e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    role_id:
+                        "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    code: "rules_curator",
+                    display_name: "Rules Curator",
+                },
+            ],
+            character_relationships: [],
+            grants: [],
+        },
+    ],
+    assignable_roles: [
+        {
+            role_id: "7c2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "campaign_owner",
+            display_name: "Campaign Owner",
+        },
+        {
+            role_id: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "rules_curator",
+            display_name: "Rules Curator",
+        },
     ],
 }
 
+function renderPage(
+    overview: CampaignAccessOverview,
+    onChanged: () => void = vi.fn(),
+) {
+    return render(
+        <SessionContext.Provider
+            value={{
+                state: {
+                    status: "authenticated",
+                    bootstrap: sessionBootstrapFixture,
+                },
+                reload: vi.fn(),
+            }}
+        >
+            <AccessPage
+                campaignId={campaignId}
+                overview={overview}
+                onChanged={onChanged}
+            />
+        </SessionContext.Provider>,
+    )
+}
+
+afterEach(() => {
+    vi.unstubAllGlobals()
+})
+
 describe("AccessPage", () => {
     it("renders exactly one page-level heading", () => {
-        render(<AccessPage overview={fullOverview} />)
+        renderPage(fullOverview)
 
         expect(
             screen.getAllByRole("heading", { level: 1 }),
@@ -79,7 +164,7 @@ describe("AccessPage", () => {
     })
 
     it("renders member display identity and human-readable role/status labels", () => {
-        render(<AccessPage overview={fullOverview} />)
+        renderPage(fullOverview)
 
         expect(
             screen.getByText("Aria the GM"),
@@ -95,9 +180,7 @@ describe("AccessPage", () => {
     })
 
     it("renders character relationships and grants with human-readable labels", () => {
-        const { container } = render(
-            <AccessPage overview={fullOverview} />,
-        )
+        const { container } = renderPage(fullOverview)
 
         expect(
             screen.getByText(
@@ -118,9 +201,7 @@ describe("AccessPage", () => {
     })
 
     it("never renders a raw UUID as user-facing text", () => {
-        const { container } = render(
-            <AccessPage overview={fullOverview} />,
-        )
+        const { container } = renderPage(fullOverview)
 
         const uuidPattern =
             /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
@@ -131,23 +212,23 @@ describe("AccessPage", () => {
     })
 
     it("shows a deliberate per-member empty state for a member with no roles, relationships, or grants", () => {
-        render(<AccessPage overview={fullOverview} />)
+        renderPage(fullOverview)
 
         expect(
             screen.getByText("No roles assigned."),
         ).toBeInTheDocument()
 
         expect(
-            screen.getByText("No character relationships."),
-        ).toBeInTheDocument()
+            screen.getAllByText("No character relationships.").length,
+        ).toBeGreaterThan(0)
 
         expect(
-            screen.getByText("No explicit grants."),
-        ).toBeInTheDocument()
+            screen.getAllByText("No explicit grants.").length,
+        ).toBeGreaterThan(0)
     })
 
     it("shows a deliberate empty state when the campaign has no manageable access records", () => {
-        render(<AccessPage overview={{ members: [] }} />)
+        renderPage({ members: [], assignable_roles: [] })
 
         expect(
             screen.getByText(
@@ -156,32 +237,189 @@ describe("AccessPage", () => {
         ).toBeInTheDocument()
     })
 
-    it("renders no mutation controls", () => {
-        render(<AccessPage overview={fullOverview} />)
-
-        expect(screen.queryAllByRole("button")).toHaveLength(0)
-        expect(screen.queryAllByRole("textbox")).toHaveLength(0)
-    })
-
     it("renders each member as a collapsed-by-default disclosure element", () => {
-        const { container } = render(
-            <AccessPage overview={fullOverview} />,
-        )
+        const { container } = renderPage(fullOverview)
 
         const detailsElements =
             container.querySelectorAll("details")
 
-        expect(detailsElements.length).toBe(2)
+        expect(detailsElements.length).toBe(3)
         detailsElements.forEach((details) => {
             expect(details.open).toBe(false)
         })
     })
 
     it("uses a semantic list for the member collection", () => {
-        render(<AccessPage overview={fullOverview} />)
+        renderPage(fullOverview)
 
         expect(
             screen.getAllByRole("list").length,
         ).toBeGreaterThan(0)
+    })
+
+    it("exposes an accessible role-edit action for each eligible role", () => {
+        renderPage(fullOverview)
+
+        // One role from the single-role member plus two from the
+        // multi-role member = three independent "Change role" triggers —
+        // each role assignment gets its own control, never one per member.
+        expect(
+            screen.getAllByRole("button", { name: "Change role" }),
+        ).toHaveLength(3)
+    })
+
+    it("does not expose an actionable role control when no role is assignable", () => {
+        renderPage({
+            ...fullOverview,
+            assignable_roles: [],
+        })
+
+        expect(
+            screen.queryByRole("button", { name: "Change role" }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("labels the role-edit control with the member and campaign context, and offers only authorized choices", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+
+        const select = screen.getByLabelText(
+            `Change Aria the GM's Campaign Owner role in ${campaignName}`,
+        )
+        expect(select).toBeInTheDocument()
+
+        const options = Array.from(
+            select.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(options).toEqual([
+            "Campaign Owner",
+            "Rules Curator",
+        ])
+    })
+
+    it("requires an explicit Save action and never submits on selection change alone", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+
+        const select = screen.getByRole("combobox")
+        fireEvent.change(select, {
+            target: {
+                value: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("cancel closes the editor and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("combobox"),
+        ).not.toBeInTheDocument()
+        expect(
+            screen.getAllByRole("button", { name: "Change role" })
+                .length,
+        ).toBeGreaterThan(0)
+    })
+
+    it("announces pending, then success, and refreshes the authoritative overview after a successful save", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Saving role change…"),
+            ).toBeInTheDocument()
+        })
+        // Existing role text remains visible — no optimistic replacement.
+        expect(
+            screen.getAllByText("Campaign Owner").length,
+        ).toBeGreaterThan(0)
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_role_id: "new-membership-role",
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Role updated."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+
+    it("renders no unrelated mutation controls", () => {
+        renderPage(fullOverview)
+
+        const buttonNames = screen
+            .getAllByRole("button")
+            .map((button) => button.textContent)
+
+        buttonNames.forEach((name) => {
+            expect(name).toBe("Change role")
+        })
     })
 })
