@@ -1,6 +1,8 @@
 import { useId } from "react"
+import { AddCampaignMember } from "../components/AddCampaignMember"
 import { AddMemberRole } from "../components/AddMemberRole"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
+import { RemoveCampaignMember } from "../components/RemoveCampaignMember"
 import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
@@ -163,6 +165,17 @@ function MemberAccessCard({
                 <p className="access-member-card__joined">
                     Joined {formatTimestamp(member.joined_at)}
                 </p>
+
+                <RemoveCampaignMember
+                    campaignId={campaignId}
+                    campaignMembershipId={
+                        member.campaign_membership_id
+                    }
+                    memberUserId={member.user_id}
+                    memberDisplayName={member.display_name}
+                    onChanged={onChanged}
+                    onMutationStart={onMutationStart}
+                />
             </div>
         </details>
     )
@@ -197,10 +210,20 @@ export function AccessPage({
 
             <p className="access-page__description">
                 Current members, roles, character relationships, and
-                explicit grants for this campaign. Adding, changing, and
-                removing an existing member's roles is available below;
-                other access changes are not available here yet.
+                explicit grants for this campaign. Adding an existing
+                account as a member, changing and removing an existing
+                member's roles, and removing an existing member are
+                available below; other access changes are not available
+                here yet.
             </p>
+
+            <AddCampaignMember
+                campaignId={campaignId}
+                campaignName={campaignName}
+                assignableRoles={overview.assignable_roles}
+                onChanged={onChanged}
+                onMutationStart={onMutationStart}
+            />
 
             {overview.members.length > 0 ? (
                 <ul className="access-page__member-list">

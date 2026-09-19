@@ -421,20 +421,16 @@ def test_the_vertical_slice_scenario(
         player_role_id = _system_role_id(connection, "player")
         observer_role_id = _system_role_id(connection, "observer")
 
-    # -- Step 3: two players and an observer, the seeded system-template
-    # player/observer roles (migration 086), assigned through the ordinary
-    # membership-role API — no campaign-scoped role is created here.
+    # -- Step 3: two players and an observer, added with the seeded
+    # system-template player/observer roles (migration 086) as their
+    # initial role — no campaign-scoped role is created here.
     def _add_member(user_id: uuid.UUID, role_id: uuid.UUID) -> uuid.UUID:
         create_response = gm.post(
-            f"/campaigns/{campaign_id}/memberships", json={"user_id": str(user_id)}
+            f"/campaigns/{campaign_id}/memberships",
+            json={"user_id": str(user_id), "role_id": str(role_id)},
         )
         assert create_response.status_code == 201, create_response.text
         membership_id = uuid.UUID(create_response.json()["campaign_membership_id"])
-        role_response = gm.post(
-            f"/campaigns/{campaign_id}/memberships/{membership_id}/roles",
-            json={"role_id": str(role_id)},
-        )
-        assert role_response.status_code == 201, role_response.text
         return membership_id
 
     player1_membership_id = _add_member(f.player1_user_id, player_role_id)
@@ -707,17 +703,10 @@ def test_the_vertical_slice_scenario(
     with postgres_engine.begin() as connection:
         campaign2_player_role_id = _system_role_id(connection, "player")
     add_campaign2_member_response = gm.post(
-        f"/campaigns/{campaign2_id}/memberships", json={"user_id": str(f.player1_user_id)}
+        f"/campaigns/{campaign2_id}/memberships",
+        json={"user_id": str(f.player1_user_id), "role_id": str(campaign2_player_role_id)},
     )
     assert add_campaign2_member_response.status_code == 201, add_campaign2_member_response.text
-    campaign2_player1_membership_id = uuid.UUID(
-        add_campaign2_member_response.json()["campaign_membership_id"]
-    )
-    assign_campaign2_role_response = gm.post(
-        f"/campaigns/{campaign2_id}/memberships/{campaign2_player1_membership_id}/roles",
-        json={"role_id": str(campaign2_player_role_id)},
-    )
-    assert assign_campaign2_role_response.status_code == 201, assign_campaign2_role_response.text
 
     campaign2_view = player1.get(f"/campaigns/{campaign2_id}/dungeon-areas/{f.area_b}")
     assert campaign2_view.status_code == 200, campaign2_view.text
@@ -772,17 +761,10 @@ def test_the_vertical_slice_scenario(
     with postgres_engine.begin() as connection:
         campaign3_observer_role_id = _system_role_id(connection, "observer")
     add_campaign3_member_response = gm.post(
-        f"/campaigns/{campaign3_id}/memberships", json={"user_id": str(f.observer_user_id)}
+        f"/campaigns/{campaign3_id}/memberships",
+        json={"user_id": str(f.observer_user_id), "role_id": str(campaign3_observer_role_id)},
     )
     assert add_campaign3_member_response.status_code == 201, add_campaign3_member_response.text
-    campaign3_observer_membership_id = uuid.UUID(
-        add_campaign3_member_response.json()["campaign_membership_id"]
-    )
-    assign_campaign3_role_response = gm.post(
-        f"/campaigns/{campaign3_id}/memberships/{campaign3_observer_membership_id}/roles",
-        json={"role_id": str(campaign3_observer_role_id)},
-    )
-    assert assign_campaign3_role_response.status_code == 201, assign_campaign3_role_response.text
 
     campaign3_view = observer.get(f"/campaigns/{campaign3_id}/dungeon-areas/{f.area_b}")
     assert campaign3_view.status_code == 200, campaign3_view.text

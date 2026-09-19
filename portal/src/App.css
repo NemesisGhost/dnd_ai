@@ -1882,3 +1882,85 @@
   font-size: 0.85rem;
   color: var(--color-text);
 }
+
+/* Add-campaign-member control (Phase 13E-B checkpoint 3) — the one
+   page-level control (never per-member, unlike everything above), so its
+   own trigger/actions/status reuse the .access-role-editor__* rules
+   directly; only the login-name/account-selection layout below is new.
+   Remove-member reuses .access-role-editor/__trigger/__actions/__status/
+   __confirm-text unchanged, exactly like Revoke role does. */
+.access-add-member {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 28rem;
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface-muted);
+}
+
+.access-add-member__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+
+.access-add-member__field label {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.access-add-member__field p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.access-add-member__field input,
+.access-add-member__field select {
+  min-height: 2rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.25rem 0.4rem;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.85rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.access-add-member__field input:focus-visible,
+.access-add-member__field select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.access-add-member__field button {
+  min-height: 2rem;
+  padding: 0.25rem 0.6rem;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.85rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.access-add-member__field button:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+}
+
+.access-add-member__field button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.access-add-member__field button:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}

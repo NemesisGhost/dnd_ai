@@ -68,6 +68,28 @@ caller can tell an actual revocation apart from the pre-existing harmless
 no-op on an already-revoked row — needed so `dnd_ai.api.memberships`'
 route can write exactly one audit record per real state change rather than
 one per HTTP call. See each function's own docstring for the full contract.
+
+Phase 13E-B checkpoint 3 (add an existing account to a campaign; end an
+existing membership) adds `add_campaign_member()` and `end_campaign_
+membership()` — the two remaining membership-lifecycle mutations this
+module's own original docstring above named as deferred ("bootstrapping a
+campaign's very first owner membership is left to whatever future
+workstream builds campaign creation itself" no longer applies to *every*
+subsequent member, only the first). `add_campaign_member()` hardens the
+pre-existing, previously-unused `create_campaign_membership()` insert with
+the same "currently true" eligibility discipline checkpoint 2 already
+established (campaign must be active, target account must be platform-
+active, target role must be scoped and active) and folds it into one
+atomic call with an initial role assignment, reusing `create_campaign_
+membership`'s own bare-insert shape rather than replacing it (existing
+direct callers of the unchecked bare insert, if any are added later, are
+unaffected). `end_campaign_membership()` is the temporal counterpart to
+`create_campaign_membership()`/`add_campaign_member()`: closes a
+membership (never physically deletes it) and gives every one of its active
+role rows the same disposition `revoke_membership_role()` already gives a
+single one, atomically, subject to the identical access-manager retention
+invariant every other membership/role mutation in this module already
+enforces.
 """
 
 import uuid
@@ -194,6 +216,44 @@ class MembershipRoleNotActiveError(DomainAuthorizationError):
     safe_status_code = 409
     safe_error_code = "conflict"
     safe_message = "The request could not be completed due to a conflicting change."
+
+
+class CampaignNotActiveError(DomainAuthorizationError):
+    """Raised by `add_campaign_member()` (Phase 13E-B checkpoint 3) when the
+    target `campaign_id`, though it exists and the caller is authorized for
+    it, is not currently `active` (`core.lifecycle_statuses.code`). Adding a
+    member to a campaign that is not currently running mirrors the same
+    "this may have been fine a moment ago" conflict family as
+    `MembershipNotActiveError` — a `pending`/`archived` campaign may become
+    active later, so this is a conflict (409), not the base class's default
+    404: the campaign's existence and the caller's `access.manage`
+    authorization for it are already established by the time this raises
+    (`require_campaign_capability` itself never consults campaign lifecycle
+    status). Locking `campaign.campaigns` `FOR UPDATE` before this check
+    (see `add_campaign_member`) means a concurrent transition of the
+    campaign out of `active` cannot slip in between this check and the
+    membership insert that follows it."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
+
+
+class AccountNotEligibleError(DomainAuthorizationError):
+    """Raised by `add_campaign_member()` when the target `user_id` is
+    nonexistent or is not currently a platform-active account
+    (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code
+    <> 'active'`) — folded identically, so a caller can never learn which
+    condition applied, mirroring `RoleNotUsableByCampaignError`'s own
+    reasoning: neither case was ever a legitimate target in the first
+    place, so this is the base class's default 404, not a conflict. A
+    target that already holds an open membership in this campaign is
+    deliberately *not* checked here — see this module's docstring,
+    "Database-enforced invariants this module deliberately does not
+    duplicate": `ux_campaign_memberships_open` rejects that case as an
+    ordinary 409 `IntegrityError` at insert time, exactly like every other
+    invariant this module relies on the database for rather than
+    pre-checking."""
 
 
 class ChangeMembershipRoleNoOpError(SafeMessageError):
@@ -687,4 +747,284 @@ def change_membership_role(
         previous_membership_role_id=membership_role_id,
         previous_role_code=row["role_code"],
         new_role_code=new_role_row["code"],
+    )
+
+
+@dataclass(frozen=True)
+class AddCampaignMemberResult:
+    campaign_membership_id: uuid.UUID
+    membership_role_id: uuid.UUID
+
+
+def add_campaign_member(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role_id: uuid.UUID,
+    added_by_membership_id: uuid.UUID,
+) -> AddCampaignMemberResult:
+    """Adds an existing, eligible account to `campaign_id` with one initial
+    role — the portal Access page's "Add campaign member" action (Phase
+    13E-B checkpoint 3). Creates exactly two new rows, atomically: a fresh
+    `security.campaign_memberships` row (never reactivating an earlier
+    ended one — see below) and its one initial `security.membership_roles`
+    row, in the caller's own transaction, mirroring `change_membership_
+    role`'s "every check runs, every row lock is taken, before any write"
+    discipline so a rejection never leaves a partial write behind.
+
+    Every check below is proactive (raised before any write), the same
+    "avoid an unclassified 500 from a bare database trigger" reasoning this
+    module's own docstring gives for `RoleNotUsableByCampaignError`/the
+    access-manager retention `ValueError`:
+
+    - `campaign_id` must currently be `active` (`core.lifecycle_statuses.
+      code`) — `CampaignNotActiveError` (409). Locks `campaign.campaigns`
+      `FOR UPDATE` first, so a concurrent transition of the campaign out of
+      `active` cannot slip in between this check and the insert below.
+    - `user_id` must exist and currently be a platform-active account
+      (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.
+      code = 'active'`) — `AccountNotEligibleError` (404; an ineligible
+      account was never a legitimate target, unlike the 409 cases above).
+      Locks the target `security.users` row `FOR UPDATE`, so a concurrent
+      disablement of the account cannot slip in either.
+    - `role_id` must be a system template or scoped to `campaign_id`, and
+      currently `is_active` — `RoleNotUsableByCampaignError` (404),
+      identical to `assign_membership_role`'s own check. Locks the
+      candidate role row `FOR UPDATE`.
+
+    A target `user_id` who already holds an *open* membership in
+    `campaign_id` is deliberately not pre-checked — see this module's
+    docstring, "Database-enforced invariants this module deliberately does
+    not duplicate": `ux_campaign_memberships_open` rejects that race as an
+    ordinary 409 `IntegrityError` at insert time, so two concurrent adds of
+    the same account (with different idempotency keys, or none) can never
+    both succeed regardless of which one's pre-checks ran first.
+
+    Re-entry after an earlier departure always creates a **new** temporal
+    row — this never reactivates (clears `ended_at`/`ended_by_membership_id`
+    on) an existing closed membership the way `dnd_ai.commands.
+    campaign_invitations._activate_or_create_membership` deliberately does
+    for its own, different, invitation-acceptance flow; that reactivation
+    behavior is out of this checkpoint's scope (docs/PHASE13E_ACCESS_
+    CONTRACT.md, "membership reactivation" is explicitly excluded), and
+    `ux_campaign_memberships_open` has no objection to a second, later row
+    for the same `(campaign_id, user_id)` once the earlier one is closed.
+
+    No access-manager retention check is needed here (unlike `revoke_
+    membership_role`/`change_membership_role`/`end_campaign_membership`):
+    granting a new membership and role can only ever add to a campaign's
+    set of qualifying managers, never remove from it."""
+    campaign_status_code = connection.execute(
+        text("""
+            SELECT ls.code FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            WHERE c.campaign_id = :campaign
+            FOR UPDATE OF c
+        """),
+        {"campaign": campaign_id},
+    ).scalar()
+    if campaign_status_code != "active":
+        raise CampaignNotActiveError(f"campaign {campaign_id} is not currently active")
+
+    account_status_code = connection.execute(
+        text("""
+            SELECT ls.code FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user
+            FOR UPDATE OF u
+        """),
+        {"user": user_id},
+    ).scalar()
+    if account_status_code != "active":
+        raise AccountNotEligibleError(
+            f"user {user_id} does not exist or is not currently an active platform account"
+        )
+
+    role_row = (
+        connection.execute(
+            text(
+                "SELECT campaign_id, is_active FROM security.roles WHERE role_id = :role FOR UPDATE"
+            ),
+            {"role": role_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if (
+        role_row is None
+        or (role_row["campaign_id"] is not None and role_row["campaign_id"] != campaign_id)
+        or not role_row["is_active"]
+    ):
+        raise RoleNotUsableByCampaignError(
+            f"role {role_id} is not usable by campaign {campaign_id} "
+            f"(actual campaign: {role_row['campaign_id'] if role_row is not None else None})"
+        )
+
+    campaign_membership_id = create_campaign_membership(
+        connection, campaign_id=campaign_id, user_id=user_id
+    ).campaign_membership_id
+
+    membership_role_id = connection.execute(
+        text("""
+            INSERT INTO security.membership_roles
+                (campaign_membership_id, role_id, granted_by_membership_id)
+            VALUES (:membership, :role, :granted_by)
+            RETURNING membership_role_id
+        """),
+        {
+            "membership": campaign_membership_id,
+            "role": role_id,
+            "granted_by": added_by_membership_id,
+        },
+    ).scalar()
+    assert isinstance(membership_role_id, uuid.UUID)
+
+    return AddCampaignMemberResult(
+        campaign_membership_id=campaign_membership_id, membership_role_id=membership_role_id
+    )
+
+
+@dataclass(frozen=True)
+class EndCampaignMembershipResult:
+    """`ended` (mirroring `RevokeMembershipRoleResult.revoked`'s identical
+    purpose) is `True` only when this specific call transitioned the
+    membership from open to ended — `False` for the documented harmless
+    no-op case (already ended). `dnd_ai.api.memberships.
+    end_campaign_membership_endpoint` uses this to write exactly one
+    `audit.change_log` row per *actual* removal, never one per HTTP call.
+    `revoked_membership_role_ids` is empty for the no-op case (nothing was
+    touched) and otherwise lists every role row this call revoked, for that
+    same audit record's `changed_fields`."""
+
+    campaign_membership_id: uuid.UUID
+    ended: bool
+    revoked_membership_role_ids: tuple[uuid.UUID, ...]
+
+
+def end_campaign_membership(
+    connection: Connection,
+    *,
+    campaign_membership_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    ended_by_membership_id: uuid.UUID,
+) -> EndCampaignMembershipResult:
+    """Ends `campaign_membership_id` (sets `ended_at`/`ended_by_membership_
+    id`, and moves its `membership_status_id` to the `revoked` status —
+    "Closed by a GM or owner action", `database/seeds/security.
+    membership_statuses.yaml`'s own words, which this always is: every
+    route reaching this command already required `access.manage`, even for
+    a self-removal) — the portal Access page's "Remove member" action
+    (Phase 13E-B checkpoint 3). Never reactivated and never physically
+    deleted, matching every other closed-membership row in this schema
+    (`security.campaign_memberships`' own table comment).
+
+    Preserves temporal history for *both* affected tables in the same
+    transaction: every currently active `security.membership_roles` row
+    belonging to this membership is revoked (`revoked_at` set, exactly like
+    `revoke_membership_role`'s own single-row update — never deleted, never
+    reassigned) before the membership row itself is closed, so a person who
+    no longer belongs to a campaign is never left holding rows the read
+    side (`dnd_ai.queries.access_overview`) would still describe as an
+    active current role, even though that same read side already excludes
+    the closed membership itself (`cm.ended_at IS NULL`) regardless.
+
+    Or does nothing (a harmless no-op, exactly like `revoke_membership_
+    role`'s identical "already revoked" case) if `campaign_membership_id`
+    is already ended — see `EndCampaignMembershipResult.ended`'s own
+    docstring for how a caller distinguishes the two outcomes.
+
+    Raises `MembershipNotInCampaignError` for a nonexistent `campaign_
+    membership_id`, or one belonging to a different campaign than
+    `campaign_id` (checked first, so this stays indistinguishable from "it
+    never existed" for an unauthorized caller).
+
+    Raises a plain `ValueError` (mapped by the existing generic handler to
+    a fixed 400) if ending this membership would leave an *active* campaign
+    with no membership holding `access.manage` — the identical retention
+    invariant `revoke_membership_role`/`change_membership_role` enforce,
+    via the same shared `_assert_active_campaign_retains_access_manager`
+    helper; self-removal is permitted, with no special-case check anywhere
+    in this function, subject to that same invariant exactly like every
+    other self-mutation in this module. Skipped entirely for the no-op
+    case, since an already-ended membership cannot newly violate an
+    invariant nothing about this call changed.
+
+    Locks the target membership row (`FOR UPDATE`) before evaluating
+    anything, matching `revoke_membership_role`'s identical discipline for
+    its own target row — so a concurrent removal of the same membership,
+    or a concurrent role add/change/revoke against one of its role rows
+    (each of which independently locks that specific `membership_roles`
+    row, and, for `assign_membership_role`, the membership row itself)
+    cannot race between this function's own read and its writes: whichever
+    transaction acquires the relevant lock first forces the other to wait,
+    then re-observes the first's committed effect."""
+    row = (
+        connection.execute(
+            text("""
+                SELECT campaign_id, ended_at
+                FROM security.campaign_memberships
+                WHERE campaign_membership_id = :membership
+                FOR UPDATE
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["campaign_id"] != campaign_id:
+        raise MembershipNotInCampaignError(
+            f"membership {campaign_membership_id} does not belong to campaign {campaign_id} "
+            f"(actual campaign: {row['campaign_id'] if row is not None else None})"
+        )
+
+    if row["ended_at"] is not None:
+        return EndCampaignMembershipResult(
+            campaign_membership_id=campaign_membership_id,
+            ended=False,
+            revoked_membership_role_ids=(),
+        )
+
+    revoked_role_ids = (
+        connection.execute(
+            text("""
+                UPDATE security.membership_roles SET revoked_at = now()
+                WHERE campaign_membership_id = :membership AND revoked_at IS NULL
+                RETURNING membership_role_id
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .scalars()
+        .all()
+    )
+
+    revoked_status_id = lookup_id(
+        connection, "security", "membership_statuses", "membership_status_id", "revoked"
+    )
+    connection.execute(
+        text("""
+            UPDATE security.campaign_memberships
+            SET ended_at = now(), ended_by_membership_id = :actor, membership_status_id = :status
+            WHERE campaign_membership_id = :membership
+        """),
+        {
+            "actor": ended_by_membership_id,
+            "status": revoked_status_id,
+            "membership": campaign_membership_id,
+        },
+    )
+
+    _assert_active_campaign_retains_access_manager(
+        connection,
+        campaign_id=campaign_id,
+        detail=(
+            f"ending membership {campaign_membership_id} would leave active campaign "
+            f"{campaign_id} with no membership holding access.manage"
+        ),
+    )
+
+    return EndCampaignMembershipResult(
+        campaign_membership_id=campaign_membership_id,
+        ended=True,
+        revoked_membership_role_ids=tuple(revoked_role_ids),
     )

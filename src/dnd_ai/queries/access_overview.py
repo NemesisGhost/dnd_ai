@@ -1,7 +1,11 @@
 """Read-only GM campaign access overview (Phase 13E-A, docs/PLAN.md Phase 13
 "13E — GM access tools") plus `list_assignable_campaign_roles`, the small
 read-contract addition Phase 13E-B's first mutation checkpoint needs so the
-portal never has to hardcode which roles it may offer for a role change.
+portal never has to hardcode which roles it may offer for a role change,
+and `find_eligible_campaign_account` (Phase 13E-B checkpoint 3), the
+account-selection read contract for the portal's "Add campaign member"
+action — see that function's own docstring for the exact-match/non-
+disclosure design.
 
 `get_campaign_access_overview` assembles, for one campaign, every currently
 open membership (`security.campaign_memberships.ended_at IS NULL`) together
@@ -57,6 +61,9 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.commands.local_auth import normalize_login_name
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+
 _GRANT_TARGET_COLUMNS = (
     "character_id",
     "entity_id",
@@ -108,6 +115,7 @@ class AssignableRoleView:
 @dataclass(frozen=True)
 class CampaignMemberView:
     campaign_membership_id: uuid.UUID
+    user_id: uuid.UUID
     display_name: str
     status_code: str
     status_display_name: str
@@ -115,6 +123,12 @@ class CampaignMemberView:
     roles: tuple[MemberRoleView, ...]
     character_relationships: tuple[MemberCharacterRelationshipView, ...]
     grants: tuple[MemberResourceGrantView, ...]
+
+
+@dataclass(frozen=True)
+class EligibleAccountView:
+    user_id: uuid.UUID
+    display_name: str
 
 
 def get_campaign_access_overview(
@@ -132,7 +146,7 @@ def get_campaign_access_overview(
     member_rows = (
         connection.execute(
             text("""
-            SELECT cm.campaign_membership_id, u.display_name, cm.joined_at,
+            SELECT cm.campaign_membership_id, cm.user_id, u.display_name, cm.joined_at,
                    ms.code AS status_code, ms.display_name AS status_display_name
             FROM security.campaign_memberships cm
             JOIN security.users u ON u.user_id = cm.user_id
@@ -249,6 +263,7 @@ def get_campaign_access_overview(
     return tuple(
         CampaignMemberView(
             campaign_membership_id=row["campaign_membership_id"],
+            user_id=row["user_id"],
             display_name=row["display_name"],
             status_code=row["status_code"],
             status_display_name=row["status_display_name"],
@@ -294,3 +309,95 @@ def list_assignable_campaign_roles(
             {"campaign_id": campaign_id},
         ).mappings()
     )
+
+
+def find_eligible_campaign_account(
+    connection: Connection, *, campaign_id: uuid.UUID, login_name: str
+) -> EligibleAccountView | None:
+    """Resolves `login_name` to the one existing account eligible to be
+    added to `campaign_id` right now, or `None` — the read-contract support
+    for the portal Access page's "Add campaign member" account-selection
+    step (Phase 13E-B checkpoint 3).
+
+    **Exact match, not directory-style search** (a deliberate choice,
+    docs/PHASE13E_ACCESS_CONTRACT.md's own instruction to prefer this over
+    a search endpoint when the security model favors it): this codebase's
+    established non-disclosure posture treats "does an account with this
+    name exist" as sensitive everywhere else (`dnd_ai.domain.access.
+    resolve_user_by_external_identity`'s login never varies its rejection
+    by cause; every `DomainAuthorizationError` folds "doesn't exist" into
+    the same shape as "exists but not authorized"). A prefix/substring
+    search would let any `access.manage` holder enumerate every account on
+    the platform by trying successive queries — a `campaign.view`-scoped
+    capability does not imply "may browse the platform's full user
+    directory," and this checkpoint's own instructions explicitly forbid
+    exposing one merely to support account selection. Exact lookup by a
+    login name the caller must already know (out-of-band, from whoever
+    administers accounts) closes that gap structurally rather than relying
+    on rate limiting or auditing to catch abuse after the fact.
+
+    Only ever resolves a **local** login (`security.external_identities`,
+    `issuer = dnd_ai.domain.access.LOCAL_AUTH_ISSUER`) — an OIDC-only
+    account has no login name of this kind to look up by (docs/
+    architecture/DATABASE_MODEL.md's `security.users.email` is explicitly
+    "informational... not the durable external identity key", so it is
+    never used as a lookup key here either). A campaign whose members are
+    provisioned entirely through OIDC has no accounts this lookup can ever
+    find — a known, documented limitation of this checkpoint's scope, not
+    an oversight; broadening it to OIDC subjects is deferred to whichever
+    future increment needs it. `login_name` is normalized with the same
+    `normalize_login_name()` every local-auth login path already applies,
+    so a caller's differently-cased or whitespace-padded input still
+    matches.
+
+    "Eligible" folds three independent conditions into one `None` result,
+    identically, so this endpoint can never be used to distinguish "no such
+    account", "account exists but is platform-disabled", and "account
+    already has an open membership in this campaign" from one another —
+    the same non-disclosure discipline `dnd_ai.commands.memberships.
+    AccountNotEligibleError`/`RoleNotUsableByCampaignError` already apply
+    to the mutation side:
+
+    - the local identity must resolve to a `security.users` row at all,
+      and that identity must not be revoked (`revoked_at IS NULL`);
+    - the account must currently be platform-active (`security.users.
+      lifecycle_status_id` -> `core.lifecycle_statuses.code = 'active'`);
+    - the account must **not** currently hold an open (`ended_at IS NULL`)
+      membership in `campaign_id`.
+
+    Pure read: no row lock. `add_campaign_member()` re-resolves and locks
+    the account independently at mutation time — this function only
+    narrows what the portal offers as a selectable candidate, exactly like
+    `list_assignable_campaign_roles` narrows the role choices it offers,
+    never the authorization boundary itself."""
+    normalized_login_name = normalize_login_name(login_name)
+    row = (
+        connection.execute(
+            text("""
+                SELECT u.user_id, u.display_name
+                FROM security.external_identities ei
+                JOIN security.users u ON u.user_id = ei.user_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE ei.issuer = :issuer
+                  AND ei.subject = :subject
+                  AND ei.revoked_at IS NULL
+                  AND ls.code = 'active'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM security.campaign_memberships cm
+                      WHERE cm.campaign_id = :campaign_id
+                        AND cm.user_id = u.user_id
+                        AND cm.ended_at IS NULL
+                  )
+            """),
+            {
+                "issuer": LOCAL_AUTH_ISSUER,
+                "subject": normalized_login_name,
+                "campaign_id": campaign_id,
+            },
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return EligibleAccountView(user_id=row["user_id"], display_name=row["display_name"])

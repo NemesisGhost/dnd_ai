@@ -38,6 +38,7 @@ function baseOverview(): CampaignAccessOverview {
         members: [
             {
                 campaign_membership_id: MEMBERSHIP_ID,
+                user_id: sessionBootstrapFixture.user.user_id,
                 display_name: "Aria the GM",
                 status_code: "active",
                 status_display_name: "Active",

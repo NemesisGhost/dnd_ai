@@ -24,6 +24,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "5b1f7e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: sessionBootstrapFixture.user.user_id,
             display_name: "Aria the GM",
             status_code: "active",
             status_display_name: "Active",
@@ -69,6 +70,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "1a6f2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: "9a6f2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
             display_name: "Quiet Observer",
             status_code: "active",
             status_display_name: "Active",
@@ -80,6 +82,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "2b7f3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: "8b7f3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
             display_name: "Multi Role Member",
             status_code: "active",
             status_display_name: "Active",
@@ -465,6 +468,8 @@ describe("AccessPage", () => {
             "Change role",
             "Add role",
             "Remove role",
+            "Add campaign member",
+            "Remove member",
         ])
         buttonNames.forEach((name) => {
             expect(allowedNames.has(name ?? "")).toBe(true)

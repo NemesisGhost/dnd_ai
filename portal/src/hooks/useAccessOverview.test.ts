@@ -52,6 +52,7 @@ const firstCampaignOverview: CampaignAccessOverview = {
     members: [
         {
             campaign_membership_id: "membership-a",
+            user_id: "user-a",
             display_name: "Player One",
             status_code: "active",
             status_display_name: "Active",
@@ -68,6 +69,7 @@ const secondCampaignOverview: CampaignAccessOverview = {
     members: [
         {
             campaign_membership_id: "membership-b",
+            user_id: "user-b",
             display_name: "Player Two",
             status_code: "active",
             status_display_name: "Active",

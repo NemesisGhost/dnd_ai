@@ -37,12 +37,13 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.access_overview import (
+    find_eligible_campaign_account,
     get_campaign_access_overview,
     list_assignable_campaign_roles,
 )
@@ -99,6 +100,15 @@ class ResourceGrantSummaryResponse(BaseModel):
 
 class CampaignMemberSummaryResponse(BaseModel):
     campaign_membership_id: uuid.UUID
+    # Identity only, never rendered as page text — matching
+    # campaign_membership_id's own contract above. Exists so the portal can
+    # detect "this row is the caller's own membership" (self-removal
+    # messaging) by comparing against the caller's own
+    # SessionBootstrap.user.user_id, without a separate server-computed
+    # flag for what is presentation-only labeling; the server remains
+    # authoritative on the one thing that actually matters (whether the
+    # removal is *permitted*), independent of this comparison.
+    user_id: uuid.UUID
     display_name: str
     status_code: str
     status_display_name: str
@@ -111,6 +121,18 @@ class CampaignMemberSummaryResponse(BaseModel):
 class CampaignAccessOverviewResponse(BaseModel):
     members: list[CampaignMemberSummaryResponse]
     assignable_roles: list[AssignableRoleResponse]
+
+
+class EligibleAccountResponse(BaseModel):
+    # Identity only, never rendered as page text — the portal's "Add
+    # campaign member" control submits this back verbatim as the
+    # add-member mutation's target user_id; a human never sees it.
+    user_id: uuid.UUID
+    display_name: str
+
+
+class EligibleAccountLookupResponse(BaseModel):
+    account: EligibleAccountResponse | None
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +166,7 @@ def get_campaign_access_overview_endpoint(
         members=[
             CampaignMemberSummaryResponse(
                 campaign_membership_id=member.campaign_membership_id,
+                user_id=member.user_id,
                 display_name=member.display_name,
                 status_code=member.status_code,
                 status_display_name=member.status_display_name,
@@ -189,4 +212,57 @@ def get_campaign_access_overview_endpoint(
             )
             for member in members
         ],
+    )
+
+
+# `login_name` is bounded to the same 3-64 character range
+# `dnd_ai.commands.local_auth`'s own login-name format constraint allows
+# (`ck_user_activation_tokens_login_name_format`) — a longer value can
+# never match a stored one, so rejecting it here (422, FastAPI's own query-
+# parameter validation) avoids sending an unbounded string to the database
+# at all. No format/charset validation beyond length: an unnormalized or
+# oddly-cased value is handled by `find_eligible_campaign_account`'s own
+# `normalize_login_name()` call, and a value that simply never matches
+# anything is indistinguishable from any other non-match (see that
+# function's own docstring).
+_LOGIN_NAME_MIN_LENGTH = 1
+_LOGIN_NAME_MAX_LENGTH = 64
+
+
+@router.get(
+    "/campaigns/{campaign_id}/eligible-accounts",
+    response_model=EligibleAccountLookupResponse,
+    status_code=200,
+)
+def find_eligible_campaign_account_endpoint(
+    campaign_id: uuid.UUID,
+    login_name: Annotated[
+        str, Query(min_length=_LOGIN_NAME_MIN_LENGTH, max_length=_LOGIN_NAME_MAX_LENGTH)
+    ],
+    access: Annotated[  # noqa: ARG001 — required only to enforce the access.manage capability
+        AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> EligibleAccountLookupResponse:
+    """Exact-match account lookup for the portal's "Add campaign member"
+    control (Phase 13E-B checkpoint 3) — see `dnd_ai.queries.
+    access_overview.find_eligible_campaign_account`'s own docstring for the
+    full non-disclosure design (why this is exact lookup rather than a
+    directory-style search, and why "no such account", "platform-disabled",
+    and "already a member here" all collapse to the identical `account:
+    null` result rather than three distinguishable outcomes). `access.
+    manage` is required exactly like every other route in this module —
+    reviewing who *could* be added is the same category of action as
+    reviewing who currently has access. This is a pure read: no
+    idempotency key, no `audit.change_log` row, no mutation, matching `GET
+    .../access-overview`'s own contract."""
+    account = find_eligible_campaign_account(
+        connection, campaign_id=campaign_id, login_name=login_name
+    )
+    return EligibleAccountLookupResponse(
+        account=(
+            EligibleAccountResponse(user_id=account.user_id, display_name=account.display_name)
+            if account is not None
+            else None
+        )
     )

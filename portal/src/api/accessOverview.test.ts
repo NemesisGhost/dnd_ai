@@ -17,6 +17,7 @@ const overviewFixture: CampaignAccessOverview = {
     members: [
         {
             campaign_membership_id: "membership-a",
+            user_id: "user-a",
             display_name: "Player One",
             status_code: "active",
             status_display_name: "Active",

@@ -424,15 +424,29 @@ def test_a_member_without_access_manage_gets_forbidden(
 
 
 # ---------------------------------------------------------------------------
-# create_campaign_membership
+# create_campaign_membership / add_campaign_member
 # ---------------------------------------------------------------------------
+#
+# These three tests only prove the pre-existing bare shape (membership
+# creation succeeds, a duplicate-open-membership race is rejected,
+# idempotent replay works) still holds now that this route requires an
+# initial role_id and runs through dnd_ai.commands.memberships.
+# add_campaign_member (Phase 13E-B checkpoint 3 hardening) — targeting
+# f.active_campaign_id, since add_campaign_member additionally requires
+# the target campaign to be currently active (f.campaign_id here is
+# deliberately "pending", per this Fixture's own docstring). The full
+# eligibility/concurrency/audit contract for add_campaign_member has its
+# own dedicated coverage in tests/database/test_api_membership_lifecycle.py.
 
 
 def test_creating_a_membership_succeeds(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    with client_factory(f.admin_user_id) as client:
-        response = client.post(_memberships_url(f), json={"user_id": str(f.new_user_id)})
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _memberships_url(f, f.active_campaign_id),
+            json={"user_id": str(f.new_user_id), "role_id": str(f.active_player_role_id)},
+        )
     assert response.status_code == 201, response.text
     membership_id = uuid.UUID(response.json()["campaign_membership_id"])
 
@@ -455,8 +469,14 @@ def test_creating_a_membership_succeeds(
 def test_creating_a_duplicate_open_membership_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
-    with client_factory(f.admin_user_id) as client:
-        response = client.post(_memberships_url(f), json={"user_id": str(f.existing_user_id)})
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _memberships_url(f, f.active_campaign_id),
+            json={
+                "user_id": str(f.active_second_admin_user_id),
+                "role_id": str(f.active_player_role_id),
+            },
+        )
     assert response.status_code == 409, response.text
 
 
@@ -464,10 +484,14 @@ def test_a_sequential_replay_of_create_membership_returns_the_original_response(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     key = f"create-membership-{uuid.uuid4().hex[:8]}"
-    body = {"user_id": str(f.new_user_id)}
-    with client_factory(f.admin_user_id) as client:
-        first = client.post(_memberships_url(f), json=body, headers={"Idempotency-Key": key})
-        second = client.post(_memberships_url(f), json=body, headers={"Idempotency-Key": key})
+    body = {"user_id": str(f.new_user_id), "role_id": str(f.active_player_role_id)}
+    with client_factory(f.active_admin_user_id) as client:
+        first = client.post(
+            _memberships_url(f, f.active_campaign_id), json=body, headers={"Idempotency-Key": key}
+        )
+        second = client.post(
+            _memberships_url(f, f.active_campaign_id), json=body, headers={"Idempotency-Key": key}
+        )
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
     assert second.json() == first.json()
