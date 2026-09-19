@@ -763,6 +763,23 @@ def resolve_access_context(
     identical rule, so a relationship this resolver would no longer
     authorize through never appears as "current" on the read side or as a
     valid `change` target either.
+
+    Deactivated-character exclusion (checkpoint-4 review correction): the
+    character-capabilities join above also requires `core.lifecycle_
+    statuses.code = 'active'` for the relationship's own `character_id` —
+    previously unchecked here, so a character archived *after* a
+    relationship was granted (or changed) stayed authorization-effective
+    indefinitely, even though `dnd_ai.commands.access_grants.grant_
+    character_relationship()`/`.change_character_relationship()` both
+    already refuse to *create* or *change* a relationship naming an
+    inactive character. This closes the gap for the read side: a character
+    that is later deactivated stops granting any capability on the very
+    next call to this resolver, with no separate cleanup step — exactly
+    the same "resolved fresh every call, nothing cached" guarantee that
+    already made a *revoked relationship* disappear immediately. `dnd_ai.
+    queries.access_overview.get_campaign_access_overview` applies the
+    identical join/filter so the GM overview and the effective-access
+    resolver can never disagree about whether a relationship is current.
     """
     membership_id = connection.execute(
         text("""
@@ -824,12 +841,15 @@ def resolve_access_context(
             JOIN security.character_relationship_type_capabilities rtc
               ON rtc.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
+            JOIN core.entities e ON e.entity_id = mcr.character_id
+            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE mcr.campaign_membership_id = :membership_id
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
               AND cap.is_active
+              AND cls.code = 'active'
         """),
         {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
     ).mappings():

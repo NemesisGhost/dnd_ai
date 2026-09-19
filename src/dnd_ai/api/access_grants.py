@@ -233,7 +233,14 @@ def change_character_relationship_endpoint(
     not 200: this both revokes the old assignment and creates a new
     `security.membership_character_relationships` row, matching `grant_
     character_relationship_endpoint`'s own status code for "a new row now
-    exists," even though an existing row also changed."""
+    exists," even though an existing row also changed.
+
+    `expected_world_id` (checkpoint-4 review correction) is resolved
+    server-side from the caller's own already-authorized campaign timeline
+    (`timeline_world_id(connection, access.timeline_id)`), exactly like
+    `grant_character_relationship_endpoint`'s identical argument — never
+    accepted from the request body, so a caller can never widen the world
+    the command checks the relationship's character against."""
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
@@ -257,6 +264,7 @@ def change_character_relationship_endpoint(
         connection,
         membership_character_relationship_id=membership_character_relationship_id,
         campaign_id=campaign_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
         new_relationship_type_id=body.new_relationship_type_id,
         granted_by_membership_id=access.campaign_membership_id,
     )

@@ -30,7 +30,14 @@ rule `dnd_ai.domain.access.resolve_access_context`'s own docstring
 explains in full: a relationship with both fictional-time endpoints set is
 a closed historical interval, never currently active regardless of where
 those endpoints fall, since this schema tracks no "current fictional now"
-to compare against.
+to compare against — and `core.lifecycle_statuses.code = 'active'` for the
+relationship's own character (checkpoint-4 review correction): a character
+archived after a relationship was granted previously stayed on this
+overview indefinitely, disagreeing with `resolve_access_context`'s own
+capability resolution, which already excludes it; the two now apply the
+identical join/filter, so this overview's own "current character
+relationships" list can never overstate what a member's own effective
+access actually is.
 
 Deliberately out of scope for this first increment (documented here rather
 than silently omitted):
@@ -222,12 +229,14 @@ def get_campaign_access_overview(
             JOIN security.character_relationship_types rt
               ON rt.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN core.entities e ON e.entity_id = mcr.character_id
+            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE cm.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
+              AND cls.code = 'active'
             ORDER BY e.canonical_name, mcr.membership_character_relationship_id
         """),
         {"campaign_id": campaign_id, "timeline_id": timeline_id},

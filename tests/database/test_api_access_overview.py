@@ -252,6 +252,23 @@ class Fixture:
             """),
             {"character": self.archived_character_id},
         )
+
+        # A relationship to an already-archived character (checkpoint-4
+        # review correction) — must never appear as a member's current
+        # character relationship, matching `dnd_ai.domain.access.
+        # resolve_access_context`'s own identical exclusion.
+        self.archived_character_relationship_id = make_membership_character_relationship(
+            connection,
+            self.member_membership_id,
+            self.archived_character_id,
+            lookup_id(
+                connection,
+                "security",
+                "character_relationship_types",
+                "character_relationship_type_id",
+                "viewer",
+            ),
+        )
         self.deactivated_relationship_type_id = make_character_relationship_type(connection)
         connection.execute(
             text(
@@ -559,6 +576,27 @@ def test_a_fully_fictional_time_bounded_relationship_is_excluded(
         r["membership_character_relationship_id"] for r in member["character_relationships"]
     }
     assert str(f.bounded_relationship_id) not in relationship_ids
+    assert str(f.relationship_id) in relationship_ids
+
+
+def test_a_relationship_to_an_archived_character_is_excluded(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-4 review correction: `f.archived_character_relationship_id`
+    (a relationship to an already-archived character) must never appear,
+    even though `f.member_membership_id`'s *other* relationship (`f.
+    relationship_id`, to a currently-active character) still does — the
+    identical per-row exclusion `dnd_ai.domain.access.resolve_access_
+    context` now applies too, so the overview and effective access
+    resolution can never disagree."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    member = _member(response.json(), f.member_membership_id)
+    relationship_ids = {
+        r["membership_character_relationship_id"] for r in member["character_relationships"]
+    }
+    assert str(f.archived_character_relationship_id) not in relationship_ids
     assert str(f.relationship_id) in relationship_ids
 
 

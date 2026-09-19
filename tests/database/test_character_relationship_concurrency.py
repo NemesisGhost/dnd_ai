@@ -26,11 +26,15 @@ delay:
 
 3. **Eligibility-check/write races for `change_character_relationship`**:
    its own row locks (target relationship + owning membership, then the
-   candidate new relationship type) must make a concurrent conflicting
-   write block, mirroring `change_membership_role`'s own coverage in
-   `test_membership_role_concurrency.py`.
+   candidate new relationship type, and — checkpoint-4 review correction —
+   the owning membership's user row and the relationship's own existing
+   character row) must make a concurrent conflicting write block, mirroring
+   `change_membership_role`'s own coverage in `test_membership_role_
+   concurrency.py` and the identical account-disablement/character-
+   deactivation proofs `grant_character_relationship`'s own section 2
+   above already gives.
 
-4. **Same-row races**: change-vs-revoke, revoke-vs-revoke, and change-vs-
+6. **Same-row races**: change-vs-revoke, revoke-vs-revoke, and change-vs-
    change of the identical relationship row must serialize on `FOR UPDATE
    OF mcr`, never interleave, and never raise for the loser's own
    documented no-op/already-changed outcome — mirroring `test_two_
@@ -537,6 +541,7 @@ def test_a_relationship_type_deactivation_cannot_race_it_being_assigned_by_a_cha
                 first,
                 membership_character_relationship_id=relationship_id,
                 campaign_id=campaign_id,
+                expected_world_id=world_id,
                 new_relationship_type_id=portrayer_type_id,
                 granted_by_membership_id=manager_membership_id,
             )
@@ -568,6 +573,133 @@ def test_a_relationship_type_deactivation_cannot_race_it_being_assigned_by_a_cha
                 ),
                 {"t": portrayer_type_id},
             )
+
+
+def test_an_account_disablement_cannot_race_a_change_targeting_it(postgres_engine: Engine) -> None:
+    """Checkpoint-4 review correction: `change_character_relationship`'s
+    own `FOR UPDATE OF u` lock on the owning membership's user row must
+    make a concurrent disablement of that account block too — the
+    identical proof `test_a_character_deactivation_cannot_race_a_grant_
+    targeting_it` already gives for `grant_character_relationship`'s own
+    equivalent lock."""
+    engine = postgres_engine
+    slug = f"conc-rel-change-account-disable-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        rf = _RelationshipFixture(setup, slug)
+        world_id, timeline_id = rf.world_id, rf.timeline_id
+        campaign_id, character_id = rf.campaign_id, rf.character_id
+        target_membership_id = rf.target_membership_id
+        target_user_id = rf.target_user_id
+        manager_membership_id = rf.manager_membership_id
+        portrayer_type_id = rf.portrayer_type_id
+        relationship_id = make_membership_character_relationship(
+            setup,
+            target_membership_id,
+            character_id,
+            rf.viewer_type_id,
+            granted_by_membership_id=manager_membership_id,
+        )
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            change_character_relationship(
+                first,
+                membership_character_relationship_id=relationship_id,
+                campaign_id=campaign_id,
+                expected_world_id=world_id,
+                new_relationship_type_id=portrayer_type_id,
+                granted_by_membership_id=manager_membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("""
+                        UPDATE security.users SET lifecycle_status_id = (
+                            SELECT lifecycle_status_id FROM core.lifecycle_statuses
+                            WHERE code = 'inactive'
+                        )
+                        WHERE user_id = :u
+                    """),
+                    {"u": target_user_id},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the account disablement to block on change_character_relationship's "
+                f"own lock of the owning user row, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+    finally:
+        _cleanup_relationship_fixture(engine, timeline_id, world_id, rf.extra_relationship_type_id)
+
+
+def test_a_character_deactivation_cannot_race_a_change_targeting_it(
+    postgres_engine: Engine,
+) -> None:
+    """Checkpoint-4 review correction: `change_character_relationship`'s
+    own `FOR UPDATE OF e` lock on the relationship's existing character row
+    must make a concurrent deactivation/archival of that character block
+    too — the identical proof `test_a_character_deactivation_cannot_race_a_
+    grant_targeting_it` already gives for `grant_character_relationship`'s
+    own equivalent lock."""
+    engine = postgres_engine
+    slug = f"conc-rel-change-char-deactivate-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        rf = _RelationshipFixture(setup, slug)
+        world_id, timeline_id = rf.world_id, rf.timeline_id
+        campaign_id, character_id = rf.campaign_id, rf.character_id
+        target_membership_id = rf.target_membership_id
+        manager_membership_id = rf.manager_membership_id
+        portrayer_type_id = rf.portrayer_type_id
+        relationship_id = make_membership_character_relationship(
+            setup,
+            target_membership_id,
+            character_id,
+            rf.viewer_type_id,
+            granted_by_membership_id=manager_membership_id,
+        )
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            change_character_relationship(
+                first,
+                membership_character_relationship_id=relationship_id,
+                campaign_id=campaign_id,
+                expected_world_id=world_id,
+                new_relationship_type_id=portrayer_type_id,
+                granted_by_membership_id=manager_membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("""
+                        UPDATE core.entities SET lifecycle_status_id = (
+                            SELECT lifecycle_status_id FROM core.lifecycle_statuses
+                            WHERE code = 'archived'
+                        )
+                        WHERE entity_id = :c
+                    """),
+                    {"c": character_id},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the character deactivation to block on change_character_relationship's "
+                f"own lock of the existing character row, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+    finally:
+        _cleanup_relationship_fixture(engine, timeline_id, world_id, rf.extra_relationship_type_id)
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +796,7 @@ def test_a_campaign_deactivation_cannot_race_a_change_targeting_it(
                 first,
                 membership_character_relationship_id=relationship_id,
                 campaign_id=campaign_id,
+                expected_world_id=world_id,
                 new_relationship_type_id=portrayer_type_id,
                 granted_by_membership_id=manager_membership_id,
             )
@@ -784,6 +917,7 @@ def test_a_change_and_a_revoke_of_the_same_relationship_serialize(postgres_engin
                 first,
                 membership_character_relationship_id=relationship_id,
                 campaign_id=campaign_id,
+                expected_world_id=world_id,
                 new_relationship_type_id=portrayer_type_id,
                 granted_by_membership_id=manager_membership_id,
             )
@@ -850,6 +984,7 @@ def test_two_concurrent_changes_of_the_same_relationship_serialize(
                 first,
                 membership_character_relationship_id=relationship_id,
                 campaign_id=campaign_id,
+                expected_world_id=world_id,
                 new_relationship_type_id=portrayer_type_id,
                 granted_by_membership_id=manager_membership_id,
             )
@@ -860,6 +995,7 @@ def test_two_concurrent_changes_of_the_same_relationship_serialize(
                     second,
                     membership_character_relationship_id=relationship_id,
                     campaign_id=campaign_id,
+                    expected_world_id=world_id,
                     new_relationship_type_id=former_controller_type_id,
                     granted_by_membership_id=manager_membership_id,
                 )
@@ -880,6 +1016,7 @@ def test_two_concurrent_changes_of_the_same_relationship_serialize(
                 third,
                 membership_character_relationship_id=relationship_id,
                 campaign_id=campaign_id,
+                expected_world_id=world_id,
                 new_relationship_type_id=former_controller_type_id,
                 granted_by_membership_id=manager_membership_id,
             )

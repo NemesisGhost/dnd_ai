@@ -470,6 +470,42 @@ def test_an_open_ended_fictional_time_bounded_relationship_remains_selectable(
     assert campaign.character_perspectives[0].character_id == character_id
 
 
+def test_a_relationship_to_a_deactivated_character_is_not_selectable(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Checkpoint-4 review correction: a character deactivated/archived
+    *after* a relationship was granted must stop being authorization-
+    effective on the very next bootstrap call — `dnd_ai.domain.access.
+    resolve_access_context`'s own character-capabilities join now requires
+    `core.lifecycle_statuses.code = 'active'` for the relationship's
+    character, closing a gap where `grant_character_relationship`/`change_
+    character_relationship` already refused to act on an inactive
+    character but the read side never re-checked it after the fact."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Deactivated Character Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Soon Archived")
+    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
+    capability_id = _capability_id(db_connection, "character.view_summary")
+    make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
+    make_membership_character_relationship(
+        db_connection, membership_id, character_id, relationship_type_id
+    )
+
+    db_connection.execute(
+        text("""
+            UPDATE core.entities SET lifecycle_status_id = (
+                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+            )
+            WHERE entity_id = :character
+        """),
+        {"character": character_id},
+    )
+
+    bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
+
+    assert bootstrap.campaigns[0].character_perspectives == ()
+
+
 def test_multiple_perspectives_leave_selected_character_null(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:

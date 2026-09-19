@@ -1264,6 +1264,309 @@ def test_changing_a_fictional_time_bounded_relationship_is_rejected(
         assert row is None
 
 
+def test_changing_a_relationship_after_its_account_is_disabled_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 review correction: `change_character_relationship`
+    previously did not recheck the owning membership's account lifecycle at
+    all, unlike `grant_character_relationship`. It must reject a target
+    relationship whose owning account has since gone platform-inactive,
+    folded into the same `CharacterRelationshipNotActiveError` (409) this
+    function already raises for every other "no longer eligible" cause —
+    and reactivating the account afterward must not silently expose the
+    attempted (rejected) type change."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE security.users SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'inactive'
+                ) WHERE user_id = :u
+            """),
+            {"u": f.target_user_id},
+        )
+
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _change_relationship_url(f, relationship_id),
+                json={"new_relationship_type_id": str(f.portrayer_type_id)},
+            )
+        assert response.status_code == 409, response.text
+
+        with postgres_engine.connect() as verify:
+            row = verify.execute(
+                text("""
+                    SELECT mcr.revoked_at, crt.code
+                    FROM security.membership_character_relationships mcr
+                    JOIN security.character_relationship_types crt
+                        ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                    WHERE mcr.membership_character_relationship_id = :r
+                """),
+                {"r": relationship_id},
+            ).one()
+            assert row.revoked_at is None
+            assert row.code == "viewer"
+
+            audit_row_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE table_name = 'membership_character_relationships'
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                      AND world_id = :w
+                """),
+                {"w": f.world_id},
+            ).scalar_one()
+            assert audit_row_count == 0
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE security.users SET lifecycle_status_id = (
+                        SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                    ) WHERE user_id = :u
+                """),
+                {"u": f.target_user_id},
+            )
+
+    with postgres_engine.connect() as verify:
+        code = verify.execute(
+            text("""
+                SELECT crt.code
+                FROM security.membership_character_relationships mcr
+                JOIN security.character_relationship_types crt
+                    ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :r
+            """),
+            {"r": relationship_id},
+        ).scalar_one()
+        assert code == "viewer"
+
+
+def test_a_change_rejected_for_account_disablement_does_not_durably_complete_its_idempotency_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE security.users SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'inactive'
+                ) WHERE user_id = :u
+            """),
+            {"u": f.target_user_id},
+        )
+
+    key = f"change-relationship-account-inactive-{uuid.uuid4().hex[:8]}"
+    body = {"new_relationship_type_id": str(f.portrayer_type_id)}
+    try:
+        with client_factory(f.admin_user_id) as client:
+            rejected = client.post(
+                _change_relationship_url(f, relationship_id),
+                json=body,
+                headers={"Idempotency-Key": key},
+            )
+        assert rejected.status_code == 409, rejected.text
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE security.users SET lifecycle_status_id = (
+                        SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                    ) WHERE user_id = :u
+                """),
+                {"u": f.target_user_id},
+            )
+
+    with client_factory(f.admin_user_id) as client:
+        retried = client.post(
+            _change_relationship_url(f, relationship_id),
+            json=body,
+            headers={"Idempotency-Key": key},
+        )
+    assert retried.status_code == 201, retried.text
+
+    with postgres_engine.connect() as verify:
+        code = verify.execute(
+            text("""
+                SELECT crt.code
+                FROM security.membership_character_relationships mcr
+                JOIN security.character_relationship_types crt
+                    ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :r
+            """),
+            {"r": uuid.UUID(retried.json()["membership_character_relationship_id"])},
+        ).scalar_one()
+        assert code == "portrayer"
+
+
+def test_changing_a_relationship_after_its_character_is_deactivated_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 review correction: `change_character_relationship`
+    previously did not recheck the relationship's own existing character at
+    all, unlike `grant_character_relationship`. It must reject a target
+    relationship whose character has since been deactivated/archived,
+    folded into the same `CharacterRelationshipNotActiveError` (409) —
+    and reactivating the character afterward must not silently expose the
+    attempted (rejected) type change."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE core.entities SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                ) WHERE entity_id = :c
+            """),
+            {"c": f.character_id},
+        )
+
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _change_relationship_url(f, relationship_id),
+                json={"new_relationship_type_id": str(f.portrayer_type_id)},
+            )
+        assert response.status_code == 409, response.text
+
+        with postgres_engine.connect() as verify:
+            row = verify.execute(
+                text("""
+                    SELECT mcr.revoked_at, crt.code
+                    FROM security.membership_character_relationships mcr
+                    JOIN security.character_relationship_types crt
+                        ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                    WHERE mcr.membership_character_relationship_id = :r
+                """),
+                {"r": relationship_id},
+            ).one()
+            assert row.revoked_at is None
+            assert row.code == "viewer"
+
+            audit_row_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE table_name = 'membership_character_relationships'
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                      AND world_id = :w
+                """),
+                {"w": f.world_id},
+            ).scalar_one()
+            assert audit_row_count == 0
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE core.entities SET lifecycle_status_id = (
+                        SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                    ) WHERE entity_id = :c
+                """),
+                {"c": f.character_id},
+            )
+
+    with postgres_engine.connect() as verify:
+        code = verify.execute(
+            text("""
+                SELECT crt.code
+                FROM security.membership_character_relationships mcr
+                JOIN security.character_relationship_types crt
+                    ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :r
+            """),
+            {"r": relationship_id},
+        ).scalar_one()
+        assert code == "viewer"
+
+
+def test_a_change_rejected_for_character_deactivation_does_not_durably_complete_its_idempotency_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE core.entities SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                ) WHERE entity_id = :c
+            """),
+            {"c": f.character_id},
+        )
+
+    key = f"change-relationship-character-inactive-{uuid.uuid4().hex[:8]}"
+    body = {"new_relationship_type_id": str(f.portrayer_type_id)}
+    try:
+        with client_factory(f.admin_user_id) as client:
+            rejected = client.post(
+                _change_relationship_url(f, relationship_id),
+                json=body,
+                headers={"Idempotency-Key": key},
+            )
+        assert rejected.status_code == 409, rejected.text
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE core.entities SET lifecycle_status_id = (
+                        SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                    ) WHERE entity_id = :c
+                """),
+                {"c": f.character_id},
+            )
+
+    with client_factory(f.admin_user_id) as client:
+        retried = client.post(
+            _change_relationship_url(f, relationship_id),
+            json=body,
+            headers={"Idempotency-Key": key},
+        )
+    assert retried.status_code == 201, retried.text
+
+    with postgres_engine.connect() as verify:
+        code = verify.execute(
+            text("""
+                SELECT crt.code
+                FROM security.membership_character_relationships mcr
+                JOIN security.character_relationship_types crt
+                    ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :r
+            """),
+            {"r": uuid.UUID(retried.json()["membership_character_relationship_id"])},
+        ).scalar_one()
+        assert code == "portrayer"
+
+
 def test_changing_a_relationship_to_an_inactive_type_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
