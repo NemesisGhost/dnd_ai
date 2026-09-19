@@ -1,0 +1,14 @@
+# tests/database/test_api_campaigns.py is stored with CRLF line endings
+# (pre-existing, matching this repository's Windows-authored history).
+# git's default core.whitespace does not include cr-at-eol, so it treats
+# a line's own trailing CR (the first byte of its CRLF terminator) as
+# ordinary "trailing whitespace" whenever that line is new or modified in
+# a diff — flagging every such line in this already-CRLF file, even with
+# no actual trailing space or tab, and in direct conflict with `ruff
+# format`'s own line-ending normalization (which preserves this file's
+# existing CRLF convention rather than rewriting it to LF). Enabling
+# cr-at-eol here tells git that a trailing CR is this file's own line
+# terminator, not blank content, so `git diff --check` and `ruff format
+# --check` can both pass without rewriting the file's pre-existing line
+# endings.
+tests/database/test_api_campaigns.py whitespace=cr-at-eol

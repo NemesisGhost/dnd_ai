@@ -179,6 +179,28 @@ class Fixture:
         )
         make_campaign_membership(connection, self.campaign_id, self.duplicate_target_user_id)
 
+        # An active platform account with only an OIDC identity — no
+        # security.external_identities row at all for issuer=LOCAL_AUTH_
+        # ISSUER — the target of the OIDC-only add-rejection test (review
+        # correction: add_campaign_member now requires an unrevoked local
+        # identity, matching find_eligible_campaign_account's own bar).
+        self.oidc_only_user_id = make_user(connection, "Lifecycle OIDC Only")
+        make_external_identity(connection, self.oidc_only_user_id)
+
+        # An active platform account whose one local-login identity has
+        # since been revoked — the target of the revoked-local-identity
+        # add-rejection test.
+        self.revoked_local_identity_user_id = make_user(
+            connection, "Lifecycle Revoked Local Identity"
+        )
+        make_external_identity(
+            connection,
+            self.revoked_local_identity_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"revoked.{uuid.uuid4().hex[:8]}",
+            revoked=True,
+        )
+
         # --- Remove-member fixtures ---
 
         # An ordinary member holding two independent roles — proves both
@@ -279,6 +301,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.already_member_user_id,
                     fixture.disabled_user_id,
                     fixture.duplicate_target_user_id,
+                    fixture.oidc_only_user_id,
+                    fixture.revoked_local_identity_user_id,
                     fixture.member_user_id,
                     fixture.sibling_user_id,
                 ]
@@ -559,6 +583,106 @@ def test_adding_a_nonexistent_account_is_rejected(
             json={"user_id": str(uuid.uuid4()), "role_id": str(f.player_role_id)},
         )
     assert response.status_code == 404, response.text
+
+
+def test_adding_an_active_oidc_only_account_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`add_campaign_member` requires an unrevoked local-login identity
+    (review correction) — an active, otherwise-ordinary account that has
+    only an OIDC identity (no `security.external_identities` row for
+    `issuer=LOCAL_AUTH_ISSUER` at all) is rejected identically to a
+    nonexistent or disabled account, non-disclosing 404, before any write."""
+    with client_factory(f.manager_user_id) as client:
+        response = client.post(
+            _memberships_url(f),
+            json={"user_id": str(f.oidc_only_user_id), "role_id": str(f.player_role_id)},
+        )
+    assert response.status_code == 404, response.text
+
+    with postgres_engine.connect() as verify:
+        membership_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships "
+                "WHERE campaign_id = :c AND user_id = :u"
+            ),
+            {"c": f.campaign_id, "u": f.oidc_only_user_id},
+        ).scalar()
+        assert membership_count == 0
+        role_count = verify.execute(
+            text("""
+                SELECT count(*) FROM security.membership_roles mr
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = mr.campaign_membership_id
+                WHERE cm.user_id = :u
+            """),
+            {"u": f.oidc_only_user_id},
+        ).scalar()
+        assert role_count == 0
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log WHERE world_id = :w "
+                "AND table_name IN ('campaign_memberships', 'membership_roles')"
+            ),
+            {"w": f.world_id},
+        ).scalar()
+        assert audit_count == 0
+
+
+def test_adding_an_active_account_with_only_a_revoked_local_identity_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The identical rejection for an account whose one local identity has
+    since been revoked — folded into the same non-disclosing 404 as the
+    OIDC-only case above, so a caller can never learn which condition
+    applied."""
+    with client_factory(f.manager_user_id) as client:
+        response = client.post(
+            _memberships_url(f),
+            json={
+                "user_id": str(f.revoked_local_identity_user_id),
+                "role_id": str(f.player_role_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+    with postgres_engine.connect() as verify:
+        membership_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_memberships "
+                "WHERE campaign_id = :c AND user_id = :u"
+            ),
+            {"c": f.campaign_id, "u": f.revoked_local_identity_user_id},
+        ).scalar()
+        assert membership_count == 0
+
+
+def test_a_rejected_add_for_an_ineligible_identity_leaves_no_idempotency_reservation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """A rejected add for an OIDC-only target never durably reserves its
+    Idempotency-Key — matching `test_a_rejected_add_leaves_no_membership_
+    or_role_row`'s identical proof for the pre-existing rejection reasons,
+    now extended to this one. A subsequent retry with the same key must
+    still run the real command, not replay a cached rejection."""
+    key = f"add-ineligible-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.manager_user_id) as client:
+        response = client.post(
+            _memberships_url(f),
+            json={"user_id": str(f.oidc_only_user_id), "role_id": str(f.player_role_id)},
+            headers={"Idempotency-Key": key},
+        )
+    assert response.status_code == 404, response.text
+
+    with postgres_engine.connect() as verify:
+        reservation_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.idempotent_requests "
+                "WHERE campaign_id = :c AND idempotency_key = :k"
+            ),
+            {"c": f.campaign_id, "k": key},
+        ).scalar()
+        assert reservation_count == 0
 
 
 def test_adding_an_account_that_already_has_an_open_membership_is_rejected(

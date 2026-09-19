@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { useRemoveCampaignMembership } from "../hooks/useRemoveCampaignMembership"
 import { useSession } from "../context/SessionContext"
 
@@ -55,6 +55,7 @@ export function RemoveCampaignMember({
     const { state: sessionState } = useSession()
 
     const [isConfirming, setIsConfirming] = useState(false)
+    const confirmButtonRef = useRef<HTMLButtonElement>(null)
 
     const { status, submit, reset } =
         useRemoveCampaignMembership(campaignId, () =>
@@ -62,6 +63,21 @@ export function RemoveCampaignMember({
         )
 
     const isPending = status.kind === "pending"
+
+    // Moves focus deliberately into the confirmation UI the moment it
+    // replaces the trigger button — without this, the trigger's own
+    // removal from the DOM drops focus to <body>, breaking keyboard
+    // continuity right when a keyboard user most needs it (the next
+    // action, Confirm, is what they almost always want). Keyed only on
+    // isConfirming, not on isPending/status, so an unrelated rerender
+    // while already confirming (a status change, a re-render from a
+    // sibling row) never steals focus back from wherever the user has
+    // since moved it.
+    useEffect(() => {
+        if (isConfirming) {
+            confirmButtonRef.current?.focus()
+        }
+    }, [isConfirming])
 
     const isSelf =
         sessionState.status === "authenticated" &&
@@ -105,6 +121,7 @@ export function RemoveCampaignMember({
 
             <div className="access-role-editor__actions">
                 <button
+                    ref={confirmButtonRef}
                     type="button"
                     disabled={isPending}
                     aria-busy={isPending}

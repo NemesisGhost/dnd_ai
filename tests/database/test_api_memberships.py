@@ -27,10 +27,12 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_external_identity,
     make_membership_role,
     make_role,
     make_role_capability,
@@ -92,8 +94,17 @@ class Fixture:
             connection, campaign_id=self.other_campaign_id, code=f"foreign_{uuid.uuid4().hex[:8]}"
         )
 
-        # A user with no membership yet — the target of a create-membership call.
+        # A user with no membership yet — the target of a create-membership
+        # call. Given an unrevoked local identity: add_campaign_member now
+        # requires one (review correction), matching find_eligible_
+        # campaign_account's own eligibility bar.
         self.new_user_id = make_user(connection, "Membership API New User")
+        make_external_identity(
+            connection,
+            self.new_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"membership-api-new-{uuid.uuid4().hex[:8]}",
+        )
 
         # An already-active member — the target of assign/revoke-role calls.
         self.existing_user_id = make_user(connection, "Membership API Existing Member")
@@ -255,6 +266,17 @@ class Fixture:
         # last_manager below.
         self.active_second_admin_user_id = make_user(
             connection, "Membership API Active Second Admin"
+        )
+        # An unrevoked local identity — this user is also the target of
+        # test_creating_a_duplicate_open_membership_is_rejected, which
+        # needs add_campaign_member to reach its duplicate-open-membership
+        # check (409) rather than being rejected earlier for ineligibility
+        # (404, review correction).
+        make_external_identity(
+            connection,
+            self.active_second_admin_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"membership-api-active-second-{uuid.uuid4().hex[:8]}",
         )
         self.active_second_admin_membership_id = make_campaign_membership(
             connection, self.active_campaign_id, self.active_second_admin_user_id

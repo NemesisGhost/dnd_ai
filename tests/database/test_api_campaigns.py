@@ -106,12 +106,17 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    LOCAL_AUTH_ISSUER,
+    AuthenticatedPrincipal,
+)
 from tests.factories import (
     make_area_hazard,
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_external_identity,
     make_knowledge_item,
     make_location,
     make_organization,
@@ -138,6 +143,16 @@ class Fixture:
 
         self.creator_user_id = make_user(connection, "Campaign API Creator")
         self.second_user_id = make_user(connection, "Campaign API Second User")
+        # An unrevoked local identity — add_campaign_member now requires
+        # one (review correction), and this user is the target of
+        # test_a_member_with_only_campaign_view_cannot_reuse_the_timeline's
+        # own add-member call.
+        make_external_identity(
+            connection,
+            self.second_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"campaign-api-second-{uuid.uuid4().hex[:8]}",
+        )
 
         # The positive, server-verifiable first-campaign entitlement —
         # issued here by this fixture acting as trusted world-authoring

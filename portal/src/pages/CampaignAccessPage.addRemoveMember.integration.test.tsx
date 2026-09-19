@@ -511,6 +511,51 @@ describe("CampaignAccessPage remove-member flow", () => {
         expect(mutationCalls).toHaveLength(0)
     })
 
+    it("moves focus to Confirm when Remove member is activated by keyboard, instead of dropping it when the trigger unmounts", async () => {
+        const fetchMock = vi.fn(
+            (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+                const url = requestUrl(input)
+                const method = init?.method ?? "GET"
+
+                if (method === "GET" && url.includes("/access-overview")) {
+                    return Promise.resolve(jsonResponse(baseOverview()))
+                }
+
+                return Promise.reject(
+                    new Error(`unexpected fetch in test: ${method} ${url}`),
+                )
+            },
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderAtCampaign()
+
+        expect(
+            await screen.findByRole("heading", { name: "Access" }),
+        ).toBeInTheDocument()
+
+        const removeButtons = screen.getAllByRole("button", {
+            name: "Remove member",
+        })
+        const trigger = removeButtons[1]
+
+        // Establish keyboard focus on the trigger, the way Tab would, then
+        // activate it the way a browser translates a focused native
+        // <button>'s Enter/Space keypress into a click (jsdom does not
+        // perform that translation itself, so it is simulated explicitly
+        // here — the property under test is what happens to focus once
+        // the trigger's own onClick fires, not the browser's native key-
+        // to-click translation).
+        trigger.focus()
+        expect(document.activeElement).toBe(trigger)
+        fireEvent.click(trigger)
+
+        const confirmButton = await screen.findByRole("button", {
+            name: "Confirm",
+        })
+        expect(document.activeElement).toBe(confirmButton)
+    })
+
     it("names self-removal distinctly, succeeds, refreshes the overview and the session bootstrap, and keeps the announcement observable through the reload", async () => {
         let overviewCallCount = 0
         let resolveSecondOverview!: (response: Response) => void

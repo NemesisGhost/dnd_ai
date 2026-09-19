@@ -98,6 +98,7 @@ from datetime import datetime
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id
@@ -241,13 +242,32 @@ class CampaignNotActiveError(DomainAuthorizationError):
 
 class AccountNotEligibleError(DomainAuthorizationError):
     """Raised by `add_campaign_member()` when the target `user_id` is
-    nonexistent or is not currently a platform-active account
+    nonexistent, is not currently a platform-active account
     (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code
-    <> 'active'`) — folded identically, so a caller can never learn which
-    condition applied, mirroring `RoleNotUsableByCampaignError`'s own
-    reasoning: neither case was ever a legitimate target in the first
-    place, so this is the base class's default 404, not a conflict. A
-    target that already holds an open membership in this campaign is
+    <> 'active'`), or has no currently unrevoked local-login identity
+    (`security.external_identities` row with `issuer = dnd_ai.domain.
+    access.LOCAL_AUTH_ISSUER` and `revoked_at IS NULL`) — folded
+    identically, so a caller can never learn which condition applied,
+    mirroring `RoleNotUsableByCampaignError`'s own reasoning: none of these
+    was ever a legitimate target in the first place, so this is the base
+    class's default 404, not a conflict.
+
+    The local-identity check (review correction) matches `dnd_ai.queries.
+    access_overview.find_eligible_campaign_account`'s own eligibility
+    definition exactly — that read contract already requires an unrevoked
+    local identity before ever offering an account as a selectable
+    candidate, so the mutation must enforce the identical bar rather than
+    trusting the portal to have gone through that lookup first. Without
+    this, a caller who already knows (or guesses) an active user's raw
+    `user_id` — an OIDC-only account, or a local account whose one login
+    identity has since been revoked — could add it directly, bypassing the
+    read side's own non-disclosure/eligibility contract entirely. An
+    OIDC-only account is therefore never addable through this mutation at
+    all (matching that query's own documented scope limitation), and a
+    revoked local identity is treated exactly like a disabled account:
+    never a legitimate target, not a "this changed a moment ago" conflict.
+
+    A target that already holds an open membership in this campaign is
     deliberately *not* checked here — see this module's docstring,
     "Database-enforced invariants this module deliberately does not
     duplicate": `ux_campaign_memberships_open` rejects that case as an
@@ -788,6 +808,22 @@ def add_campaign_member(
       account was never a legitimate target, unlike the 409 cases above).
       Locks the target `security.users` row `FOR UPDATE`, so a concurrent
       disablement of the account cannot slip in either.
+    - `user_id` must also hold at least one currently unrevoked local-login
+      identity (`security.external_identities`, `issuer = dnd_ai.domain.
+      access.LOCAL_AUTH_ISSUER`, `revoked_at IS NULL`) — `AccountNotEligibleError`
+      again, the identical "currently true" eligibility bar `dnd_ai.queries.
+      access_overview.find_eligible_campaign_account` already requires
+      before ever offering this account as a selectable candidate (review
+      correction: this command previously trusted the read side's own
+      eligibility check instead of re-deriving it, letting a caller who
+      already knew — or guessed — an active OIDC-only user's `user_id`, or
+      one whose sole local identity had since been revoked, add it
+      directly). Locks every matching `security.external_identities` row
+      `FOR UPDATE`, so a concurrent revocation of the account's local
+      identity cannot slip in either; locked *after* the `security.users`
+      row above, the same order every check in this function already
+      follows (top-to-bottom, each check's own row locked immediately
+      before it runs).
     - `role_id` must be a system template or scoped to `campaign_id`, and
       currently `is_active` — `RoleNotUsableByCampaignError` (404),
       identical to `assign_membership_role`'s own check. Locks the
@@ -839,6 +875,19 @@ def add_campaign_member(
     if account_status_code != "active":
         raise AccountNotEligibleError(
             f"user {user_id} does not exist or is not currently an active platform account"
+        )
+
+    has_unrevoked_local_identity = connection.execute(
+        text("""
+            SELECT 1 FROM security.external_identities
+            WHERE user_id = :user AND issuer = :issuer AND revoked_at IS NULL
+            FOR UPDATE
+        """),
+        {"user": user_id, "issuer": LOCAL_AUTH_ISSUER},
+    ).first()
+    if has_unrevoked_local_identity is None:
+        raise AccountNotEligibleError(
+            f"user {user_id} has no currently unrevoked local-login identity"
         )
 
     role_row = (

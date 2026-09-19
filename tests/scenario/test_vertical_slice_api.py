@@ -92,6 +92,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.factories import (
     make_ability,
     make_area_connection,
@@ -100,6 +101,7 @@ from tests.factories import (
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_external_identity,
     make_knowledge_item,
     make_party,
     make_party_membership,
@@ -208,10 +210,27 @@ class Fixture:
         # Step 3: a GM and three prospective members, provisioned as
         # security.users (OIDC login/provisioning is a separate concern
         # this scenario doesn't exercise — see this module's docstring).
+        # Each prospective member also gets an unrevoked local-login
+        # identity — add_campaign_member now requires one before a member
+        # can be added (review correction), matching dnd_ai.queries.
+        # access_overview.find_eligible_campaign_account's own eligibility
+        # bar; still no real login flow exercised anywhere in this file.
         self.gm_user_id = make_user(connection, "Vertical Slice GM")
         self.player1_user_id = make_user(connection, "Vertical Slice Player One")
+        make_external_identity(
+            connection, self.player1_user_id, issuer=LOCAL_AUTH_ISSUER, subject=f"vs-player1-{slug}"
+        )
         self.player2_user_id = make_user(connection, "Vertical Slice Player Two")
+        make_external_identity(
+            connection, self.player2_user_id, issuer=LOCAL_AUTH_ISSUER, subject=f"vs-player2-{slug}"
+        )
         self.observer_user_id = make_user(connection, "Vertical Slice Observer")
+        make_external_identity(
+            connection,
+            self.observer_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"vs-observer-{slug}",
+        )
 
         # The positive, server-verifiable first-campaign entitlement (`dnd_
         # ai.commands.campaigns`'s own "First-campaign entitlement" module

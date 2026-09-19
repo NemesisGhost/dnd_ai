@@ -39,6 +39,7 @@ from dnd_ai.commands.memberships import (
     change_membership_role,
     end_campaign_membership,
 )
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.database.test_membership_role_concurrency import (
     CONSTRAINT_ERRORS,
     RetentionRaceFixture,
@@ -51,6 +52,7 @@ from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_external_identity,
     make_membership_role,
     make_role,
     make_role_capability,
@@ -72,7 +74,11 @@ class _ActiveCampaignSetup:
     the deferred `tr_campaigns_retain_access_manager` trigger sees a
     satisfied invariant at that transaction's own commit, plus one
     unassigned target role and one target user with no membership yet, for
-    the add-race tests below to use directly."""
+    the add-race tests below to use directly. `target_user_id` is given an
+    unrevoked local-login identity — `add_campaign_member`'s own
+    eligibility check (review correction) now requires one, matching
+    `dnd_ai.queries.access_overview.find_eligible_campaign_account`'s
+    identical bar."""
 
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
@@ -96,6 +102,13 @@ class _ActiveCampaignSetup:
         )
         make_membership_role(connection, self.manager_membership_id, manager_role_id)
         self.target_user_id = make_user(connection, "Race Target User")
+        self.target_login_name = f"race-target-{uuid.uuid4().hex[:8]}"
+        make_external_identity(
+            connection,
+            self.target_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=self.target_login_name,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +321,75 @@ def test_an_account_disablement_cannot_race_an_add_targeting_it(
             second.rollback()
 
             first.commit()
+    finally:
+        _cleanup_retention_fixture(engine, timeline_id, world_id)
+
+
+def test_a_local_identity_revocation_cannot_race_an_add_targeting_it(
+    postgres_engine: Engine,
+) -> None:
+    """`add_campaign_member`'s own `FOR UPDATE` lock on the target
+    account's `security.external_identities` row (review correction) must
+    make a concurrent revocation of that identity block too — the same
+    shape the pre-existing role-deactivation/account-disablement races
+    above already prove for their own target rows. No application command
+    currently revokes a local identity (confirmed by inspection of `dnd_ai.
+    commands.local_auth`/`.integration` — neither ever writes `security.
+    external_identities.revoked_at`), so the second worker below performs
+    the raw SQL write directly, exactly like this module's own campaign-
+    deactivation race test already does for a lifecycle transition with no
+    dedicated command of its own; the schema-level operation (and the lock
+    guarding it) is real and worth proving safe regardless of whether a
+    command wraps it yet."""
+    engine = postgres_engine
+    slug = f"conc-add-identity-revoke-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as setup:
+        acs = _ActiveCampaignSetup(setup, slug)
+        world_id, timeline_id = acs.world_id, acs.timeline_id
+        campaign_id, role_id = acs.campaign_id, acs.role_id
+        manager_membership_id, target_user_id = acs.manager_membership_id, acs.target_user_id
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            add_campaign_member(
+                first,
+                campaign_id=campaign_id,
+                user_id=target_user_id,
+                role_id=role_id,
+                added_by_membership_id=manager_membership_id,
+            )
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+            with pytest.raises(Exception) as exc:
+                second.execute(
+                    text("""
+                        UPDATE security.external_identities
+                        SET revoked_at = now()
+                        WHERE user_id = :u AND issuer = :issuer AND revoked_at IS NULL
+                    """),
+                    {"u": target_user_id, "issuer": LOCAL_AUTH_ISSUER},
+                )
+            message = str(exc.value)
+            assert "lock_timeout" in message or "canceling statement" in message, (
+                f"expected the identity revocation to block on add_campaign_member's own "
+                f"lock of the target account's local identity row, got: {message}"
+            )
+            second.rollback()
+
+            first.commit()
+
+        with engine.connect() as verify:
+            count = verify.execute(
+                text(
+                    "SELECT count(*) FROM security.campaign_memberships "
+                    "WHERE campaign_id = :c AND user_id = :u"
+                ),
+                {"c": campaign_id, "u": target_user_id},
+            ).scalar()
+            assert count == 1
     finally:
         _cleanup_retention_fixture(engine, timeline_id, world_id)
 
