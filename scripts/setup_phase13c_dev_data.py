@@ -237,9 +237,21 @@ that environment variable is unset or fails the local password policy):
   Campaign B. Also the grantee of the visible explicit-grant fixture below.
 
   "Phase13E Dev Player B" (`phase13e.player_b`): a Campaign B member
-  holding the plain `player` role. No membership in, or character
-  relationship reaching, Campaign A. Paired with Player A above for the
-  manual cross-campaign-isolation check. No relationship to a "Campaign B
+  holding the plain `player` role, **plus** (Phase 13E-B checkpoint 2) a
+  second, independently-held `campaign_owner` role — making Player B a
+  *second* `access.manage` holder in Campaign B alongside the pre-existing
+  `--user-id` account's own membership there, so a manual tester can safely
+  exercise self-revocation of `access.manage` (revoke Player B's own
+  `campaign_owner` role while the `--user-id` account remains a manager)
+  without ever touching Campaign A's own single-manager last-manager
+  scenario (`phase13e.gm2`, checkpoint 1, §3a) — that scenario depends on
+  `phase13e.gm2` staying Campaign A's *sole* access.manage holder, so the
+  second-manager fixture deliberately lives in Campaign B instead. This
+  also makes Player B this fixture's one "member holding multiple roles"
+  case for exercising the add-role control's own "already-held roles are
+  excluded" behavior. No membership in, or character relationship
+  reaching, Campaign A. Paired with Player A above for the manual
+  cross-campaign-isolation check. No relationship to a "Campaign B
   character" is created: the existing Campaign B seed data has none of its
   own (Character A/B are Timeline A/Campaign A fixtures) — inventing one
   merely to populate this account would be exactly the "add speculative
@@ -4496,6 +4508,21 @@ def _ensure_phase13e_access_fixtures(
         actor_user_id=admin_user_id,
         label=_PHASE13E_PLAYER_B_DISPLAY_NAME,
     )
+    # Phase 13E-B checkpoint 2: a second, independent access.manage holder
+    # in Campaign B (alongside the pre-existing --user-id account's own
+    # membership there) — see this function's own docstring and the
+    # module docstring's Player B section for why this lives in Campaign B
+    # rather than Campaign A.
+    _ensure_phase13e_role(
+        connection,
+        summary,
+        campaign_id=campaign_b_id,
+        campaign_membership_id=player_b_membership_id,
+        role_code=_PHASE13E_ACCESS_MANAGE_ROLE_CODE,
+        granted_by_membership_id=campaign_b_membership_id,
+        actor_user_id=admin_user_id,
+        label=f"{_PHASE13E_PLAYER_B_DISPLAY_NAME} (second manager)",
+    )
 
     disabled_user_id = _get_or_create_phase13e_dev_account(
         connection,
@@ -4585,10 +4612,15 @@ def _ensure_phase13e_access_fixtures(
         "— same 403 expectation as Player A."
     )
     summary.note_access(
-        f"Player B — '{_PHASE13E_PLAYER_ROLE_CODE}' role, no relationship (Campaign B has no "
-        f"character fixture of its own): login={_PHASE13E_PLAYER_B_LOGIN_NAME!r} "
-        f"user_id={player_b_user_id} membership={player_b_membership_id} "
-        f"campaign={_CAMPAIGN_B_NAME!r}. No membership or relationship reaches Campaign A."
+        f"Player B — '{_PHASE13E_PLAYER_ROLE_CODE}' role plus a second, independent "
+        f"'{_PHASE13E_ACCESS_MANAGE_ROLE_CODE}' role (access.manage), no relationship "
+        f"(Campaign B has no character fixture of its own): "
+        f"login={_PHASE13E_PLAYER_B_LOGIN_NAME!r} user_id={player_b_user_id} "
+        f"membership={player_b_membership_id} campaign={_CAMPAIGN_B_NAME!r}. No membership "
+        "or relationship reaches Campaign A. A second access.manage holder alongside the "
+        "pre-existing --user-id account's own Campaign B membership — safe to self-revoke "
+        f"the '{_PHASE13E_ACCESS_MANAGE_ROLE_CODE}' role here without ever leaving Campaign B "
+        "without a manager (Phase 13E-B checkpoint 2)."
     )
     summary.note_access(
         f"Disabled — '{_PHASE13E_PLAYER_ROLE_CODE}' role in {_CAMPAIGN_A_NAME!r}, then disabled: "

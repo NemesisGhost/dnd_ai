@@ -1,15 +1,17 @@
 # Phase 13E access-management contract inventory
 
 Written for the 13E-A increment (read-only campaign access overview,
-`docs/PLAN.md` §13) and updated for 13E-B's first mutation checkpoint
-(campaign-role change). Records what the backend actually exposes for
-GM access management as of these increments — not a design proposal, and
-not a claim that Phase 13E or any of its remaining mutation work is
-complete. **13E-A (the read-only overview) and 13E-B checkpoint 1 (change
-an existing member's campaign-role assignment) are delivered.** Everything
-else below marked "reserved for a later increment" is existing backend
-capability with no portal UI yet, or (where noted) a backend contract that
-does not exist at all yet.
+`docs/PLAN.md` §13) and updated for 13E-B's mutation checkpoints
+(campaign-role change; add one role; revoke one role). Records what the
+backend actually exposes for GM access management as of these increments —
+not a design proposal, and not a claim that Phase 13E or any of its
+remaining mutation work is complete. **13E-A (the read-only overview) and
+13E-B checkpoint 1 (change an existing member's campaign-role assignment)
+are delivered. 13E-B checkpoint 2 (add one additional role to, and revoke
+one existing role from, an existing active campaign membership) is in
+progress — see §3b/§3c.** Everything else below marked "reserved for a
+later increment" is existing backend capability with no portal UI yet, or
+(where noted) a backend contract that does not exist at all yet.
 
 ## 1. Existing read endpoints
 
@@ -24,8 +26,8 @@ No other read endpoint exposes campaign membership, role, character-relationship
 | Endpoint | Method | Module | Capability | Boundary |
 |---|---|---|---|---|
 | `/campaigns/{campaign_id}/memberships` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped |
-| `/campaigns/{campaign_id}/memberships/{membership_id}/roles` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped |
-| `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped |
+| `/campaigns/{campaign_id}/memberships/{membership_id}/roles` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3b. |
+| `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3c. |
 | `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 1.** See §3a. |
 | `/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
 | `/campaigns/{campaign_id}/character-relationships/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
@@ -214,6 +216,46 @@ access-management mutation).
   `GET .../access-overview` request and the next `/auth/session` bootstrap
   — no caching layer sits in front of either.
 
+## 3b. `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/roles` (hardened, 13E-B checkpoint 2)
+
+The route and command (`assign_membership_role`) already existed — this
+checkpoint hardens the command to the same "currently true" eligibility bar
+§3a's checkpoint-1 correction pass already established for `change_
+membership_role`, then wires it into the portal as the Access page's
+"Add role" action for an existing member. Never creates a membership; only
+adds one role to a membership that already exists.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2 uses.
+- **Request (`AssignMembershipRoleRequest`):** `{ role_id: UUID, expires_at?: datetime }`. Route path carries `campaign_id` and the target `campaign_membership_id`. `expires_at` is a pre-existing field this checkpoint does not remove; the portal's own Add-role control never sets it (no UI for a time-limited grant yet).
+- **Response (`MembershipRoleResponse`):** `{ membership_role_id: UUID }` — the new row's id. `201`, unchanged.
+- **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
+  - the target `campaign_membership_id` must belong to `campaign_id` (pre-existing; `MembershipNotInCampaignError`, 404, non-disclosing — identical for "doesn't exist" and "belongs to a different campaign");
+  - the membership must be currently open (`ended_at IS NULL`) and in the `active` membership status (`security.membership_statuses.code = 'active'` and `.is_active`) — **new**;
+  - the membership's own user account must currently be platform-active (`security.users.lifecycle_status_id` -> `core.lifecycle_statuses.code = 'active'`, the identical account-usability check every login path in this codebase already applies) — **new**; both of the two conditions above raise `MembershipNotActiveError` (409);
+  - the `role_id` must be a system template or scoped to `campaign_id`, **and** currently `is_active` (`RoleNotUsableByCampaignError`, 404 — the `is_active` half is **new**; the scope half is pre-existing) — matching `dnd_ai.queries.access_overview.list_assignable_campaign_roles`'s own assignable-role definition exactly, so a role the read-contract would never offer can never be assigned either;
+  - a duplicate still-active assignment of the same role to the same membership is rejected as a 409 by the pre-existing `ux_membership_roles_active` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's documented "database-enforced invariants this module deliberately does not duplicate" policy.
+- **Concurrency (new):** the target membership row, then its owning user row, then the candidate role row are locked (`FOR UPDATE OF cm` / `FOR UPDATE OF u` / `FOR UPDATE`, in that order — always membership-then-role, the same order `change_membership_role` already uses for its own target/candidate pair, so the two commands can never deadlock against each other) before any eligibility check runs — so a concurrent ending of the membership, a concurrent disablement of its user account, or a concurrent deactivation of the candidate role cannot slip in between this function's own read and its later `INSERT`. Proven by real-connection PostgreSQL regression tests (`tests/database/test_membership_role_concurrency.py`): assign vs. membership-ending, assign vs. role-deactivation, assign vs. account-disablement.
+- **Idempotency/audit:** unchanged from the pre-existing contract — the same durable `Idempotency-Key` mechanism, one `audit.change_log` row per successful call, atomic with the insert.
+- **Sibling roles:** untouched — this inserts exactly one new row; any other role the same membership independently holds is unaffected.
+- **Actor scope:** `granted_by_membership_id` is always the caller's own resolved `AccessContext.campaign_membership_id` — never caller-supplied, so it is same-campaign by construction.
+
+## 3c. `POST /campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` (hardened, 13E-B checkpoint 2)
+
+The route and command (`revoke_membership_role`) already existed — this
+checkpoint closes a duplicate-audit gap in the *route*, then wires it into
+the portal as the Access page's "Revoke role" action. Never ends a
+membership; revokes exactly one role assignment.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2 uses.
+- **Request:** no body. Route path carries `campaign_id` and the target `membership_role_id`. Accepts an optional `Idempotency-Key` header — **new this checkpoint**.
+- **Response contract change:** previously a bodyless `204 No Content`; now `200`/`MembershipRoleResponse` (`{ membership_role_id: UUID }`, reusing the existing assign-role response shape) — needed so `begin_idempotent_request`/`complete_idempotent_request` have a response to cache. See `revoke_membership_role_endpoint`'s own docstring for the full "why" (the duplicate-audit gap this closes).
+- **Active-state/eligibility:** unchanged from the pre-existing contract. `revoke_membership_role` does **not** require the target to currently be an eligible/active assignment the way `change_membership_role` requires of its own target — an already-revoked row is a documented, harmless no-op (`RevokeMembershipRoleResult.revoked = False`), proven by the pre-existing, unmodified `tests/database/test_membership_role_concurrency.py::test_a_change_and_a_revoke_targeting_the_identical_row_serialize`. A nonexistent `membership_role_id`, or one belonging to a different campaign, is still rejected identically as `MembershipNotInCampaignError` (404, non-disclosing).
+- **Idempotency/audit (hardened this checkpoint):** the pre-checkpoint-2 route wrote one `audit.change_log` row on *every* call, including a plain retry against an already-revoked row — a genuine, if narrow, duplicate-audit gap for an ordinary network retry with no `Idempotency-Key` reuse. Fixed two ways: (1) an `Idempotency-Key` replay (the same durable `security.idempotent_requests` mechanism §3a/§3b already use) returns the cached response verbatim without re-running the command at all; (2) independent of any key, the route's audit write is now conditioned on `RevokeMembershipRoleResult.revoked` — `False` (the no-op case) writes no audit row at all, so even a retry that reaches the command a second time under a *different* (or no) key converges on one real revocation and exactly one audit record.
+- **Last-manager protection:** unchanged — `security.campaign_has_access_manager(campaign_id)`, scoped to *active* campaigns only, evaluated after the write; skipped entirely for the no-op case (nothing changed, so nothing can newly violate the invariant).
+- **Self-revocation:** permitted, with no special-case check anywhere in the stack — identical to `change_membership_role`'s own self-change policy. The only thing that can block it is the retention invariant above.
+- **Concurrency (new regression coverage; behavior itself unchanged):** the pre-existing `FOR UPDATE` lock on the target row already served same-row serialization (see the pre-existing change-vs-revoke same-row test); this checkpoint adds a revoke-vs-revoke same-row test and a revoke-vs-revoke different-management-row retention-race test (`tests/database/test_membership_role_concurrency.py`), completing the same "every pairing of change/revoke against the same or different management-granting rows" coverage §3a already established for change-vs-change and change-vs-revoke.
+- **Sibling roles:** untouched — only the named row is revoked.
+
 ## 4. Principal/boundary summary
 
 - **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
@@ -231,9 +273,9 @@ No backend read/write contract exists yet for:
 - Access-group management: creating an access group, listing its members, or adding/removing a membership from one — `security.access_groups`/`.access_group_memberships` exist in schema and are read internally by `dnd_ai.domain.access.resolve_access_context`, but no API route anywhere creates, lists, or mutates them.
 - Any audit-history read endpoint — `audit.change_log` rows are written by every mutation above, but no route reads them back.
 - A preview-as-user/perspective workflow (docs/UI_DESIGN.md §6.3) — no existing endpoint.
-- A UI for the remaining mutation endpoints in §2: adding/removing a campaign member, bare role assignment (adding a role a member does not yet hold) or revocation (removing one with no replacement), character-relationship grant/revocation, resource-grant creation/revocation, invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions. **Changing an existing member's role assignment is now wired (§3a, 13E-B checkpoint 1)** — the one exception to this list.
+- A UI for the remaining mutation endpoints in §2: adding/removing a campaign member, character-relationship grant/revocation, resource-grant creation/revocation, invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions. **Changing an existing member's role assignment (§3a, checkpoint 1) and adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2) are now wired** — the two exceptions to this list.
 
-None of the above is implemented yet. 13E-A was read-only; 13E-B checkpoint 1 adds exactly the one mutation in §3a and nothing else in this list.
+None of the above is implemented yet. 13E-A was read-only; 13E-B checkpoints 1 and 2 together add exactly the three role-assignment mutations in §3a/§3b/§3c and nothing else in this list — no membership add/remove, invitation, relationship, grant, preview-as-user, Foundry, or AI mutation.
 
 ## 6. Manual-validation development fixture accounts
 
@@ -308,6 +350,65 @@ above already exercise every rule §3a documents:
   coverage for expired assignments, ended/non-active memberships, and
   inactive current/new roles — all rejected with a non-disclosing 409/404
   per §3a, never a 5xx.
+
+### 13E-B checkpoint 2 manual-validation scenarios
+
+One dev-data addition was needed for this checkpoint (see "Seeded accounts"
+above, Player B): a second `campaign_owner` role on `phase13e.player_b` in
+Campaign B, making Player B a second `access.manage` holder there alongside
+the pre-existing `--user-id` account's own membership — deliberately placed
+in Campaign B, not Campaign A, so it never disturbs `phase13e.gm2`'s own
+role as Campaign A's sole manager (the checkpoint-1 last-manager scenario
+above still depends on that).
+
+- **Add a role:** log in as `phase13e.gm2`, open Campaign A's Access page,
+  choose "Add role" on `phase13e.observer_a` (currently `observer` only),
+  select `player` from the server-supplied list (which must already
+  exclude `observer`), Save. The overview refreshes to show both `observer`
+  and `player` on Observer A; nothing else on the row changes.
+- **Add-role choices exclude held roles:** the same control on
+  `phase13e.player_b` (Campaign B; holds `player` and `campaign_owner`)
+  must never offer either of those two — only the remaining system-template
+  roles (`gm`, `assistant_gm`, `observer`, `import_reviewer`,
+  `rules_curator`).
+- **Revoke a role:** as `phase13e.gm2`, revoke `phase13e.player_a`'s
+  `player` role. Confirmation names both the member and the role. After
+  confirming, the overview refreshes and Player A holds no roles;
+  `player_a`'s unrelated character relationship is unaffected. (This
+  leaves Player A a member with no role — a valid, if unusual, state this
+  checkpoint's own scope does not additionally restrict; deliberately not
+  reversed by this scenario since the dev fixture is recreated fresh by a
+  clean seed run.)
+- **Safe self-revocation with a second manager:** log in as
+  `phase13e.player_b` (Campaign B), open the Access page, revoke your own
+  `campaign_owner` role. Succeeds (200) — the `--user-id` account's own
+  Campaign B membership remains a manager, so the campaign never loses its
+  last one. Player B keeps its `player` role and its Access-nav item
+  disappears on the next request (no more `access.manage`).
+- **Last-manager rejection (revoke):** still as `phase13e.gm2` in Campaign
+  A — the sole `access.manage` holder there, unchanged by this checkpoint's
+  dev-data addition — attempt to revoke `gm2`'s own `campaign_owner` role.
+  Rejected (400); `gm2` keeps the role and the Access nav item remains
+  visible on the next request. Mirrors the checkpoint-1 last-manager
+  scenario for change, now exercised for a bare revoke.
+- **Disabled-account rejection (add role):** the seeded `phase13e.disabled`
+  account (Campaign A, `player` role, platform-disabled) cannot be given an
+  additional role: a direct `POST .../memberships/{disabled_membership_id}/roles`
+  as `phase13e.gm2` returns 409 — no seed change needed, this fixture
+  already existed for the read-side scenario in §3.
+- **Cross-campaign isolation:** as `phase13e.gm2` (Campaign A only), a
+  direct `POST /campaigns/<campaign_a_id>/memberships/<a Campaign-B
+  membership id>/roles` (add), or `.../roles/<a Campaign-B membership_role_
+  id>/revoke` (revoke), both return 404 — the same non-disclosing contract
+  §3b/§3c document.
+- **Idempotent replay (add):** repeating the same add-role request with the
+  same `Idempotency-Key` returns the original response unchanged, without
+  creating a second role row.
+- **Idempotent replay (revoke):** repeating the same revoke request with
+  the same `Idempotency-Key` returns the original response unchanged,
+  writing no second `audit.change_log` row — the portal generates and
+  reuses this header automatically, exactly like the existing change-role
+  control.
 
 ### Expected access behavior
 

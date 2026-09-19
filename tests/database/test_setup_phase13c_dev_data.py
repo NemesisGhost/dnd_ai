@@ -1866,10 +1866,24 @@ def test_phase13e_apply_creates_the_expected_accounts_memberships_and_roles(
     )
     assert observer_a_access is not None and not observer_a_access.has_capability("access.manage")
 
+    # Phase 13E-B checkpoint 2: Player B is now a second, independent
+    # access.manage holder in Campaign B (alongside the pre-existing
+    # --user-id account's own membership there) — see setup_phase13c_
+    # dev_data's own module docstring ("Phase13E Dev Player B") for why
+    # this fixture addition lives in Campaign B rather than Campaign A
+    # (Campaign A's own single-manager last-manager scenario, exercised
+    # by GM2, must stay undisturbed).
     player_b_access = resolve_access_context(
         db_connection, user_id=player_b_id, campaign_id=campaign_b_id
     )
-    assert player_b_access is not None and not player_b_access.has_capability("access.manage")
+    assert player_b_access is not None and player_b_access.has_capability("access.manage")
+
+    admin_campaign_b_access = resolve_access_context(
+        db_connection, user_id=user_id, campaign_id=campaign_b_id
+    )
+    assert admin_campaign_b_access is not None and admin_campaign_b_access.has_capability(
+        "access.manage"
+    )
 
 
 def test_phase13e_player_a_has_the_owner_relationship_to_character_a(

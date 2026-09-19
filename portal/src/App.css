@@ -1872,3 +1872,13 @@
 .access-role-editor__status--error {
   color: var(--color-danger);
 }
+
+/* Add-role/revoke-role controls (Phase 13E-B checkpoint 2) reuse every
+   .access-role-editor* rule above — same trigger, layout, action, and
+   status treatment as the change-role control — plus this one addition
+   for the revoke control's inline confirmation text. */
+.access-role-editor__confirm-text {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}

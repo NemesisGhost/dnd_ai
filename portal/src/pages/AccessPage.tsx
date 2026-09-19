@@ -1,5 +1,7 @@
 import { useId } from "react"
+import { AddMemberRole } from "../components/AddMemberRole"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
+import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
 import type {
@@ -20,7 +22,8 @@ interface MemberAccessCardProps {
     campaignId: string
     campaignName: string
     assignableRoles: AssignableRole[]
-    onChanged: () => void
+    onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 function MemberAccessCard({
@@ -29,6 +32,7 @@ function MemberAccessCard({
     campaignName,
     assignableRoles,
     onChanged,
+    onMutationStart,
 }: MemberAccessCardProps) {
     const rolesHeadingId = useId()
     const relationshipsHeadingId = useId()
@@ -37,6 +41,16 @@ function MemberAccessCard({
     const roleSummary = member.roles
         .map((role) => role.display_name)
         .join(", ")
+
+    // Presentation only, never authorization: the server independently
+    // revalidates every add-role request regardless of what this list
+    // offers (dnd_ai.commands.memberships.assign_membership_role).
+    const heldRoleIds = new Set(
+        member.roles.map((role) => role.role_id),
+    )
+    const rolesAvailableToAdd = assignableRoles.filter(
+        (role) => !heldRoleIds.has(role.role_id),
+    )
 
     return (
         <details className="access-member-card">
@@ -66,6 +80,14 @@ function MemberAccessCard({
                                         role={role}
                                         assignableRoles={assignableRoles}
                                         onChanged={onChanged}
+                                        onMutationStart={onMutationStart}
+                                    />
+                                    <RevokeMemberRole
+                                        campaignId={campaignId}
+                                        memberDisplayName={member.display_name}
+                                        role={role}
+                                        onChanged={onChanged}
+                                        onMutationStart={onMutationStart}
                                     />
                                 </li>
                             ))}
@@ -73,6 +95,16 @@ function MemberAccessCard({
                     ) : (
                         <p>No roles assigned.</p>
                     )}
+
+                    <AddMemberRole
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        campaignMembershipId={member.campaign_membership_id}
+                        memberDisplayName={member.display_name}
+                        assignableRoles={rolesAvailableToAdd}
+                        onChanged={onChanged}
+                        onMutationStart={onMutationStart}
+                    />
                 </section>
 
                 <section aria-labelledby={relationshipsHeadingId}>
@@ -139,13 +171,15 @@ function MemberAccessCard({
 interface AccessPageProps {
     campaignId: string
     overview: CampaignAccessOverview
-    onChanged: () => void
+    onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 export function AccessPage({
     campaignId,
     overview,
     onChanged,
+    onMutationStart,
 }: AccessPageProps) {
     const { state: sessionState } = useSession()
 
@@ -163,9 +197,9 @@ export function AccessPage({
 
             <p className="access-page__description">
                 Current members, roles, character relationships, and
-                explicit grants for this campaign. Role changes are
-                available below; other access changes are not available
-                here yet.
+                explicit grants for this campaign. Adding, changing, and
+                removing an existing member's roles is available below;
+                other access changes are not available here yet.
             </p>
 
             {overview.members.length > 0 ? (
@@ -180,6 +214,7 @@ export function AccessPage({
                                     overview.assignable_roles
                                 }
                                 onChanged={onChanged}
+                                onMutationStart={onMutationStart}
                             />
                         </li>
                     ))}
