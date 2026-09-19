@@ -121,6 +121,36 @@ const fullOverview: CampaignAccessOverview = {
             display_name: "Rules Curator",
         },
     ],
+    assignable_characters: [
+        {
+            character_id: "9e4f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            display_name: "Kestrel Vane",
+        },
+        {
+            character_id: "1f6a2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            display_name: "Bram Ferro",
+        },
+    ],
+    assignable_relationship_types: [
+        {
+            character_relationship_type_id:
+                "2a7b3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "primary_controller",
+            display_name: "Primary Controller",
+        },
+        {
+            character_relationship_type_id:
+                "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "viewer",
+            display_name: "Viewer",
+        },
+        {
+            character_relationship_type_id:
+                "4c9d5e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "portrayer",
+            display_name: "Portrayer / Assistant GM",
+        },
+    ],
 }
 
 function renderPage(
@@ -233,7 +263,12 @@ describe("AccessPage", () => {
     })
 
     it("shows a deliberate empty state when the campaign has no manageable access records", () => {
-        renderPage({ members: [], assignable_roles: [] })
+        renderPage({
+            members: [],
+            assignable_roles: [],
+            assignable_characters: [],
+            assignable_relationship_types: [],
+        })
 
         expect(
             screen.getByText(
@@ -470,6 +505,9 @@ describe("AccessPage", () => {
             "Remove role",
             "Add campaign member",
             "Remove member",
+            "Change type",
+            "Revoke relationship",
+            "Add character relationship",
         ])
         buttonNames.forEach((name) => {
             expect(allowedNames.has(name ?? "")).toBe(true)
@@ -817,5 +855,483 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
         expect(onMutationStart).not.toHaveBeenCalled()
         expect(fetchMock).not.toHaveBeenCalled()
+    })
+})
+
+describe("AccessPage — add character relationship (character-relationship-management checkpoint)", () => {
+    it("exposes Add character relationship for every member when characters and types are assignable", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            }),
+        ).toHaveLength(3)
+    })
+
+    it("does not expose the add control when no character or no relationship type is assignable", () => {
+        renderPage({
+            ...fullOverview,
+            assignable_characters: [],
+        })
+
+        expect(
+            screen.queryByRole("button", {
+                name: "Add character relationship",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("offers only server-authoritative character choices, and narrows type choices to exclude combinations already active for the selected character", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+
+        const characterSelect = screen.getByLabelText(
+            `Add a character relationship for Aria the GM in ${campaignName}`,
+        )
+        const characterOptions = Array.from(
+            characterSelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(characterOptions).toEqual([
+            "Kestrel Vane",
+            "Bram Ferro",
+        ])
+
+        // Aria already holds Primary Controller for Kestrel Vane (the
+        // default-selected character) — only the remaining two assignable
+        // types are offered, never the already-active one.
+        const typeSelect = screen.getByLabelText("Relationship type")
+        const typeOptions = Array.from(
+            typeSelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(typeOptions).toEqual([
+            "Viewer",
+            "Portrayer / Assistant GM",
+        ])
+    })
+
+    it("requires an explicit Add action and never submits on selection alone", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("cancel closes the Add-relationship control and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByLabelText("Relationship type"),
+        ).not.toBeInTheDocument()
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically shows the new relationship", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Adding character relationship…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        "new-relationship-id",
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Character relationship added."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(
+            "Character relationship added.",
+        )
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+})
+
+describe("AccessPage — change relationship type (character-relationship-management checkpoint)", () => {
+    it("exposes an accessible change-type action for each eligible character relationship", () => {
+        renderPage(fullOverview)
+
+        // Only Aria the GM holds one active character relationship.
+        expect(
+            screen.getAllByRole("button", { name: "Change type" }),
+        ).toHaveLength(1)
+    })
+
+    it("labels the change control with the member and character context, and offers only authorized type choices", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+
+        const select = screen.getByLabelText(
+            `Change Aria the GM's Kestrel Vane relationship type in ${campaignName}`,
+        )
+        const options = Array.from(
+            select.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(options).toEqual([
+            "Primary Controller",
+            "Viewer",
+            "Portrayer / Assistant GM",
+        ])
+    })
+
+    it("disables Save until the selection changes away from the current type", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        expect(saveButton).toBeEnabled()
+    })
+
+    it("cancel closes the editor and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("combobox"),
+        ).not.toBeInTheDocument()
+    })
+
+    it("announces pending, then success, and refreshes the authoritative overview after a successful save", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Saving relationship type change…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        "new-relationship-id",
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Relationship type updated."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+})
+
+describe("AccessPage — revoke character relationship (character-relationship-management checkpoint)", () => {
+    it("exposes an accessible revoke action for each eligible character relationship", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", {
+                name: "Revoke relationship",
+            }),
+        ).toHaveLength(1)
+    })
+
+    it("requires an explicit confirmation naming the member and character, explains perspective loss, and makes no request until confirmed", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+
+        expect(
+            screen.getByText(
+                /Revoke Aria the GM's Primary Controller relationship to Kestrel Vane\?/,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/will no longer be available/),
+        ).toBeInTheDocument()
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        expect(
+            screen.getByRole("button", { name: "Confirm" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByRole("button", { name: "Cancel" }),
+        ).toBeInTheDocument()
+    })
+
+    it("cancel closes the confirmation, makes no request, and returns focus to the trigger", async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        const trigger = screen.getByRole("button", {
+            name: "Revoke relationship",
+        })
+        fireEvent.click(trigger)
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("button", { name: "Confirm" }),
+        ).not.toBeInTheDocument()
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", {
+                    name: "Revoke relationship",
+                }),
+            ).toHaveFocus()
+        })
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically removes the relationship", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Revoking character relationship…"),
+            ).toBeInTheDocument()
+        })
+        expect(
+            screen.getByText("Kestrel Vane — Primary Controller"),
+        ).toBeInTheDocument()
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        fullOverview.members[0]
+                            .character_relationships[0]
+                            .membership_character_relationship_id,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Character relationship revoked."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(
+            "Character relationship revoked.",
+        )
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+
+    it("does not display any internal identifier as visible text in the confirmation", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+
+        const uuidPattern =
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+        expect(
+            uuidPattern.test(
+                screen.getByText(
+                    /Revoke Aria the GM's Primary Controller relationship/,
+                ).textContent ?? "",
+            ),
+        ).toBe(false)
     })
 })

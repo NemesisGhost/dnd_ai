@@ -36,6 +36,7 @@ from tests.factories import (
     make_campaign_membership,
     make_capability,
     make_character,
+    make_character_relationship_type,
     make_membership_character_relationship,
     make_membership_role,
     make_resource_grant,
@@ -199,6 +200,40 @@ class Fixture:
             character_id=self.character_id,
         )
 
+        # --- assignable_characters/assignable_relationship_types metadata
+        # (character-relationship-management checkpoint): a same-world
+        # character not otherwise related to anyone (must still appear as
+        # assignable), a cross-world character (must never appear), an
+        # archived same-world character (must never appear), and a
+        # deactivated relationship type (must never appear). ---
+        self.unrelated_character_id = make_character(
+            connection, self.world_id, name="Overview Unrelated Character"
+        )
+        self.metadata_other_world_id = make_world(connection, slug=f"{slug}-metadata-other-world")
+        self.other_world_character_id = make_character(
+            connection, self.metadata_other_world_id, name="Overview Other-World Character"
+        )
+        self.archived_character_id = make_character(
+            connection, self.world_id, name="Overview Archived Character"
+        )
+        connection.execute(
+            text("""
+                UPDATE core.entities SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                )
+                WHERE entity_id = :character
+            """),
+            {"character": self.archived_character_id},
+        )
+        self.deactivated_relationship_type_id = make_character_relationship_type(connection)
+        connection.execute(
+            text(
+                "UPDATE security.character_relationship_types SET is_active = false "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": self.deactivated_relationship_type_id},
+        )
+
         # A second campaign with its own admin/member — cross-campaign
         # isolation.
         other_admin_role_id = make_role(
@@ -320,6 +355,24 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
         )
         cleanup.execute(
+            text("DELETE FROM core.entities WHERE world_id = :w"),
+            {"w": fixture.metadata_other_world_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM core.worlds WHERE world_id = :w"),
+            {"w": fixture.metadata_other_world_id},
+        )
+        # security.character_relationship_types is a shared lookup table,
+        # not scoped by campaign/timeline like the rows above — the
+        # fixture's own extra, deactivated type is deleted explicitly by id.
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.deactivated_relationship_type_id},
+        )
+        cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {
                 "users": [
@@ -425,6 +478,15 @@ def test_authorized_gm_sees_the_full_overview(
     assert grant["target_type"] == "character"
     assert grant["reason"] == "Overview test visibility"
 
+    assignable_character_ids = {c["character_id"] for c in payload["assignable_characters"]}
+    assert str(f.character_id) in assignable_character_ids
+    assert str(f.unrelated_character_id) in assignable_character_ids
+
+    assignable_type_codes = {t["code"] for t in payload["assignable_relationship_types"]}
+    assert "primary_controller" in assignable_type_codes
+    assert "viewer" in assignable_type_codes
+    assert "portrayer" in assignable_type_codes
+
 
 def test_a_membership_with_no_roles_or_relationships_or_grants_still_appears(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
@@ -505,6 +567,44 @@ def test_a_grant_of_a_deactivated_capability_is_excluded_while_an_active_one_rem
     assert str(f.deactivatable_capability_grant_id) not in grant_ids
     # ...while the equivalent grant to a still-active capability remains.
     assert str(f.grant_id) in grant_ids
+
+
+# ---------------------------------------------------------------------------
+# assignable_characters / assignable_relationship_types metadata
+# ---------------------------------------------------------------------------
+
+
+def test_a_cross_world_character_is_excluded_from_assignable_characters(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    assignable_character_ids = {c["character_id"] for c in response.json()["assignable_characters"]}
+    assert str(f.other_world_character_id) not in assignable_character_ids
+
+
+def test_an_archived_character_is_excluded_from_assignable_characters(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    assignable_character_ids = {c["character_id"] for c in response.json()["assignable_characters"]}
+    assert str(f.archived_character_id) not in assignable_character_ids
+
+
+def test_a_deactivated_relationship_type_is_excluded_from_assignable_relationship_types(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    assignable_type_ids = {
+        t["character_relationship_type_id"]
+        for t in response.json()["assignable_relationship_types"]
+    }
+    assert str(f.deactivated_relationship_type_id) not in assignable_type_ids
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_character,
+    make_character_relationship_type,
     make_entity,
     make_entity_type,
     make_event,
@@ -152,6 +153,54 @@ class Fixture:
             self.timeline_id,
             self.world_time_id,
             campaign_id=self.other_campaign_id,
+        )
+
+        # --- Character-relationship-management checkpoint: membership/
+        # character/relationship-type eligibility hardening, plus
+        # change_character_relationship's own target fixtures. ---
+        self.ended_member_user_id = make_user(connection, "Access Grant API Ended Member")
+        self.ended_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.ended_member_user_id, ended=True
+        )
+        self.disabled_account_user_id = make_user(
+            connection, "Access Grant API Disabled Account", status_code="inactive"
+        )
+        self.disabled_account_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.disabled_account_user_id
+        )
+        self.inactive_character_id = make_character(
+            connection, self.world_id, name="Access Grant API Inactive Character"
+        )
+        connection.execute(
+            text("""
+                UPDATE core.entities SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                )
+                WHERE entity_id = :character
+            """),
+            {"character": self.inactive_character_id},
+        )
+        self.inactive_relationship_type_id = make_character_relationship_type(connection)
+        connection.execute(
+            text(
+                "UPDATE security.character_relationship_types SET is_active = false "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": self.inactive_relationship_type_id},
+        )
+        self.primary_controller_type_id = lookup_id(
+            connection,
+            "security",
+            "character_relationship_types",
+            "character_relationship_type_id",
+            "primary_controller",
+        )
+        self.portrayer_type_id = lookup_id(
+            connection,
+            "security",
+            "character_relationship_types",
+            "character_relationship_type_id",
+            "portrayer",
         )
 
 
@@ -280,6 +329,16 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             )
             cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
             cleanup.execute(text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": world_id})
+        # security.character_relationship_types is a shared lookup table,
+        # not scoped by world/campaign like the rows deleted above — the
+        # fixture's own extra, deactivated type is deleted explicitly by id.
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.inactive_relationship_type_id},
+        )
         cleanup.execute(
             text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
             {
@@ -288,6 +347,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.target_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
+                    fixture.ended_member_user_id,
+                    fixture.disabled_account_user_id,
                 ]
             },
         )
@@ -317,6 +378,12 @@ def _revoke_relationship_url(
     f: Fixture, relationship_id: uuid.UUID, campaign_id: uuid.UUID | None = None
 ) -> str:
     return f"/campaigns/{campaign_id or f.campaign_id}/character-relationships/{relationship_id}/revoke"
+
+
+def _change_relationship_url(
+    f: Fixture, relationship_id: uuid.UUID, campaign_id: uuid.UUID | None = None
+) -> str:
+    return f"/campaigns/{campaign_id or f.campaign_id}/character-relationships/{relationship_id}/change"
 
 
 def _resource_grants_url(f: Fixture, campaign_id: uuid.UUID | None = None) -> str:
@@ -598,7 +665,8 @@ def test_revoking_a_character_relationship_succeeds(
         relationship_id = grant.json()["membership_character_relationship_id"]
 
         response = client.post(_revoke_relationship_url(f, uuid.UUID(relationship_id)))
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
+    assert response.json() == {"membership_character_relationship_id": relationship_id}
 
     with postgres_engine.connect() as verify:
         revoked_at = verify.execute(
@@ -623,8 +691,59 @@ def test_revoking_an_already_revoked_relationship_is_a_no_op(
 
         first = client.post(_revoke_relationship_url(f, relationship_id))
         second = client.post(_revoke_relationship_url(f, relationship_id))
-    assert first.status_code == 204, first.text
-    assert second.status_code == 204, second.text
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+
+def test_revoking_an_already_revoked_relationship_writes_no_second_audit_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        client.post(_revoke_relationship_url(f, relationship_id))
+        client.post(_revoke_relationship_url(f, relationship_id))
+
+    with postgres_engine.connect() as verify:
+        audit_row_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE table_name = 'membership_character_relationships' "
+                "AND record_id = :r AND change_action_id = ("
+                "  SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'"
+                ")"
+            ),
+            {"r": relationship_id},
+        ).scalar_one()
+        assert audit_row_count == 1
+
+
+def test_a_sequential_replay_of_revoke_relationship_returns_the_original_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    key = f"revoke-relationship-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = grant.json()["membership_character_relationship_id"]
+
+        first = client.post(
+            _revoke_relationship_url(f, uuid.UUID(relationship_id)),
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _revoke_relationship_url(f, uuid.UUID(relationship_id)),
+            headers={"Idempotency-Key": key},
+        )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == first.json()
 
 
 def test_revoking_a_relationship_from_a_different_campaign_is_rejected(
@@ -635,6 +754,242 @@ def test_revoking_a_relationship_from_a_different_campaign_is_rejected(
             _revoke_relationship_url(f, uuid.uuid4(), campaign_id=f.other_campaign_id)
         )
     assert response.status_code == 404, response.text
+
+
+# ---------------------------------------------------------------------------
+# grant_character_relationship — membership/user/character/type eligibility
+# hardening (character-relationship-management checkpoint)
+# ---------------------------------------------------------------------------
+
+
+def test_granting_a_relationship_on_an_ended_membership_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f, membership_id=f.ended_membership_id),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_granting_a_relationship_on_a_membership_with_a_disabled_account_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f, membership_id=f.disabled_account_membership_id),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_granting_a_relationship_to_an_inactive_character_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.inactive_character_id),
+                "relationship_type_code": "viewer",
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_granting_a_relationship_with_an_inactive_type_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.connect() as verify:
+        code = verify.execute(
+            text(
+                "SELECT code FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": f.inactive_relationship_type_id},
+        ).scalar_one()
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": code},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_granting_a_relationship_with_a_nonexistent_type_code_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": f"no-such-type-{uuid.uuid4().hex[:8]}",
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+# ---------------------------------------------------------------------------
+# change_character_relationship
+# ---------------------------------------------------------------------------
+
+
+def test_changing_a_character_relationship_type_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+        )
+    assert response.status_code == 201, response.text
+    new_relationship_id = uuid.UUID(response.json()["membership_character_relationship_id"])
+    assert new_relationship_id != relationship_id
+
+    with postgres_engine.connect() as verify:
+        old_row = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": relationship_id},
+        ).one()
+        assert old_row.revoked_at is not None
+
+        new_row = verify.execute(
+            text("""
+                SELECT mcr.character_id, mcr.campaign_membership_id, mcr.revoked_at, crt.code
+                FROM security.membership_character_relationships mcr
+                JOIN security.character_relationship_types crt
+                    ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :r
+            """),
+            {"r": new_relationship_id},
+        ).one()
+        assert new_row.character_id == f.character_id
+        assert new_row.campaign_membership_id == f.target_membership_id
+        assert new_row.revoked_at is None
+        assert new_row.code == "portrayer"
+
+
+def test_changing_a_relationship_to_its_own_current_type_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "primary_controller",
+            },
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.primary_controller_type_id)},
+        )
+    assert response.status_code == 422, response.text
+
+
+def test_changing_a_revoked_relationship_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+        revoke = client.post(_revoke_relationship_url(f, relationship_id))
+        assert revoke.status_code == 200, revoke.text
+
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_changing_a_relationship_to_an_inactive_type_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.inactive_relationship_type_id)},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_changing_a_relationship_from_a_different_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _change_relationship_url(f, uuid.uuid4(), campaign_id=f.other_campaign_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_a_sequential_replay_of_change_relationship_returns_the_original_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    key = f"change-relationship-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        first = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+            headers={"Idempotency-Key": key},
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json() == first.json()
+
+
+def test_a_member_without_access_manage_gets_forbidden_for_change(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    with client_factory(f.capless_user_id) as client:
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+        )
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------

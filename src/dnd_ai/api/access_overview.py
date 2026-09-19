@@ -25,6 +25,20 @@ has to hardcode or guess the assignable set. Campaign-level, not per-member
 `access.manage` may assign is equally assignable to any member (see that
 query function's own docstring).
 
+`assignable_characters`/`assignable_relationship_types` (character-
+relationship-management checkpoint) are the identical read-contract
+counterpart for `dnd_ai.api.access_grants`' `grant_character_relationship`/
+`change_character_relationship` mutations: every same-world, currently
+active character, and every currently active relationship type, so the
+portal's "Add/change character relationship" controls never have to
+hardcode or guess either assignable set (`dnd_ai.queries.access_overview.
+list_assignable_campaign_characters`/`.list_assignable_character_
+relationship_types`). Also campaign-level (by world, for characters) rather
+than per-member — which *combinations* are already active for a given
+member is derived by the portal from that member's own `character_
+relationships` list already in this response, exactly like `assignable_
+roles`' own per-member narrowing is left to the portal.
+
 Non-disclosure: a caller without an active membership, or without
 `access.manage`, gets the same fixed 404/403 `require_campaign_capability`
 already gives every other `access.manage` route — this route adds no new
@@ -45,9 +59,12 @@ from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.access_overview import (
     find_eligible_campaign_account,
     get_campaign_access_overview,
+    list_assignable_campaign_characters,
     list_assignable_campaign_roles,
+    list_assignable_character_relationship_types,
 )
 
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .deps import get_connection
 
@@ -73,6 +90,17 @@ class RoleSummaryResponse(BaseModel):
 
 class AssignableRoleResponse(BaseModel):
     role_id: uuid.UUID
+    code: str
+    display_name: str
+
+
+class AssignableCharacterResponse(BaseModel):
+    character_id: uuid.UUID
+    display_name: str
+
+
+class AssignableCharacterRelationshipTypeResponse(BaseModel):
+    character_relationship_type_id: uuid.UUID
     code: str
     display_name: str
 
@@ -121,6 +149,8 @@ class CampaignMemberSummaryResponse(BaseModel):
 class CampaignAccessOverviewResponse(BaseModel):
     members: list[CampaignMemberSummaryResponse]
     assignable_roles: list[AssignableRoleResponse]
+    assignable_characters: list[AssignableCharacterResponse]
+    assignable_relationship_types: list[AssignableCharacterRelationshipTypeResponse]
 
 
 class EligibleAccountResponse(BaseModel):
@@ -156,12 +186,30 @@ def get_campaign_access_overview_endpoint(
         connection, campaign_id=campaign_id, timeline_id=access.timeline_id
     )
     assignable_roles = list_assignable_campaign_roles(connection, campaign_id=campaign_id)
+    assignable_characters = list_assignable_campaign_characters(
+        connection, world_id=timeline_world_id(connection, access.timeline_id)
+    )
+    assignable_relationship_types = list_assignable_character_relationship_types(connection)
     return CampaignAccessOverviewResponse(
         assignable_roles=[
             AssignableRoleResponse(
                 role_id=role.role_id, code=role.code, display_name=role.display_name
             )
             for role in assignable_roles
+        ],
+        assignable_characters=[
+            AssignableCharacterResponse(
+                character_id=character.character_id, display_name=character.display_name
+            )
+            for character in assignable_characters
+        ],
+        assignable_relationship_types=[
+            AssignableCharacterRelationshipTypeResponse(
+                character_relationship_type_id=relationship_type.character_relationship_type_id,
+                code=relationship_type.code,
+                display_name=relationship_type.display_name,
+            )
+            for relationship_type in assignable_relationship_types
         ],
         members=[
             CampaignMemberSummaryResponse(

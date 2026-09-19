@@ -38,6 +38,28 @@ ordinary validation failure to an unclassified 500). The "exactly one
 grantee"/"exactly one target" `CHECK` constraints on `security.
 resource_grants` are, by contrast, left unduplicated: a violation raises
 SQLSTATE `23514`, already correctly classified to a fixed 400.
+
+Phase 13E-B's character-relationship-management checkpoint adds
+`change_character_relationship()` (atomically revokes one active
+assignment and inserts a new one with a different relationship type,
+mirroring `dnd_ai.commands.memberships.change_membership_role()`'s
+identical "revoke one, insert one" shape) and hardens the two pre-existing
+functions to the same "currently true" eligibility bar `dnd_ai.commands.
+memberships` already established for its own membership/role mutations:
+`grant_character_relationship()` now requires the target membership to be
+open and in the `active` membership status, its underlying user account to
+be currently platform-active (`MembershipNotActiveError`), the target
+character to be currently active (folded into `TargetNotInCampaignWorldError`),
+and the relationship type to be currently `is_active`
+(`RelationshipTypeNotActiveError`) — none of these was checked before;
+`revoke_character_relationship()` now returns `RevokeCharacterRelationshipResult`
+so its caller can tell an actual revocation apart from the pre-existing
+harmless no-op on an already-revoked row, needed so `dnd_ai.api.
+access_grants`' route can write exactly one audit record per real state
+change rather than one per HTTP call — the identical correction Phase
+13E-B checkpoint 2 already made to `revoke_membership_role`/`.
+revoke_membership_role_endpoint`. See each function's own docstring for
+the full contract.
 """
 
 import uuid
@@ -45,7 +67,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id, validate_session_campaign
 
@@ -58,6 +80,72 @@ class MembershipNotInCampaignError(DomainAuthorizationError):
     distinguish "doesn't exist" from "belongs to a different campaign."
     The supplied ids are included only in the constructor's `detail`
     argument (`str(self)`), never in `safe_message`."""
+
+
+class MembershipNotActiveError(DomainAuthorizationError):
+    """Raised by `grant_character_relationship()` (Phase 13E-B character-
+    relationship checkpoint hardening) when the target `campaign_membership_id`,
+    though it does belong to `campaign_id` (checked first, as `Membership
+    NotInCampaignError`), is not currently an eligible, open membership to
+    grant a character relationship to — grouped, identically, so a caller
+    can never learn which condition applied: the membership has ended, its
+    membership status is not currently `active`, or its underlying user
+    account is not currently platform-active. Mirrors `dnd_ai.commands.
+    memberships.MembershipNotActiveError`'s identical eligibility bar
+    exactly, applied here to the same class of caller-supplied membership
+    id. 409, not the base class's default 404: the membership's existence
+    and campaign scope are already established by the time this raises."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
+
+
+class RelationshipTypeNotActiveError(DomainAuthorizationError):
+    """Raised by `grant_character_relationship()`/`change_character_
+    relationship()` when the relevant `security.character_relationship_types`
+    row (looked up by `code` for a grant, by id for a change) does not
+    exist or is not currently `is_active` — folded identically, so a caller
+    can never distinguish "no such relationship type" from "deactivated",
+    mirroring `dnd_ai.commands.memberships.RoleNotUsableByCampaignError`'s
+    identical reasoning for roles. Relationship types carry no campaign
+    scope of their own (`security.character_relationship_types` has no
+    `campaign_id`), so this checks only existence plus activeness."""
+
+
+class CharacterRelationshipNotActiveError(DomainAuthorizationError):
+    """Raised by `change_character_relationship()` when the target
+    `membership_character_relationship_id` is not currently an eligible,
+    active assignment to change: already revoked, expired, or its owning
+    membership ended or no longer in the active membership status — the
+    identical "currently true" definition `dnd_ai.queries.access_overview.
+    get_campaign_access_overview`'s own relationships query already uses to
+    decide what counts as a member's *current* relationship, applied here
+    so this mutation can never act on a row the read side would no longer
+    show as active. Mirrors `dnd_ai.commands.memberships.
+    MembershipRoleNotActiveError`'s identical reasoning and 409 conflict
+    contract (not the base class's default 404: the relationship
+    unambiguously existed and belonged to this campaign, so a caller here
+    is retrying against state that has already moved out from under it, not
+    probing for a resource's existence)."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
+
+
+class ChangeCharacterRelationshipNoOpError(SafeMessageError):
+    """Raised by `change_character_relationship()` when `new_relationship_
+    type_id` names the same relationship type the target `membership_
+    character_relationship_id` already, currently holds — checked before
+    any write, mirroring `dnd_ai.commands.memberships.
+    ChangeMembershipRoleNoOpError`'s identical reasoning (including why
+    this must never be durably cached as a successful idempotent-replay
+    result). 422, never 409: this is not a race with anything external."""
+
+    safe_status_code = 422
+    safe_error_code = "invalid_relationship_change"
+    safe_message = "The selected relationship type is already this assignment's current type."
 
 
 class AccessGroupNotInCampaignError(DomainAuthorizationError):
@@ -126,6 +214,33 @@ def _resolve_world_time_sort_key(
     return sort_key
 
 
+def _resolve_active_relationship_type_id_by_code(connection: Connection, code: str) -> uuid.UUID:
+    """`grant_character_relationship()`'s relationship-type resolution —
+    unlike the plain `lookup_id()` helper, also requires `is_active`, so an
+    already-deactivated type (never a legitimate grant target, mirroring
+    `dnd_ai.commands.memberships.RoleNotUsableByCampaignError`'s identical
+    "not usable" reasoning for roles) is rejected here instead of silently
+    granted."""
+    row = (
+        connection.execute(
+            text(
+                "SELECT character_relationship_type_id, is_active "
+                "FROM security.character_relationship_types WHERE code = :code FOR UPDATE"
+            ),
+            {"code": code},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or not row["is_active"]:
+        raise RelationshipTypeNotActiveError(
+            f"relationship type code {code!r} does not exist or is not currently active"
+        )
+    relationship_type_id = row["character_relationship_type_id"]
+    assert isinstance(relationship_type_id, uuid.UUID)
+    return relationship_type_id
+
+
 def grant_character_relationship(
     connection: Connection,
     *,
@@ -143,10 +258,24 @@ def grant_character_relationship(
     type_code` to `character_id`, unbounded and campaign-wide by default,
     or timeline-scoped and/or fictional-time-bounded (ADR 0010) when
     `timeline_id`/`effective_from_world_time_id`/`effective_to_world_
-    time_id` are supplied. Raises `MembershipNotInCampaignError` for a
-    `campaign_membership_id` outside `campaign_id`; `TargetNotInCampaignWorldError`
-    for a `character_id`, `timeline_id`, or world-time id whose world does
-    not match `expected_world_id`; `InvalidRelationshipPeriodError` for an
+    time_id` are supplied.
+
+    Raises `MembershipNotInCampaignError` for a `campaign_membership_id`
+    outside `campaign_id`. Raises `MembershipNotActiveError` (409, character-
+    relationship checkpoint hardening) if the target membership, though it
+    belongs to `campaign_id`, is not currently an eligible, open membership
+    — ended, its own status not `active`, or its underlying user account
+    not currently platform-active — mirroring `dnd_ai.commands.memberships.
+    assign_membership_role()`'s identical eligibility bar for the same
+    class of caller-supplied membership id. Raises
+    `TargetNotInCampaignWorldError` for a `character_id` that does not
+    exist, is not currently active (`core.lifecycle_statuses.code`), or
+    whose world does not match `expected_world_id` — folded identically,
+    the same "never a legitimate target" reasoning `RoleNotUsableByCampaignError`
+    already applies to roles — and for a `timeline_id`/world-time id whose
+    world does not match `expected_world_id`. Raises `RelationshipTypeNotActiveError`
+    for a `relationship_type_code` that does not exist or is not currently
+    `is_active`. Raises `InvalidRelationshipPeriodError` for an
     `effective_to_world_time_id` supplied without `effective_from_world_
     time_id`, or one that does not resolve to a later `sort_key` — all
     before any row is written, mirroring `security.enforce_membership_
@@ -158,28 +287,93 @@ def grant_character_relationship(
     "derived, never client-authoritative." A retry granting the same
     still-active relationship type again is rejected as a 409 by `ux_
     membership_character_relationships_active_type` (existing
-    `IntegrityError` handler)."""
-    membership_campaign_id = connection.execute(
-        text(
-            "SELECT campaign_id FROM security.campaign_memberships "
-            "WHERE campaign_membership_id = :membership"
-        ),
-        {"membership": campaign_membership_id},
-    ).scalar()
-    if membership_campaign_id is None or membership_campaign_id != campaign_id:
+    `IntegrityError` handler).
+
+    Locks the target membership row and, separately, its owning user row
+    (`FOR UPDATE OF cm`/`FOR UPDATE OF u`), then the target character row
+    (`FOR UPDATE OF e`), then the candidate relationship-type row, before
+    evaluating each one's own eligibility check — the same "membership-then-
+    role" lock ordering `assign_membership_role()` uses, extended by
+    character-then-relationship-type, so a concurrent ending of this
+    membership, deactivation of its owning user account, deactivation/
+    archival of the character, or deactivation of the relationship type
+    cannot slip in between this function's own read and its later `INSERT`,
+    and so this function can never deadlock against `assign_membership_
+    role()`/`change_membership_role()` (which lock membership/user/role in
+    the same relative order over disjoint row sets)."""
+    membership_row = (
+        connection.execute(
+            text("""
+                SELECT cm.campaign_id, cm.ended_at, cm.user_id,
+                       ms.code AS membership_status_code, ms.is_active AS membership_status_is_active
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :membership
+                FOR UPDATE OF cm
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if membership_row is None or membership_row["campaign_id"] != campaign_id:
         raise MembershipNotInCampaignError(
             f"membership {campaign_membership_id} does not belong to campaign {campaign_id} "
-            f"(actual campaign: {membership_campaign_id})"
+            f"(actual campaign: {membership_row['campaign_id'] if membership_row is not None else None})"
         )
 
-    character_world_id = connection.execute(
-        text("SELECT world_id FROM core.entities WHERE entity_id = :character"),
-        {"character": character_id},
+    membership_is_eligible = (
+        membership_row["ended_at"] is None
+        and membership_row["membership_status_code"] == "active"
+        and membership_row["membership_status_is_active"]
+    )
+    if not membership_is_eligible:
+        raise MembershipNotActiveError(
+            f"membership {campaign_membership_id} is not currently an eligible, open "
+            "membership to grant a character relationship to"
+        )
+
+    user_lifecycle_status_code = connection.execute(
+        text("""
+            SELECT ls.code
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user
+            FOR UPDATE OF u
+        """),
+        {"user": membership_row["user_id"]},
     ).scalar()
-    if character_world_id is None or character_world_id != expected_world_id:
+    if user_lifecycle_status_code != "active":
+        raise MembershipNotActiveError(
+            f"membership {campaign_membership_id}'s user {membership_row['user_id']} is not "
+            "currently an active platform account"
+        )
+
+    character_row = (
+        connection.execute(
+            text("""
+                SELECT e.world_id, ls.code AS lifecycle_status_code
+                FROM core.entities e
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                WHERE e.entity_id = :character
+                FOR UPDATE OF e
+            """),
+            {"character": character_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    character_is_eligible = (
+        character_row is not None
+        and character_row["world_id"] == expected_world_id
+        and character_row["lifecycle_status_code"] == "active"
+    )
+    if not character_is_eligible:
         raise TargetNotInCampaignWorldError(
-            f"character {character_id} does not exist in world {expected_world_id} "
-            f"(actual world: {character_world_id})"
+            f"character {character_id} does not exist in world {expected_world_id}, or is not "
+            "currently active "
+            f"(actual world: {character_row['world_id'] if character_row is not None else None})"
         )
 
     if timeline_id is not None:
@@ -216,12 +410,8 @@ def grant_character_relationship(
                     f"(sort_key {from_sort_key})"
                 )
 
-    relationship_type_id = lookup_id(
-        connection,
-        "security",
-        "character_relationship_types",
-        "character_relationship_type_id",
-        relationship_type_code,
+    relationship_type_id = _resolve_active_relationship_type_id_by_code(
+        connection, relationship_type_code
     )
     membership_character_relationship_id = connection.execute(
         text("""
@@ -249,26 +439,41 @@ def grant_character_relationship(
     )
 
 
+@dataclass(frozen=True)
+class RevokeCharacterRelationshipResult:
+    """`revoked` is `True` only when this specific call transitioned the row
+    from active to revoked — `False` for the documented harmless-no-op case
+    (already revoked). Mirrors `dnd_ai.commands.memberships.
+    RevokeMembershipRoleResult` exactly: `dnd_ai.api.access_grants.
+    revoke_character_relationship_endpoint` uses this to write exactly one
+    `audit.change_log` row per *actual* revocation, never one per HTTP
+    call."""
+
+    revoked: bool
+
+
 def revoke_character_relationship(
     connection: Connection,
     *,
     membership_character_relationship_id: uuid.UUID,
     campaign_id: uuid.UUID,
-) -> None:
+) -> RevokeCharacterRelationshipResult:
     """Revokes `membership_character_relationship_id` (sets
     `revoked_at`), or does nothing if it was already revoked — a retry is
-    a harmless no-op, needing no idempotency-key store. Raises
-    `MembershipNotInCampaignError` for a nonexistent
-    `membership_character_relationship_id` or one belonging to a
-    membership outside `campaign_id`. Unlike `dnd_ai.commands.memberships.
-    revoke_membership_role`, there is no retention invariant to re-check
-    here — a character relationship never carries `access.manage`
-    (character-scoped capabilities and the campaign-wide `access.manage`
-    capability are disjoint concerns)."""
+    a harmless no-op, state-idempotent on its own; see `RevokeCharacter
+    RelationshipResult.revoked` above for how a caller distinguishes an
+    actual revocation from that no-op without this function itself needing
+    a durable idempotency-key store. Raises `MembershipNotInCampaignError`
+    for a nonexistent `membership_character_relationship_id` or one
+    belonging to a membership outside `campaign_id`. Unlike `dnd_ai.
+    commands.memberships.revoke_membership_role`, there is no retention
+    invariant to re-check here — a character relationship never carries
+    `access.manage` (character-scoped capabilities and the campaign-wide
+    `access.manage` capability are disjoint concerns)."""
     row = (
         connection.execute(
             text("""
-                SELECT cm.campaign_id
+                SELECT cm.campaign_id, mcr.revoked_at
                 FROM security.membership_character_relationships mcr
                 JOIN security.campaign_memberships cm
                     ON cm.campaign_membership_id = mcr.campaign_membership_id
@@ -287,12 +492,198 @@ def revoke_character_relationship(
             f"(actual campaign: {row['campaign_id'] if row is not None else None})"
         )
 
+    already_revoked = row["revoked_at"] is not None
+    if already_revoked:
+        return RevokeCharacterRelationshipResult(revoked=False)
+
     connection.execute(
         text(
             "UPDATE security.membership_character_relationships SET revoked_at = now() "
             "WHERE membership_character_relationship_id = :relationship AND revoked_at IS NULL"
         ),
         {"relationship": membership_character_relationship_id},
+    )
+
+    return RevokeCharacterRelationshipResult(revoked=True)
+
+
+@dataclass(frozen=True)
+class ChangeCharacterRelationshipResult:
+    membership_character_relationship_id: uuid.UUID
+    previous_membership_character_relationship_id: uuid.UUID
+    previous_relationship_type_code: str
+    new_relationship_type_code: str
+
+
+def change_character_relationship(
+    connection: Connection,
+    *,
+    membership_character_relationship_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    new_relationship_type_id: uuid.UUID,
+    granted_by_membership_id: uuid.UUID,
+) -> ChangeCharacterRelationshipResult:
+    """Changes one existing, currently-active character-relationship
+    assignment (`membership_character_relationship_id`) to a different
+    relationship type (`new_relationship_type_id`), atomically: revokes the
+    old `security.membership_character_relationships` row and inserts a new
+    one for the same `campaign_membership_id`/`character_id`, in the
+    caller's own transaction — mirroring `dnd_ai.commands.memberships.
+    change_membership_role()`'s identical "revoke one, insert one" shape.
+    This targets exactly the one relationship assignment named — any
+    *other* active relationship the same membership independently holds
+    (to this character or any other) is untouched, so a member with
+    several simultaneous character relationships never has an unrelated one
+    silently replaced. The new row carries forward the old row's own
+    `timeline_id`/`effective_from_world_time_id`/`effective_to_world_time_id`
+    scope unchanged — only the relationship type changes — and preserves
+    full temporal history (the old row's `revoked_at` is set, its
+    `character_relationship_type_id`/`granted_by_membership_id`/
+    `granted_at` are never overwritten) rather than updating the type in
+    place.
+
+    Raises `MembershipNotInCampaignError` for a nonexistent
+    `membership_character_relationship_id` or one belonging to a different
+    campaign than `campaign_id` (checked first, so this stays
+    indistinguishable from "it never existed" for an unauthorized caller).
+    Raises `CharacterRelationshipNotActiveError` (409) if `membership_
+    character_relationship_id` is not currently an eligible, active
+    assignment — already revoked, expired, or its membership ended or no
+    longer in the active membership status; see that error's own docstring
+    for the full "currently true" definition (matching the access-overview
+    read side exactly, so this mutation can never act on a row the read
+    side would no longer show as active). Raises `RelationshipTypeNotActiveError`
+    for a `new_relationship_type_id` that does not exist or is not
+    currently `is_active`. Raises `ChangeCharacterRelationshipNoOpError`
+    (422) if `new_relationship_type_id` names the type `membership_
+    character_relationship_id` already, currently holds — checked before
+    any write. A retry naming a `new_relationship_type_id` the same
+    membership/character pair already holds actively (from some other
+    assignment) is rejected as a 409 by `ux_membership_character_
+    relationships_active_type` (existing `IntegrityError` handler) —
+    deliberately not pre-checked here, matching `change_membership_role()`'s
+    own "database-enforced invariants deliberately not duplicated" policy.
+
+    Every check above runs, and every row lock below is taken, before any
+    write — a rejection therefore never leaves a partial write behind.
+
+    Locks the target row and its owning membership (`FOR UPDATE OF mcr,
+    cm`) before evaluating the target's own eligibility check, and
+    separately locks the candidate new relationship-type row before
+    evaluating its own — the identical "target-row/candidate-row" lock
+    ordering `change_membership_role()` uses for its own role pair, so a
+    concurrent change/revoke of this exact assignment, a concurrent
+    deactivation of the new relationship type, or a concurrent ending of
+    its membership cannot race between this function's own check and
+    write, and so this function can never deadlock against `change_
+    membership_role()` (which locks its own, disjoint row set in the same
+    relative order)."""
+    row = (
+        connection.execute(
+            text("""
+                SELECT cm.campaign_id, cm.ended_at,
+                       ms.code AS membership_status_code,
+                       ms.is_active AS membership_status_is_active,
+                       mcr.campaign_membership_id, mcr.character_id,
+                       mcr.character_relationship_type_id, mcr.timeline_id,
+                       mcr.effective_from_world_time_id, mcr.effective_to_world_time_id,
+                       mcr.revoked_at,
+                       (mcr.expires_at IS NOT NULL AND mcr.expires_at <= now())
+                           AS relationship_is_expired,
+                       rt.code AS relationship_type_code
+                FROM security.membership_character_relationships mcr
+                JOIN security.campaign_memberships cm
+                    ON cm.campaign_membership_id = mcr.campaign_membership_id
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                JOIN security.character_relationship_types rt
+                    ON rt.character_relationship_type_id = mcr.character_relationship_type_id
+                WHERE mcr.membership_character_relationship_id = :relationship
+                FOR UPDATE OF mcr, cm
+            """),
+            {"relationship": membership_character_relationship_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["campaign_id"] != campaign_id:
+        raise MembershipNotInCampaignError(
+            f"membership character relationship {membership_character_relationship_id} does not "
+            f"belong to campaign {campaign_id} "
+            f"(actual campaign: {row['campaign_id'] if row is not None else None})"
+        )
+
+    target_is_eligible = (
+        row["revoked_at"] is None
+        and not row["relationship_is_expired"]
+        and row["ended_at"] is None
+        and row["membership_status_code"] == "active"
+        and row["membership_status_is_active"]
+    )
+    if not target_is_eligible:
+        raise CharacterRelationshipNotActiveError(
+            f"membership character relationship {membership_character_relationship_id} is not "
+            "currently an eligible, active assignment to change"
+        )
+
+    new_type_row = (
+        connection.execute(
+            text(
+                "SELECT code, is_active FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :type FOR UPDATE"
+            ),
+            {"type": new_relationship_type_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if new_type_row is None or not new_type_row["is_active"]:
+        raise RelationshipTypeNotActiveError(
+            f"relationship type {new_relationship_type_id} does not exist or is not currently "
+            "active"
+        )
+
+    if new_relationship_type_id == row["character_relationship_type_id"]:
+        raise ChangeCharacterRelationshipNoOpError(
+            f"relationship type {new_relationship_type_id} is already the current type for "
+            f"membership character relationship {membership_character_relationship_id}"
+        )
+
+    connection.execute(
+        text(
+            "UPDATE security.membership_character_relationships SET revoked_at = now() "
+            "WHERE membership_character_relationship_id = :relationship AND revoked_at IS NULL"
+        ),
+        {"relationship": membership_character_relationship_id},
+    )
+
+    new_membership_character_relationship_id = connection.execute(
+        text("""
+            INSERT INTO security.membership_character_relationships
+                (campaign_membership_id, character_id, character_relationship_type_id,
+                 timeline_id, effective_from_world_time_id, effective_to_world_time_id,
+                 granted_by_membership_id)
+            VALUES (:membership, :character, :new_type, :timeline, :from_time, :to_time,
+                    :granted_by)
+            RETURNING membership_character_relationship_id
+        """),
+        {
+            "membership": row["campaign_membership_id"],
+            "character": row["character_id"],
+            "new_type": new_relationship_type_id,
+            "timeline": row["timeline_id"],
+            "from_time": row["effective_from_world_time_id"],
+            "to_time": row["effective_to_world_time_id"],
+            "granted_by": granted_by_membership_id,
+        },
+    ).scalar()
+    assert isinstance(new_membership_character_relationship_id, uuid.UUID)
+
+    return ChangeCharacterRelationshipResult(
+        membership_character_relationship_id=new_membership_character_relationship_id,
+        previous_membership_character_relationship_id=membership_character_relationship_id,
+        previous_relationship_type_code=row["relationship_type_code"],
+        new_relationship_type_code=new_type_row["code"],
     )
 
 

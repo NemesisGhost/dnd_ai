@@ -3,18 +3,21 @@
 Written for the 13E-A increment (read-only campaign access overview,
 `docs/PLAN.md` §13) and updated for 13E-B's mutation checkpoints
 (campaign-role change; add one role; revoke one role; add an existing
-account as a member; remove an existing membership). Records what the
-backend actually exposes for GM access management as of these increments —
-not a design proposal, and not a claim that Phase 13E or any of its
-remaining mutation work is complete. **13E-A (the read-only overview),
-13E-B checkpoint 1 (change an existing member's campaign-role assignment),
-and 13E-B checkpoint 2 (add one additional role to, and revoke one
-existing role from, an existing active campaign membership) are
-delivered. 13E-B checkpoint 3 (add an existing account to the campaign
-with one initial role; end an existing membership) is in progress — see
-§3d/§3e/§3f.** Everything else below marked "reserved for a later
-increment" is existing backend capability with no portal UI yet, or
-(where noted) a backend contract that does not exist at all yet.
+account as a member; remove an existing membership; add/change/revoke a
+member's character relationship). Records what the backend actually
+exposes for GM access management as of these increments — not a design
+proposal, and not a claim that Phase 13E or any of its remaining mutation
+work is complete. **13E-A (the read-only overview), 13E-B checkpoint 1
+(change an existing member's campaign-role assignment), 13E-B checkpoint 2
+(add one additional role to, and revoke one existing role from, an
+existing active campaign membership), 13E-B checkpoint 3 (add an existing
+account to the campaign with one initial role; end an existing
+membership), and 13E-B's character-relationship-management checkpoint (add
+a character relationship to an existing membership; change an existing
+relationship's type; revoke a character relationship — see
+§3g/§3h/§3i/§3j) are delivered.** Everything else below marked "reserved
+for a later increment" is existing backend capability with no portal UI
+yet, or (where noted) a backend contract that does not exist at all yet.
 
 ## 1. Existing read endpoints
 
@@ -34,8 +37,9 @@ No other read endpoint exposes campaign membership, role, character-relationship
 | `/campaigns/{campaign_id}/memberships/{membership_id}/roles` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3b. |
 | `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 2.** See §3c. |
 | `/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change` | POST | `dnd_ai.api.memberships` | `access.manage` | Campaign-scoped — **portal-wired, 13E-B checkpoint 1.** See §3a. |
-| `/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
-| `/campaigns/{campaign_id}/character-relationships/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
+| `/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, character-relationship-management checkpoint.** See §3h. |
+| `/campaigns/{campaign_id}/character-relationships/{id}/change` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **new, portal-wired, character-relationship-management checkpoint.** See §3i. |
+| `/campaigns/{campaign_id}/character-relationships/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, character-relationship-management checkpoint.** See §3j. |
 | `/campaigns/{campaign_id}/resource-grants` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
 | `/campaigns/{campaign_id}/resource-grants/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped |
 | `/campaigns/{campaign_id}/invitations` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped (returns a raw invitation token — never suitable to echo in a list contract) |
@@ -55,7 +59,7 @@ None of the campaign-scoped rows above pass `allow_foundry_access=True` to `requ
 - **Capability:** `access.manage`, resolved via the existing `dnd_ai.api.access.require_campaign_capability` dependency — the identical gate every mutation endpoint in §2 already uses for the same category of action.
 - **Boundary:** campaign-scoped, human principal only (local-session or OIDC — see §4; Foundry-adapter credentials are rejected).
 - **Request:** `campaign_id` path parameter (UUID) only. No query parameters, no request body.
-- **Response (`CampaignAccessOverviewResponse`):** `{ members: [CampaignMemberSummaryResponse], assignable_roles: [AssignableRoleResponse] }`, one member entry per currently open (`ended_at IS NULL`) campaign membership:
+- **Response (`CampaignAccessOverviewResponse`):** `{ members: [CampaignMemberSummaryResponse], assignable_roles: [AssignableRoleResponse], assignable_characters: [AssignableCharacterResponse], assignable_relationship_types: [AssignableCharacterRelationshipTypeResponse] }` (the last two are new, character-relationship-management checkpoint — see §3g), one member entry per currently open (`ended_at IS NULL`) campaign membership:
   - `campaign_membership_id` (UUID — identity only, never rendered as page text)
   - `display_name`, `status_code`, `status_display_name`, `joined_at`
   - `roles: [{ membership_role_id, role_id, code, display_name }]` — active (non-revoked, non-expired, `is_active`) roles only. `membership_role_id` (13E-B) is the identifier the portal's role-change control targets — identity only, never rendered as page text, matching `campaign_membership_id`'s own contract.
@@ -320,6 +324,106 @@ action (disable/reactivate) — those remain out of scope.
 - **Concurrency:** proven by real-connection PostgreSQL regression tests (`tests/database/test_membership_lifecycle_concurrency.py`): two concurrent removals of the identical membership (same-row serialization, second observes the no-op); a concurrent `change_membership_role` against one of the membership's own role rows (blocked by this command's membership-row lock); two managers concurrently ending their own distinct manager-bearing memberships on the same active campaign (the combined-effect retention race, resolved by the database's own deferred trigger under barrier-coordinated real concurrency); self-removal racing a different manager's concurrent attempt to end that same membership (same-row serialization again, not a retention race, since a second manager remains either way).
 - **Idempotency/audit:** the same durable `Idempotency-Key` mechanism every other row in §2/§3 uses. One `audit.change_log` row per actual removal (`table_name = 'membership_roles'` is **not** separately recorded — `changed_fields.revoked_membership_role_ids` lists every role row this call revoked on the single `campaign_memberships` audit row instead, since they are all one logical removal event, not independent creates the way §3e's two inserts are).
 
+## 3g. `assignable_characters`/`assignable_relationship_types` on `GET /campaigns/{campaign_id}/access-overview` (new fields, character-relationship-management checkpoint)
+
+The read-contract counterpart §3h/§3i's mutations need so the portal's
+"Add/change character relationship" controls never have to hardcode or
+guess either assignable set — the identical role §3's own `assignable_roles`
+already plays for §3a/§3b.
+
+- `assignable_characters: [{ character_id, display_name }]` —
+  `dnd_ai.queries.access_overview.list_assignable_campaign_characters`:
+  every `character.characters` row (never a bare `core.entities` row of
+  some other type) belonging to the campaign's own world (resolved
+  server-side from the caller's pinned timeline, exactly like `grant_
+  character_relationship`'s own `expected_world_id`) and currently active
+  (`core.lifecycle_statuses.code = 'active'`) — the identical "never a
+  legitimate target" bar §3h's own hardening now enforces. **Not** narrowed
+  to player characters only: an NPC is a legitimate target too (a
+  portrayer/assistant-GM relationship is meaningful for an NPC, per
+  docs/architecture/DATABASE_MODEL.md §19.4's own relationship-type list).
+  Campaign-level by world, not per-member — which *combinations* are
+  already active for a given member is derived by the portal from that
+  member's own `character_relationships` list already in this response.
+- `assignable_relationship_types: [{ character_relationship_type_id, code, display_name }]`
+  — `dnd_ai.queries.access_overview.list_assignable_character_relationship_types`:
+  every currently `is_active` `security.character_relationship_types` row.
+  Relationship types carry no campaign scope of their own (unlike roles),
+  so this is not further narrowed by `campaign_id`/`world_id`.
+- No pagination — matching §3's own "expected to stay small" precedent.
+
+## 3h. `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/character-relationships` (hardened, character-relationship-management checkpoint)
+
+The route and command (`grant_character_relationship`) already existed
+(Phase 10 workstream 21/25) — this checkpoint hardens the command to the
+same "currently true" eligibility bar §3b/§3e already established for
+role/membership mutations, then wires it into the portal as the Access
+page's "Add character relationship" action.
+
+- **Relationship model discovered:** `security.membership_character_relationships`
+  lets one `(campaign_membership_id, character_id)` pair hold **multiple
+  simultaneous active relationships of different types**
+  (`ux_membership_character_relationships_active_type` only forbids two
+  *active* rows for the *same* `(membership, character, type)` triple) —
+  e.g. a member may simultaneously be both `viewer` and `portrayer` of the
+  same character. Relationships are **temporal**, identically to roles: a
+  row is never updated in place; it is revoked (`revoked_at` set) and a
+  new row inserted (§3i). Relationship types are reference rows
+  (`security.character_relationship_types`, a `code`/`is_active`/`sort_order`
+  lookup table, not an enum) — see §3g.
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request (`GrantCharacterRelationshipRequest`):** `{ character_id: UUID, relationship_type_code: string, timeline_id?: UUID, effective_from_world_time_id?: UUID, effective_to_world_time_id?: UUID }` — unchanged this checkpoint. The portal's own Add-relationship control sets only `character_id`/`relationship_type_code`; the temporal-scope fields have no UI yet (pre-existing capability, not newly exposed).
+- **Response (`CharacterRelationshipResponse`):** `{ membership_character_relationship_id: UUID }`. `201`, unchanged.
+- **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
+  - the target `campaign_membership_id` must belong to `campaign_id` (pre-existing; `MembershipNotInCampaignError`, 404, non-disclosing);
+  - the membership must be currently open (`ended_at IS NULL`) and in the `active` membership status — **new**; the membership's own user account must currently be platform-active — **new**; both raise `MembershipNotActiveError` (409) — identical to §3b's own two checks for `assign_membership_role`;
+  - the target `character_id` must exist, belong to the campaign's own world, **and** currently be active (`core.lifecycle_statuses.code = 'active'`) — the world-scope half is pre-existing, the activeness half is **new**; both fold into the existing `TargetNotInCampaignWorldError` (404);
+  - `relationship_type_code` must resolve to a currently `is_active` type — **new**; previously any existing code (even a deactivated one) was accepted. Raises the new `RelationshipTypeNotActiveError` (404), folding "doesn't exist" and "deactivated" identically, mirroring `RoleNotUsableByCampaignError`'s reasoning for roles;
+  - a duplicate still-active `(membership, character, type)` triple is rejected as a 409 by the pre-existing `ux_membership_character_relationships_active_type` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's own "database-enforced invariants deliberately not duplicated" policy.
+- **Concurrency (new):** the target membership row, then its owning user row, then the target character row, then the candidate relationship-type row are locked in that order (`FOR UPDATE OF cm` / `FOR UPDATE OF u` / `FOR UPDATE OF e` / `FOR UPDATE`) before any eligibility check runs — always membership-then-role/type, the same relative order `assign_membership_role`/`change_membership_role` already use for their own disjoint row sets, so this command can never deadlock against either. Proven by real-connection PostgreSQL regression tests (`tests/database/test_character_relationship_concurrency.py`): grant-vs-grant of the identical relationship (unique-index insertion lock, no pre-check needed), grant vs. membership-ending, grant vs. character-deactivation, grant vs. relationship-type-deactivation.
+- **Not checked (documented, not an oversight):** campaign lifecycle status — `grant_character_relationship`/`change_character_relationship` never require `campaign_id` to currently be `active`, consistent with `assign_membership_role`/`change_membership_role`'s own identical precedent (only `add_campaign_member`, which creates a *fresh* membership, checks and locks the campaign row).
+- **Idempotency/audit:** unchanged — the same durable `Idempotency-Key` mechanism every other create-shaped row in §2/§3 uses; one `audit.change_log` row per successful call.
+- **Sibling relationships:** untouched — this inserts exactly one new row; any other relationship (to this character or any other) the same membership independently holds is unaffected.
+
+## 3i. `POST /campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/change` (new, character-relationship-management checkpoint)
+
+The character-relationship analogue of §3a's `change_membership_role`:
+atomically revokes one existing, currently-active relationship assignment
+and inserts a new one with a different relationship type — never a bulk
+replace of every relationship a member holds.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request (`ChangeCharacterRelationshipRequest`):** `{ new_relationship_type_id: UUID }`. Route path carries `campaign_id` and the target `membership_character_relationship_id`. Unlike §3h's grant contract (which takes a `relationship_type_code` string), this takes the type by **id** — mirroring §3a's `new_role_id: UUID` shape, and matching §3g's `assignable_relationship_types` metadata, which carries both `code` and `character_relationship_type_id` so the portal can satisfy either contract without a lookup of its own.
+- **Response (`CharacterRelationshipResponse`, reused from §3h):** `{ membership_character_relationship_id: UUID }` — the id of the *new* row. `201`, matching §3h's own status code for "a new row now exists," even though an existing row also changed.
+- **Command:** `dnd_ai.commands.access_grants.change_character_relationship` (new). The new row carries forward the old row's own `timeline_id`/`effective_from_world_time_id`/`effective_to_world_time_id` temporal scope unchanged — only the relationship type changes.
+- **Active-state boundary:** the target `membership_character_relationship_id` must currently be an eligible, active assignment — not already revoked, not expired, and its owning membership not ended and in the `active` membership status (the identical "currently true" definition §3's own `character_relationships` field already uses). Any of these failing raises `CharacterRelationshipNotActiveError`, mapped to **409** — identically for all of them, mirroring §3a's own `MembershipRoleNotActiveError` contract exactly (a caller cannot learn *which* condition applied). The candidate `new_relationship_type_id` is held to the same bar as §3h's own type check: nonexistent or deactivated raises `RelationshipTypeNotActiveError` (**404**) — never a legitimate target in the first place, unlike the 409 cases above.
+- **Same-type no-op:** if `new_relationship_type_id` names the type `membership_character_relationship_id` already, currently holds, the request is rejected as `ChangeCharacterRelationshipNoOpError`, mapped to **422**, checked before any write — identical to §3a's own `ChangeMembershipRoleNoOpError` contract, including the "never durably cached as a successful idempotent-replay result" reasoning.
+- **Duplicate-result rejection:** a retry naming a `new_relationship_type_id` the same `(membership, character)` pair already holds actively (from some *other* assignment) is rejected as a 409 by the pre-existing `ux_membership_character_relationships_active_type` unique index — not pre-checked, matching §3h's own policy.
+- **Concurrency:** the target row and its owning membership are locked together (`FOR UPDATE OF mcr, cm`) before evaluating the target's own eligibility, and the candidate new relationship-type row is separately locked (`FOR UPDATE`) before its own check — the identical "target-row/candidate-row" lock ordering §3a's `change_membership_role` uses for its own role pair, so this command can never deadlock against it. A concurrent change/revoke of the identical row is serialized the same way (same-row coverage) — the loser observes the winner's committed effect (already-revoked/superseded) once unblocked, raising `CharacterRelationshipNotActiveError` rather than an interleaved write. Proven by real-connection PostgreSQL regression tests (`tests/database/test_character_relationship_concurrency.py`): change vs. relationship-type-deactivation, change-vs-revoke same-row, change-vs-change same-row.
+- **No retention invariant:** unlike §3a's `change_membership_role`, this checkpoint adds no campaign `access.manage`-retention check — a character relationship never carries `access.manage` (character-scoped capabilities and the campaign-wide `access.manage` capability are disjoint concerns, per `dnd_ai.commands.access_grants`' own module docstring).
+- **Idempotency:** the same durable `Idempotency-Key` mechanism §3a uses — one opaque key per logical `(membership_character_relationship_id, new_relationship_type_id)` edit, reused verbatim across a retry of that exact selection, regenerated the moment the selection changes, cleared on confirmed success. See `portal/src/hooks/useChangeCharacterRelationship.ts`.
+- **Audit:** one `audit.change_log` row (`change_action_code = 'updated'`, `table_name = 'membership_character_relationships'`, `record_id` = the new row's id), atomic with the state change, recording `previous_status`/`new_status` (the old/new relationship-type **codes**) and `changed_fields = { "previous_membership_character_relationship_id": "<uuid>" }` — the identical shape §3a's own audit row uses.
+- **Self-change:** permitted, with no special-case check — there is no retention invariant to protect.
+- **Effective immediately:** the change is visible on the next `GET .../access-overview` request and the next `/auth/session` bootstrap.
+
+## 3j. `POST /campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke` (hardened, character-relationship-management checkpoint)
+
+The route and command (`revoke_character_relationship`) already existed —
+this checkpoint closes the identical duplicate-audit gap §3c already
+closed for `revoke_membership_role_endpoint`, then wires it into the
+portal as the Access page's "Revoke relationship" action.
+
+- **Capability:** `access.manage`, via the identical `require_campaign_capability` dependency every other row in §2/§3 uses.
+- **Request:** no body. Route path carries `campaign_id` and the target `membership_character_relationship_id`. Accepts an optional `Idempotency-Key` header — **new this checkpoint**.
+- **Response contract change:** previously a bodyless `204 No Content`; now `200`/`CharacterRelationshipResponse` (`{ membership_character_relationship_id: UUID }`, reusing §3h's own grant response shape) — needed so `begin_idempotent_request`/`complete_idempotent_request` have a response to cache. Identical reasoning to §3c's own response-contract change for `revoke_membership_role_endpoint`.
+- **Active-state/eligibility:** `revoke_character_relationship` does **not** require the target to currently be an eligible/active assignment the way `change_character_relationship` requires of its own target — an already-revoked row is a documented, harmless no-op (`RevokeCharacterRelationshipResult.revoked = False`), proven by `tests/database/test_character_relationship_concurrency.py::test_two_concurrent_revokes_of_the_same_relationship_serialize`. A nonexistent `membership_character_relationship_id`, or one belonging to a different campaign, is still rejected identically as `MembershipNotInCampaignError` (404, non-disclosing).
+- **Idempotency/audit (hardened this checkpoint):** the pre-hardening route wrote one `audit.change_log` row on *every* call, including a plain retry against an already-revoked row — the identical duplicate-audit gap §3c closed for role revocation. Fixed the same two ways: (1) an `Idempotency-Key` replay returns the cached response verbatim without re-running the command; (2) independent of any key, the route's audit write is now conditioned on `RevokeCharacterRelationshipResult.revoked` — `False` writes no audit row at all.
+- **No retention invariant:** unchanged — a character relationship never carries `access.manage`, so there is nothing for this route to protect (see §3i).
+- **Self-revocation:** permitted, with no special-case check — the server decides authorization; the portal never locally grants or withholds the control based on whether the target is the caller's own relationship.
+- **Concurrency:** the pre-existing `FOR UPDATE OF mcr` lock on the target row serializes same-row races; this checkpoint adds regression coverage for revoke-vs-revoke and change-vs-revoke same-row cases (`tests/database/test_character_relationship_concurrency.py`). Revoke racing the owning membership's own ending is **not** a race this function needs to resolve — `revoke_character_relationship` never re-checks membership eligibility at all (documented in that function's own docstring), so a concurrent write to a different `security.campaign_memberships` row cannot affect its `FOR UPDATE OF mcr` lock.
+- **Sibling relationships:** untouched — only the named row is revoked.
+- **Immediate authorization effect:** revocation removes the character from the target user's next `GET /auth/session` bootstrap (`dnd_ai.queries.bootstrap.get_session_bootstrap` re-resolves `AccessContext.character_capabilities` fresh on every call — no caching layer) and, if the revoked relationship was the sole source of a `selected_character_id` default, that field becomes `null` on the next bootstrap rather than continuing to name a no-longer-authorized character. Already covered by the pre-existing, unmodified `tests/database/test_query_bootstrap.py::test_relationship_revocation_is_reflected_on_the_next_call`/`test_character_relationship_with_capability_is_a_selectable_perspective`/`test_multiple_perspectives_leave_selected_character_null` — this checkpoint changes no bootstrap-query code, so no new bootstrap-level test was needed; the existing suite already proves the same-request re-resolution behavior this route's own hardening depends on. A route request made using the revoked perspective (e.g. a character-scoped read) fails with that route's own established non-disclosing response on its *next* request — no browser-session revocation is performed or required.
+
 ## 4. Principal/boundary summary
 
 - **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
@@ -337,9 +441,9 @@ No backend read/write contract exists yet for:
 - Access-group management: creating an access group, listing its members, or adding/removing a membership from one — `security.access_groups`/`.access_group_memberships` exist in schema and are read internally by `dnd_ai.domain.access.resolve_access_context`, but no API route anywhere creates, lists, or mutates them.
 - Any audit-history read endpoint — `audit.change_log` rows are written by every mutation above, but no route reads them back.
 - A preview-as-user/perspective workflow (docs/UI_DESIGN.md §6.3) — no existing endpoint.
-- A UI for the remaining mutation endpoints in §2: character-relationship grant/revocation, resource-grant creation/revocation, invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation. **Changing an existing member's role assignment (§3a, checkpoint 1), adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2), and adding an existing account as a member/ending an existing membership (§3d/§3e/§3f, checkpoint 3) are now wired** — the exceptions to this list.
+- A UI for the remaining mutation endpoints in §2: resource-grant creation/revocation, invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation. **Changing an existing member's role assignment (§3a, checkpoint 1), adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2), adding an existing account as a member/ending an existing membership (§3d/§3e/§3f, checkpoint 3), and adding/changing/revoking a member's character relationship (§3g/§3h/§3i/§3j, the character-relationship-management checkpoint) are now wired** — the exceptions to this list. Resource grants have a broader target model (six target kinds, two grantee kinds) than this document's own scope and are explicitly deferred to a separate future increment, not folded into the character-relationship checkpoint.
 
-None of the above is implemented yet. 13E-A was read-only; 13E-B checkpoints 1, 2, and 3 together add exactly the five mutations in §3a/§3b/§3c/§3e/§3f (plus the §3d read contract) and nothing else in this list — no invitation, relationship, grant, preview-as-user, Foundry, or AI mutation; no account creation, activation, disablement, or reactivation; no membership reactivation.
+None of the above is implemented yet. 13E-A was read-only; 13E-B checkpoints 1, 2, 3, and the character-relationship-management checkpoint together add exactly the eight mutations in §3a/§3b/§3c/§3e/§3f/§3h/§3i/§3j (plus the §3d/§3g read contracts) and nothing else in this list — no invitation, resource grant, preview-as-user, Foundry, or AI mutation; no account creation, activation, disablement, or reactivation; no membership reactivation.
 
 ## 6. Manual-validation development fixture accounts
 
@@ -529,6 +633,50 @@ accounts already exercise the removal side.
   the same `Idempotency-Key` returns the original response unchanged,
   creating no second membership or role row.
 - **Idempotent replay (removal):** repeating the same removal request with
+  the same `Idempotency-Key` returns the original response unchanged,
+  writing no second `audit.change_log` row.
+
+### Character-relationship-management checkpoint manual-validation scenarios
+
+No seed change was needed — `phase13e.player_a`'s pre-existing `owner`
+relationship to "Phase13C Character A" (see the seeded-accounts table
+above) already provides an existing relationship to change/revoke, and
+`phase13e.observer_a` (no relationship of their own) provides a target
+with nothing yet to add to.
+
+- **Add a character relationship:** log in as `phase13e.gm2`, open Campaign
+  A's Access page, expand `phase13e.observer_a`'s card, choose "Add
+  character relationship". "Phase13C Character A" and every currently
+  active relationship type are offered (server-authoritative, never
+  hardcoded). Select "Viewer", Add. The overview refreshes to show the new
+  relationship on Observer A's card; `phase13e.player_a`'s own unrelated
+  `owner` relationship to the same character is unaffected (sibling
+  relationships preserved).
+- **Add excludes an already-active combination:** on `phase13e.player_a`'s
+  own card, "Add character relationship" with "Phase13C Character A"
+  selected omits "Owner" from the relationship-type choices (already
+  active for that exact character) while still offering every other type —
+  proving the exclusion is per-`(character, type)` combination, not a
+  blanket "already has a relationship to this character" rule.
+- **Change relationship type:** as `phase13e.gm2`, choose "Change type" on
+  `phase13e.player_a`'s "Owner" relationship, select "Primary Controller",
+  Save. The overview refreshes to show "Primary Controller" in place of
+  "Owner" for the same character; the old assignment's row is revoked, not
+  overwritten (temporal history preserved, verifiable via `tests/database/
+  test_api_access_grants.py::test_changing_a_character_relationship_type_succeeds`'s
+  own database assertions).
+- **Revoke a character relationship:** as `phase13e.gm2`, choose "Revoke
+  relationship" on `phase13e.player_a`'s current relationship. The
+  confirmation names the character and member and explains that the
+  character perspective will no longer be available. Confirm — the
+  overview refreshes with the relationship gone; on Player A's own next
+  `GET /auth/session`, the corresponding entry disappears from `character_
+  perspectives` (`dnd_ai.queries.bootstrap` re-resolves fresh every call —
+  no browser-session revocation needed).
+- **Idempotent replay (add/change):** repeating the same add or change
+  request with the same `Idempotency-Key` returns the original response
+  unchanged, creating no second relationship row.
+- **Idempotent replay (revoke):** repeating the same revoke request with
   the same `Idempotency-Key` returns the original response unchanged,
   writing no second `audit.change_log` row.
 

@@ -41,6 +41,8 @@ const overviewFixture: CampaignAccessOverview = {
             display_name: "Player",
         },
     ],
+    assignable_characters: [],
+    assignable_relationship_types: [],
 }
 
 afterEach(() => {

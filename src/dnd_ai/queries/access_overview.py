@@ -131,6 +131,19 @@ class EligibleAccountView:
     display_name: str
 
 
+@dataclass(frozen=True)
+class AssignableCharacterView:
+    character_id: uuid.UUID
+    display_name: str
+
+
+@dataclass(frozen=True)
+class AssignableCharacterRelationshipTypeView:
+    character_relationship_type_id: uuid.UUID
+    code: str
+    display_name: str
+
+
 def get_campaign_access_overview(
     connection: Connection,
     *,
@@ -307,6 +320,68 @@ def list_assignable_campaign_roles(
                 ORDER BY sort_order, display_name
             """),
             {"campaign_id": campaign_id},
+        ).mappings()
+    )
+
+
+def list_assignable_campaign_characters(
+    connection: Connection, *, world_id: uuid.UUID
+) -> tuple[AssignableCharacterView, ...]:
+    """Every character `dnd_ai.commands.access_grants.
+    grant_character_relationship()`/`change_character_relationship()` would
+    actually accept as a same-world target right now: a `character.
+    characters` row (never a bare `core.entities` row of some other type)
+    belonging to `world_id` — the campaign's own world, resolved server-side
+    by the caller from the campaign's pinned timeline, exactly like `grant_
+    character_relationship()`'s own `expected_world_id` — and currently
+    active (`core.lifecycle_statuses.code = 'active'`), the identical
+    "never a legitimate target in the first place" bar that command's own
+    hardening now enforces. Queried here read-only so the portal's "Add/
+    change character relationship" controls never have to hardcode or guess
+    the assignable set, mirroring `list_assignable_campaign_roles`'s
+    identical purpose for roles. Not narrowed to player characters only —
+    an NPC is a legitimate target too (a portrayer/assistant-GM relationship
+    is meaningful for an NPC, per docs/architecture/DATABASE_MODEL.md
+    §19.4's own relationship-type list)."""
+    return tuple(
+        AssignableCharacterView(character_id=row["entity_id"], display_name=row["canonical_name"])
+        for row in connection.execute(
+            text("""
+                SELECT e.entity_id, e.canonical_name
+                FROM core.entities e
+                JOIN character.characters c ON c.character_id = e.entity_id
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                WHERE e.world_id = :world_id
+                  AND ls.code = 'active'
+                ORDER BY e.canonical_name, e.entity_id
+            """),
+            {"world_id": world_id},
+        ).mappings()
+    )
+
+
+def list_assignable_character_relationship_types(
+    connection: Connection,
+) -> tuple[AssignableCharacterRelationshipTypeView, ...]:
+    """Every currently `is_active` `security.character_relationship_types`
+    row — the identical scope `dnd_ai.commands.access_grants.
+    grant_character_relationship()`/`change_character_relationship()` now
+    enforce for their own type argument. Relationship types carry no
+    campaign scope of their own (unlike roles), so this is not further
+    narrowed by `campaign_id`/`world_id`."""
+    return tuple(
+        AssignableCharacterRelationshipTypeView(
+            character_relationship_type_id=row["character_relationship_type_id"],
+            code=row["code"],
+            display_name=row["display_name"],
+        )
+        for row in connection.execute(
+            text("""
+                SELECT character_relationship_type_id, code, display_name
+                FROM security.character_relationship_types
+                WHERE is_active
+                ORDER BY sort_order, display_name
+            """)
         ).mappings()
     )
 

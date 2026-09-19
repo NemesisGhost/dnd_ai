@@ -1,12 +1,17 @@
 import { useId } from "react"
 import { AddCampaignMember } from "../components/AddCampaignMember"
+import { AddCharacterRelationship } from "../components/AddCharacterRelationship"
 import { AddMemberRole } from "../components/AddMemberRole"
+import { CharacterRelationshipEditor } from "../components/CharacterRelationshipEditor"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
 import { RemoveCampaignMember } from "../components/RemoveCampaignMember"
+import { RevokeCharacterRelationship } from "../components/RevokeCharacterRelationship"
 import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
 import type {
+    AssignableCharacter,
+    AssignableCharacterRelationshipType,
     AssignableRole,
     CampaignAccessMember,
     CampaignAccessOverview,
@@ -24,6 +29,8 @@ interface MemberAccessCardProps {
     campaignId: string
     campaignName: string
     assignableRoles: AssignableRole[]
+    assignableCharacters: AssignableCharacter[]
+    assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -33,6 +40,8 @@ function MemberAccessCard({
     campaignId,
     campaignName,
     assignableRoles,
+    assignableCharacters,
+    assignableRelationshipTypes,
     onChanged,
     onMutationStart,
 }: MemberAccessCardProps) {
@@ -131,6 +140,32 @@ function MemberAccessCard({
                                         {
                                             relationship.relationship_type_display_name
                                         }
+                                        <CharacterRelationshipEditor
+                                            campaignId={campaignId}
+                                            campaignName={campaignName}
+                                            memberDisplayName={
+                                                member.display_name
+                                            }
+                                            relationship={relationship}
+                                            assignableRelationshipTypes={
+                                                assignableRelationshipTypes
+                                            }
+                                            onChanged={onChanged}
+                                            onMutationStart={
+                                                onMutationStart
+                                            }
+                                        />
+                                        <RevokeCharacterRelationship
+                                            campaignId={campaignId}
+                                            memberDisplayName={
+                                                member.display_name
+                                            }
+                                            relationship={relationship}
+                                            onChanged={onChanged}
+                                            onMutationStart={
+                                                onMutationStart
+                                            }
+                                        />
                                     </li>
                                 ),
                             )}
@@ -138,6 +173,24 @@ function MemberAccessCard({
                     ) : (
                         <p>No character relationships.</p>
                     )}
+
+                    <AddCharacterRelationship
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        campaignMembershipId={
+                            member.campaign_membership_id
+                        }
+                        memberDisplayName={member.display_name}
+                        assignableCharacters={assignableCharacters}
+                        assignableRelationshipTypes={
+                            assignableRelationshipTypes
+                        }
+                        existingRelationships={
+                            member.character_relationships
+                        }
+                        onChanged={onChanged}
+                        onMutationStart={onMutationStart}
+                    />
                 </section>
 
                 <section aria-labelledby={grantsHeadingId}>
@@ -212,9 +265,10 @@ export function AccessPage({
                 Current members, roles, character relationships, and
                 explicit grants for this campaign. Adding an existing
                 account as a member, changing and removing an existing
-                member's roles, and removing an existing member are
-                available below; other access changes are not available
-                here yet.
+                member's roles, adding/changing/revoking a member's
+                character relationships, and removing an existing member
+                are available below; other access changes are not
+                available here yet.
             </p>
 
             <AddCampaignMember
@@ -235,6 +289,12 @@ export function AccessPage({
                                 campaignName={campaignName}
                                 assignableRoles={
                                     overview.assignable_roles
+                                }
+                                assignableCharacters={
+                                    overview.assignable_characters
+                                }
+                                assignableRelationshipTypes={
+                                    overview.assignable_relationship_types
                                 }
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}

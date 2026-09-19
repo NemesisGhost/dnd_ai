@@ -76,6 +76,8 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
                 display_name: "Rules Curator",
             },
         ],
+        assignable_characters: [],
+        assignable_relationship_types: [],
     }
 }
 

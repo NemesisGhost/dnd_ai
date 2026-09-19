@@ -11,6 +11,17 @@ export interface AssignableRole {
     display_name: string
 }
 
+export interface AssignableCharacter {
+    character_id: string
+    display_name: string
+}
+
+export interface AssignableCharacterRelationshipType {
+    character_relationship_type_id: string
+    code: string
+    display_name: string
+}
+
 export interface AccessCharacterRelationshipSummary {
     membership_character_relationship_id: string
     character_id: string
@@ -50,4 +61,6 @@ export interface CampaignAccessMember {
 export interface CampaignAccessOverview {
     members: CampaignAccessMember[]
     assignable_roles: AssignableRole[]
+    assignable_characters: AssignableCharacter[]
+    assignable_relationship_types: AssignableCharacterRelationshipType[]
 }
