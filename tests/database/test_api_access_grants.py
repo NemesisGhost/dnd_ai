@@ -47,6 +47,7 @@ from tests.factories import (
     make_knowledge_item,
     make_membership_role,
     make_quest,
+    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_session,
@@ -64,8 +65,14 @@ class Fixture:
     def __init__(self, connection: Connection, slug: str) -> None:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
+        # active, not the module's original "pending" default: checkpoint-4
+        # correction added a campaign-active check to grant_character_
+        # relationship/change_character_relationship, and admin_membership_id
+        # below already gives this campaign a qualifying, non-expiring
+        # access.manage holder, so activating it here satisfies the deferred
+        # retention trigger at this setup transaction's own commit.
         self.campaign_id = make_campaign(
-            connection, self.timeline_id, lifecycle_status_code="pending"
+            connection, self.timeline_id, lifecycle_status_code="active"
         )
         self.other_campaign_id = make_campaign(
             connection, self.timeline_id, "Other Campaign", lifecycle_status_code="pending"
@@ -756,6 +763,111 @@ def test_revoking_a_relationship_from_a_different_campaign_is_rejected(
     assert response.status_code == 404, response.text
 
 
+def test_a_granted_relationship_appears_on_bootstrap_and_a_revoked_one_disappears_and_loses_access(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Focused API mutation-to-bootstrap coverage for add/revoke (checkpoint-4
+    correction), through the real HTTP endpoints end to end rather than
+    direct command calls: granting via `POST .../character-relationships`
+    must make the character a selectable perspective on the very next
+    `GET /auth/session` (`selected_character_id` defaults to it, being the
+    only one), and the character-detail endpoint (a real perspective-
+    sensitive resource) must become readable; revoking via `POST .../revoke`
+    must remove both on the next request of each — `dnd_ai.queries.bootstrap.
+    get_session_bootstrap` re-resolves fresh every call, so no code change
+    is needed for either direction to take effect immediately."""
+    with postgres_engine.begin() as connection:
+        view_summary_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_summary"
+        )
+        viewer_type_id = lookup_id(
+            connection,
+            "security",
+            "character_relationship_types",
+            "character_relationship_type_id",
+            "viewer",
+        )
+
+        # target_membership_id otherwise holds no role at all — the
+        # character-detail endpoint's own coarser base gate requires
+        # campaign.view before its finer, character-scoped tier check ever
+        # runs (dnd_ai.api.characters' own module docstring).
+        view_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "campaign.view"
+        )
+        viewer_role_id = make_role(
+            connection, campaign_id=f.campaign_id, code=f"bootstrap_viewer_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(connection, viewer_role_id, view_capability_id)
+        make_membership_role(connection, f.target_membership_id, viewer_role_id)
+
+    # security.character_relationship_type_capabilities has no seed file and
+    # "viewer" is a shared lookup row (unlike the fixture's own extra,
+    # per-test relationship types) — added/removed around the request
+    # section below rather than left to the fixture's own teardown, so this
+    # test never leaks a permanent capability mapping onto a row every other
+    # test in the shared database also reads.
+    try:
+        with postgres_engine.begin() as connection:
+            make_relationship_type_capability(
+                connection, viewer_type_id, view_summary_capability_id
+            )
+
+        with client_factory(f.admin_user_id) as admin_client:
+            grant = admin_client.post(
+                _relationships_url(f),
+                json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+            )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        with client_factory(f.target_user_id) as target_client:
+            session_after_grant = target_client.get("/auth/session")
+            detail_after_grant = target_client.get(
+                f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
+            )
+        assert session_after_grant.status_code == 200, session_after_grant.text
+        campaign_after_grant = next(
+            c
+            for c in session_after_grant.json()["campaigns"]
+            if c["campaign_id"] == str(f.campaign_id)
+        )
+        perspective_ids = {
+            p["character_id"] for p in campaign_after_grant["character_perspectives"]
+        }
+        assert str(f.character_id) in perspective_ids
+        assert campaign_after_grant["selected_character_id"] == str(f.character_id)
+        assert detail_after_grant.status_code == 200, detail_after_grant.text
+
+        with client_factory(f.admin_user_id) as admin_client:
+            revoke = admin_client.post(_revoke_relationship_url(f, relationship_id))
+        assert revoke.status_code == 200, revoke.text
+
+        with client_factory(f.target_user_id) as target_client:
+            session_after_revoke = target_client.get("/auth/session")
+            detail_after_revoke = target_client.get(
+                f"/campaigns/{f.campaign_id}/characters/{f.character_id}"
+            )
+        assert session_after_revoke.status_code == 200, session_after_revoke.text
+        campaign_after_revoke = next(
+            c
+            for c in session_after_revoke.json()["campaigns"]
+            if c["campaign_id"] == str(f.campaign_id)
+        )
+        assert campaign_after_revoke["character_perspectives"] == []
+        assert campaign_after_revoke["selected_character_id"] is None
+        assert detail_after_revoke.status_code == 404, detail_after_revoke.text
+    finally:
+        with postgres_engine.begin() as cleanup:
+            cleanup.execute(
+                text(
+                    "DELETE FROM security.character_relationship_type_capabilities "
+                    "WHERE character_relationship_type_id = :t AND capability_id = :c"
+                ),
+                {"t": viewer_type_id, "c": view_summary_capability_id},
+            )
+
+
 # ---------------------------------------------------------------------------
 # grant_character_relationship — membership/user/character/type eligibility
 # hardening (character-relationship-management checkpoint)
@@ -829,6 +941,199 @@ def test_granting_a_relationship_with_a_nonexistent_type_code_is_rejected(
             },
         )
     assert response.status_code == 404, response.text
+
+
+# ---------------------------------------------------------------------------
+# grant/change_character_relationship — campaign lifecycle hardening
+# (checkpoint-4 correction)
+# ---------------------------------------------------------------------------
+
+
+def _deactivate_campaign(postgres_engine: Engine, campaign_id: uuid.UUID) -> None:
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE campaign.campaigns
+                SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'pending'
+                )
+                WHERE campaign_id = :c
+            """),
+            {"c": campaign_id},
+        )
+
+
+def _reactivate_campaign(postgres_engine: Engine, campaign_id: uuid.UUID) -> None:
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE campaign.campaigns
+                SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active'
+                )
+                WHERE campaign_id = :c
+            """),
+            {"c": campaign_id},
+        )
+
+
+def test_granting_a_relationship_on_an_inactive_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Sequential ordering: the campaign is already inactive by the time
+    the request reaches the command (as opposed to the concurrency-proof
+    ordering in `test_character_relationship_concurrency.py`, where the
+    grant commits first and the deactivation blocks behind it)."""
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _relationships_url(f),
+                json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+            )
+        assert response.status_code == 409, response.text
+
+        with postgres_engine.connect() as verify:
+            relationship_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM security.membership_character_relationships
+                    WHERE campaign_membership_id = :m AND character_id = :c
+                """),
+                {"m": f.target_membership_id, "c": f.character_id},
+            ).scalar_one()
+            assert relationship_count == 0
+
+            audit_row_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE table_name = 'membership_character_relationships'
+                      AND world_id = :w
+                """),
+                {"w": f.world_id},
+            ).scalar_one()
+            assert audit_row_count == 0
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
+
+
+def test_a_grant_rejected_for_campaign_inactivity_does_not_durably_complete_its_idempotency_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The whole request runs in one transaction (`dnd_ai.api.deps.
+    get_connection`) — `CampaignNotActiveError` rolls it back, including
+    `begin_idempotent_request`'s own reservation row, so the *same* key
+    reused once the campaign is active again must run the real command
+    rather than replay a cached rejection or a cached success it never
+    earned."""
+    key = f"grant-relationship-campaign-inactive-{uuid.uuid4().hex[:8]}"
+    body = {"character_id": str(f.character_id), "relationship_type_code": "viewer"}
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            rejected = client.post(
+                _relationships_url(f), json=body, headers={"Idempotency-Key": key}
+            )
+        assert rejected.status_code == 409, rejected.text
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
+
+    with client_factory(f.admin_user_id) as client:
+        retried = client.post(_relationships_url(f), json=body, headers={"Idempotency-Key": key})
+    assert retried.status_code == 201, retried.text
+
+    with postgres_engine.connect() as verify:
+        relationship_count = verify.execute(
+            text("""
+                SELECT count(*) FROM security.membership_character_relationships
+                WHERE campaign_membership_id = :m AND character_id = :c AND revoked_at IS NULL
+            """),
+            {"m": f.target_membership_id, "c": f.character_id},
+        ).scalar_one()
+        assert relationship_count == 1
+
+
+def test_changing_a_relationship_on_an_inactive_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _change_relationship_url(f, relationship_id),
+                json={"new_relationship_type_id": str(f.portrayer_type_id)},
+            )
+        assert response.status_code == 409, response.text
+
+        with postgres_engine.connect() as verify:
+            row = verify.execute(
+                text("""
+                    SELECT mcr.revoked_at, crt.code
+                    FROM security.membership_character_relationships mcr
+                    JOIN security.character_relationship_types crt
+                        ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+                    WHERE mcr.membership_character_relationship_id = :r
+                """),
+                {"r": relationship_id},
+            ).one()
+            assert row.revoked_at is None
+            assert row.code == "viewer"
+
+            audit_row_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE table_name = 'membership_character_relationships'
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                      AND world_id = :w
+                """),
+                {"w": f.world_id},
+            ).scalar_one()
+            assert audit_row_count == 0
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
+
+
+def test_revoking_a_relationship_on_an_inactive_campaign_still_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`revoke_character_relationship` deliberately does not check campaign
+    lifecycle status — revoking access must stay available for cleanup even
+    against an inactive campaign (see `dnd_ai.commands.access_grants`'s own
+    module docstring, "Checkpoint-4 correction")."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={"character_id": str(f.character_id), "relationship_type_code": "viewer"},
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(_revoke_relationship_url(f, relationship_id))
+        assert response.status_code == 200, response.text
+
+        with postgres_engine.connect() as verify:
+            revoked_at = verify.execute(
+                text(
+                    "SELECT revoked_at FROM security.membership_character_relationships "
+                    "WHERE membership_character_relationship_id = :r"
+                ),
+                {"r": relationship_id},
+            ).scalar_one()
+            assert revoked_at is not None
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +1223,45 @@ def test_changing_a_revoked_relationship_is_rejected(
             json={"new_relationship_type_id": str(f.portrayer_type_id)},
         )
     assert response.status_code == 409, response.text
+
+
+def test_changing_a_fictional_time_bounded_relationship_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 correction: a fully fictional-time-bounded relationship
+    (both `effective_from_world_time_id`/`effective_to_world_time_id` set)
+    is a closed historical interval, never currently active — `dnd_ai.
+    commands.access_grants.change_character_relationship`'s own eligibility
+    check must reject it exactly like an already-revoked row, via the same
+    `CharacterRelationshipNotActiveError` (409)."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _relationships_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "relationship_type_code": "viewer",
+                "effective_from_world_time_id": str(f.world_time_id),
+                "effective_to_world_time_id": str(f.later_world_time_id),
+            },
+        )
+        assert grant.status_code == 201, grant.text
+        relationship_id = uuid.UUID(grant.json()["membership_character_relationship_id"])
+
+        response = client.post(
+            _change_relationship_url(f, relationship_id),
+            json={"new_relationship_type_id": str(f.portrayer_type_id)},
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": relationship_id},
+        ).scalar_one()
+        assert row is None
 
 
 def test_changing_a_relationship_to_an_inactive_type_is_rejected(

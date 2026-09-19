@@ -942,13 +942,17 @@ class EndCampaignMembershipResult:
     no-op case (already ended). `dnd_ai.api.memberships.
     end_campaign_membership_endpoint` uses this to write exactly one
     `audit.change_log` row per *actual* removal, never one per HTTP call.
-    `revoked_membership_role_ids` is empty for the no-op case (nothing was
-    touched) and otherwise lists every role row this call revoked, for that
-    same audit record's `changed_fields`."""
+    `revoked_membership_role_ids`/`revoked_membership_character_relationship_ids`
+    are both empty for the no-op case (nothing was touched) and otherwise
+    list every role/character-relationship row this call revoked, for that
+    same audit record's `changed_fields` (checkpoint-4 correction added the
+    relationship half — see `end_campaign_membership()`'s own docstring for
+    the silent-reactivation gap this closes)."""
 
     campaign_membership_id: uuid.UUID
     ended: bool
     revoked_membership_role_ids: tuple[uuid.UUID, ...]
+    revoked_membership_character_relationship_ids: tuple[uuid.UUID, ...]
 
 
 def end_campaign_membership(
@@ -968,15 +972,37 @@ def end_campaign_membership(
     deleted, matching every other closed-membership row in this schema
     (`security.campaign_memberships`' own table comment).
 
-    Preserves temporal history for *both* affected tables in the same
+    Preserves temporal history for *all three* affected tables in the same
     transaction: every currently active `security.membership_roles` row
-    belonging to this membership is revoked (`revoked_at` set, exactly like
-    `revoke_membership_role`'s own single-row update — never deleted, never
-    reassigned) before the membership row itself is closed, so a person who
-    no longer belongs to a campaign is never left holding rows the read
-    side (`dnd_ai.queries.access_overview`) would still describe as an
-    active current role, even though that same read side already excludes
-    the closed membership itself (`cm.ended_at IS NULL`) regardless.
+    **and** every currently active (`revoked_at IS NULL`) `security.
+    membership_character_relationships` row belonging to this membership is
+    revoked (`revoked_at` set, exactly like `revoke_membership_role`'s own
+    single-row update — never deleted, never reassigned) before the
+    membership row itself is closed, so a person who no longer belongs to a
+    campaign is never left holding rows the read side (`dnd_ai.queries.
+    access_overview`) would still describe as an active current role or
+    character relationship, even though that same read side already
+    excludes the closed membership itself (`cm.ended_at IS NULL`)
+    regardless.
+
+    Checkpoint-4 correction: the character-relationship half of this was
+    previously missing entirely — `end_campaign_membership()` closed a
+    membership's roles but left its `membership_character_relationships`
+    rows untouched. `dnd_ai.commands.campaign_invitations.
+    _activate_or_create_membership` (the invitation-acceptance flow's own
+    "reopen a closed membership" path) reactivates the *same*
+    `campaign_membership_id` row in place — it clears `ended_at`/`ended_
+    by_membership_id` and resets `membership_status_id`, never inserting a
+    fresh membership row — so any relationship row this function left
+    `revoked_at IS NULL` on would immediately regain effect the moment that
+    membership reopened, silently restoring whatever character
+    perspective/capabilities the departed member held before, with no new
+    `grant_character_relationship()` call and no new `audit.change_log`
+    entry to explain why. Revoking every such row here, in the same
+    transaction that closes the membership, means a reopened membership
+    always starts with zero character relationships, exactly like it always
+    already started with zero roles — any perspective it should regain
+    requires an explicit new grant, auditable the normal way.
 
     Or does nothing (a harmless no-op, exactly like `revoke_membership_
     role`'s identical "already revoked" case) if `campaign_membership_id`
@@ -1004,10 +1030,13 @@ def end_campaign_membership(
     its own target row — so a concurrent removal of the same membership,
     or a concurrent role add/change/revoke against one of its role rows
     (each of which independently locks that specific `membership_roles`
-    row, and, for `assign_membership_role`, the membership row itself)
-    cannot race between this function's own read and its writes: whichever
-    transaction acquires the relevant lock first forces the other to wait,
-    then re-observes the first's committed effect."""
+    row, and, for `assign_membership_role`, the membership row itself), or
+    (checkpoint-4 correction) a concurrent `grant_character_relationship`/
+    `change_character_relationship` against one of its relationship rows
+    (each of which independently locks the same membership row `FOR UPDATE
+    OF cm`) cannot race between this function's own read and its writes:
+    whichever transaction acquires the relevant lock first forces the
+    other to wait, then re-observes the first's committed effect."""
     row = (
         connection.execute(
             text("""
@@ -1032,6 +1061,7 @@ def end_campaign_membership(
             campaign_membership_id=campaign_membership_id,
             ended=False,
             revoked_membership_role_ids=(),
+            revoked_membership_character_relationship_ids=(),
         )
 
     revoked_role_ids = (
@@ -1040,6 +1070,19 @@ def end_campaign_membership(
                 UPDATE security.membership_roles SET revoked_at = now()
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_role_id
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .scalars()
+        .all()
+    )
+
+    revoked_relationship_ids = (
+        connection.execute(
+            text("""
+                UPDATE security.membership_character_relationships SET revoked_at = now()
+                WHERE campaign_membership_id = :membership AND revoked_at IS NULL
+                RETURNING membership_character_relationship_id
             """),
             {"membership": campaign_membership_id},
         )
@@ -1076,4 +1119,5 @@ def end_campaign_membership(
         campaign_membership_id=campaign_membership_id,
         ended=True,
         revoked_membership_role_ids=tuple(revoked_role_ids),
+        revoked_membership_character_relationship_ids=tuple(revoked_relationship_ids),
     )

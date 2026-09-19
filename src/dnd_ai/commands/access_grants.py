@@ -60,16 +60,81 @@ change rather than one per HTTP call — the identical correction Phase
 13E-B checkpoint 2 already made to `revoke_membership_role`/`.
 revoke_membership_role_endpoint`. See each function's own docstring for
 the full contract.
-"""
+
+Checkpoint-4 correction: `grant_character_relationship()`/`change_
+character_relationship()` now also require `campaign_id` itself to
+currently be `active` (`core.lifecycle_statuses.code`), reusing `dnd_ai.
+commands.memberships.CampaignNotActiveError` (re-exported from this module
+below) rather than a second, parallel error class — the same "currently
+true" bar `add_campaign_member()` already applies when *creating* a
+membership, now closed for the gap where a campaign could be deactivated
+after `require_campaign_capability("access.manage")` had already
+authorized the request but before either mutation committed. Deliberately
+**not** applied to `revoke_character_relationship()` — revoking access
+must remain available for cleanup even against an inactive campaign, the
+same asymmetry `dnd_ai.commands.memberships.revoke_membership_role`/`.
+end_campaign_membership` already accept implicitly by never checking
+campaign lifecycle status either (nothing in this codebase's documented
+retention/lifecycle rules requires a *closing* action to be blocked by the
+very state it is trying to close out of).
+
+Lock ordering (checkpoint-4 correction): the new `campaign.campaigns FOR
+UPDATE` lock is acquired **after** the function's own primary target row
+(the membership row for `grant_character_relationship`, the `mcr`/`cm`
+pair for `change_character_relationship`) but **before** every other
+dependent lookup (user, character, candidate relationship type) —
+deliberately not "campaign first," even though that is `add_campaign_
+member()`'s own ordering. `add_campaign_member()` can safely lock campaign-
+then-user because it never locks a *pre-existing* membership row (it only
+ever inserts a fresh one). `assign_membership_role`/`change_membership_
+role`/`revoke_membership_role`/`end_campaign_membership`, by contrast, all
+lock their own target membership/role row **synchronously**, up front, and
+only ever acquire `campaign.campaigns FOR UPDATE` **implicitly, at commit
+time**, via the `DEFERRABLE INITIALLY DEFERRED` constraint trigger `security.
+assert_campaign_retains_access_manager()` attaches to `security.
+membership_roles`/`.campaign_memberships` (migration 080, §18) — a lock
+ordering that is, in effect, always "dependent-row-then-campaign-row,"
+identically to what this module now does. Locking campaign-then-membership
+here instead would invert that relative order and create a genuine A-B-A
+deadlock opportunity against any concurrent role mutation targeting the
+same campaign (one transaction holding the membership row while waiting on
+the campaign row, the other holding the campaign row — via its own
+deferred trigger — while waiting on the membership row). Matching the
+existing "dependent-row-then-campaign-row" ordering avoids that new
+deadlock class entirely rather than introducing a lock_timeout/deadlock
+regression while closing this correction's own race."""
 
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.commands.memberships import CampaignNotActiveError
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id, validate_session_campaign
+
+__all__ = [
+    "CampaignNotActiveError",
+    "MembershipNotInCampaignError",
+    "MembershipNotActiveError",
+    "RelationshipTypeNotActiveError",
+    "CharacterRelationshipNotActiveError",
+    "ChangeCharacterRelationshipNoOpError",
+    "AccessGroupNotInCampaignError",
+    "ResourceGrantNotInCampaignError",
+    "TargetNotInCampaignWorldError",
+    "InvalidRelationshipPeriodError",
+    "GrantCharacterRelationshipResult",
+    "grant_character_relationship",
+    "RevokeCharacterRelationshipResult",
+    "revoke_character_relationship",
+    "ChangeCharacterRelationshipResult",
+    "change_character_relationship",
+    "CreateResourceGrantResult",
+    "create_resource_grant",
+    "revoke_resource_grant",
+]
 
 
 class MembershipNotInCampaignError(DomainAuthorizationError):
@@ -116,13 +181,17 @@ class RelationshipTypeNotActiveError(DomainAuthorizationError):
 class CharacterRelationshipNotActiveError(DomainAuthorizationError):
     """Raised by `change_character_relationship()` when the target
     `membership_character_relationship_id` is not currently an eligible,
-    active assignment to change: already revoked, expired, or its owning
-    membership ended or no longer in the active membership status — the
-    identical "currently true" definition `dnd_ai.queries.access_overview.
-    get_campaign_access_overview`'s own relationships query already uses to
-    decide what counts as a member's *current* relationship, applied here
-    so this mutation can never act on a row the read side would no longer
-    show as active. Mirrors `dnd_ai.commands.memberships.
+    active assignment to change: already revoked, expired, fictional-time-
+    bounded and therefore closed (both `effective_from_world_time_id`/
+    `effective_to_world_time_id` set — checkpoint-4 correction, see `dnd_ai.
+    domain.access.resolve_access_context`'s own docstring for the "current
+    record" rule this reuses), or its owning membership ended or no longer
+    in the active membership status — the identical "currently true"
+    definition `dnd_ai.queries.access_overview.get_campaign_access_overview`'s
+    own relationships query already uses to decide what counts as a
+    member's *current* relationship, applied here so this mutation can
+    never act on a row the read side would no longer show as active.
+    Mirrors `dnd_ai.commands.memberships.
     MembershipRoleNotActiveError`'s identical reasoning and 409 conflict
     contract (not the base class's default 404: the relationship
     unambiguously existed and belonged to this campaign, so a caller here
@@ -260,6 +329,20 @@ def grant_character_relationship(
     `timeline_id`/`effective_from_world_time_id`/`effective_to_world_
     time_id` are supplied.
 
+    Checkpoint-4 correction — supplying **both** `effective_from_world_
+    time_id` and `effective_to_world_time_id` records a fully-bounded,
+    already-closed historical interval, never a currently-authorizing one:
+    `dnd_ai.domain.access.resolve_access_context` (and every other reader
+    of "current" relationships — see its own docstring for the full "current
+    record" rule) requires `effective_to_world_time_id IS NULL` before a
+    row grants any capability at all, since this schema tracks no "current
+    fictional now" a bounded window could be compared against. Supplying
+    only `effective_from_world_time_id` (or neither) grants normally and
+    remains current indefinitely, matching `campaign.party_memberships`'
+    own identical "from is always already-past, to null means still
+    current" precedent — only a caller who supplies *both* endpoints gets a
+    row that records history without ever granting access.
+
     Raises `MembershipNotInCampaignError` for a `campaign_membership_id`
     outside `campaign_id`. Raises `MembershipNotActiveError` (409, character-
     relationship checkpoint hardening) if the target membership, though it
@@ -267,7 +350,14 @@ def grant_character_relationship(
     — ended, its own status not `active`, or its underlying user account
     not currently platform-active — mirroring `dnd_ai.commands.memberships.
     assign_membership_role()`'s identical eligibility bar for the same
-    class of caller-supplied membership id. Raises
+    class of caller-supplied membership id. Raises `CampaignNotActiveError`
+    (409, checkpoint-4 correction, re-exported from `dnd_ai.commands.
+    memberships`) if `campaign_id` itself is not currently `active` —
+    closing the gap where a campaign could be deactivated after `require_
+    campaign_capability("access.manage")` had already authorized the
+    request but before this write committed; see this module's own
+    docstring, "Checkpoint-4 correction," for why this is checked *after*
+    the membership-eligibility check above rather than before it. Raises
     `TargetNotInCampaignWorldError` for a `character_id` that does not
     exist, is not currently active (`core.lifecycle_statuses.code`), or
     whose world does not match `expected_world_id` — folded identically,
@@ -289,18 +379,25 @@ def grant_character_relationship(
     membership_character_relationships_active_type` (existing
     `IntegrityError` handler).
 
-    Locks the target membership row and, separately, its owning user row
-    (`FOR UPDATE OF cm`/`FOR UPDATE OF u`), then the target character row
-    (`FOR UPDATE OF e`), then the candidate relationship-type row, before
-    evaluating each one's own eligibility check — the same "membership-then-
-    role" lock ordering `assign_membership_role()` uses, extended by
-    character-then-relationship-type, so a concurrent ending of this
-    membership, deactivation of its owning user account, deactivation/
-    archival of the character, or deactivation of the relationship type
-    cannot slip in between this function's own read and its later `INSERT`,
-    and so this function can never deadlock against `assign_membership_
-    role()`/`change_membership_role()` (which lock membership/user/role in
-    the same relative order over disjoint row sets)."""
+    Locks the target membership row, then `campaign.campaigns`
+    (checkpoint-4 correction), then, separately, the membership's owning
+    user row (`FOR UPDATE OF cm`/`FOR UPDATE OF c`/`FOR UPDATE OF u`), then
+    the target character row (`FOR UPDATE OF e`), then the candidate
+    relationship-type row, before evaluating each one's own eligibility
+    check — the same "membership-then-role" lock ordering `assign_
+    membership_role()` uses, extended by campaign-then-character-then-
+    relationship-type, so a concurrent ending of this membership,
+    deactivation of the campaign, deactivation of its owning user account,
+    deactivation/archival of the character, or deactivation of the
+    relationship type cannot slip in between this function's own read and
+    its later `INSERT`, and so this function can never deadlock against
+    `assign_membership_role()`/`change_membership_role()` (which lock
+    membership/user/role in the same relative order over disjoint row
+    sets) nor against any campaign-role mutation's own deferred `campaign.
+    campaigns` lock (acquired membership/role-row-first, campaign-last, at
+    commit — see this module's own docstring, "Checkpoint-4 correction",
+    for why campaign is locked here right after the membership row rather
+    than before it)."""
     membership_row = (
         connection.execute(
             text("""
@@ -333,6 +430,18 @@ def grant_character_relationship(
             f"membership {campaign_membership_id} is not currently an eligible, open "
             "membership to grant a character relationship to"
         )
+
+    campaign_status_code = connection.execute(
+        text("""
+            SELECT ls.code FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            WHERE c.campaign_id = :campaign
+            FOR UPDATE OF c
+        """),
+        {"campaign": campaign_id},
+    ).scalar()
+    if campaign_status_code != "active":
+        raise CampaignNotActiveError(f"campaign {campaign_id} is not currently active")
 
     user_lifecycle_status_code = connection.execute(
         text("""
@@ -546,10 +655,17 @@ def change_character_relationship(
     `membership_character_relationship_id` or one belonging to a different
     campaign than `campaign_id` (checked first, so this stays
     indistinguishable from "it never existed" for an unauthorized caller).
-    Raises `CharacterRelationshipNotActiveError` (409) if `membership_
+    Raises `CampaignNotActiveError` (409, checkpoint-4 correction,
+    re-exported from `dnd_ai.commands.memberships`) if `campaign_id` itself
+    is not currently `active` — checked immediately after, before the
+    target's own eligibility below, so a caller can never change a
+    relationship's type on the strength of an authorization check that
+    already ran against a campaign that has since been deactivated. Raises
+    `CharacterRelationshipNotActiveError` (409) if `membership_
     character_relationship_id` is not currently an eligible, active
-    assignment — already revoked, expired, or its membership ended or no
-    longer in the active membership status; see that error's own docstring
+    assignment — already revoked, expired, fictional-time-bounded and
+    therefore closed, or its membership ended or no longer in the active
+    membership status; see that error's own docstring
     for the full "currently true" definition (matching the access-overview
     read side exactly, so this mutation can never act on a row the read
     side would no longer show as active). Raises `RelationshipTypeNotActiveError`
@@ -568,7 +684,8 @@ def change_character_relationship(
     write — a rejection therefore never leaves a partial write behind.
 
     Locks the target row and its owning membership (`FOR UPDATE OF mcr,
-    cm`) before evaluating the target's own eligibility check, and
+    cm`), then `campaign.campaigns` (checkpoint-4 correction, `FOR UPDATE
+    OF c`), before evaluating the target's own eligibility check, and
     separately locks the candidate new relationship-type row before
     evaluating its own — the identical "target-row/candidate-row" lock
     ordering `change_membership_role()` uses for its own role pair, so a
@@ -577,7 +694,11 @@ def change_character_relationship(
     its membership cannot race between this function's own check and
     write, and so this function can never deadlock against `change_
     membership_role()` (which locks its own, disjoint row set in the same
-    relative order)."""
+    relative order) nor against any campaign-role mutation's own deferred
+    `campaign.campaigns` lock (see `grant_character_relationship()`'s own
+    docstring, and this module's "Checkpoint-4 correction" section, for why
+    campaign is locked here right after the target row rather than
+    before)."""
     row = (
         connection.execute(
             text("""
@@ -613,9 +734,22 @@ def change_character_relationship(
             f"(actual campaign: {row['campaign_id'] if row is not None else None})"
         )
 
+    campaign_status_code = connection.execute(
+        text("""
+            SELECT ls.code FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            WHERE c.campaign_id = :campaign
+            FOR UPDATE OF c
+        """),
+        {"campaign": campaign_id},
+    ).scalar()
+    if campaign_status_code != "active":
+        raise CampaignNotActiveError(f"campaign {campaign_id} is not currently active")
+
     target_is_eligible = (
         row["revoked_at"] is None
         and not row["relationship_is_expired"]
+        and row["effective_to_world_time_id"] is None
         and row["ended_at"] is None
         and row["membership_status_code"] == "active"
         and row["membership_status_is_active"]

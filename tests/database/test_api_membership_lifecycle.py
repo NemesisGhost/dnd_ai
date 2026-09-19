@@ -24,13 +24,17 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, resolve_access_context
 from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_character,
+    make_character_relationship_type,
     make_external_identity,
+    make_membership_character_relationship,
     make_membership_role,
+    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_timeline,
@@ -217,6 +221,28 @@ class Fixture:
             connection, self.member_membership_id, self.second_player_role_id
         )
 
+        # --- checkpoint-4 correction: ending a membership must also
+        # revoke every unrevoked character relationship it holds, not just
+        # its roles — see dnd_ai.commands.memberships.end_campaign_
+        # membership's own docstring for the silent-reactivation gap this
+        # closes. ---
+        view_summary_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_summary"
+        )
+        self.member_relationship_character_id = make_character(
+            connection, self.world_id, name="Lifecycle Removable Member Character"
+        )
+        self.member_relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(
+            connection, self.member_relationship_type_id, view_summary_capability_id
+        )
+        self.member_relationship_id = make_membership_character_relationship(
+            connection,
+            self.member_membership_id,
+            self.member_relationship_character_id,
+            self.member_relationship_type_id,
+        )
+
         # A membership belonging only to the *other* campaign — proves
         # removal never touches a sibling campaign's own memberships.
         self.sibling_user_id = make_user(connection, "Lifecycle Sibling")
@@ -232,6 +258,32 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        cleanup.execute(
+            text("""
+                DELETE FROM security.membership_character_relationships
+                WHERE campaign_membership_id IN (
+                    SELECT campaign_membership_id FROM security.campaign_memberships
+                    WHERE campaign_id IN (
+                        SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
+                    )
+                )
+            """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.member_relationship_type_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.member_relationship_type_id},
+        )
         cleanup.execute(
             text("""
                 DELETE FROM security.membership_roles WHERE campaign_membership_id IN (
@@ -865,6 +917,47 @@ def test_ending_a_membership_succeeds_and_revokes_its_roles(
         ).all()
         assert len(role_rows) == 2
         assert all(row.revoked_at is not None for row in role_rows)
+
+
+def test_ending_a_membership_also_revokes_its_character_relationships(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 correction: `end_campaign_membership` previously
+    revoked a membership's roles but left its character relationships
+    untouched — see `dnd_ai.commands.memberships.end_campaign_membership`'s
+    own docstring for the silent-reactivation gap this closes
+    (`test_api_campaign_invitations.py`'s own checkpoint-4 test proves the
+    combined effect through a real reactivation)."""
+    with client_factory(f.manager_user_id) as client:
+        response = client.post(_end_url(f))
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        relationship_row = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": f.member_relationship_id},
+        ).one()
+        assert relationship_row.revoked_at is not None
+
+        audit_row = (
+            verify.execute(
+                text("""
+                SELECT changed_fields FROM audit.change_log
+                WHERE table_name = 'campaign_memberships' AND record_id = :m
+            """),
+                {"m": f.member_membership_id},
+            )
+            .mappings()
+            .one()
+        )
+        assert str(f.member_relationship_id) in str(audit_row["changed_fields"])
+
+    with postgres_engine.connect() as verify:
+        access = resolve_access_context(verify, user_id=f.member_user_id, campaign_id=f.campaign_id)
+    assert access is None  # the membership itself is ended — no access context at all.
 
 
 def test_ending_a_membership_does_not_affect_a_sibling_campaign(

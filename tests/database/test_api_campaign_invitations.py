@@ -23,12 +23,21 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaign_invitations import create_campaign_invitation
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.commands.memberships import end_campaign_membership
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    AuthenticatedPrincipal,
+    resolve_access_context,
+)
 from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_character,
+    make_character_relationship_type,
+    make_membership_character_relationship,
     make_membership_role,
+    make_relationship_type_capability,
     make_role,
     make_role_capability,
     make_timeline,
@@ -88,6 +97,33 @@ class Fixture:
 
         self.other_user_id = make_user(connection, "Invitation API Other User")
 
+        # --- checkpoint-4 correction: end_campaign_membership must revoke
+        # every unrevoked character relationship a membership holds, so a
+        # later reactivation through this very acceptance flow never
+        # silently restores the old character perspective/capability. ---
+        view_summary_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_summary"
+        )
+        self.relationship_character_id = make_character(
+            connection, self.world_id, name="Invitation API Relationship Character"
+        )
+        self.relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(
+            connection, self.relationship_type_id, view_summary_capability_id
+        )
+        self.pre_reactivation_relationship_user_id = make_user(
+            connection, "Invitation API Relationship Member"
+        )
+        self.pre_reactivation_relationship_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.pre_reactivation_relationship_user_id
+        )
+        self.pre_reactivation_relationship_id = make_membership_character_relationship(
+            connection,
+            self.pre_reactivation_relationship_membership_id,
+            self.relationship_character_id,
+            self.relationship_type_id,
+        )
+
 
 @pytest.fixture
 def f(postgres_engine: Engine) -> Iterator[Fixture]:
@@ -99,6 +135,30 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         cleanup.execute(
             text("DELETE FROM security.campaign_invitations WHERE campaign_id = :c"),
             {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text("""
+                DELETE FROM security.membership_character_relationships
+                WHERE campaign_membership_id IN (
+                    SELECT campaign_membership_id FROM security.campaign_memberships
+                    WHERE campaign_id = :c
+                )
+            """),
+            {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.relationship_type_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.relationship_type_id},
         )
         cleanup.execute(
             text("""
@@ -149,6 +209,7 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.departed_user_id,
                     fixture.open_member_user_id,
                     fixture.other_user_id,
+                    fixture.pre_reactivation_relationship_user_id,
                 ]
             },
         )
@@ -351,6 +412,70 @@ def test_accepting_an_invitation_reactivates_a_departed_membership(
             {"c": f.campaign_id, "u": f.departed_user_id},
         ).scalar()
         assert count == 1
+
+
+def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 correction: `_activate_or_create_membership` (this
+    acceptance flow's own reactivation path) reopens the *same* `campaign_
+    membership_id` row rather than inserting a fresh one — before this
+    correction, `end_campaign_membership` left `security.membership_
+    character_relationships` rows untouched, so reopening the membership
+    silently restored whatever character capability the departed member
+    held before, with no new grant and no new audit entry to explain why.
+    Ending the membership through the real command must revoke that
+    relationship first, and reactivating it here must not bring the old
+    relationship back."""
+    with postgres_engine.begin() as connection:
+        end_result = end_campaign_membership(
+            connection,
+            campaign_membership_id=f.pre_reactivation_relationship_membership_id,
+            campaign_id=f.campaign_id,
+            ended_by_membership_id=f.admin_membership_id,
+        )
+    assert end_result.ended is True
+    assert end_result.revoked_membership_character_relationship_ids == (
+        f.pre_reactivation_relationship_id,
+    )
+
+    token = _issue_token(postgres_engine, f)
+    with client_factory(f.pre_reactivation_relationship_user_id) as client:
+        response = client.post("/campaign-invitations/accept", json={"token": token})
+    assert response.status_code == 200, response.text
+    assert response.json()["campaign_membership_id"] == str(
+        f.pre_reactivation_relationship_membership_id
+    )
+
+    with postgres_engine.connect() as verify:
+        membership_row = verify.execute(
+            text("""
+                SELECT ended_at, ms.code
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :m
+            """),
+            {"m": f.pre_reactivation_relationship_membership_id},
+        ).one()
+        assert membership_row.ended_at is None
+        assert membership_row.code == "active"
+
+        relationship_revoked_at = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": f.pre_reactivation_relationship_id},
+        ).scalar_one()
+        assert relationship_revoked_at is not None
+
+    with postgres_engine.connect() as verify:
+        access = resolve_access_context(
+            verify, user_id=f.pre_reactivation_relationship_user_id, campaign_id=f.campaign_id
+        )
+    assert access is not None
+    assert f.relationship_character_id not in access.character_capabilities
 
 
 def test_accepting_an_invitation_for_an_already_open_member_reuses_the_membership(

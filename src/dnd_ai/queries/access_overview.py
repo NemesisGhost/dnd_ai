@@ -23,7 +23,14 @@ resource-grants query additionally requires `cap.is_active`, matching
 explicit grant of a deactivated capability confers no effective access
 there, so it must not appear here as a current grant either (a review
 correction; the first cut joined `security.capabilities` for its
-`code`/`display_name` but omitted this check).
+`code`/`display_name` but omitted this check). Character relationships
+additionally require `mcr.effective_to_world_time_id IS NULL`
+(checkpoint-4 correction) — the identical fictional-time "current record"
+rule `dnd_ai.domain.access.resolve_access_context`'s own docstring
+explains in full: a relationship with both fictional-time endpoints set is
+a closed historical interval, never currently active regardless of where
+those endpoints fall, since this schema tracks no "current fictional now"
+to compare against.
 
 Deliberately out of scope for this first increment (documented here rather
 than silently omitted):
@@ -219,6 +226,7 @@ def get_campaign_access_overview(
               AND cm.ended_at IS NULL
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+              AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
             ORDER BY e.canonical_name, mcr.membership_character_relationship_id
         """),

@@ -733,6 +733,36 @@ def resolve_access_context(
     capabilities or resource grants (finding 2) — a branch timeline is
     rejected exactly like an unrelated same-world or different-world one,
     since none of them are the campaign's own timeline.
+
+    Fictional-time-bounded character relationships (checkpoint-4
+    correction): a `security.membership_character_relationships` row may
+    carry `effective_from_world_time_id`/`effective_to_world_time_id`
+    (ADR 0010) in addition to `revoked_at`/`expires_at` — a *fictional*-time
+    scope layered on top of the row's real-time lifecycle. This codebase has
+    no tracked "current fictional now" for a timeline anywhere (no `campaign.
+    timelines` column, no session/event pointer) to compare those bounds
+    against, and inventing one here would be exactly the "client-authoritative
+    time" this domain's own conventions reject. So this resolver applies the
+    same "current record" pattern every other ADR-0010-shaped interval in
+    this schema already uses for currentness — `campaign.party_memberships`/
+    `world.organization_memberships`/`world.employment_relationships` all
+    treat `effective_to_*_id IS NULL` as "still current," never a comparison
+    against some external clock (docs/architecture/DATABASE_MODEL.md §12.4,
+    §6.3) — applied here as `mcr.effective_to_world_time_id IS NULL`: a row
+    with only `effective_from_world_time_id` set (or neither) still
+    currently grants its capabilities, since "from" always names an
+    already-past grant moment, exactly like a party join. A row with
+    *both* endpoints set is, by that same precedent, a closed historical
+    interval — it never currently grants access, regardless of where its
+    endpoints fall — this is the fail-closed policy this correction adds:
+    previously, this query ignored both world-time columns entirely, so a
+    fully-bounded (and therefore already-closed) relationship was treated
+    identically to an unbounded one. `dnd_ai.queries.access_overview.
+    get_campaign_access_overview` and `dnd_ai.commands.access_grants.
+    change_character_relationship`'s own eligibility check apply the
+    identical rule, so a relationship this resolver would no longer
+    authorize through never appears as "current" on the read side or as a
+    valid `change` target either.
     """
     membership_id = connection.execute(
         text("""
@@ -797,6 +827,7 @@ def resolve_access_context(
             WHERE mcr.campaign_membership_id = :membership_id
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+              AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
               AND cap.is_active
         """),
