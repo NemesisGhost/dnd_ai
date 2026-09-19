@@ -123,6 +123,7 @@ const fullOverview: CampaignAccessOverview = {
 function renderPage(
     overview: CampaignAccessOverview,
     onChanged: (message: string) => void = vi.fn(),
+    onMutationStart: () => void = vi.fn(),
 ) {
     return render(
         <SessionContext.Provider
@@ -138,6 +139,7 @@ function renderPage(
                 campaignId={campaignId}
                 overview={overview}
                 onChanged={onChanged}
+                onMutationStart={onMutationStart}
             />
         </SessionContext.Provider>,
     )
@@ -740,5 +742,75 @@ describe("AccessPage — revoke role (Phase 13E-B checkpoint 2)", () => {
                 ).textContent ?? "",
             ),
         ).toBe(false)
+    })
+})
+
+describe("AccessPage — onMutationStart (persistent-announcement clearing)", () => {
+    it("calls onMutationStart immediately when a role change is submitted, never merely on opening the editor", () => {
+        const onMutationStart = vi.fn()
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+
+        renderPage(fullOverview, vi.fn(), onMutationStart)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+        expect(onMutationStart).not.toHaveBeenCalled()
+
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        expect(onMutationStart).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+        expect(onMutationStart).toHaveBeenCalledTimes(1)
+    })
+
+    it("calls onMutationStart immediately when a role is added, never merely on opening the control", () => {
+        const onMutationStart = vi.fn()
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+
+        renderPage(fullOverview, vi.fn(), onMutationStart)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Add role" })[0],
+        )
+        expect(onMutationStart).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+        expect(onMutationStart).toHaveBeenCalledTimes(1)
+    })
+
+    it("calls onMutationStart immediately when a role revocation is confirmed, never merely on opening the confirmation", () => {
+        const onMutationStart = vi.fn()
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+
+        renderPage(fullOverview, vi.fn(), onMutationStart)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Remove role" })[0],
+        )
+        expect(onMutationStart).not.toHaveBeenCalled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
+        expect(onMutationStart).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not call onMutationStart on Cancel", () => {
+        const onMutationStart = vi.fn()
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, vi.fn(), onMutationStart)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Change role" })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+        expect(onMutationStart).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
     })
 })

@@ -23,6 +23,7 @@ interface MemberAccessCardProps {
     campaignName: string
     assignableRoles: AssignableRole[]
     onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 function MemberAccessCard({
@@ -31,6 +32,7 @@ function MemberAccessCard({
     campaignName,
     assignableRoles,
     onChanged,
+    onMutationStart,
 }: MemberAccessCardProps) {
     const rolesHeadingId = useId()
     const relationshipsHeadingId = useId()
@@ -78,12 +80,14 @@ function MemberAccessCard({
                                         role={role}
                                         assignableRoles={assignableRoles}
                                         onChanged={onChanged}
+                                        onMutationStart={onMutationStart}
                                     />
                                     <RevokeMemberRole
                                         campaignId={campaignId}
                                         memberDisplayName={member.display_name}
                                         role={role}
                                         onChanged={onChanged}
+                                        onMutationStart={onMutationStart}
                                     />
                                 </li>
                             ))}
@@ -99,6 +103,7 @@ function MemberAccessCard({
                         memberDisplayName={member.display_name}
                         assignableRoles={rolesAvailableToAdd}
                         onChanged={onChanged}
+                        onMutationStart={onMutationStart}
                     />
                 </section>
 
@@ -167,12 +172,14 @@ interface AccessPageProps {
     campaignId: string
     overview: CampaignAccessOverview
     onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 export function AccessPage({
     campaignId,
     overview,
     onChanged,
+    onMutationStart,
 }: AccessPageProps) {
     const { state: sessionState } = useSession()
 
@@ -207,6 +214,7 @@ export function AccessPage({
                                     overview.assignable_roles
                                 }
                                 onChanged={onChanged}
+                                onMutationStart={onMutationStart}
                             />
                         </li>
                     ))}

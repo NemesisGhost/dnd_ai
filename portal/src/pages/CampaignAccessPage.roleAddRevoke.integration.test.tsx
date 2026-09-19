@@ -262,3 +262,116 @@ describe("CampaignAccessPage revoke-role success announcement", () => {
         )
     })
 })
+
+// The persistent announcement region is queried by its own class here,
+// rather than by role="status", because a row-level control (AddMemberRole/
+// MemberRoleEditor/RevokeMemberRole) mounts its own role="status" paragraph
+// while expanded — getByRole("status") would then be ambiguous. Row-level
+// text is still asserted with getByText/findByText as elsewhere in this
+// file.
+function persistentAnnouncement(container: HTMLElement): HTMLElement | null {
+    return container.querySelector(".campaign-access-page__announcement")
+}
+
+describe("CampaignAccessPage cross-operation announcement lifecycle", () => {
+    it("clears a stale success announcement the moment a different mutation starts, and keeps it cleared through that mutation's failure — successful add followed by a failed revoke", async () => {
+        let resolveRevoke!: (response: Response) => void
+        const revokePromise = new Promise<Response>((resolve) => {
+            resolveRevoke = resolve
+        })
+
+        const fetchMock = vi.fn(
+            (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+                const url = requestUrl(input)
+                const method = init?.method ?? "GET"
+
+                if (method === "GET" && url.includes("/access-overview")) {
+                    return Promise.resolve(jsonResponse(baseOverview()))
+                }
+
+                if (
+                    method === "POST" &&
+                    url.endsWith(`/memberships/${MEMBERSHIP_ID}/roles`)
+                ) {
+                    return Promise.resolve(
+                        jsonResponse(
+                            { membership_role_id: "new-membership-role" },
+                            201,
+                        ),
+                    )
+                }
+
+                if (
+                    method === "POST" &&
+                    url.endsWith(
+                        `/memberships/roles/${MEMBERSHIP_ROLE_ID}/revoke`,
+                    )
+                ) {
+                    return revokePromise
+                }
+
+                return Promise.reject(
+                    new Error(`unexpected fetch in test: ${method} ${url}`),
+                )
+            },
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        const { container } = renderAtCampaign()
+
+        expect(
+            await screen.findByRole("heading", { name: "Access" }),
+        ).toBeInTheDocument()
+
+        // 1. Complete an add-role mutation successfully, and let its own
+        // authoritative overview reload finish — the normal Access view is
+        // showing again, with "Role added." as the current announcement.
+        fireEvent.click(
+            screen.getByRole("button", { name: "Add role" }),
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        await waitFor(() => {
+            expect(persistentAnnouncement(container)).toHaveTextContent(
+                "Role added.",
+            )
+        })
+        expect(
+            await screen.findByRole("heading", { name: "Access" }),
+        ).toBeInTheDocument()
+
+        // 2. Begin a different, unrelated mutation — revoke the member's
+        // existing role — without waiting for this one to resolve.
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove role" }),
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
+
+        // 3. The stale "Role added." success is cleared the instant the
+        // new mutation is submitted, while this row's own pending state is
+        // shown — never both at once, and never the overview's own
+        // success-triggered refetch (there was none here) clearing it.
+        await waitFor(() => {
+            expect(
+                screen.getByText("Removing role…"),
+            ).toBeInTheDocument()
+        })
+        expect(persistentAnnouncement(container)).toHaveTextContent("")
+
+        // 4. The revoke fails.
+        await act(async () => {
+            resolveRevoke(new Response(null, { status: 500 }))
+        })
+
+        // 5. The old success stays cleared; the current row presents its
+        // own recoverable error — never a stale, now-misleading success.
+        await waitFor(() => {
+            expect(
+                screen.getByText(
+                    "The role could not be removed. Try again.",
+                ),
+            ).toBeInTheDocument()
+        })
+        expect(persistentAnnouncement(container)).toHaveTextContent("")
+    })
+})

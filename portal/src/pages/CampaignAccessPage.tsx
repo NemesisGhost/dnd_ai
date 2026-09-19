@@ -75,6 +75,18 @@ export function CampaignAccessPage() {
         retry()
     }
 
+    // Called the moment a new Add/Change/Remove mutation is submitted
+    // (before the request is even sent), never when the overview's own
+    // success-triggered refetch begins on its own. Without this, a stale
+    // "Role added."/"Role updated."/"Role removed." from a previous,
+    // already-completed operation would keep sitting in this persistent
+    // region — indistinguishable from a fresh success — right alongside a
+    // different row's own current pending/error state for the operation
+    // the user is now watching.
+    function handleMutationStart(): void {
+        setAnnouncement(null)
+    }
+
     return (
         <>
             <p
@@ -93,6 +105,7 @@ export function CampaignAccessPage() {
                         onChanged={(message) =>
                             handleRoleChanged(retry, message)
                         }
+                        onMutationStart={handleMutationStart}
                     />
                 )}
             </AccessOverviewBoundary>

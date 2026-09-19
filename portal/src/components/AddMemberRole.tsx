@@ -9,6 +9,7 @@ interface AddMemberRoleProps {
     memberDisplayName: string
     assignableRoles: AssignableRole[]
     onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 function statusMessage(
@@ -42,6 +43,7 @@ export function AddMemberRole({
     memberDisplayName,
     assignableRoles,
     onChanged,
+    onMutationStart,
 }: AddMemberRoleProps) {
     const selectId = useId()
     const statusId = useId()
@@ -90,6 +92,7 @@ export function AddMemberRole({
                 if (selectedRoleId === "") {
                     return
                 }
+                onMutationStart()
                 submit(campaignMembershipId, selectedRoleId)
             }}
         >

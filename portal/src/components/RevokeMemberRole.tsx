@@ -7,6 +7,7 @@ interface RevokeMemberRoleProps {
     memberDisplayName: string
     role: AccessRoleSummary
     onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 function statusMessage(
@@ -36,6 +37,7 @@ export function RevokeMemberRole({
     memberDisplayName,
     role,
     onChanged,
+    onMutationStart,
 }: RevokeMemberRoleProps) {
     const statusId = useId()
 
@@ -80,6 +82,7 @@ export function RevokeMemberRole({
                     disabled={isPending}
                     aria-busy={isPending}
                     onClick={() => {
+                        onMutationStart()
                         submit(role.membership_role_id)
                     }}
                 >

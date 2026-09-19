@@ -12,6 +12,7 @@ interface MemberRoleEditorProps {
     role: AccessRoleSummary
     assignableRoles: AssignableRole[]
     onChanged: (message: string) => void
+    onMutationStart: () => void
 }
 
 function statusMessage(
@@ -51,6 +52,7 @@ export function MemberRoleEditor({
     role,
     assignableRoles,
     onChanged,
+    onMutationStart,
 }: MemberRoleEditorProps) {
     const selectId = useId()
     const statusId = useId()
@@ -101,6 +103,7 @@ export function MemberRoleEditor({
                 if (isUnchangedSelection) {
                     return
                 }
+                onMutationStart()
                 submit(role.membership_role_id, selectedRoleId)
             }}
         >
