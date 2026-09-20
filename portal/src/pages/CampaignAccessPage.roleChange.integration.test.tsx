@@ -47,6 +47,7 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
         members: [
             {
                 campaign_membership_id: "membership-a",
+                user_id: sessionBootstrapFixture.user.user_id,
                 display_name: memberDisplayName,
                 status_code: "active",
                 status_display_name: "Active",
@@ -75,6 +76,9 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
                 display_name: "Rules Curator",
             },
         ],
+        assignable_characters: [],
+        assignable_relationship_types: [],
+        grantable_resource_capabilities: [],
     }
 }
 

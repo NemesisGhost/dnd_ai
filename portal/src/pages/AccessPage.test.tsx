@@ -24,6 +24,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "5b1f7e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: sessionBootstrapFixture.user.user_id,
             display_name: "Aria the GM",
             status_code: "active",
             status_display_name: "Active",
@@ -60,6 +61,9 @@ const fullOverview: CampaignAccessOverview = {
                     capability_display_name: "View Campaign",
                     effect: "allow",
                     target_type: "character",
+                    target_id:
+                        "9e4f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    target_display_name: "Kestrel Vane",
                     reason: "Visibility for the shared scene",
                     granted_at: "2026-01-03T00:00:00Z",
                     expires_at: null,
@@ -69,6 +73,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "1a6f2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: "9a6f2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
             display_name: "Quiet Observer",
             status_code: "active",
             status_display_name: "Active",
@@ -80,6 +85,7 @@ const fullOverview: CampaignAccessOverview = {
         {
             campaign_membership_id:
                 "2b7f3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            user_id: "8b7f3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
             display_name: "Multi Role Member",
             status_code: "active",
             status_display_name: "Active",
@@ -116,6 +122,44 @@ const fullOverview: CampaignAccessOverview = {
             role_id: "4a2f8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
             code: "rules_curator",
             display_name: "Rules Curator",
+        },
+    ],
+    assignable_characters: [
+        {
+            character_id: "9e4f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            display_name: "Kestrel Vane",
+        },
+        {
+            character_id: "1f6a2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            display_name: "Bram Ferro",
+        },
+    ],
+    assignable_relationship_types: [
+        {
+            character_relationship_type_id:
+                "2a7b3e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "primary_controller",
+            display_name: "Primary Controller",
+        },
+        {
+            character_relationship_type_id:
+                "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "viewer",
+            display_name: "Viewer",
+        },
+        {
+            character_relationship_type_id:
+                "4c9d5e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "portrayer",
+            display_name: "Portrayer / Assistant GM",
+        },
+    ],
+    grantable_resource_capabilities: [
+        {
+            capability_id: "5d0e6e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            code: "character.view_full",
+            display_name: "View Character Full Detail",
+            target_type: "character",
         },
     ],
 }
@@ -195,7 +239,7 @@ describe("AccessPage", () => {
         ).toBeInTheDocument()
 
         expect(container.textContent).toContain(
-            "(Allow) — Character",
+            "(Allow) on Kestrel Vane",
         )
         expect(container.textContent).toContain(
             "Visibility for the shared scene",
@@ -225,12 +269,18 @@ describe("AccessPage", () => {
         ).toBeGreaterThan(0)
 
         expect(
-            screen.getAllByText("No explicit grants.").length,
+            screen.getAllByText("No direct resource access.").length,
         ).toBeGreaterThan(0)
     })
 
     it("shows a deliberate empty state when the campaign has no manageable access records", () => {
-        renderPage({ members: [], assignable_roles: [] })
+        renderPage({
+            members: [],
+            assignable_roles: [],
+            assignable_characters: [],
+            assignable_relationship_types: [],
+            grantable_resource_capabilities: [],
+        })
 
         expect(
             screen.getByText(
@@ -465,6 +515,13 @@ describe("AccessPage", () => {
             "Change role",
             "Add role",
             "Remove role",
+            "Add campaign member",
+            "Remove member",
+            "Change type",
+            "Revoke relationship",
+            "Add character relationship",
+            "Add direct resource access",
+            "Revoke access",
         ])
         buttonNames.forEach((name) => {
             expect(allowedNames.has(name ?? "")).toBe(true)
@@ -812,5 +869,976 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
         expect(onMutationStart).not.toHaveBeenCalled()
         expect(fetchMock).not.toHaveBeenCalled()
+    })
+})
+
+describe("AccessPage — add character relationship (character-relationship-management checkpoint)", () => {
+    it("exposes Add character relationship for every member when characters and types are assignable", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            }),
+        ).toHaveLength(3)
+    })
+
+    it("does not expose the add control when no character or no relationship type is assignable", () => {
+        renderPage({
+            ...fullOverview,
+            assignable_characters: [],
+        })
+
+        expect(
+            screen.queryByRole("button", {
+                name: "Add character relationship",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("offers only server-authoritative character choices, and narrows type choices to exclude combinations already active for the selected character", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+
+        const characterSelect = screen.getByLabelText(
+            `Add a character relationship for Aria the GM in ${campaignName}`,
+        )
+        const characterOptions = Array.from(
+            characterSelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(characterOptions).toEqual([
+            "Kestrel Vane",
+            "Bram Ferro",
+        ])
+
+        // Aria already holds Primary Controller for Kestrel Vane (the
+        // default-selected character) — only the remaining two assignable
+        // types are offered, never the already-active one.
+        const typeSelect = screen.getByLabelText("Relationship type")
+        const typeOptions = Array.from(
+            typeSelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(typeOptions).toEqual([
+            "Viewer",
+            "Portrayer / Assistant GM",
+        ])
+    })
+
+    it("requires an explicit Add action and never submits on selection alone", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("cancel closes the Add-relationship control and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByLabelText("Relationship type"),
+        ).not.toBeInTheDocument()
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically shows the new relationship", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Adding character relationship…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        "new-relationship-id",
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Character relationship added."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(
+            "Character relationship added.",
+        )
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add character relationship",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+})
+
+describe("AccessPage — change relationship type (character-relationship-management checkpoint)", () => {
+    it("exposes an accessible change-type action for each eligible character relationship", () => {
+        renderPage(fullOverview)
+
+        // Only Aria the GM holds one active character relationship.
+        expect(
+            screen.getAllByRole("button", { name: "Change type" }),
+        ).toHaveLength(1)
+    })
+
+    it("labels the change control with the member and character context, and offers only authorized type choices", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+
+        const select = screen.getByLabelText(
+            `Change Aria the GM's Kestrel Vane relationship type in ${campaignName}`,
+        )
+        const options = Array.from(
+            select.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(options).toEqual([
+            "Primary Controller",
+            "Viewer",
+            "Portrayer / Assistant GM",
+        ])
+    })
+
+    it("disables Save until the selection changes away from the current type", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        expect(saveButton).toBeEnabled()
+    })
+
+    it("cancel closes the editor and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("combobox"),
+        ).not.toBeInTheDocument()
+    })
+
+    it("announces pending, then success, and refreshes the authoritative overview after a successful save", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Saving relationship type change…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        "new-relationship-id",
+                }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Relationship type updated."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Change type" }),
+        )
+        fireEvent.change(screen.getByRole("combobox"), {
+            target: {
+                value: "3b8c4e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+            },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+})
+
+describe("AccessPage — revoke character relationship (character-relationship-management checkpoint)", () => {
+    it("exposes an accessible revoke action for each eligible character relationship", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", {
+                name: "Revoke relationship",
+            }),
+        ).toHaveLength(1)
+    })
+
+    it("requires an explicit confirmation naming the member and character, explains perspective loss, and makes no request until confirmed", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+
+        expect(
+            screen.getByText(
+                /Revoke Aria the GM's Primary Controller relationship to Kestrel Vane\?/,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/will no longer be available/),
+        ).toBeInTheDocument()
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        expect(
+            screen.getByRole("button", { name: "Confirm" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByRole("button", { name: "Cancel" }),
+        ).toBeInTheDocument()
+    })
+
+    it("cancel closes the confirmation, makes no request, and returns focus to the trigger", async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        const trigger = screen.getByRole("button", {
+            name: "Revoke relationship",
+        })
+        fireEvent.click(trigger)
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("button", { name: "Confirm" }),
+        ).not.toBeInTheDocument()
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", {
+                    name: "Revoke relationship",
+                }),
+            ).toHaveFocus()
+        })
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically removes the relationship", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Revoking character relationship…"),
+            ).toBeInTheDocument()
+        })
+        expect(
+            screen.getByText("Kestrel Vane — Primary Controller"),
+        ).toBeInTheDocument()
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    membership_character_relationship_id:
+                        fullOverview.members[0]
+                            .character_relationships[0]
+                            .membership_character_relationship_id,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Character relationship revoked."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(
+            "Character relationship revoked.",
+        )
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+
+    it("does not display any internal identifier as visible text in the confirmation", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Revoke relationship",
+            }),
+        )
+
+        const uuidPattern =
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+        expect(
+            uuidPattern.test(
+                screen.getByText(
+                    /Revoke Aria the GM's Primary Controller relationship/,
+                ).textContent ?? "",
+            ),
+        ).toBe(false)
+    })
+})
+
+describe("AccessPage — add resource grant (checkpoint 5)", () => {
+    it("exposes Add direct resource access for every member when a character and a grantable capability are assignable", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            }),
+        ).toHaveLength(3)
+    })
+
+    it("does not expose the add control when no character is assignable", () => {
+        renderPage({
+            ...fullOverview,
+            assignable_characters: [],
+        })
+
+        expect(
+            screen.queryByRole("button", {
+                name: "Add direct resource access",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("does not expose the add control when no capability is grantable", () => {
+        renderPage({
+            ...fullOverview,
+            grantable_resource_capabilities: [],
+        })
+
+        expect(
+            screen.queryByRole("button", {
+                name: "Add direct resource access",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("offers only server-authoritative resource-type/resource/capability choices, narrowing capability choices to exclude combinations already active for the selected resource", () => {
+        const overview = {
+            ...fullOverview,
+            members: [
+                {
+                    ...fullOverview.members[0],
+                    grants: [
+                        {
+                            resource_grant_id: "existing-grant",
+                            capability_code: "character.view_full",
+                            capability_display_name:
+                                "View Character Full Detail",
+                            effect: "allow",
+                            target_type: "character",
+                            target_id:
+                                "9e4f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                            target_display_name: "Kestrel Vane",
+                            reason: null,
+                            granted_at: "2026-01-03T00:00:00Z",
+                            expires_at: null,
+                        },
+                    ],
+                },
+                fullOverview.members[1],
+                fullOverview.members[2],
+            ],
+            grantable_resource_capabilities: [
+                {
+                    capability_id: "cap-full",
+                    code: "character.view_full",
+                    display_name: "View Character Full Detail",
+                    target_type: "character",
+                },
+                {
+                    capability_id: "cap-summary",
+                    code: "character.view_summary",
+                    display_name: "View Character Summary",
+                    target_type: "character",
+                },
+            ],
+        }
+
+        renderPage(overview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            })[0],
+        )
+
+        const resourceSelect = screen.getByLabelText("Character")
+        const resourceOptions = Array.from(
+            resourceSelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(resourceOptions).toEqual(["Kestrel Vane", "Bram Ferro"])
+
+        // Aria already holds View Character Full Detail on Kestrel Vane
+        // (the default-selected resource) — only the remaining
+        // grantable capability is offered, never the already-active one.
+        const capabilitySelect = screen.getByLabelText("Permission")
+        const capabilityOptions = Array.from(
+            capabilitySelect.querySelectorAll("option"),
+        ).map((option) => option.textContent)
+        expect(capabilityOptions).toEqual(["View Character Summary"])
+    })
+
+    it("requires an explicit Add action and never submits on selection alone", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            })[0],
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("cancel closes the Add-grant control and makes no request", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            })[0],
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByLabelText("Permission"),
+        ).not.toBeInTheDocument()
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically shows the new grant", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Adding resource access…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({ resource_grant_id: "new-grant-id" }),
+                {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Resource access added."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith("Resource access added.")
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", {
+                name: "Add direct resource access",
+            })[0],
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+})
+
+describe("AccessPage — revoke resource grant (checkpoint 5)", () => {
+    it("exposes an accessible revoke action for each existing grant", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getAllByRole("button", { name: "Revoke access" }),
+        ).toHaveLength(1)
+    })
+
+    it("requires an explicit confirmation naming the member and resource/permission, explains access may disappear immediately, and makes no request until confirmed", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Revoke access" }),
+        )
+
+        expect(
+            screen.getByText(
+                /Revoke Aria the GM's View Campaign on Kestrel Vane access\?/,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/may disappear immediately/),
+        ).toBeInTheDocument()
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        expect(
+            screen.getByRole("button", { name: "Confirm" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByRole("button", { name: "Cancel" }),
+        ).toBeInTheDocument()
+    })
+
+    it("cancel closes the confirmation, makes no request, and returns focus to the trigger", async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        const trigger = screen.getByRole("button", {
+            name: "Revoke access",
+        })
+        fireEvent.click(trigger)
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByRole("button", { name: "Confirm" }),
+        ).not.toBeInTheDocument()
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", { name: "Revoke access" }),
+            ).toHaveFocus()
+        })
+    })
+
+    it("announces pending, then success, refreshes via onChanged, and never optimistically removes the grant", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Revoke access" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Revoking resource access…"),
+            ).toBeInTheDocument()
+        })
+        expect(
+            screen.getByText("View Campaign"),
+        ).toBeInTheDocument()
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    resource_grant_id:
+                        fullOverview.members[0].grants[0]
+                            .resource_grant_id,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Resource access revoked."),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith("Resource access revoked.")
+    })
+
+    it("announces a denied failure without exposing sensitive details", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(new Response(null, { status: 403 }))
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Revoke access" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        expect(
+            await screen.findByText(
+                "You do not have permission to make this change.",
+            ),
+        ).toBeInTheDocument()
+    })
+
+    it("does not display any internal identifier as visible text in the confirmation", () => {
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Revoke access" }),
+        )
+
+        const uuidPattern =
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+        expect(
+            uuidPattern.test(
+                screen.getByText(
+                    /Revoke Aria the GM's View Campaign on Kestrel Vane access/,
+                ).textContent ?? "",
+            ),
+        ).toBe(false)
+    })
+})
+
+describe("AccessPage — revoke resource grant, deny effect (checkpoint-5 correction)", () => {
+    // A "deny" grant is an explicit block, not a permission — removing one
+    // restores access from elsewhere rather than taking it away, so every
+    // trigger/confirmation/status string must say so instead of reusing the
+    // allow-oriented "Revoke access"/"may disappear" copy above.
+    const denyOverview: CampaignAccessOverview = {
+        ...fullOverview,
+        members: [
+            {
+                ...fullOverview.members[0],
+                grants: [
+                    {
+                        ...fullOverview.members[0].grants[0],
+                        effect: "deny",
+                    },
+                ],
+            },
+            fullOverview.members[1],
+            fullOverview.members[2],
+        ],
+    }
+
+    it("labels the trigger 'Remove denial', never 'Revoke access'", () => {
+        renderPage(denyOverview)
+
+        expect(
+            screen.getByRole("button", { name: "Remove denial" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.queryByRole("button", { name: "Revoke access" }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("explains the denial is being removed and access may be restored, never that access may disappear", () => {
+        renderPage(denyOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+
+        expect(
+            screen.getByText(
+                /Remove Aria the GM's explicit denial of View Campaign on Kestrel Vane\?/,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(
+                /Access may be restored from another role, relationship, group, or allow grant\./,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.queryByText(/may disappear immediately/),
+        ).not.toBeInTheDocument()
+    })
+
+    it("moves focus from trigger to confirmation, and back to the trigger on cancel", async () => {
+        renderPage(denyOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", { name: "Confirm" }),
+            ).toHaveFocus()
+        })
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        // Cancel unmounts the confirmation markup and mounts a fresh
+        // trigger button — re-query rather than reuse the stale pre-click
+        // reference, mirroring the identical allow-effect focus-return
+        // test above.
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", { name: "Remove denial" }),
+            ).toHaveFocus()
+        })
+    })
+
+    it("announces a deny-specific pending/success message and calls onChanged with it", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(denyOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Removing denial…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    resource_grant_id:
+                        denyOverview.members[0].grants[0]
+                            .resource_grant_id,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        const successMessage =
+            "Explicit denial removed. Access may be restored from another role, relationship, group, or allow grant."
+        await waitFor(() => {
+            expect(screen.getByText(successMessage)).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(successMessage)
     })
 })

@@ -66,6 +66,90 @@ _TARGET_COLUMNS = (
     "event_id",
 )
 
+# Resource-grant delegation policy (Phase 13E-B checkpoint 5): the fixed,
+# server-authoritative catalog of which `security.capabilities.code` values
+# `dnd_ai.commands.access_grants.create_resource_grant()` accepts for each
+# `_TARGET_COLUMNS` kind, and which `dnd_ai.queries.access_overview.
+# list_grantable_resource_capabilities()` offers the portal as choices.
+# There is no `resource_type`/capability-validity reference table in this
+# schema (docs/architecture/DATABASE_MODEL.md §19.6 explicitly rejects a
+# universal ACL framework for every table), so this dict is the smallest
+# server-side policy that closes the gap: without it, `create_resource_
+# grant()` would accept *any* active capability against *any* target kind —
+# including a nonsensical pairing (e.g. `character.control` on a `quest_id`)
+# that no reader anywhere in this codebase ever checks, and, more
+# seriously, `access.manage`/`import.approve`/`rules_source.manage` scoped
+# to one resource.
+#
+# Derived from actual call-site usage, not guessed: every `has_capability(
+# ..., character_id=...)`/`resource_grant_targets(cap, "character_id")` call
+# in this codebase (`dnd_ai.api.characters`, `.ai_npc`, `.access`) checks
+# only a `character.*` code, mirroring `security.character_relationship_
+# type_capabilities`' own identical scoping of those same codes to
+# character relationships exclusively; every call against the other five
+# target columns (`dnd_ai.api.world_explorer`, `.knowledge`, `.quests`,
+# `.sessions`, `.dungeon`, `.relationships`, `.summary`) checks only
+# `campaign.view` or `canon.edit` — the two capabilities this codebase
+# already treats as generically resource-scoped. `access.manage`, `import.
+# approve`, and `rules_source.manage` are excluded from every column
+# entirely: `has_capability()`'s own contract above ("passing none checks
+# only role/character-relationship capabilities") means a resource-scoped
+# grant of one of these would be silently inert against every real call
+# site in this codebase (each is checked only via `require_campaign_
+# capability`, which never passes a resource-target keyword) — and even
+# where it would not be inert, this codebase's authorization model has no
+# documented notion of *resource-scoped* platform/campaign administration,
+# so delegating one through a resource grant is disallowed as policy, not
+# merely because it happens to do nothing today.
+#
+# `character.discover` (checkpoint-5 correction) is deliberately excluded,
+# even though it is otherwise a `character.*` code exactly like the nine
+# below: its own baseline check (`dnd_ai.api.world_explorer.
+# resolve_world_character_visibility`, `discover_all = any(access.
+# has_capability(cap) for cap in _DISCOVER_CAPABILITIES)`) passes no resource
+# target at all, so `has_capability()`'s own "passing none checks only role/
+# character-relationship capabilities" contract means a resource-scoped
+# grant can never move that baseline. That same function's per-character
+# loop *does* call `has_capability(cap, character_id=character_id)` for each
+# discover-tier code, including this one — but only for characters already
+# reached through `resource_grant_targets(cap, "character_id")`'s own
+# deny/allow sets or an existing character relationship, i.e. it can only
+# ever confirm a grant that already exists, never explain how a caller would
+# discover a character *before* one exists to check against. In other words:
+# a `character.discover` resource grant is not fully inert (the per-character
+# loop's narrower use is real), but there is no path by which granting it to
+# a membership makes a *previously-undiscoverable* character newly
+# discoverable to that membership — no consumer anywhere in this codebase
+# resolves "should a resource grant of `character.discover` make character X
+# appear in a list" from a bare `(membership, capability)` pair the way
+# `character.view_summary`/`.view_full`/etc. do for their own gated actions.
+# Advertising it as grantable therefore promises a capability this codebase
+# has no real, standalone target-aware consumer for. Re-add it if and when
+# such a consumer exists (see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k).
+CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
+    {
+        "character.view_summary",
+        "character.view_full",
+        "character.view_private",
+        "character.view_knowledge",
+        "character.edit_narrative",
+        "character.edit_mechanical_state",
+        "character.interact",
+        "character.control",
+    }
+)
+
+GENERIC_TARGET_CAPABILITY_CODES = frozenset({"campaign.view", "canon.edit"})
+
+RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
+    "character_id": CHARACTER_TARGET_CAPABILITY_CODES,
+    "entity_id": GENERIC_TARGET_CAPABILITY_CODES,
+    "knowledge_item_id": GENERIC_TARGET_CAPABILITY_CODES,
+    "quest_id": GENERIC_TARGET_CAPABILITY_CODES,
+    "session_id": GENERIC_TARGET_CAPABILITY_CODES,
+    "event_id": GENERIC_TARGET_CAPABILITY_CODES,
+}
+
 _GrantKey = tuple[str, uuid.UUID]
 
 
@@ -733,6 +817,68 @@ def resolve_access_context(
     capabilities or resource grants (finding 2) — a branch timeline is
     rejected exactly like an unrelated same-world or different-world one,
     since none of them are the campaign's own timeline.
+
+    Fictional-time-bounded character relationships (checkpoint-4
+    correction): a `security.membership_character_relationships` row may
+    carry `effective_from_world_time_id`/`effective_to_world_time_id`
+    (ADR 0010) in addition to `revoked_at`/`expires_at` — a *fictional*-time
+    scope layered on top of the row's real-time lifecycle. This codebase has
+    no tracked "current fictional now" for a timeline anywhere (no `campaign.
+    timelines` column, no session/event pointer) to compare those bounds
+    against, and inventing one here would be exactly the "client-authoritative
+    time" this domain's own conventions reject. So this resolver applies the
+    same "current record" pattern every other ADR-0010-shaped interval in
+    this schema already uses for currentness — `campaign.party_memberships`/
+    `world.organization_memberships`/`world.employment_relationships` all
+    treat `effective_to_*_id IS NULL` as "still current," never a comparison
+    against some external clock (docs/architecture/DATABASE_MODEL.md §12.4,
+    §6.3) — applied here as `mcr.effective_to_world_time_id IS NULL`: a row
+    with only `effective_from_world_time_id` set (or neither) still
+    currently grants its capabilities, since "from" always names an
+    already-past grant moment, exactly like a party join. A row with
+    *both* endpoints set is, by that same precedent, a closed historical
+    interval — it never currently grants access, regardless of where its
+    endpoints fall — this is the fail-closed policy this correction adds:
+    previously, this query ignored both world-time columns entirely, so a
+    fully-bounded (and therefore already-closed) relationship was treated
+    identically to an unbounded one. `dnd_ai.queries.access_overview.
+    get_campaign_access_overview` and `dnd_ai.commands.access_grants.
+    change_character_relationship`'s own eligibility check apply the
+    identical rule, so a relationship this resolver would no longer
+    authorize through never appears as "current" on the read side or as a
+    valid `change` target either.
+
+    Deactivated-character exclusion (checkpoint-4 review correction): the
+    character-capabilities join above also requires `core.lifecycle_
+    statuses.code = 'active'` for the relationship's own `character_id` —
+    previously unchecked here, so a character archived *after* a
+    relationship was granted (or changed) stayed authorization-effective
+    indefinitely, even though `dnd_ai.commands.access_grants.grant_
+    character_relationship()`/`.change_character_relationship()` both
+    already refuse to *create* or *change* a relationship naming an
+    inactive character. This closes the gap for the read side: a character
+    that is later deactivated stops granting any capability on the very
+    next call to this resolver, with no separate cleanup step — exactly
+    the same "resolved fresh every call, nothing cached" guarantee that
+    already made a *revoked relationship* disappear immediately. `dnd_ai.
+    queries.access_overview.get_campaign_access_overview` applies the
+    identical join/filter so the GM overview and the effective-access
+    resolver can never disagree about whether a relationship is current.
+
+    Deactivated-resource-grant-target exclusion (checkpoint 5): the
+    resource-grants query below also requires the grant's own target to be
+    currently active — `core.lifecycle_statuses.code = 'active'` for the
+    five entity-rooted target kinds (`character_id`/`entity_id`/`knowledge_
+    item_id`/`quest_id`/`event_id`, all `core.entities` rows via class-table
+    inheritance, exactly like `dnd_ai.commands.access_grants.
+    _validate_resource_grant_target`'s own reasoning), or the same check
+    against `campaign.sessions.lifecycle_status_id` for `session_id` —
+    mirroring the deactivated-character exclusion above, generalized to
+    every resource-grant target kind: a resource later archived/deactivated
+    after a grant was issued must stop being authorization-effective on the
+    very next call, not remain effective indefinitely because this resolver
+    never re-checked it. `dnd_ai.queries.access_overview.
+    get_campaign_access_overview` applies the identical join/filter.
     """
     membership_id = connection.execute(
         text("""
@@ -794,11 +940,15 @@ def resolve_access_context(
             JOIN security.character_relationship_type_capabilities rtc
               ON rtc.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
+            JOIN core.entities e ON e.entity_id = mcr.character_id
+            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE mcr.campaign_membership_id = :membership_id
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+              AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
               AND cap.is_active
+              AND cls.code = 'active'
         """),
         {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
     ).mappings():
@@ -812,11 +962,24 @@ def resolve_access_context(
             SELECT {target_column_list}, cap.code AS capability_code, rg.effect
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
+            LEFT JOIN core.entities target_entity
+              ON target_entity.entity_id = COALESCE(
+                     rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
+                 )
+            LEFT JOIN core.lifecycle_statuses target_entity_status
+              ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
+            LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
+            LEFT JOIN core.lifecycle_statuses target_session_status
+              ON target_session_status.lifecycle_status_id = target_session.lifecycle_status_id
             WHERE rg.campaign_id = :campaign_id
               AND rg.revoked_at IS NULL
               AND (rg.expires_at IS NULL OR rg.expires_at > now())
               AND (rg.timeline_id IS NULL OR rg.timeline_id = :timeline_id)
               AND cap.is_active
+              AND (
+                    (rg.session_id IS NULL AND target_entity_status.code = 'active')
+                    OR (rg.session_id IS NOT NULL AND target_session_status.code = 'active')
+                  )
               AND (
                     rg.grantee_campaign_membership_id = :membership_id
                     OR rg.grantee_access_group_id IN (

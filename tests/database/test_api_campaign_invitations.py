@@ -8,7 +8,12 @@ and `accept_campaign_invitation`'s full acceptance surface — a fresh
 invitee (new membership), a departed member (reactivation), an
 already-open member (no-op reuse), a replay by the same accepting user
 (idempotent), a wrong/nonexistent token, an expired invitation, a revoked
-invitation, and an invitation already accepted by a different user.
+invitation, and an invitation already accepted by a different user. Also
+covers (checkpoint-4 correction, extended by checkpoint 5) that ending a
+membership through `end_campaign_membership` revokes its character
+relationships *and* resource grants before reactivating it here — proving
+neither silently regains effect through this acceptance flow's own
+"reopen the same row in place" reactivation path.
 """
 
 import uuid
@@ -23,12 +28,24 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaign_invitations import create_campaign_invitation
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.commands.memberships import end_campaign_membership
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    AuthenticatedPrincipal,
+    resolve_access_context,
+)
 from tests.factories import (
     lookup_id,
+    make_access_group,
+    make_access_group_membership,
     make_campaign,
     make_campaign_membership,
+    make_character,
+    make_character_relationship_type,
+    make_membership_character_relationship,
     make_membership_role,
+    make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -88,6 +105,78 @@ class Fixture:
 
         self.other_user_id = make_user(connection, "Invitation API Other User")
 
+        # --- checkpoint-4 correction: end_campaign_membership must revoke
+        # every unrevoked character relationship a membership holds, so a
+        # later reactivation through this very acceptance flow never
+        # silently restores the old character perspective/capability. ---
+        view_summary_capability_id = lookup_id(
+            connection, "security", "capabilities", "capability_id", "character.view_summary"
+        )
+        self.relationship_character_id = make_character(
+            connection, self.world_id, name="Invitation API Relationship Character"
+        )
+        self.relationship_type_id = make_character_relationship_type(connection)
+        make_relationship_type_capability(
+            connection, self.relationship_type_id, view_summary_capability_id
+        )
+        self.pre_reactivation_relationship_user_id = make_user(
+            connection, "Invitation API Relationship Member"
+        )
+        self.pre_reactivation_relationship_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.pre_reactivation_relationship_user_id
+        )
+        self.pre_reactivation_relationship_id = make_membership_character_relationship(
+            connection,
+            self.pre_reactivation_relationship_membership_id,
+            self.relationship_character_id,
+            self.relationship_type_id,
+        )
+
+        # --- checkpoint 5: end_campaign_membership must also revoke every
+        # unrevoked resource grant a membership holds, the identical
+        # silent-reactivation gap closed above for character relationships.
+        # Reuses the same membership/character as the relationship above —
+        # one membership demonstrating both revocation halves at once. ---
+        self.pre_reactivation_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            view_summary_capability_id,
+            grantee_campaign_membership_id=self.pre_reactivation_relationship_membership_id,
+            character_id=self.relationship_character_id,
+        )
+
+        # --- checkpoint-5 correction: the identical silent-reactivation gap
+        # existed for security.access_group_memberships — end_campaign_
+        # membership previously left a membership's group links untouched,
+        # so resolve_access_context's own group-membership subquery kept
+        # treating a departed member as still belonging to the group, and a
+        # later reactivation through this exact acceptance flow would
+        # silently restore every group-derived resource grant. A dedicated
+        # membership/group/grant, separate from the relationship/direct-
+        # grant scenario above, keeps that scenario's own assertions from
+        # entangling with this one. ---
+        self.pre_reactivation_access_group_user_id = make_user(
+            connection, "Invitation API Access Group Member"
+        )
+        self.pre_reactivation_access_group_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.pre_reactivation_access_group_user_id
+        )
+        self.pre_reactivation_access_group_id = make_access_group(
+            connection, self.campaign_id, name=f"Invitation API Group {uuid.uuid4().hex[:8]}"
+        )
+        self.pre_reactivation_access_group_membership_row_id = make_access_group_membership(
+            connection,
+            self.pre_reactivation_access_group_id,
+            self.pre_reactivation_access_group_membership_id,
+        )
+        self.pre_reactivation_access_group_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            view_summary_capability_id,
+            grantee_access_group_id=self.pre_reactivation_access_group_id,
+            character_id=self.relationship_character_id,
+        )
+
 
 @pytest.fixture
 def f(postgres_engine: Engine) -> Iterator[Fixture]:
@@ -99,6 +188,34 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
         cleanup.execute(
             text("DELETE FROM security.campaign_invitations WHERE campaign_id = :c"),
             {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text("""
+                DELETE FROM security.membership_character_relationships
+                WHERE campaign_membership_id IN (
+                    SELECT campaign_membership_id FROM security.campaign_memberships
+                    WHERE campaign_id = :c
+                )
+            """),
+            {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.resource_grants WHERE campaign_id = :c"),
+            {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_type_capabilities "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.relationship_type_id},
+        )
+        cleanup.execute(
+            text(
+                "DELETE FROM security.character_relationship_types "
+                "WHERE character_relationship_type_id = :t"
+            ),
+            {"t": fixture.relationship_type_id},
         )
         cleanup.execute(
             text("""
@@ -149,6 +266,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     fixture.departed_user_id,
                     fixture.open_member_user_id,
                     fixture.other_user_id,
+                    fixture.pre_reactivation_relationship_user_id,
+                    fixture.pre_reactivation_access_group_user_id,
                 ]
             },
         )
@@ -351,6 +470,228 @@ def test_accepting_an_invitation_reactivates_a_departed_membership(
             {"c": f.campaign_id, "u": f.departed_user_id},
         ).scalar()
         assert count == 1
+
+
+def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-4 correction: `_activate_or_create_membership` (this
+    acceptance flow's own reactivation path) reopens the *same* `campaign_
+    membership_id` row rather than inserting a fresh one — before this
+    correction, `end_campaign_membership` left `security.membership_
+    character_relationships` rows untouched, so reopening the membership
+    silently restored whatever character capability the departed member
+    held before, with no new grant and no new audit entry to explain why.
+    Ending the membership through the real command must revoke that
+    relationship first, and reactivating it here must not bring the old
+    relationship back.
+
+    Checkpoint 5 extends this same test to `security.resource_grants`: the
+    identical silent-reactivation gap existed there too — `f.pre_
+    reactivation_grant_id` belongs to the same membership and must be
+    revoked by the same `end_campaign_membership()` call, and must not
+    regain effect on reactivation either."""
+    with postgres_engine.begin() as connection:
+        end_result = end_campaign_membership(
+            connection,
+            campaign_membership_id=f.pre_reactivation_relationship_membership_id,
+            campaign_id=f.campaign_id,
+            ended_by_membership_id=f.admin_membership_id,
+        )
+    assert end_result.ended is True
+    assert end_result.revoked_membership_character_relationship_ids == (
+        f.pre_reactivation_relationship_id,
+    )
+    assert end_result.revoked_resource_grant_ids == (f.pre_reactivation_grant_id,)
+
+    token = _issue_token(postgres_engine, f)
+    with client_factory(f.pre_reactivation_relationship_user_id) as client:
+        response = client.post("/campaign-invitations/accept", json={"token": token})
+    assert response.status_code == 200, response.text
+    assert response.json()["campaign_membership_id"] == str(
+        f.pre_reactivation_relationship_membership_id
+    )
+
+    with postgres_engine.connect() as verify:
+        membership_row = verify.execute(
+            text("""
+                SELECT ended_at, ms.code
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :m
+            """),
+            {"m": f.pre_reactivation_relationship_membership_id},
+        ).one()
+        assert membership_row.ended_at is None
+        assert membership_row.code == "active"
+
+        relationship_revoked_at = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.membership_character_relationships "
+                "WHERE membership_character_relationship_id = :r"
+            ),
+            {"r": f.pre_reactivation_relationship_id},
+        ).scalar_one()
+        assert relationship_revoked_at is not None
+
+        grant_revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :g"),
+            {"g": f.pre_reactivation_grant_id},
+        ).scalar_one()
+        assert grant_revoked_at is not None
+
+    with postgres_engine.connect() as verify:
+        access = resolve_access_context(
+            verify, user_id=f.pre_reactivation_relationship_user_id, campaign_id=f.campaign_id
+        )
+    assert access is not None
+    assert f.relationship_character_id not in access.character_capabilities
+    assert access.grant_effects == {}
+
+
+def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_access_group_membership(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-5 correction: `end_campaign_membership` previously closed
+    a membership's own direct resource grants but left its `security.
+    access_group_memberships` rows untouched — since `_activate_or_create_
+    membership` (this acceptance flow's own reactivation path) reopens the
+    *same* `campaign_membership_id` row rather than inserting a fresh one,
+    a departed member's stale group membership (and every resource grant
+    made to that group) would silently regain effect the moment they
+    rejoined, with no new grant and no new audit entry to explain why. Full
+    scenario: the group grant is effective before the membership ends,
+    ineffective (and the group link closed) once it does, still ineffective
+    after a real reactivation through this acceptance flow, and restored
+    only by an explicit new `access_group_memberships` row — never by
+    reactivation alone."""
+    with postgres_engine.connect() as verify:
+        before_access = resolve_access_context(
+            verify,
+            user_id=f.pre_reactivation_access_group_user_id,
+            campaign_id=f.campaign_id,
+        )
+    assert before_access is not None
+    assert before_access.grant_effects == {
+        ("character_id", f.relationship_character_id): {"character.view_summary": "allow"},
+    }
+
+    # Ended through the real HTTP route (unlike the relationship/direct-
+    # grant scenario above, which exercises end_campaign_membership() at
+    # the command layer) so this test can also assert real audit content —
+    # dnd_ai.api.memberships.end_campaign_membership_endpoint is what
+    # actually writes the audit.change_log row this test checks below.
+    with client_factory(f.admin_user_id) as client:
+        end_response = client.post(
+            f"/campaigns/{f.campaign_id}/memberships/"
+            f"{f.pre_reactivation_access_group_membership_id}/end"
+        )
+    assert end_response.status_code == 200, end_response.text
+
+    with postgres_engine.connect() as verify:
+        group_membership_row = verify.execute(
+            text(
+                "SELECT removed_at FROM security.access_group_memberships "
+                "WHERE access_group_membership_id = :g"
+            ),
+            {"g": f.pre_reactivation_access_group_membership_row_id},
+        ).one()
+        assert group_membership_row.removed_at is not None
+
+        # The group's own grant row is untouched — it must remain effective
+        # for any other member of the same group.
+        group_grant_revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :g"),
+            {"g": f.pre_reactivation_access_group_grant_id},
+        ).scalar_one()
+        assert group_grant_revoked_at is None
+
+        access_after_end = resolve_access_context(
+            verify,
+            user_id=f.pre_reactivation_access_group_user_id,
+            campaign_id=f.campaign_id,
+        )
+    assert access_after_end is None  # the membership itself is ended.
+
+    token = _issue_token(postgres_engine, f)
+    with client_factory(f.pre_reactivation_access_group_user_id) as client:
+        response = client.post("/campaign-invitations/accept", json={"token": token})
+    assert response.status_code == 200, response.text
+    assert response.json()["campaign_membership_id"] == str(
+        f.pre_reactivation_access_group_membership_id
+    )
+
+    with postgres_engine.connect() as verify:
+        membership_row = verify.execute(
+            text("""
+                SELECT ended_at, ms.code
+                FROM security.campaign_memberships cm
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = cm.membership_status_id
+                WHERE cm.campaign_membership_id = :m
+            """),
+            {"m": f.pre_reactivation_access_group_membership_id},
+        ).one()
+        assert membership_row.ended_at is None
+        assert membership_row.code == "active"
+
+        # The group link stays historically closed — reactivating the
+        # membership never reopens it.
+        group_membership_row = verify.execute(
+            text(
+                "SELECT removed_at FROM security.access_group_memberships "
+                "WHERE access_group_membership_id = :g"
+            ),
+            {"g": f.pre_reactivation_access_group_membership_row_id},
+        ).one()
+        assert group_membership_row.removed_at is not None
+
+        audit_row = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'campaign_memberships'
+                      AND record_id = :m
+                      AND command_name = 'end_campaign_membership'
+                """),
+                {"m": f.pre_reactivation_access_group_membership_id},
+            )
+            .mappings()
+            .one()
+        )
+        assert str(f.pre_reactivation_access_group_membership_row_id) in str(
+            audit_row["changed_fields"]
+        )
+
+    with postgres_engine.connect() as verify:
+        access_after_reactivation = resolve_access_context(
+            verify,
+            user_id=f.pre_reactivation_access_group_user_id,
+            campaign_id=f.campaign_id,
+        )
+    assert access_after_reactivation is not None
+    assert access_after_reactivation.grant_effects == {}
+
+    # Restoration requires an explicit new access_group_memberships row —
+    # never a side effect of reactivation alone.
+    with postgres_engine.begin() as connection:
+        make_access_group_membership(
+            connection,
+            f.pre_reactivation_access_group_id,
+            f.pre_reactivation_access_group_membership_id,
+        )
+
+    with postgres_engine.connect() as verify:
+        access_after_new_assignment = resolve_access_context(
+            verify,
+            user_id=f.pre_reactivation_access_group_user_id,
+            campaign_id=f.campaign_id,
+        )
+    assert access_after_new_assignment is not None
+    assert access_after_new_assignment.grant_effects == {
+        ("character_id", f.relationship_character_id): {"character.view_summary": "allow"},
+    }
 
 
 def test_accepting_an_invitation_for_an_already_open_member_reuses_the_membership(

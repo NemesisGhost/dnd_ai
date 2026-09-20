@@ -106,12 +106,17 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
-from dnd_ai.domain.access import FOUNDRY_SYSTEM_AUTH_METHOD, AuthenticatedPrincipal
+from dnd_ai.domain.access import (
+    FOUNDRY_SYSTEM_AUTH_METHOD,
+    LOCAL_AUTH_ISSUER,
+    AuthenticatedPrincipal,
+)
 from tests.factories import (
     make_area_hazard,
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_external_identity,
     make_knowledge_item,
     make_location,
     make_organization,
@@ -138,6 +143,16 @@ class Fixture:
 
         self.creator_user_id = make_user(connection, "Campaign API Creator")
         self.second_user_id = make_user(connection, "Campaign API Second User")
+        # An unrevoked local identity — add_campaign_member now requires
+        # one (review correction), and this user is the target of
+        # test_a_member_with_only_campaign_view_cannot_reuse_the_timeline's
+        # own add-member call.
+        make_external_identity(
+            connection,
+            self.second_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"campaign-api-second-{uuid.uuid4().hex[:8]}",
+        )
 
         # The positive, server-verifiable first-campaign entitlement —
         # issued here by this fixture acting as trusted world-authoring
@@ -740,13 +755,11 @@ def test_a_member_with_only_campaign_view_cannot_reuse_the_timeline(
         assert first_response.status_code == 201, first_response.text
         first_campaign_id = uuid.UUID(first_response.json()["campaign_id"])
 
-        add_member_response = owner_client.post(
-            f"/campaigns/{first_campaign_id}/memberships",
-            json={"user_id": str(f.second_user_id)},
-        )
-        assert add_member_response.status_code == 201, add_member_response.text
-        member_membership_id = uuid.UUID(add_member_response.json()["campaign_membership_id"])
-
+        # POST /campaigns/{campaign_id}/memberships requires an initial
+        # role_id since Phase 13E-B checkpoint 3 (dnd_ai.commands.
+        # memberships.add_campaign_member) — the system-template `player`
+        # role (campaign.view only) is exactly what this test needs to
+        # prove insufficient for timeline reuse below.
         with postgres_engine.connect() as verify:
             player_role_id = verify.execute(
                 text(
@@ -755,11 +768,11 @@ def test_a_member_with_only_campaign_view_cannot_reuse_the_timeline(
                 )
             ).scalar_one()
 
-        assign_role_response = owner_client.post(
-            f"/campaigns/{first_campaign_id}/memberships/{member_membership_id}/roles",
-            json={"role_id": str(player_role_id)},
+        add_member_response = owner_client.post(
+            f"/campaigns/{first_campaign_id}/memberships",
+            json={"user_id": str(f.second_user_id), "role_id": str(player_role_id)},
         )
-        assert assign_role_response.status_code == 201, assign_role_response.text
+        assert add_member_response.status_code == 201, add_member_response.text
 
     with client_factory(f.second_user_id) as member_client:
         # campaign.view: confirms the role really is active before proving

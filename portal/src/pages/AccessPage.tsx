@@ -1,13 +1,23 @@
 import { useId } from "react"
+import { AddCampaignMember } from "../components/AddCampaignMember"
+import { AddCharacterRelationship } from "../components/AddCharacterRelationship"
 import { AddMemberRole } from "../components/AddMemberRole"
+import { AddResourceGrant } from "../components/AddResourceGrant"
+import { CharacterRelationshipEditor } from "../components/CharacterRelationshipEditor"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
+import { RemoveCampaignMember } from "../components/RemoveCampaignMember"
+import { RevokeCharacterRelationship } from "../components/RevokeCharacterRelationship"
 import { RevokeMemberRole } from "../components/RevokeMemberRole"
+import { RevokeResourceGrant } from "../components/RevokeResourceGrant"
 import { useSession } from "../context/SessionContext"
 import { humanizeCode } from "../utils/humanize"
 import type {
+    AssignableCharacter,
+    AssignableCharacterRelationshipType,
     AssignableRole,
     CampaignAccessMember,
     CampaignAccessOverview,
+    GrantableResourceCapability,
 } from "../types/accessOverview"
 
 function formatTimestamp(timestamp: string): string {
@@ -22,6 +32,9 @@ interface MemberAccessCardProps {
     campaignId: string
     campaignName: string
     assignableRoles: AssignableRole[]
+    assignableCharacters: AssignableCharacter[]
+    assignableRelationshipTypes: AssignableCharacterRelationshipType[]
+    grantableResourceCapabilities: GrantableResourceCapability[]
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -31,6 +44,9 @@ function MemberAccessCard({
     campaignId,
     campaignName,
     assignableRoles,
+    assignableCharacters,
+    assignableRelationshipTypes,
+    grantableResourceCapabilities,
     onChanged,
     onMutationStart,
 }: MemberAccessCardProps) {
@@ -129,6 +145,32 @@ function MemberAccessCard({
                                         {
                                             relationship.relationship_type_display_name
                                         }
+                                        <CharacterRelationshipEditor
+                                            campaignId={campaignId}
+                                            campaignName={campaignName}
+                                            memberDisplayName={
+                                                member.display_name
+                                            }
+                                            relationship={relationship}
+                                            assignableRelationshipTypes={
+                                                assignableRelationshipTypes
+                                            }
+                                            onChanged={onChanged}
+                                            onMutationStart={
+                                                onMutationStart
+                                            }
+                                        />
+                                        <RevokeCharacterRelationship
+                                            campaignId={campaignId}
+                                            memberDisplayName={
+                                                member.display_name
+                                            }
+                                            relationship={relationship}
+                                            onChanged={onChanged}
+                                            onMutationStart={
+                                                onMutationStart
+                                            }
+                                        />
                                     </li>
                                 ),
                             )}
@@ -136,10 +178,28 @@ function MemberAccessCard({
                     ) : (
                         <p>No character relationships.</p>
                     )}
+
+                    <AddCharacterRelationship
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        campaignMembershipId={
+                            member.campaign_membership_id
+                        }
+                        memberDisplayName={member.display_name}
+                        assignableCharacters={assignableCharacters}
+                        assignableRelationshipTypes={
+                            assignableRelationshipTypes
+                        }
+                        existingRelationships={
+                            member.character_relationships
+                        }
+                        onChanged={onChanged}
+                        onMutationStart={onMutationStart}
+                    />
                 </section>
 
                 <section aria-labelledby={grantsHeadingId}>
-                    <h3 id={grantsHeadingId}>Explicit grants</h3>
+                    <h3 id={grantsHeadingId}>Direct resource access</h3>
 
                     {member.grants.length > 0 ? (
                         <ul>
@@ -148,21 +208,58 @@ function MemberAccessCard({
                                     <strong>
                                         {grant.capability_display_name}
                                     </strong>{" "}
-                                    ({humanizeCode(grant.effect)}) —{" "}
-                                    {humanizeCode(grant.target_type)}
+                                    ({humanizeCode(grant.effect)}) on{" "}
+                                    {grant.target_display_name ??
+                                        humanizeCode(grant.target_type)}
                                     {grant.reason !== null &&
                                         ` · ${grant.reason}`}
+                                    <RevokeResourceGrant
+                                        campaignId={campaignId}
+                                        memberDisplayName={
+                                            member.display_name
+                                        }
+                                        grant={grant}
+                                        onChanged={onChanged}
+                                        onMutationStart={onMutationStart}
+                                    />
                                 </li>
                             ))}
                         </ul>
                     ) : (
-                        <p>No explicit grants.</p>
+                        <p>No direct resource access.</p>
                     )}
+
+                    <AddResourceGrant
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        campaignMembershipId={
+                            member.campaign_membership_id
+                        }
+                        memberDisplayName={member.display_name}
+                        assignableCharacters={assignableCharacters}
+                        grantableCapabilities={
+                            grantableResourceCapabilities
+                        }
+                        existingGrants={member.grants}
+                        onChanged={onChanged}
+                        onMutationStart={onMutationStart}
+                    />
                 </section>
 
                 <p className="access-member-card__joined">
                     Joined {formatTimestamp(member.joined_at)}
                 </p>
+
+                <RemoveCampaignMember
+                    campaignId={campaignId}
+                    campaignMembershipId={
+                        member.campaign_membership_id
+                    }
+                    memberUserId={member.user_id}
+                    memberDisplayName={member.display_name}
+                    onChanged={onChanged}
+                    onMutationStart={onMutationStart}
+                />
             </div>
         </details>
     )
@@ -196,11 +293,23 @@ export function AccessPage({
             <h1 id="access-heading">Access</h1>
 
             <p className="access-page__description">
-                Current members, roles, character relationships, and
-                explicit grants for this campaign. Adding, changing, and
-                removing an existing member's roles is available below;
-                other access changes are not available here yet.
+                Current members, roles, character relationships, and direct
+                resource access for this campaign. Adding an existing
+                account as a member, changing and removing an existing
+                member's roles, adding/changing/revoking a member's
+                character relationships, adding/revoking a member's direct
+                resource access, and removing an existing member are
+                available below; other access changes are not available
+                here yet.
             </p>
+
+            <AddCampaignMember
+                campaignId={campaignId}
+                campaignName={campaignName}
+                assignableRoles={overview.assignable_roles}
+                onChanged={onChanged}
+                onMutationStart={onMutationStart}
+            />
 
             {overview.members.length > 0 ? (
                 <ul className="access-page__member-list">
@@ -212,6 +321,15 @@ export function AccessPage({
                                 campaignName={campaignName}
                                 assignableRoles={
                                     overview.assignable_roles
+                                }
+                                assignableCharacters={
+                                    overview.assignable_characters
+                                }
+                                assignableRelationshipTypes={
+                                    overview.assignable_relationship_types
+                                }
+                                grantableResourceCapabilities={
+                                    overview.grantable_resource_capabilities
                                 }
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}

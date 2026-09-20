@@ -52,6 +52,7 @@ from .access_grants import router as access_grants_router
 from .access_overview import router as access_overview_router
 from .ai_npc import router as ai_npc_router
 from .ai_synthesis import router as ai_synthesis_router
+from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
@@ -138,6 +139,7 @@ def create_app() -> FastAPI:
     app.include_router(access_overview_router)
     app.include_router(ai_npc_router)
     app.include_router(ai_synthesis_router)
+    app.include_router(audit_history_router)
     app.include_router(campaign_invitations_router)
     app.include_router(campaigns_router)
     app.include_router(character_state_router)

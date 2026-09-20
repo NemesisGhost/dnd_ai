@@ -38,6 +38,7 @@ function baseOverview(): CampaignAccessOverview {
         members: [
             {
                 campaign_membership_id: MEMBERSHIP_ID,
+                user_id: sessionBootstrapFixture.user.user_id,
                 display_name: "Aria the GM",
                 status_code: "active",
                 status_display_name: "Active",
@@ -66,6 +67,9 @@ function baseOverview(): CampaignAccessOverview {
                 display_name: "Rules Curator",
             },
         ],
+        assignable_characters: [],
+        assignable_relationship_types: [],
+        grantable_resource_capabilities: [],
     }
 }
 

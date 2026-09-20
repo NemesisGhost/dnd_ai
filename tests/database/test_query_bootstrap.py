@@ -395,6 +395,117 @@ def test_revoked_character_relationship_is_not_selectable(
     assert bootstrap.campaigns[0].character_perspectives == ()
 
 
+def test_a_fictional_time_bounded_relationship_is_never_selectable_regardless_of_its_window(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Checkpoint-4 correction: a `security.membership_character_
+    relationships` row with **both** `effective_from_world_time_id` and
+    `effective_to_world_time_id` set is a closed historical interval — this
+    schema tracks no "current fictional now" a bounded window could be
+    compared against (see `dnd_ai.domain.access.resolve_access_context`'s
+    own docstring for the full "current record" reasoning), so it never
+    currently grants access, regardless of *where* its two endpoints fall.
+    Proven with three windows at different points along the same world's
+    chronology ("early", "middle", "late" relative to each other, not to
+    any tracked "now") — all three must be excluded identically."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Bounded Relationship Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
+    capability_id = _capability_id(db_connection, "character.view_summary")
+    make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
+
+    t100 = make_world_time(db_connection, world_id, 100)
+    t200 = make_world_time(db_connection, world_id, 200)
+    t300 = make_world_time(db_connection, world_id, 300)
+    t400 = make_world_time(db_connection, world_id, 400)
+
+    for label, from_time, to_time in (
+        ("Early Window", t100, t200),
+        ("Middle Window", t200, t300),
+        ("Late Window", t300, t400),
+    ):
+        character_id = make_character(db_connection, world_id, name=label)
+        make_membership_character_relationship(
+            db_connection,
+            membership_id,
+            character_id,
+            relationship_type_id,
+            effective_from_world_time_id=from_time,
+            effective_to_world_time_id=to_time,
+        )
+
+    bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
+
+    assert bootstrap.campaigns[0].character_perspectives == ()
+
+
+def test_an_open_ended_fictional_time_bounded_relationship_remains_selectable(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """The other half of the same rule: a relationship with only
+    `effective_from_world_time_id` set (`effective_to_world_time_id`
+    `NULL`) still currently grants access — "from" always names an
+    already-past grant moment, exactly like `campaign.party_memberships`'
+    own identical "current record" precedent (`effective_to_*_id IS NULL`
+    means still current, never a comparison against some external clock)."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Open Ended Relationship Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Open Ended")
+    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
+    capability_id = _capability_id(db_connection, "character.view_summary")
+    make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
+    from_time = make_world_time(db_connection, world_id, 100)
+    make_membership_character_relationship(
+        db_connection,
+        membership_id,
+        character_id,
+        relationship_type_id,
+        effective_from_world_time_id=from_time,
+    )
+
+    bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
+
+    campaign = bootstrap.campaigns[0]
+    assert len(campaign.character_perspectives) == 1
+    assert campaign.character_perspectives[0].character_id == character_id
+
+
+def test_a_relationship_to_a_deactivated_character_is_not_selectable(
+    db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Checkpoint-4 review correction: a character deactivated/archived
+    *after* a relationship was granted must stop being authorization-
+    effective on the very next bootstrap call — `dnd_ai.domain.access.
+    resolve_access_context`'s own character-capabilities join now requires
+    `core.lifecycle_statuses.code = 'active'` for the relationship's
+    character, closing a gap where `grant_character_relationship`/`change_
+    character_relationship` already refused to act on an inactive
+    character but the read side never re-checked it after the fact."""
+    campaign_id = make_campaign(db_connection, timeline_id, "Deactivated Character Campaign")
+    membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
+    character_id = make_character(db_connection, world_id, name="Soon Archived")
+    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
+    capability_id = _capability_id(db_connection, "character.view_summary")
+    make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
+    make_membership_character_relationship(
+        db_connection, membership_id, character_id, relationship_type_id
+    )
+
+    db_connection.execute(
+        text("""
+            UPDATE core.entities SET lifecycle_status_id = (
+                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+            )
+            WHERE entity_id = :character
+        """),
+        {"character": character_id},
+    )
+
+    bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
+
+    assert bootstrap.campaigns[0].character_perspectives == ()
+
+
 def test_multiple_perspectives_leave_selected_character_null(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:

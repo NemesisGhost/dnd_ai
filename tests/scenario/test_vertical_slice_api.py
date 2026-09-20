@@ -92,6 +92,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import grant_timeline_bootstrap
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.factories import (
     make_ability,
     make_area_connection,
@@ -100,6 +101,7 @@ from tests.factories import (
     make_character,
     make_dungeon,
     make_dungeon_area,
+    make_external_identity,
     make_knowledge_item,
     make_party,
     make_party_membership,
@@ -208,10 +210,27 @@ class Fixture:
         # Step 3: a GM and three prospective members, provisioned as
         # security.users (OIDC login/provisioning is a separate concern
         # this scenario doesn't exercise — see this module's docstring).
+        # Each prospective member also gets an unrevoked local-login
+        # identity — add_campaign_member now requires one before a member
+        # can be added (review correction), matching dnd_ai.queries.
+        # access_overview.find_eligible_campaign_account's own eligibility
+        # bar; still no real login flow exercised anywhere in this file.
         self.gm_user_id = make_user(connection, "Vertical Slice GM")
         self.player1_user_id = make_user(connection, "Vertical Slice Player One")
+        make_external_identity(
+            connection, self.player1_user_id, issuer=LOCAL_AUTH_ISSUER, subject=f"vs-player1-{slug}"
+        )
         self.player2_user_id = make_user(connection, "Vertical Slice Player Two")
+        make_external_identity(
+            connection, self.player2_user_id, issuer=LOCAL_AUTH_ISSUER, subject=f"vs-player2-{slug}"
+        )
         self.observer_user_id = make_user(connection, "Vertical Slice Observer")
+        make_external_identity(
+            connection,
+            self.observer_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"vs-observer-{slug}",
+        )
 
         # The positive, server-verifiable first-campaign entitlement (`dnd_
         # ai.commands.campaigns`'s own "First-campaign entitlement" module
@@ -421,20 +440,16 @@ def test_the_vertical_slice_scenario(
         player_role_id = _system_role_id(connection, "player")
         observer_role_id = _system_role_id(connection, "observer")
 
-    # -- Step 3: two players and an observer, the seeded system-template
-    # player/observer roles (migration 086), assigned through the ordinary
-    # membership-role API — no campaign-scoped role is created here.
+    # -- Step 3: two players and an observer, added with the seeded
+    # system-template player/observer roles (migration 086) as their
+    # initial role — no campaign-scoped role is created here.
     def _add_member(user_id: uuid.UUID, role_id: uuid.UUID) -> uuid.UUID:
         create_response = gm.post(
-            f"/campaigns/{campaign_id}/memberships", json={"user_id": str(user_id)}
+            f"/campaigns/{campaign_id}/memberships",
+            json={"user_id": str(user_id), "role_id": str(role_id)},
         )
         assert create_response.status_code == 201, create_response.text
         membership_id = uuid.UUID(create_response.json()["campaign_membership_id"])
-        role_response = gm.post(
-            f"/campaigns/{campaign_id}/memberships/{membership_id}/roles",
-            json={"role_id": str(role_id)},
-        )
-        assert role_response.status_code == 201, role_response.text
         return membership_id
 
     player1_membership_id = _add_member(f.player1_user_id, player_role_id)
@@ -661,7 +676,7 @@ def test_the_vertical_slice_scenario(
     revoke_response = gm.post(
         f"/campaigns/{campaign_id}/resource-grants/{resource_grant_ids[player2_membership_id]}/revoke"
     )
-    assert revoke_response.status_code == 204, revoke_response.text
+    assert revoke_response.status_code == 200, revoke_response.text
 
     player2_dungeon_view_after_revoke = player2.get(
         f"/campaigns/{campaign_id}/dungeon-areas/{f.area_a}",
@@ -707,17 +722,10 @@ def test_the_vertical_slice_scenario(
     with postgres_engine.begin() as connection:
         campaign2_player_role_id = _system_role_id(connection, "player")
     add_campaign2_member_response = gm.post(
-        f"/campaigns/{campaign2_id}/memberships", json={"user_id": str(f.player1_user_id)}
+        f"/campaigns/{campaign2_id}/memberships",
+        json={"user_id": str(f.player1_user_id), "role_id": str(campaign2_player_role_id)},
     )
     assert add_campaign2_member_response.status_code == 201, add_campaign2_member_response.text
-    campaign2_player1_membership_id = uuid.UUID(
-        add_campaign2_member_response.json()["campaign_membership_id"]
-    )
-    assign_campaign2_role_response = gm.post(
-        f"/campaigns/{campaign2_id}/memberships/{campaign2_player1_membership_id}/roles",
-        json={"role_id": str(campaign2_player_role_id)},
-    )
-    assert assign_campaign2_role_response.status_code == 201, assign_campaign2_role_response.text
 
     campaign2_view = player1.get(f"/campaigns/{campaign2_id}/dungeon-areas/{f.area_b}")
     assert campaign2_view.status_code == 200, campaign2_view.text
@@ -772,17 +780,10 @@ def test_the_vertical_slice_scenario(
     with postgres_engine.begin() as connection:
         campaign3_observer_role_id = _system_role_id(connection, "observer")
     add_campaign3_member_response = gm.post(
-        f"/campaigns/{campaign3_id}/memberships", json={"user_id": str(f.observer_user_id)}
+        f"/campaigns/{campaign3_id}/memberships",
+        json={"user_id": str(f.observer_user_id), "role_id": str(campaign3_observer_role_id)},
     )
     assert add_campaign3_member_response.status_code == 201, add_campaign3_member_response.text
-    campaign3_observer_membership_id = uuid.UUID(
-        add_campaign3_member_response.json()["campaign_membership_id"]
-    )
-    assign_campaign3_role_response = gm.post(
-        f"/campaigns/{campaign3_id}/memberships/{campaign3_observer_membership_id}/roles",
-        json={"role_id": str(campaign3_observer_role_id)},
-    )
-    assert assign_campaign3_role_response.status_code == 201, assign_campaign3_role_response.text
 
     campaign3_view = observer.get(f"/campaigns/{campaign3_id}/dungeon-areas/{f.area_b}")
     assert campaign3_view.status_code == 200, campaign3_view.text

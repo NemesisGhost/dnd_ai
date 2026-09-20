@@ -204,3 +204,12 @@ Index(
     change_log.c.world_id,
     change_log.c.recorded_at.desc(),
 )
+# Backs dnd_ai.queries.audit_history's campaign-scope join (migration
+# 104_audit_history_indexes) — every branch of that query joins
+# audit.change_log to the one real table a row's own schema_name/table_name
+# names, via record_id = that table's primary key.
+Index(
+    "ix_change_log_record_id",
+    change_log.c.record_id,
+    postgresql_where=change_log.c.record_id.isnot(None),
+)

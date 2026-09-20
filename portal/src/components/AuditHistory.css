@@ -1,0 +1,91 @@
+/* Scoped to the AuditHistory component only (imported directly by
+   AuditHistory.tsx) — deliberately a dedicated file rather than an
+   addition to the shared App.css, so this standalone foundation component
+   carries zero risk of colliding with unrelated concurrent App.css
+   changes (e.g. the parallel checkpoint-5 resource-grant UI work). Uses
+   the same CSS custom properties (--color-*, --color-focus) the rest of
+   the portal already defines globally, so it inherits the app's theme
+   rather than inventing its own palette. */
+
+.audit-history__filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    margin-block-end: 1rem;
+}
+
+.audit-history__filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.audit-history__filter-field label {
+    font-size: 0.85rem;
+}
+
+.audit-history__filter-field select,
+.audit-history__filter-field input {
+    min-height: 2rem;
+    padding: 0.25rem 0.4rem;
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.audit-history__filters button {
+    min-height: 2rem;
+    padding: 0.25rem 0.6rem;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.audit-history__filters button:focus-visible,
+.audit-history__filter-field select:focus-visible,
+.audit-history__filter-field input:focus-visible {
+    outline: 2px solid var(--color-focus, #2563eb);
+    outline-offset: 2px;
+}
+
+/* The only element allowed to exceed the viewport width — everything else
+   in this component wraps or stacks. A narrow phone-width viewport gets a
+   horizontally scrollable table rather than a broken page layout; an
+   ultrawide viewport simply shows the table at its natural width. */
+.audit-history__table-wrapper {
+    overflow-x: auto;
+}
+
+.audit-history__table {
+    width: 100%;
+    min-width: 40rem;
+    border-collapse: collapse;
+}
+
+.audit-history__table caption {
+    text-align: start;
+    font-size: 0.85rem;
+    margin-block-end: 0.5rem;
+}
+
+.audit-history__table th,
+.audit-history__table td {
+    padding: 0.4rem 0.6rem;
+    text-align: start;
+    vertical-align: top;
+    border-block-end: 1px solid var(--color-border, #d1d5db);
+    font-size: 0.85rem;
+}
+
+.audit-history__actor-type {
+    color: var(--color-text-muted, #6b7280);
+    font-size: 0.8em;
+}
+
+@media (max-width: 30rem) {
+    .audit-history__filters {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

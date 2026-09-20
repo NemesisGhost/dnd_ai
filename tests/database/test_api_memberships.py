@@ -27,10 +27,12 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
 from tests.factories import (
     lookup_id,
     make_campaign,
     make_campaign_membership,
+    make_external_identity,
     make_membership_role,
     make_role,
     make_role_capability,
@@ -92,8 +94,17 @@ class Fixture:
             connection, campaign_id=self.other_campaign_id, code=f"foreign_{uuid.uuid4().hex[:8]}"
         )
 
-        # A user with no membership yet — the target of a create-membership call.
+        # A user with no membership yet — the target of a create-membership
+        # call. Given an unrevoked local identity: add_campaign_member now
+        # requires one (review correction), matching find_eligible_
+        # campaign_account's own eligibility bar.
         self.new_user_id = make_user(connection, "Membership API New User")
+        make_external_identity(
+            connection,
+            self.new_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"membership-api-new-{uuid.uuid4().hex[:8]}",
+        )
 
         # An already-active member — the target of assign/revoke-role calls.
         self.existing_user_id = make_user(connection, "Membership API Existing Member")
@@ -255,6 +266,17 @@ class Fixture:
         # last_manager below.
         self.active_second_admin_user_id = make_user(
             connection, "Membership API Active Second Admin"
+        )
+        # An unrevoked local identity — this user is also the target of
+        # test_creating_a_duplicate_open_membership_is_rejected, which
+        # needs add_campaign_member to reach its duplicate-open-membership
+        # check (409) rather than being rejected earlier for ineligibility
+        # (404, review correction).
+        make_external_identity(
+            connection,
+            self.active_second_admin_user_id,
+            issuer=LOCAL_AUTH_ISSUER,
+            subject=f"membership-api-active-second-{uuid.uuid4().hex[:8]}",
         )
         self.active_second_admin_membership_id = make_campaign_membership(
             connection, self.active_campaign_id, self.active_second_admin_user_id
@@ -424,15 +446,29 @@ def test_a_member_without_access_manage_gets_forbidden(
 
 
 # ---------------------------------------------------------------------------
-# create_campaign_membership
+# create_campaign_membership / add_campaign_member
 # ---------------------------------------------------------------------------
+#
+# These three tests only prove the pre-existing bare shape (membership
+# creation succeeds, a duplicate-open-membership race is rejected,
+# idempotent replay works) still holds now that this route requires an
+# initial role_id and runs through dnd_ai.commands.memberships.
+# add_campaign_member (Phase 13E-B checkpoint 3 hardening) — targeting
+# f.active_campaign_id, since add_campaign_member additionally requires
+# the target campaign to be currently active (f.campaign_id here is
+# deliberately "pending", per this Fixture's own docstring). The full
+# eligibility/concurrency/audit contract for add_campaign_member has its
+# own dedicated coverage in tests/database/test_api_membership_lifecycle.py.
 
 
 def test_creating_a_membership_succeeds(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    with client_factory(f.admin_user_id) as client:
-        response = client.post(_memberships_url(f), json={"user_id": str(f.new_user_id)})
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _memberships_url(f, f.active_campaign_id),
+            json={"user_id": str(f.new_user_id), "role_id": str(f.active_player_role_id)},
+        )
     assert response.status_code == 201, response.text
     membership_id = uuid.UUID(response.json()["campaign_membership_id"])
 
@@ -455,8 +491,14 @@ def test_creating_a_membership_succeeds(
 def test_creating_a_duplicate_open_membership_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
-    with client_factory(f.admin_user_id) as client:
-        response = client.post(_memberships_url(f), json={"user_id": str(f.existing_user_id)})
+    with client_factory(f.active_admin_user_id) as client:
+        response = client.post(
+            _memberships_url(f, f.active_campaign_id),
+            json={
+                "user_id": str(f.active_second_admin_user_id),
+                "role_id": str(f.active_player_role_id),
+            },
+        )
     assert response.status_code == 409, response.text
 
 
@@ -464,10 +506,14 @@ def test_a_sequential_replay_of_create_membership_returns_the_original_response(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
     key = f"create-membership-{uuid.uuid4().hex[:8]}"
-    body = {"user_id": str(f.new_user_id)}
-    with client_factory(f.admin_user_id) as client:
-        first = client.post(_memberships_url(f), json=body, headers={"Idempotency-Key": key})
-        second = client.post(_memberships_url(f), json=body, headers={"Idempotency-Key": key})
+    body = {"user_id": str(f.new_user_id), "role_id": str(f.active_player_role_id)}
+    with client_factory(f.active_admin_user_id) as client:
+        first = client.post(
+            _memberships_url(f, f.active_campaign_id), json=body, headers={"Idempotency-Key": key}
+        )
+        second = client.post(
+            _memberships_url(f, f.active_campaign_id), json=body, headers={"Idempotency-Key": key}
+        )
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
     assert second.json() == first.json()
