@@ -296,6 +296,114 @@ describe("CampaignAccessPage revoke-resource-grant success announcement", () => 
     })
 })
 
+// A "deny" grant is an explicit block, not a permission — removing one
+// restores access from elsewhere rather than taking it away, so the whole
+// page->component->hook->API chain must use deny-aware wording, not the
+// allow-oriented copy the two describe blocks above exercise
+// (checkpoint-5 correction).
+const withDenyGrantOverview = baseOverview([
+    {
+        resource_grant_id: GRANT_ID,
+        capability_code: CAPABILITY_CODE,
+        capability_display_name: "View Character Full Detail",
+        effect: "deny",
+        target_type: "character",
+        target_id: CHARACTER_ID,
+        target_display_name: "Kestrel Vane",
+        reason: null,
+        granted_at: "2026-01-02T00:00:00Z",
+        expires_at: null,
+    },
+])
+
+describe("CampaignAccessPage revoke-resource-grant deny effect (checkpoint-5 correction)", () => {
+    it("uses deny-aware trigger/confirmation/success wording and keeps the deny-specific announcement observable through the overview's own loading transition", async () => {
+        let overviewCallCount = 0
+        let resolveSecondOverview: ((response: Response) => void) | null =
+            null
+        const secondOverviewPromise = new Promise<Response>((resolve) => {
+            resolveSecondOverview = resolve
+        })
+
+        const fetchMock = vi.fn(
+            (
+                input: RequestInfo | URL,
+                init?: RequestInit,
+            ): Promise<Response> => {
+                const url =
+                    typeof input === "string" ? input : input.toString()
+                const method = init?.method ?? "GET"
+
+                if (method === "GET" && url.includes("/access-overview")) {
+                    overviewCallCount += 1
+                    if (overviewCallCount === 2) {
+                        return secondOverviewPromise
+                    }
+                    return Promise.resolve(jsonResponse(withDenyGrantOverview))
+                }
+
+                if (method === "POST" && url.includes("/revoke")) {
+                    return Promise.resolve(
+                        jsonResponse({ resource_grant_id: GRANT_ID }),
+                    )
+                }
+
+                return Promise.reject(
+                    new Error(`unexpected fetch in test: ${method} ${url}`),
+                )
+            },
+        )
+
+        const { container } = renderAtCampaign(fetchMock)
+
+        expect(
+            await screen.findByRole("heading", { name: "Access" }),
+        ).toBeInTheDocument()
+
+        expect(
+            screen.queryByRole("button", { name: "Revoke access" }),
+        ).not.toBeInTheDocument()
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+
+        expect(
+            screen.getByText(/Access may be restored from another role, relationship, group, or allow grant\./),
+        ).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("heading", { name: "Loading access" }),
+            ).toBeInTheDocument()
+        })
+
+        const successMessage =
+            "Explicit denial removed. Access may be restored from another role, relationship, group, or allow grant."
+        expect(persistentAnnouncement(container)).toHaveTextContent(
+            successMessage,
+        )
+
+        await act(async () => {
+            resolveSecondOverview?.(jsonResponse(emptyOverview))
+        })
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("heading", { name: "Access" }),
+            ).toBeInTheDocument()
+        })
+        expect(
+            screen.getByText("No direct resource access."),
+        ).toBeInTheDocument()
+        expect(persistentAnnouncement(container)).toHaveTextContent(
+            successMessage,
+        )
+    })
+})
+
 describe("CampaignAccessPage resource-grant cross-operation announcement lifecycle", () => {
     it("clears a stale success announcement the moment a different mutation starts, and keeps it cleared through that mutation's failure", async () => {
         let overviewCallCount = 0

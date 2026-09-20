@@ -11,26 +11,73 @@ interface RevokeResourceGrantProps {
     onMutationStart: () => void
 }
 
-function statusMessage(
-    kind: "pending" | "success" | "denied" | "conflict" | "error",
-): string {
-    switch (kind) {
-        case "pending":
-            return "Revoking resource access…"
-        case "success":
-            return "Resource access revoked."
-        case "denied":
-            return "You do not have permission to make this change."
-        case "conflict":
-            return "This grant changed elsewhere. Reload the page to see the current state."
-        case "error":
-            return "The resource access could not be revoked. Try again."
-    }
+// A "deny" grant is an explicit block, not a permission — revoking one
+// removes the block rather than removing access, and doing so may *restore*
+// access the member already had from some other source (a role, a character
+// relationship, an access group, or another allow grant), not take access
+// away. Every trigger/confirmation/status string below branches on this so
+// the portal never tells an operator "this access may disappear" about a
+// control whose actual effect is the opposite (checkpoint-5 correction).
+function isDenyEffect(grant: AccessResourceGrantSummary): boolean {
+    return grant.effect === "deny"
 }
 
 function grantLabel(grant: AccessResourceGrantSummary): string {
     const target = grant.target_display_name ?? humanizeCode(grant.target_type)
     return `${grant.capability_display_name} on ${target}`
+}
+
+function triggerLabel(grant: AccessResourceGrantSummary): string {
+    return isDenyEffect(grant) ? "Remove denial" : "Revoke access"
+}
+
+function confirmText(
+    grant: AccessResourceGrantSummary,
+    memberDisplayName: string,
+): string {
+    const label = grantLabel(grant)
+    return isDenyEffect(grant)
+        ? `Remove ${memberDisplayName}'s explicit denial of ${label}? ` +
+              "Access may be restored from another role, relationship, group, or allow grant."
+        : `Revoke ${memberDisplayName}'s ${label} access? ` +
+              "This access may disappear immediately."
+}
+
+function triggerAriaLabel(
+    grant: AccessResourceGrantSummary,
+    memberDisplayName: string,
+): string {
+    return isDenyEffect(grant)
+        ? `Remove denial of ${grantLabel(grant)} from ${memberDisplayName}`
+        : `Revoke ${grantLabel(grant)} from ${memberDisplayName}`
+}
+
+function successMessage(grant: AccessResourceGrantSummary): string {
+    return isDenyEffect(grant)
+        ? "Explicit denial removed. Access may be restored from another role, relationship, group, or allow grant."
+        : "Resource access revoked."
+}
+
+function statusMessage(
+    kind: "pending" | "success" | "denied" | "conflict" | "error",
+    grant: AccessResourceGrantSummary,
+): string {
+    switch (kind) {
+        case "pending":
+            return isDenyEffect(grant)
+                ? "Removing denial…"
+                : "Revoking resource access…"
+        case "success":
+            return successMessage(grant)
+        case "denied":
+            return "You do not have permission to make this change."
+        case "conflict":
+            return "This grant changed elsewhere. Reload the page to see the current state."
+        case "error":
+            return isDenyEffect(grant)
+                ? "The denial could not be removed. Try again."
+                : "The resource access could not be revoked. Try again."
+    }
 }
 
 // One control per currently active resource grant (mirrors
@@ -55,7 +102,7 @@ export function RevokeResourceGrant({
 
     const { status, submit, reset } = useRevokeResourceGrant(
         campaignId,
-        () => onChanged("Resource access revoked."),
+        () => onChanged(successMessage(grant)),
     )
 
     const isPending = status.kind === "pending"
@@ -84,7 +131,7 @@ export function RevokeResourceGrant({
                     setIsConfirming(true)
                 }}
             >
-                Revoke access
+                {triggerLabel(grant)}
             </button>
         )
     }
@@ -93,11 +140,10 @@ export function RevokeResourceGrant({
         <span
             className="access-role-editor"
             role="group"
-            aria-label={`Revoke ${grantLabel(grant)} from ${memberDisplayName}`}
+            aria-label={triggerAriaLabel(grant, memberDisplayName)}
         >
             <span className="access-role-editor__confirm-text">
-                Revoke {memberDisplayName}'s {grantLabel(grant)} access?
-                This access may disappear immediately.
+                {confirmText(grant, memberDisplayName)}
             </span>
 
             <div className="access-role-editor__actions">
@@ -111,7 +157,11 @@ export function RevokeResourceGrant({
                         submit(grant.resource_grant_id)
                     }}
                 >
-                    {isPending ? "Revoking…" : "Confirm"}
+                    {isPending
+                        ? isDenyEffect(grant)
+                            ? "Removing…"
+                            : "Revoking…"
+                        : "Confirm"}
                 </button>
 
                 <button
@@ -138,7 +188,7 @@ export function RevokeResourceGrant({
                 role="status"
                 aria-live="polite"
             >
-                {status.kind === "idle" ? "" : statusMessage(status.kind)}
+                {status.kind === "idle" ? "" : statusMessage(status.kind, grant)}
             </p>
         </span>
     )

@@ -182,8 +182,16 @@ same transaction that closes it — the identical silent-reactivation gap
 checkpoint 4 closed for character relationships, now closed for resource
 grants too; see that function's own docstring for the full reasoning
 (`_activate_or_create_membership`'s "reopen the same row in place"
-behavior). Access-group-targeted grants are unaffected by any membership
-ending — they belong to the group, not to any one member's own row.
+behavior). Access-group-targeted grant *rows* are never touched by any
+membership ending — they belong to the group, not to any one member's own
+row — but (checkpoint-5 correction) `end_campaign_membership()` now also
+closes the ending membership's own `security.access_group_memberships` link
+to every group it belonged to, which has the same practical effect: a
+group's resource grants stop applying to a departed member (`dnd_ai.domain.
+access.resolve_access_context`'s group-membership subquery only ever
+considers a currently open `access_group_memberships` row) without the
+group's own grant row, or any *other* member's link to that group, being
+touched at all.
 
 No `change_resource_grant()` exists, and none is planned for this
 checkpoint: unlike a character relationship's single-dimension "swap the
@@ -1412,9 +1420,30 @@ class RevokeResourceGrantResult:
     case (already revoked). Mirrors `RevokeCharacterRelationshipResult`
     exactly (checkpoint 5): `dnd_ai.api.access_grants.
     revoke_resource_grant_endpoint` uses this to write exactly one `audit.
-    change_log` row per *actual* revocation, never one per HTTP call."""
+    change_log` row per *actual* revocation, never one per HTTP call.
+
+    `grantee_campaign_membership_id`/`grantee_access_group_id`/`target_field_
+    name`/`target_id`/`capability_code`/`effect` (checkpoint-5 correction)
+    are the revoked row's own identifying columns, read server-side from the
+    same locked row `revoke_resource_grant()` already reads to decide
+    `revoked` — never re-derived from caller-supplied input, since a caller
+    only ever supplies `resource_grant_id`. `dnd_ai.api.access_grants.
+    revoke_resource_grant_endpoint` uses these to record a bounded,
+    non-free-form `changed_fields` payload identifying exactly what was
+    revoked (see that route's own docstring for why the *pre-correction*
+    audit row, naming only `resource_grant_id`, was not enough to reconstruct
+    what access actually changed without a second query against a row that
+    may since have been superseded). All six are `None` for the documented
+    no-op case (`revoked=False`) — nothing was actually revoked, so there is
+    nothing for a caller to record."""
 
     revoked: bool
+    grantee_campaign_membership_id: uuid.UUID | None = None
+    grantee_access_group_id: uuid.UUID | None = None
+    target_field_name: str | None = None
+    target_id: uuid.UUID | None = None
+    capability_code: str | None = None
+    effect: str | None = None
 
 
 def revoke_resource_grant(
@@ -1438,29 +1467,29 @@ def revoke_resource_grant(
     access must remain possible for cleanup" policy (see this module's own
     docstring, and `revoke_character_relationship()`'s identical policy for
     the same reasoning)."""
-    row_campaign_id = connection.execute(
-        text(
-            "SELECT campaign_id FROM security.resource_grants "
-            "WHERE resource_grant_id = :grant FOR UPDATE"
-        ),
-        {"grant": resource_grant_id},
-    ).scalar()
-    if row_campaign_id is None or row_campaign_id != campaign_id:
+    row = (
+        connection.execute(
+            text(f"""
+                SELECT rg.campaign_id, rg.revoked_at, rg.grantee_campaign_membership_id,
+                       rg.grantee_access_group_id, rg.effect, cap.code AS capability_code,
+                       {", ".join(f"rg.{column}" for column in _RESOURCE_GRANT_TARGET_FIELDS)}
+                FROM security.resource_grants rg
+                JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
+                WHERE rg.resource_grant_id = :grant
+                FOR UPDATE OF rg
+            """),
+            {"grant": resource_grant_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["campaign_id"] != campaign_id:
         raise ResourceGrantNotInCampaignError(
             f"resource grant {resource_grant_id} does not belong to campaign {campaign_id} "
-            f"(actual campaign: {row_campaign_id})"
+            f"(actual campaign: {row['campaign_id'] if row is not None else None})"
         )
 
-    already_revoked = (
-        connection.execute(
-            text(
-                "SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :grant"
-            ),
-            {"grant": resource_grant_id},
-        ).scalar()
-        is not None
-    )
-    if already_revoked:
+    if row["revoked_at"] is not None:
         return RevokeResourceGrantResult(revoked=False)
 
     connection.execute(
@@ -1471,4 +1500,20 @@ def revoke_resource_grant(
         {"grant": resource_grant_id},
     )
 
-    return RevokeResourceGrantResult(revoked=True)
+    target_field_name = _resource_grant_target_field_name(
+        character_id=row["character_id"],
+        entity_id=row["entity_id"],
+        knowledge_item_id=row["knowledge_item_id"],
+        quest_id=row["quest_id"],
+        session_id=row["session_id"],
+        event_id=row["event_id"],
+    )
+    return RevokeResourceGrantResult(
+        revoked=True,
+        grantee_campaign_membership_id=row["grantee_campaign_membership_id"],
+        grantee_access_group_id=row["grantee_access_group_id"],
+        target_field_name=target_field_name,
+        target_id=row[target_field_name] if target_field_name is not None else None,
+        capability_code=row["capability_code"],
+        effect=row["effect"],
+    )

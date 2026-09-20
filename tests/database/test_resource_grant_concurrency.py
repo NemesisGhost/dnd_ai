@@ -545,7 +545,10 @@ def test_a_capability_deactivation_cannot_race_a_create_assigning_it(
     """`create_resource_grant`'s own `FOR UPDATE` lock on the candidate
     capability row (`_resolve_grantable_capability_id`) must make a
     concurrent deactivation of that capability block too — `character.
-    discover` is a real catalog capability; this test never commits the
+    view_summary` is a real, currently-catalogued `character_id`-target
+    capability (unlike `character.discover`, deliberately excluded from
+    `RESOURCE_GRANT_CAPABILITY_CATALOG` as of a checkpoint-5 correction —
+    see that constant's own docstring); this test never commits the
     deactivation attempt (it is rolled back after the timeout), so this
     leaves no lasting effect on shared state regardless of test ordering."""
     engine = postgres_engine
@@ -567,7 +570,7 @@ def test_a_capability_deactivation_cannot_race_a_create_assigning_it(
                 campaign_id=campaign_id,
                 grantee_campaign_membership_id=target_membership_id,
                 grantee_access_group_id=None,
-                capability_code="character.discover",
+                capability_code="character.view_summary",
                 effect="allow",
                 expected_world_id=world_id,
                 granted_by_membership_id=manager_membership_id,
@@ -578,7 +581,7 @@ def test_a_capability_deactivation_cannot_race_a_create_assigning_it(
             with pytest.raises(Exception) as exc:
                 second.execute(
                     text("UPDATE security.capabilities SET is_active = false WHERE code = :c"),
-                    {"c": "character.discover"},
+                    {"c": "character.view_summary"},
                 )
             message = str(exc.value)
             assert "lock_timeout" in message or "canceling statement" in message, (

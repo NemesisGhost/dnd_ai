@@ -1710,3 +1710,135 @@ describe("AccessPage — revoke resource grant (checkpoint 5)", () => {
         ).toBe(false)
     })
 })
+
+describe("AccessPage — revoke resource grant, deny effect (checkpoint-5 correction)", () => {
+    // A "deny" grant is an explicit block, not a permission — removing one
+    // restores access from elsewhere rather than taking it away, so every
+    // trigger/confirmation/status string must say so instead of reusing the
+    // allow-oriented "Revoke access"/"may disappear" copy above.
+    const denyOverview: CampaignAccessOverview = {
+        ...fullOverview,
+        members: [
+            {
+                ...fullOverview.members[0],
+                grants: [
+                    {
+                        ...fullOverview.members[0].grants[0],
+                        effect: "deny",
+                    },
+                ],
+            },
+            fullOverview.members[1],
+            fullOverview.members[2],
+        ],
+    }
+
+    it("labels the trigger 'Remove denial', never 'Revoke access'", () => {
+        renderPage(denyOverview)
+
+        expect(
+            screen.getByRole("button", { name: "Remove denial" }),
+        ).toBeInTheDocument()
+        expect(
+            screen.queryByRole("button", { name: "Revoke access" }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("explains the denial is being removed and access may be restored, never that access may disappear", () => {
+        renderPage(denyOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+
+        expect(
+            screen.getByText(
+                /Remove Aria the GM's explicit denial of View Campaign on Kestrel Vane\?/,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(
+                /Access may be restored from another role, relationship, group, or allow grant\./,
+            ),
+        ).toBeInTheDocument()
+        expect(
+            screen.queryByText(/may disappear immediately/),
+        ).not.toBeInTheDocument()
+    })
+
+    it("moves focus from trigger to confirmation, and back to the trigger on cancel", async () => {
+        renderPage(denyOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", { name: "Confirm" }),
+            ).toHaveFocus()
+        })
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Cancel" }),
+        )
+
+        // Cancel unmounts the confirmation markup and mounts a fresh
+        // trigger button — re-query rather than reuse the stale pre-click
+        // reference, mirroring the identical allow-effect focus-return
+        // test above.
+        await waitFor(() => {
+            expect(
+                screen.getByRole("button", { name: "Remove denial" }),
+            ).toHaveFocus()
+        })
+    })
+
+    it("announces a deny-specific pending/success message and calls onChanged with it", async () => {
+        const onChanged = vi.fn()
+        let resolveResponse!: (response: Response) => void
+        const fetchMock = vi.fn().mockReturnValue(
+            new Promise<Response>((resolve) => {
+                resolveResponse = resolve
+            }),
+        )
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(denyOverview, onChanged)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove denial" }),
+        )
+        fireEvent.click(
+            screen.getByRole("button", { name: "Confirm" }),
+        )
+
+        await waitFor(() => {
+            expect(
+                screen.getByText("Removing denial…"),
+            ).toBeInTheDocument()
+        })
+        expect(onChanged).not.toHaveBeenCalled()
+
+        resolveResponse(
+            new Response(
+                JSON.stringify({
+                    resource_grant_id:
+                        denyOverview.members[0].grants[0]
+                            .resource_grant_id,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        )
+
+        const successMessage =
+            "Explicit denial removed. Access may be restored from another role, relationship, group, or allow grant."
+        await waitFor(() => {
+            expect(screen.getByText(successMessage)).toBeInTheDocument()
+        })
+        expect(onChanged).toHaveBeenCalledWith(successMessage)
+    })
+})

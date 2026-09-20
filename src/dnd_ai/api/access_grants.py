@@ -43,7 +43,30 @@ docstring. `entity_id` is always `None` for the same reason `dnd_ai.api.
 memberships` gives — none of `security.membership_character_relationships`/
 `.resource_grants` is a `core.entities` row. `world_id` is resolved
 server-side from the campaign's own pinned timeline.
-"""
+
+Checkpoint-5 correction: `create_resource_grant_endpoint`/`revoke_resource_
+grant_endpoint`'s own audit rows previously carried no `changed_fields` at
+all — `record_id` alone (the `resource_grant_id`) told a reviewer *that*
+some resource grant changed, but not *what* changed: which kind of grantee
+(a member or an access group), which one, which of the six target kinds and
+resource, which capability, or whether the change was an `allow` or a
+`deny`. Reconstructing any of that required a second, separate query against
+a row that, for a revocation, may since have been further superseded or
+deleted-by-cascade (a campaign/membership/target archival cascades onto
+`security.resource_grants` via `ON DELETE CASCADE` in a few of its foreign
+keys — see migration 080). Both routes now record a bounded, non-free-form
+`changed_fields` payload — `grantee_campaign_membership_id`/`grantee_access_
+group_id` (exactly one non-null), `target_kind`/`target_id`, `capability_
+code`, and `effect` — identifying exactly what the grant was without ever
+recording `reason` (free-form caller text) or anything from `dnd_ai.api.
+local_auth`'s own "Never store" list. `create_resource_grant_endpoint` reads
+these straight from the already-validated request body (the command already
+succeeded by the time the audit row is written, so the body's own values are
+exactly what was persisted); `revoke_resource_grant_endpoint` reads them from
+`RevokeResourceGrantResult`'s own new fields — populated server-side by
+`revoke_resource_grant()` from the row it already locks, never re-derived
+from caller input, so a caller who only ever supplies `resource_grant_id`
+still yields a complete audit record of what was actually revoked."""
 
 import uuid
 from typing import Annotated, Any
@@ -122,6 +145,38 @@ class CreateResourceGrantRequest(BaseModel):
 
 class ResourceGrantResponse(BaseModel):
     resource_grant_id: uuid.UUID
+
+
+# Mirrors dnd_ai.commands.access_grants._RESOURCE_GRANT_TARGET_FIELDS exactly
+# (that tuple is module-private, so this route layer keeps its own copy
+# rather than reaching into another module's private name) — the six
+# `CreateResourceGrantRequest` fields that name a resource-grant target kind,
+# in the same order. Used only to build this checkpoint's own audit
+# `changed_fields` payload (see this module's own docstring, "Checkpoint-5
+# correction"), never for validation — the command itself is the only thing
+# that enforces "exactly one."
+_RESOURCE_GRANT_TARGET_FIELDS = (
+    "character_id",
+    "entity_id",
+    "knowledge_item_id",
+    "quest_id",
+    "session_id",
+    "event_id",
+)
+
+
+def _resource_grant_target_kind_and_id(
+    body: CreateResourceGrantRequest,
+) -> tuple[str | None, uuid.UUID | None]:
+    """The one non-`None` target field on an already-validated (command
+    already succeeded) `CreateResourceGrantRequest`, or `(None, None)` for
+    the malformed-shape case the command's own `CHECK` constraint would have
+    already rejected before this is ever called."""
+    for field_name in _RESOURCE_GRANT_TARGET_FIELDS:
+        value = getattr(body, field_name)
+        if value is not None:
+            return field_name, value
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +501,7 @@ def create_resource_grant_endpoint(
         reason=body.reason,
     )
 
+    target_kind, target_id = _resource_grant_target_kind_and_id(body)
     record_change_log(
         connection,
         change_action_code=_CREATED_CHANGE_ACTION,
@@ -458,6 +514,22 @@ def create_resource_grant_endpoint(
         correlation_id=correlation_id,
         command_name=_CREATE_RESOURCE_GRANT_COMMAND_NAME,
         event_id=None,
+        changed_fields={
+            "grantee_campaign_membership_id": (
+                str(body.grantee_campaign_membership_id)
+                if body.grantee_campaign_membership_id is not None
+                else None
+            ),
+            "grantee_access_group_id": (
+                str(body.grantee_access_group_id)
+                if body.grantee_access_group_id is not None
+                else None
+            ),
+            "target_kind": target_kind,
+            "target_id": str(target_id) if target_id is not None else None,
+            "capability_code": body.capability_code,
+            "effect": body.effect,
+        },
     )
 
     response = ResourceGrantResponse(resource_grant_id=result.resource_grant_id)
@@ -540,6 +612,22 @@ def revoke_resource_grant_endpoint(
             correlation_id=correlation_id,
             command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
             event_id=None,
+            changed_fields={
+                "grantee_campaign_membership_id": (
+                    str(result.grantee_campaign_membership_id)
+                    if result.grantee_campaign_membership_id is not None
+                    else None
+                ),
+                "grantee_access_group_id": (
+                    str(result.grantee_access_group_id)
+                    if result.grantee_access_group_id is not None
+                    else None
+                ),
+                "target_kind": result.target_field_name,
+                "target_id": (str(result.target_id) if result.target_id is not None else None),
+                "capability_code": result.capability_code,
+                "effect": result.effect,
+            },
         )
 
     response = ResourceGrantResponse(resource_grant_id=resource_grant_id)

@@ -100,16 +100,34 @@ _TARGET_COLUMNS = (
 # where it would not be inert, this codebase's authorization model has no
 # documented notion of *resource-scoped* platform/campaign administration,
 # so delegating one through a resource grant is disallowed as policy, not
-# merely because it happens to do nothing today. `character.discover` is
-# included even though its only current reader (`dnd_ai.api.world_explorer`)
-# checks it with no resource target at all (`any(access.has_capability(cap)
-# for cap in _DISCOVER_CAPABILITIES)`) — a resource-scoped grant of it is
-# harmless-if-unused today, exactly like every other capability this
-# codebase resolves through a role instead, and excluding it would need a
-# narrower, less consistent per-code carve-out than including it does.
+# merely because it happens to do nothing today.
+#
+# `character.discover` (checkpoint-5 correction) is deliberately excluded,
+# even though it is otherwise a `character.*` code exactly like the nine
+# below: its own baseline check (`dnd_ai.api.world_explorer.
+# resolve_world_character_visibility`, `discover_all = any(access.
+# has_capability(cap) for cap in _DISCOVER_CAPABILITIES)`) passes no resource
+# target at all, so `has_capability()`'s own "passing none checks only role/
+# character-relationship capabilities" contract means a resource-scoped
+# grant can never move that baseline. That same function's per-character
+# loop *does* call `has_capability(cap, character_id=character_id)` for each
+# discover-tier code, including this one — but only for characters already
+# reached through `resource_grant_targets(cap, "character_id")`'s own
+# deny/allow sets or an existing character relationship, i.e. it can only
+# ever confirm a grant that already exists, never explain how a caller would
+# discover a character *before* one exists to check against. In other words:
+# a `character.discover` resource grant is not fully inert (the per-character
+# loop's narrower use is real), but there is no path by which granting it to
+# a membership makes a *previously-undiscoverable* character newly
+# discoverable to that membership — no consumer anywhere in this codebase
+# resolves "should a resource grant of `character.discover` make character X
+# appear in a list" from a bare `(membership, capability)` pair the way
+# `character.view_summary`/`.view_full`/etc. do for their own gated actions.
+# Advertising it as grantable therefore promises a capability this codebase
+# has no real, standalone target-aware consumer for. Re-add it if and when
+# such a consumer exists (see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k).
 CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
     {
-        "character.discover",
         "character.view_summary",
         "character.view_full",
         "character.view_private",

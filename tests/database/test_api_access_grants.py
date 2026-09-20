@@ -2011,6 +2011,269 @@ def test_a_sequential_replay_of_revoke_resource_grant_returns_the_original_respo
     assert second.json() == first.json()
 
 
+def test_revoking_an_already_revoked_resource_grant_writes_no_second_audit_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+        resource_grant_id = uuid.UUID(grant.json()["resource_grant_id"])
+
+        client.post(_revoke_grant_url(f, resource_grant_id))
+        client.post(_revoke_grant_url(f, resource_grant_id))
+
+    with postgres_engine.connect() as verify:
+        audit_row_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE table_name = 'resource_grants' "
+                "AND record_id = :g AND change_action_id = ("
+                "  SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'"
+                ")"
+            ),
+            {"g": resource_grant_id},
+        ).scalar_one()
+        assert audit_row_count == 1
+
+
+# ---------------------------------------------------------------------------
+# create_resource_grant / revoke_resource_grant — audit content (checkpoint-5
+# correction)
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_resource_grant_for_a_membership_grantee_records_bounded_audit_content(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint-5 correction: the create-grant audit row previously
+    carried no `changed_fields` at all — `record_id` alone told a reviewer
+    that some grant was created, not what it was. Now records which kind of
+    grantee (a member, here), the exact typed target, the capability code,
+    and the `allow`/`deny` effect — never the free-form `reason` text."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_full",
+                "effect": "allow",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+                "reason": "do not store this free-form text in the audit row",
+            },
+        )
+    assert response.status_code == 201, response.text
+    resource_grant_id = uuid.UUID(response.json()["resource_grant_id"])
+
+    with postgres_engine.connect() as verify:
+        audit_row = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'resource_grants' AND record_id = :g
+                """),
+                {"g": resource_grant_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert audit_row["changed_fields"] == {
+        "grantee_campaign_membership_id": str(f.target_membership_id),
+        "grantee_access_group_id": None,
+        "target_kind": "character_id",
+        "target_id": str(f.character_id),
+        "capability_code": "character.view_full",
+        "effect": "allow",
+    }
+    assert "do not store this free-form text in the audit row" not in str(audit_row)
+
+
+def test_creating_a_resource_grant_for_an_access_group_grantee_records_bounded_audit_content(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "effect": "deny",
+                "grantee_access_group_id": str(f.access_group_id),
+            },
+        )
+    assert response.status_code == 201, response.text
+    resource_grant_id = uuid.UUID(response.json()["resource_grant_id"])
+
+    with postgres_engine.connect() as verify:
+        audit_row = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'resource_grants' AND record_id = :g
+                """),
+                {"g": resource_grant_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert audit_row["changed_fields"] == {
+        "grantee_campaign_membership_id": None,
+        "grantee_access_group_id": str(f.access_group_id),
+        "target_kind": "character_id",
+        "target_id": str(f.character_id),
+        "capability_code": "character.view_summary",
+        "effect": "deny",
+    }
+
+
+def test_revoking_a_resource_grant_records_bounded_audit_content_read_from_the_locked_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The revoke request itself only ever supplies `resource_grant_id` —
+    `revoke_resource_grant()` reads the grantee/target/capability/effect
+    values recorded here from the locked grant row it already reads to
+    decide `revoked`, never re-derived from caller input."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_full",
+                "effect": "allow",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+                "reason": "do not store this free-form text in the audit row either",
+            },
+        )
+        resource_grant_id = uuid.UUID(grant.json()["resource_grant_id"])
+
+        response = client.post(_revoke_grant_url(f, resource_grant_id))
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        audit_row = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'resource_grants' AND record_id = :g
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                """),
+                {"g": resource_grant_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert audit_row["changed_fields"] == {
+        "grantee_campaign_membership_id": str(f.target_membership_id),
+        "grantee_access_group_id": None,
+        "target_kind": "character_id",
+        "target_id": str(f.character_id),
+        "capability_code": "character.view_full",
+        "effect": "allow",
+    }
+    assert "do not store this free-form text in the audit row either" not in str(audit_row)
+
+
+def test_revoking_a_deny_effect_resource_grant_records_deny_in_its_audit_content(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "effect": "deny",
+                "grantee_access_group_id": str(f.access_group_id),
+            },
+        )
+        resource_grant_id = uuid.UUID(grant.json()["resource_grant_id"])
+
+        response = client.post(_revoke_grant_url(f, resource_grant_id))
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        audit_row = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'resource_grants' AND record_id = :g
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                """),
+                {"g": resource_grant_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert audit_row["changed_fields"] == {
+        "grantee_campaign_membership_id": None,
+        "grantee_access_group_id": str(f.access_group_id),
+        "target_kind": "character_id",
+        "target_id": str(f.character_id),
+        "capability_code": "character.view_summary",
+        "effect": "deny",
+    }
+
+
+def test_a_no_op_revoke_of_an_already_revoked_resource_grant_records_no_audit_content(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The documented no-op case (`RevokeResourceGrantResult.revoked =
+    False`) must never write a second `audit.change_log` row at all — see
+    `test_revoking_an_already_revoked_resource_grant_writes_no_second_audit_
+    row` above — so there is no second `changed_fields` payload to check
+    here; this test instead confirms the *first* (real) revocation's audit
+    content is unaffected by the harmless no-op retry that follows it."""
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+        resource_grant_id = uuid.UUID(grant.json()["resource_grant_id"])
+
+        first = client.post(_revoke_grant_url(f, resource_grant_id))
+        second = client.post(_revoke_grant_url(f, resource_grant_id))
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    with postgres_engine.connect() as verify:
+        audit_rows = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'resource_grants' AND record_id = :g
+                      AND change_action_id = (
+                          SELECT change_action_id FROM audit.change_actions WHERE code = 'updated'
+                      )
+                """),
+                {"g": resource_grant_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert len(audit_rows) == 1
+    assert audit_rows[0]["changed_fields"] == {
+        "grantee_campaign_membership_id": str(f.target_membership_id),
+        "grantee_access_group_id": None,
+        "target_kind": "character_id",
+        "target_id": str(f.character_id),
+        "capability_code": "character.view_summary",
+        "effect": "allow",
+    }
+
+
 # ---------------------------------------------------------------------------
 # create_resource_grant — target-eligibility hardening (checkpoint 5)
 # ---------------------------------------------------------------------------
@@ -2196,6 +2459,29 @@ def test_creating_a_resource_grant_with_a_capability_incompatible_with_its_targe
     assert control_response.status_code == 201, control_response.text
 
 
+def test_creating_a_resource_grant_of_character_discover_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """`character.discover` (checkpoint-5 correction) is deliberately
+    excluded from `RESOURCE_GRANT_CAPABILITY_CATALOG`'s `character_id`
+    entry even though it is otherwise a `character.*` code, matching the
+    same 404 every other nonexistent/deactivated/incompatible capability
+    code gets — see that catalog's own docstring for why: its baseline
+    reader (`dnd_ai.api.world_explorer.resolve_world_character_visibility`)
+    passes no resource target at all, so a resource-scoped grant of it can
+    never move that check."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.discover",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
 def test_creating_a_resource_grant_with_a_nonexistent_capability_code_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
@@ -2214,16 +2500,16 @@ def test_creating_a_resource_grant_with_a_nonexistent_capability_code_is_rejecte
 def test_creating_a_resource_grant_with_a_deactivated_capability_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
-    """`character.discover` is a real catalog capability, temporarily
-    deactivated for the duration of this test and restored afterward — this
-    codebase's tests run single-worker/sequential (no parallel test
-    execution), the same property `_deactivate_campaign`/the account-
-    disablement tests above already rely on to safely mutate shared rows
-    for one test's duration."""
+    """`character.view_summary` is a real, currently-catalogued
+    `character_id`-target capability, temporarily deactivated for the
+    duration of this test and restored afterward — this codebase's tests
+    run single-worker/sequential (no parallel test execution), the same
+    property `_deactivate_campaign`/the account-disablement tests above
+    already rely on to safely mutate shared rows for one test's duration."""
     with postgres_engine.begin() as connection:
         connection.execute(
             text("UPDATE security.capabilities SET is_active = false WHERE code = :c"),
-            {"c": "character.discover"},
+            {"c": "character.view_summary"},
         )
     try:
         with client_factory(f.admin_user_id) as client:
@@ -2231,7 +2517,7 @@ def test_creating_a_resource_grant_with_a_deactivated_capability_is_rejected(
                 _resource_grants_url(f),
                 json={
                     "character_id": str(f.character_id),
-                    "capability_code": "character.discover",
+                    "capability_code": "character.view_summary",
                     "grantee_campaign_membership_id": str(f.target_membership_id),
                 },
             )
@@ -2240,7 +2526,7 @@ def test_creating_a_resource_grant_with_a_deactivated_capability_is_rejected(
         with postgres_engine.begin() as connection:
             connection.execute(
                 text("UPDATE security.capabilities SET is_active = true WHERE code = :c"),
-                {"c": "character.discover"},
+                {"c": "character.view_summary"},
             )
 
 

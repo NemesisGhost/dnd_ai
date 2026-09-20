@@ -943,19 +943,22 @@ class EndCampaignMembershipResult:
     end_campaign_membership_endpoint` uses this to write exactly one
     `audit.change_log` row per *actual* removal, never one per HTTP call.
     `revoked_membership_role_ids`/`revoked_membership_character_relationship_ids`/
-    `revoked_resource_grant_ids` are all empty for the no-op case (nothing
-    was touched) and otherwise list every role/character-relationship/
-    resource-grant row this call revoked, for that same audit record's
+    `revoked_resource_grant_ids`/`removed_access_group_membership_ids` are
+    all empty for the no-op case (nothing was touched) and otherwise list
+    every role/character-relationship/resource-grant/access-group-membership
+    row this call revoked or closed, for that same audit record's
     `changed_fields` (checkpoint-4 correction added the relationship half;
-    checkpoint 5 added the resource-grant half — see `end_campaign_
-    membership()`'s own docstring for the silent-reactivation gap both
-    close)."""
+    checkpoint 5 added the resource-grant half; checkpoint-5 correction
+    added the access-group-membership half — see `end_campaign_
+    membership()`'s own docstring for the silent-reactivation gap each
+    closes)."""
 
     campaign_membership_id: uuid.UUID
     ended: bool
     revoked_membership_role_ids: tuple[uuid.UUID, ...]
     revoked_membership_character_relationship_ids: tuple[uuid.UUID, ...]
     revoked_resource_grant_ids: tuple[uuid.UUID, ...]
+    removed_access_group_membership_ids: tuple[uuid.UUID, ...]
 
 
 def end_campaign_membership(
@@ -1010,10 +1013,31 @@ def end_campaign_membership(
     Checkpoint 5: the identical gap existed for `security.resource_grants` —
     every currently active (`revoked_at IS NULL`) row whose `grantee_
     campaign_membership_id` is this membership is now revoked here too, in
-    the same transaction, for the identical reason. Access-group-targeted
-    grants (`grantee_access_group_id`) are untouched — they belong to the
-    group, not to this membership's own row, and `_activate_or_create_
-    membership`'s reactivation never touches group membership either.
+    the same transaction, for the identical reason.
+
+    Checkpoint-5 correction: closing a membership's own direct resource
+    grants was not enough — a membership's currently active `security.
+    access_group_memberships` row (`removed_at IS NULL`) was left untouched,
+    so `dnd_ai.domain.access.resolve_access_context`'s own group-membership
+    subquery (`WHERE agm.campaign_membership_id = :membership_id AND agm.
+    removed_at IS NULL`) kept treating a departed member as still belonging
+    to every access group they had joined, and every resource grant made to
+    that group (`grantee_access_group_id`) stayed effective against them.
+    Worse, since `_activate_or_create_membership` reactivates the *same*
+    `campaign_membership_id` row in place on a later invitation acceptance,
+    that stale group membership — and therefore every group-derived resource
+    grant — would silently regain effect the moment the membership reopened,
+    identically to the character-relationship and direct-resource-grant gaps
+    checkpoints 4 and 5 already closed. Fixed by closing (`removed_at =
+    now()`, never deleting) every one of this membership's currently open
+    `access_group_memberships` rows in this same transaction, so a reopened
+    membership always starts in zero access groups, exactly like it always
+    already started with zero roles, relationships, and direct grants — any
+    group membership it should regain requires an explicit new `security.
+    access_group_memberships` insert, auditable the normal way. Access
+    groups themselves, and any *other* membership's own link to one, are
+    untouched — this only ever closes rows naming this one `campaign_
+    membership_id`.
 
     Or does nothing (a harmless no-op, exactly like `revoke_membership_
     role`'s identical "already revoked" case) if `campaign_membership_id`
@@ -1050,7 +1074,12 @@ def end_campaign_membership(
     same membership row `FOR UPDATE OF cm`) cannot race between this
     function's own read and its writes: whichever transaction acquires the
     relevant lock first forces the other to wait, then re-observes the
-    first's committed effect."""
+    first's committed effect. The new access-group-membership closure
+    (checkpoint-5 correction) takes no row lock of its own beyond the target
+    membership row already locked above — `security.access_group_memberships`
+    has no command anywhere in this codebase that mutates an existing row
+    (only inserts new ones), so there is no concurrent writer for this
+    `UPDATE` to race against."""
     row = (
         connection.execute(
             text("""
@@ -1077,6 +1106,7 @@ def end_campaign_membership(
             revoked_membership_role_ids=(),
             revoked_membership_character_relationship_ids=(),
             revoked_resource_grant_ids=(),
+            removed_access_group_membership_ids=(),
         )
 
     revoked_role_ids = (
@@ -1118,6 +1148,19 @@ def end_campaign_membership(
         .all()
     )
 
+    removed_access_group_membership_ids = (
+        connection.execute(
+            text("""
+                UPDATE security.access_group_memberships SET removed_at = now()
+                WHERE campaign_membership_id = :membership AND removed_at IS NULL
+                RETURNING access_group_membership_id
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .scalars()
+        .all()
+    )
+
     revoked_status_id = lookup_id(
         connection, "security", "membership_statuses", "membership_status_id", "revoked"
     )
@@ -1149,4 +1192,5 @@ def end_campaign_membership(
         revoked_membership_role_ids=tuple(revoked_role_ids),
         revoked_membership_character_relationship_ids=tuple(revoked_relationship_ids),
         revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
+        removed_access_group_membership_ids=tuple(removed_access_group_membership_ids),
     )

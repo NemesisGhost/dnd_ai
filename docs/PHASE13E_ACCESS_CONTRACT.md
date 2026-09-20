@@ -431,7 +431,7 @@ portal as the Access page's "Revoke relationship" action.
 - **Sibling relationships:** untouched — only the named row is revoked.
 - **Immediate authorization effect:** revocation removes the character from the target user's next `GET /auth/session` bootstrap (`dnd_ai.queries.bootstrap.get_session_bootstrap` re-resolves `AccessContext.character_capabilities` fresh on every call — no caching layer) and, if the revoked relationship was the sole source of a `selected_character_id` default, that field becomes `null` on the next bootstrap rather than continuing to name a no-longer-authorized character. Already covered by the pre-existing, unmodified `tests/database/test_query_bootstrap.py::test_relationship_revocation_is_reflected_on_the_next_call`/`test_character_relationship_with_capability_is_a_selectable_perspective`/`test_multiple_perspectives_leave_selected_character_null` — this checkpoint changes no bootstrap-query code, so no new bootstrap-level test was needed; the existing suite already proves the same-request re-resolution behavior this route's own hardening depends on. A route request made using the revoked perspective (e.g. a character-scoped read) fails with that route's own established non-disclosing response on its *next* request — no browser-session revocation is performed or required.
 
-## 3k. `POST /campaigns/{campaign_id}/resource-grants` / `.../resource-grants/{id}/revoke` (hardened, checkpoint 5)
+## 3k. `POST /campaigns/{campaign_id}/resource-grants` / `.../resource-grants/{id}/revoke` (hardened, checkpoint 5, corrected)
 
 The direct-resource-grant management checkpoint: the `security.
 resource_grants` schema, resolver (`dnd_ai.domain.access.
@@ -441,7 +441,10 @@ already existed (Phase 10) — this checkpoint hardens the commands to the
 same "currently true" eligibility bar §3h/§3b already established, adds a
 server-authoritative delegation policy (nothing this codebase had before),
 closes the identical membership-ending silent-reactivation gap checkpoint
-4 closed for character relationships, and wires the portal's own
+4 closed for character relationships (extended by a post-delivery
+correction — see the membership-ending-integration bullet below — to also
+close a member's access-group links, not just their own direct grants), and
+wires the portal's own
 "Direct resource access" section to it — scoped to **character targets
 only** this checkpoint.
 
@@ -476,12 +479,21 @@ only** this checkpoint.
   keyword, so a resource-scoped grant of one would be silently inert
   against every real call site, and this codebase's authorization model
   has no documented notion of *resource-scoped* platform/campaign
-  administration regardless. `access.manage` authorizes assignment from
-  this entire fixed catalog regardless of which capabilities the granting
-  membership itself currently holds — the identical precedent `assign_
-  membership_role`/`grant_character_relationship` already established for
-  roles and relationship types (an access manager need not personally
-  hold a capability to delegate it).
+  administration regardless. `character.discover` (checkpoint-5
+  correction) is also excluded from the `character_id` list even though it
+  is otherwise a `character.*` code: its own baseline reader passes no
+  resource target at all, and the one call site that *does* pass a
+  `character_id` can only confirm a grant that already exists — no reader
+  anywhere in this codebase resolves "should a resource grant of
+  `character.discover` make character X newly discoverable" from a bare
+  `(membership, capability)` pair the way the other eight `character.*`
+  codes do for their own gated actions; see `RESOURCE_GRANT_CAPABILITY_
+  CATALOG`'s own docstring for the full account. `access.manage`
+  authorizes assignment from this entire fixed catalog regardless of which
+  capabilities the granting membership itself currently holds — the
+  identical precedent `assign_membership_role`/`grant_character_
+  relationship` already established for roles and relationship types (an
+  access manager need not personally hold a capability to delegate it).
 - **Request (`CreateResourceGrantRequest`):** `{ capability_code, effect, grantee_campaign_membership_id?, grantee_access_group_id?, character_id?, entity_id?, knowledge_item_id?, quest_id?, session_id?, event_id?, reason? }` — unchanged shape (all six target kinds and both grantee kinds remain backend-supported); the portal's own Add-grant control only ever sends `grantee_campaign_membership_id`, `character_id`, and `capability_code` (`effect` always `"allow"` — see the portal-scope note below).
 - **Response (`ResourceGrantResponse`):** `{ resource_grant_id: UUID }`. `201`, unchanged.
 - **Eligibility (hardened this checkpoint):** all checked before any write, all raising identically within each group so a caller cannot distinguish which condition applied:
@@ -491,11 +503,12 @@ only** this checkpoint.
   - `capability_code` must be currently active **and** a valid pairing for the supplied target kind under `RESOURCE_GRANT_CAPABILITY_CATALOG` — both **new**, folded into the new `ResourceGrantCapabilityNotGrantableError` (404): a nonexistent code, a deactivated one, and an incompatible pairing (e.g. `character.control` against a `quest_id`) are all indistinguishable to the caller.
   - a duplicate still-active `(grantee, target, timeline_id, capability, effect)` combination is rejected as a 409 by the pre-existing `ux_resource_grants_active` unique index (existing `IntegrityError` handler) — not pre-checked, matching this module's own "database-enforced invariants deliberately not duplicated" policy.
 - **Concurrency (new):** the grantee (membership row, or nothing further for an access-group grantee), then `campaign.campaigns`, then, separately, the membership grantee's owning user row, then the target resource row, then the candidate capability row are locked in that order (`FOR UPDATE OF cm` / `FOR UPDATE OF c` / `FOR UPDATE OF u` / `FOR UPDATE OF e`-or-`s` / `FOR UPDATE`) before any eligibility check runs — grantee, then campaign, then owning user, then target, then capability: the identical relative order §3h's `grant_character_relationship` uses for its own disjoint checks, so this command can never deadlock against it. Proven by real-connection PostgreSQL regression tests (`tests/database/test_resource_grant_concurrency.py`): create-vs-create of the identical grant (unique-index insertion lock), create vs. membership-ending, create vs. account-disablement, create vs. campaign-deactivation, create vs. target-deactivation (both the entity-rooted and the session code path), create vs. capability-deactivation, and two-concurrent-revokes-serialize.
-- **Idempotency/audit:** unchanged for create — the same durable `Idempotency-Key` mechanism every other create-shaped row in §2/§3 uses; one `audit.change_log` row per successful call. A request rejected for any of the eligibility conditions above rolls back its whole transaction, including any `Idempotency-Key` reservation — a retry with the same key once the condition clears runs the real command rather than replaying a cached rejection.
+- **Idempotency:** unchanged for create — the same durable `Idempotency-Key` mechanism every other create-shaped row in §2/§3 uses. A request rejected for any of the eligibility conditions above rolls back its whole transaction, including any `Idempotency-Key` reservation — a retry with the same key once the condition clears runs the real command rather than replaying a cached rejection.
+- **Audit content (hardened this checkpoint, correction):** one `audit.change_log` row per successful create, and per actual revocation, exactly as before — but both now carry a bounded, non-free-form `changed_fields` payload (`grantee_campaign_membership_id`/`grantee_access_group_id` — exactly one non-null, `target_kind`/`target_id`, `capability_code`, `effect`) instead of none at all. `create_resource_grant_endpoint` reads these from the already-validated request body; `revoke_resource_grant_endpoint` reads them from `RevokeResourceGrantResult`'s own new fields, populated server-side by `revoke_resource_grant()` from the locked grant row itself — never re-derived from caller input, since a revoke request only ever supplies `resource_grant_id`. `reason` (free-form caller text) is never recorded, matching `dnd_ai.api.local_auth`'s "Never store" list.
 - **Revoke stays unchecked (deliberate, unchanged):** `revoke_resource_grant` checks none of the eligibility conditions above (account, character/target, membership, campaign) — closing access must remain possible for cleanup regardless, matching §3j's identical policy for `revoke_character_relationship`.
 - **Revoke response contract change (hardened this checkpoint):** previously a bodyless `204 No Content` with no `Idempotency-Key` support and an unconditional audit write on every call (including a plain retry against an already-revoked row); now `200`/`ResourceGrantResponse` (`{ resource_grant_id: UUID }`), an optional `Idempotency-Key`, and the audit write conditioned on `RevokeResourceGrantResult.revoked` — the identical duplicate-audit-gap fix §3c/§3j already made for role/relationship revocation.
 - **No change endpoint:** unlike a character relationship's single-dimension type change, a resource grant's meaningful fields (target, capability, effect, temporal/timeline scope) could each independently change, with no single unambiguous "this is what changed" audit story — revoking the old grant and creating a new one (both already hardened, audited, and idempotent) is the deliberate replacement for a generic edit form; see `dnd_ai.commands.access_grants`' own module docstring.
-- **Membership-ending integration (checkpoint 5):** `end_campaign_membership` now also revokes every currently active `security.resource_grants` row whose `grantee_campaign_membership_id` is the ending membership, in the same transaction that closes it — the identical silent-reactivation gap checkpoint 4 closed for character relationships. Access-group-targeted grants are unaffected (they belong to the group, not to any one member's own row). Covered by `tests/database/test_api_membership_lifecycle.py::test_ending_a_membership_also_revokes_its_resource_grants` and `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship` (extended this checkpoint to also cover the resource-grant half through a real reactivation).
+- **Membership-ending integration (checkpoint 5, extended by correction):** `end_campaign_membership` revokes every currently active `security.resource_grants` row whose `grantee_campaign_membership_id` is the ending membership, in the same transaction that closes it — the identical silent-reactivation gap checkpoint 4 closed for character relationships. It also now closes (`removed_at = now()`, never deletes) the ending membership's own currently open `security.access_group_memberships` rows — the *membership's link* to each access group it belonged to — so a group's own resource grants stop applying to a departed member too, without touching the group's grant row or any other member's link to it. This closes a real gap the first cut of this checkpoint missed: `resolve_access_context`'s group-membership subquery only ever considers a currently open `access_group_memberships` row, and `_activate_or_create_membership` reactivates the *same* `campaign_membership_id` row in place on a later invitation acceptance — without this correction, a departed member's stale group membership (and every grant made to that group) would silently regain effect the moment they rejoined. Covered by `tests/database/test_api_membership_lifecycle.py::test_ending_a_membership_also_revokes_its_resource_grants`/`::test_ending_a_membership_also_closes_its_access_group_memberships` and `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship` (extended checkpoint 5 to also cover the resource-grant half through a real reactivation) and the new `::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_access_group_membership` (checkpoint-5 correction — the full access-group scenario: initial effect, closure on end, non-reactivation on a reopened membership, and restoration only via an explicit new `access_group_memberships` insert).
 - **Read-side parity (checkpoint 5):** `dnd_ai.domain.access.resolve_access_context` and `get_campaign_access_overview` both now exclude a resource grant whose own target is not currently active — the same "currently true" generalization applied to the mutation side above, so a target deactivated *after* a grant was created stops being authorization-effective (and stops appearing on the overview) on the very next request, not just at creation time.
 - **Portal scope this checkpoint (deliberate, not full coverage):** the portal's "Add direct resource access" control only offers **character** as a selectable resource type — the one target kind with an existing safe display-name/search contract (`dnd_ai.queries.access_overview.list_assignable_campaign_characters`, already built for §3g). The other five target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) have no safe, campaign-scoped display/search contract of their own yet (resolving one for each is a materially larger surface — five unrelated resource kinds — than this checkpoint's own scope), so they are omitted from the portal rather than presented with a raw id; a grant to any of them remains fully supported by the backend (all six target kinds are hardened identically) and, if one already exists (created directly, or by a future increment), still appears on the overview with its `target_type` label and no display name, exactly as before. Access-group-targeted grants are likewise omitted from the portal this checkpoint — "Do not implement access-group grants" was this checkpoint's own explicit instruction; the backend continues to support them unchanged. `grantable_resource_capabilities` (§3) is shaped generally (one row per valid `(capability, target_type)` pairing) specifically so a future checkpoint that adds a safe contract for another target kind needs no change to that endpoint, only a portal change.
 - **Server delegation policy answers this checkpoint's own open question:** an access manager may delegate any capability in the fixed catalog for the target's kind, **not** only capabilities they personally currently hold — see the delegation-policy bullet above for the precedent this follows and the reasoning.
@@ -514,7 +527,7 @@ only** this checkpoint.
 No backend read/write contract exists yet for:
 
 - Listing pending/outstanding `security.campaign_invitations` for a campaign.
-- Access-group management: creating an access group, listing its members, or adding/removing a membership from one — `security.access_groups`/`.access_group_memberships` exist in schema and are read internally by `dnd_ai.domain.access.resolve_access_context`, but no API route anywhere creates, lists, or mutates them.
+- Access-group management: creating an access group, listing its members, or adding/removing a membership from one — `security.access_groups`/`.access_group_memberships` exist in schema and are read internally by `dnd_ai.domain.access.resolve_access_context`, but no API route anywhere creates, lists, or mutates them. `end_campaign_membership` (checkpoint-5 correction) is the one exception: it closes a departed member's own `access_group_memberships` rows as a side effect of ending their campaign membership, the same way it closes their roles/relationships/direct grants — this is cleanup on an existing membership-ending command, not new access-group CRUD, and no route can add a membership to a group, create a group, or list one's members.
 - Any audit-history read endpoint — `audit.change_log` rows are written by every mutation above, but no route reads them back.
 - A preview-as-user/perspective workflow (docs/UI_DESIGN.md §6.3) — no existing endpoint.
 - A UI for the remaining mutation endpoints in §2: invitation issuance, account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation, and access-group-targeted resource grants (see §3k's own "Portal scope this checkpoint" note — access groups themselves have no management contract at all yet, per the bullet above, so a group-targeted grant has no group to select regardless). **Changing an existing member's role assignment (§3a, checkpoint 1), adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2), adding an existing account as a member/ending an existing membership (§3d/§3e/§3f, checkpoint 3), adding/changing/revoking a member's character relationship (§3g/§3h/§3i/§3j, the character-relationship-management checkpoint), and adding/revoking a member's character-targeted direct resource grant (§3k, checkpoint 5) are now wired** — the exceptions to this list.
@@ -786,15 +799,23 @@ and `phase13e.player_a` (no grant of its own beyond the pre-existing
   disappear immediately. Confirm — the overview refreshes with the grant
   gone; `phase13e.observer_a`'s own unrelated `observer` role is
   unaffected.
-- **Non-character target kinds and access-group grants not seed-
-  exercisable:** none of the seeded accounts has a grant of any of the
-  other five target kinds or an access-group-targeted grant (access groups
-  have no management UI at all yet) — this checkpoint's PostgreSQL-backed
-  tests (`tests/database/test_api_access_grants.py`, `test_resource_grant_
-  concurrency.py`) are the authoritative coverage for those, plus the
-  disabled-account/ended-membership/inactive-campaign/inactive-target/
-  deactivated-or-incompatible-capability eligibility boundaries, all
-  rejected with a non-disclosing 404/409, never a 5xx.
+- **Non-character target kinds, access-group grants, and deny effects not
+  seed-exercisable:** none of the seeded accounts has a grant of any of
+  the other five target kinds, an access-group-targeted grant (access
+  groups have no management UI at all yet), or a `deny`-effect grant (the
+  portal's own Add flow only ever creates `allow`) — this checkpoint's
+  PostgreSQL-backed tests (`tests/database/test_api_access_grants.py`,
+  `test_resource_grant_concurrency.py`) and portal tests (`AccessPage.
+  test.tsx`, `CampaignAccessPage.resourceGrant.integration.test.tsx`) are
+  the authoritative coverage for those, plus the disabled-account/ended-
+  membership/inactive-campaign/inactive-target/deactivated-or-incompatible-
+  capability eligibility boundaries, all rejected with a non-disclosing
+  404/409, never a 5xx. A `deny` grant can still reach the portal if
+  created directly against the database (or by a future increment) —
+  `RevokeResourceGrant` renders it with effect-aware wording ("Remove
+  denial" rather than "Revoke access", explaining that access may be
+  *restored* from another source rather than lost) rather than the
+  allow-oriented copy this checkpoint originally shipped with (correction).
 - **Idempotent replay (add):** repeating the same add request with the
   same `Idempotency-Key` returns the original response unchanged, creating
   no second grant row.
