@@ -135,6 +135,24 @@ _RELATIONSHIP_TABLE_COMMANDS: tuple[str, ...] = (
 _GRANT_TABLE_COMMANDS: tuple[str, ...] = ("create_resource_grant", "revoke_resource_grant")
 _INVITATION_TABLE_COMMANDS: tuple[str, ...] = ("create_campaign_invitation",)
 _CAMPAIGN_TABLE_COMMANDS: tuple[str, ...] = ("create_campaign",)
+# Phase 13E-B checkpoint 6. Grouped separately from _GRANT_TABLE_COMMANDS
+# even though both concern access groups: these resolve against
+# security.access_groups/.access_group_memberships directly (the record_id
+# *is* the group/membership row), never against security.resource_grants
+# — a group-owned resource grant's own create/revoke events already join
+# through the existing grant branch above (its grantee_access_group_id
+# column resolves grantee_group_name identically for a member- or
+# group-targeted grant).
+_ACCESS_GROUP_TABLE_COMMANDS: tuple[str, ...] = (
+    "create_access_group",
+    "update_access_group",
+    "deactivate_access_group",
+    "reactivate_access_group",
+)
+_ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS: tuple[str, ...] = (
+    "add_access_group_member",
+    "remove_access_group_member",
+)
 
 # Public category vocabulary — the `category` query-parameter filter's
 # closed set, and the `category` value returned on every item.
@@ -145,6 +163,8 @@ AUDIT_CATEGORIES: tuple[str, ...] = (
     "resource_grant",
     "invitation",
     "campaign",
+    "access_group",
+    "access_group_membership",
 )
 
 _COMMANDS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
@@ -154,6 +174,8 @@ _COMMANDS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
     "resource_grant": _GRANT_TABLE_COMMANDS,
     "invitation": ("create_campaign_invitation", "accept_campaign_invitation"),
     "campaign": _CAMPAIGN_TABLE_COMMANDS,
+    "access_group": _ACCESS_GROUP_TABLE_COMMANDS,
+    "access_group_membership": _ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS,
 }
 
 # Every command_name this query recognizes at all, in one flat tuple — the
@@ -184,6 +206,12 @@ _ACTION_LABEL_BY_COMMAND: dict[str, str] = {
     "create_campaign_invitation": "Invitation sent",
     "accept_campaign_invitation": "Invitation accepted",
     "create_campaign": "Campaign created",
+    "create_access_group": "Access group created",
+    "update_access_group": "Access group updated",
+    "deactivate_access_group": "Access group deactivated",
+    "reactivate_access_group": "Access group reactivated",
+    "add_access_group_member": "Access group member added",
+    "remove_access_group_member": "Access group member removed",
 }
 
 KEYSET = "campaign_audit_history"
@@ -320,9 +348,48 @@ _QUERY = """
         FROM audit.change_log cl
         JOIN campaign.campaigns c ON c.campaign_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:campaign_commands AS text[]))
+
+        UNION ALL
+
+        -- Phase 13E-B checkpoint 6: security.access_groups' own lifecycle
+        -- commands. The record IS the group, so grantee_access_group_id
+        -- (otherwise a resource_grants column) is reused here to name it
+        -- — the existing grantee_group join below then resolves its name
+        -- identically to how it already resolves a group-grantee's name
+        -- for the resource-grant branch above.
+        SELECT
+            cl.change_log_id, cl.command_name, cl.recorded_at,
+            cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
+            ag.campaign_id, NULL::uuid, NULL::uuid,
+            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, ag.access_group_id,
+            NULL::uuid, NULL::uuid
+        FROM audit.change_log cl
+        JOIN security.access_groups ag ON ag.access_group_id = cl.record_id
+        WHERE cl.command_name = ANY(CAST(:access_group_commands AS text[]))
+
+        UNION ALL
+
+        -- Phase 13E-B checkpoint 6: security.access_group_memberships' own
+        -- add/remove commands. target_user_id is reused to name the added/
+        -- removed member (the existing target_user join below resolves
+        -- their display name identically to the membership/role branches
+        -- above); grantee_access_group_id is reused to name the owning
+        -- group, exactly like the access_groups branch above.
+        SELECT
+            cl.change_log_id, cl.command_name, cl.recorded_at,
+            cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
+            cm.campaign_id, cm.user_id, NULL::uuid,
+            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, agm.access_group_id,
+            NULL::uuid, NULL::uuid
+        FROM audit.change_log cl
+        JOIN security.access_group_memberships agm
+            ON agm.access_group_membership_id = cl.record_id
+        JOIN security.campaign_memberships cm
+            ON cm.campaign_membership_id = agm.campaign_membership_id
+        WHERE cl.command_name = ANY(CAST(:access_group_membership_commands AS text[]))
     )
     SELECT
-        s.change_log_id, s.command_name, s.recorded_at, s.previous_status,
+        s.change_log_id, s.command_name, s.recorded_at, s.previous_status, s.new_status,
         s.actor_user_id, actor.display_name AS actor_display_name, s.actor_service,
         s.target_user_id, target_user.display_name AS target_user_display_name,
         s.target_character_id, target_entity.canonical_name AS target_character_name,
@@ -424,6 +491,20 @@ def _change_summary(row: dict[str, object], *, command_name: str) -> str | None:
         if grantee is not None:
             return f"{capability_label} — {grantee}"
         return str(capability_label)
+    if command_name == "update_access_group":
+        # previous_status/new_status hold the group's own previous/new name
+        # here (dnd_ai.api.access_groups.update_access_group_endpoint),
+        # unlike every other command_name above where they hold a fixed
+        # code. Both are always recorded together; if they are equal (a
+        # description-only edit) there is nothing meaningful to arrow
+        # between, so this returns None rather than "X → X".
+        new_status = row.get("new_status")
+        if previous_status is None or new_status is None or previous_status == new_status:
+            return None
+        return f"{previous_status} → {new_status}"
+    if command_name in ("add_access_group_member", "remove_access_group_member"):
+        group_label = row.get("grantee_group_name") or _PLACEHOLDER_GROUP_LABEL
+        return str(group_label)
     return None
 
 
@@ -455,6 +536,15 @@ def _resolve_target(row: dict[str, object], *, command_name: str) -> tuple[str |
         if row.get("grantee_access_group_id") is not None:
             return _PLACEHOLDER_GROUP_LABEL, "access_group"
         return _PLACEHOLDER_ACCOUNT_LABEL, "account"
+    if command_name in _ACCESS_GROUP_TABLE_COMMANDS:
+        group_name = row.get("grantee_group_name")
+        label = group_name if group_name is not None else _PLACEHOLDER_GROUP_LABEL
+        return str(label), "access_group"
+    if command_name in _ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS:
+        if row.get("target_user_id") is not None:
+            label = row.get("target_user_display_name") or _PLACEHOLDER_ACCOUNT_LABEL
+            return str(label), "account"
+        return None, None
     # invitation / campaign: no single discrete target to name safely.
     return None, None
 
@@ -507,6 +597,8 @@ def list_campaign_audit_history(
             "grant_commands": list(_GRANT_TABLE_COMMANDS),
             "invitation_commands": list(_INVITATION_TABLE_COMMANDS),
             "campaign_commands": list(_CAMPAIGN_TABLE_COMMANDS),
+            "access_group_commands": list(_ACCESS_GROUP_TABLE_COMMANDS),
+            "access_group_membership_commands": list(_ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS),
             # NULL (no category requested) disables this filter entirely —
             # every branch above already restricts itself to its own fixed
             # command_name set, so `_ALL_COMMANDS` would be redundant here.

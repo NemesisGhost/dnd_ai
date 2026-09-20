@@ -47,6 +47,7 @@ const overviewFixture: CampaignAccessOverview = {
     assignable_characters: [],
     assignable_relationship_types: [],
     grantable_resource_capabilities: [],
+    access_groups: [],
 }
 
 function renderBoundary() {

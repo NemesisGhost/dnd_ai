@@ -879,6 +879,20 @@ def resolve_access_context(
     very next call, not remain effective indefinitely because this resolver
     never re-checked it. `dnd_ai.queries.access_overview.
     get_campaign_access_overview` applies the identical join/filter.
+
+    Deactivated-group exclusion (checkpoint 6): the group-membership
+    subquery feeding the resource-grants query's `grantee_access_group_id`
+    branch now also requires the group itself to currently be `active`
+    (`security.access_groups.lifecycle_status_id`, revision 105) — under
+    normal operation `dnd_ai.commands.access_groups.
+    deactivate_access_group()` already revokes every grant a group owns
+    and closes every membership in it at deactivation time, so this is
+    defense in depth (matching the deactivated-target/deactivated-character
+    exclusions above) rather than the only thing keeping an archived
+    group's grants from applying — but it means a caller's group-derived
+    access can never outlive the group's own status by so much as one
+    request, even against a hypothetical direct data repair that left a
+    stray open membership or unrevoked grant behind.
     """
     membership_id = connection.execute(
         text("""
@@ -985,8 +999,13 @@ def resolve_access_context(
                     OR rg.grantee_access_group_id IN (
                         SELECT agm.access_group_id
                         FROM security.access_group_memberships agm
+                        JOIN security.access_groups ag
+                            ON ag.access_group_id = agm.access_group_id
+                        JOIN core.lifecycle_statuses ag_status
+                            ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
                         WHERE agm.campaign_membership_id = :membership_id
                           AND agm.removed_at IS NULL
+                          AND ag_status.code = 'active'
                     )
                   )
         """),

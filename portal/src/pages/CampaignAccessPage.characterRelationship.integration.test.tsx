@@ -62,6 +62,7 @@ function baseOverview(
             },
         ],
         grantable_resource_capabilities: [],
+        access_groups: [],
     }
 }
 

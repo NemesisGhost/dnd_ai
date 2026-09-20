@@ -584,6 +584,25 @@ access_groups = Table(
     ),
     Column("name", Text(), nullable=False),
     Column("description", Text()),
+    # Added by revision 105 (Phase 13E-B checkpoint 6) — see that migration's
+    # own docstring for why this reuses the shared core.lifecycle_statuses
+    # lookup rather than a bespoke boolean, and why reactivating a group
+    # only ever flips this one column, never restoring the memberships/
+    # grants deactivation already closed.
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "Whether this group is currently active or has been deactivated/archived "
+            "(docs/ENTITY_LIFECYCLE.md §12/§13). Deactivation closes the group's open "
+            "memberships and revokes its active resource grants in the same transaction "
+            "(dnd_ai.commands.access_groups.deactivate_access_group) rather than deleting the "
+            "group row; reactivation only ever flips this column back — it never restores "
+            "those closed memberships or revoked grants."
+        ),
+    ),
     *_timestamps(),
     UniqueConstraint("campaign_id", "name", name="ux_access_groups_campaign_name"),
     schema="security",
@@ -597,6 +616,7 @@ access_groups = Table(
 )
 
 Index("ix_access_groups_campaign_id", access_groups.c.campaign_id)
+Index("ix_access_groups_lifecycle_status_id", access_groups.c.lifecycle_status_id)
 
 access_group_memberships = Table(
     "access_group_memberships",

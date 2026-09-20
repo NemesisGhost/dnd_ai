@@ -1013,10 +1013,12 @@ The earlier `security.character_permissions` sketch is superseded by these seman
 
 Primary tables:
 
-- `security.access_groups` — campaign-scoped named sets such as livestream observers, former players or a GM-curated lore audience
+- `security.access_groups` — campaign-scoped named sets such as livestream observers, former players or a GM-curated lore audience. Carries `lifecycle_status_id` (`core.lifecycle_statuses`, added by revision 105/Phase 13E-B checkpoint 6) so a group can be deactivated (`archived`) without being physically deleted, and later reactivated (`active`) — the same archive/restore pattern every other long-lived entity in this schema uses, applied here for the first time to a security concept. Reactivation flips only this column: it never reopens a membership or un-revokes a grant deactivation already closed.
 - `security.access_group_memberships` — many-to-many association between campaign memberships and access groups
 
 Groups simplify repeated grants but do not represent in-world parties. Adding a user to an access group does not add a character to `campaign.party_memberships`, reveal knowledge in-world, or create an event. Group membership and revocation retain granting actor and timestamps.
+
+Full lifecycle management (`dnd_ai.commands.access_groups`, Phase 13E-B checkpoint 6): create, rename/redescribe, deactivate, reactivate a group; add/remove a campaign membership's link to one. Deactivating a group closes every one of its open `access_group_memberships` rows and revokes every active `security.resource_grants` row it owns, in the same transaction as the status change, so group-derived access disappears on the very next request. Group-owned resource grants themselves continue through the ordinary `create_resource_grant`/`revoke_resource_grant` commands (§19.6) unchanged in shape — hardened to also require the grantee group currently be active.
 
 #### 19.6 Typed resource grants
 

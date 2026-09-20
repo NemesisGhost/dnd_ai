@@ -203,7 +203,23 @@ relationship()`'s single-field swap does. Revoking the old grant and
 creating a new one (two already-hardened, already-audited, already-
 idempotent mutations) is the deliberate replacement for a generic edit
 form here — see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full
-rationale."""
+rationale.
+
+Checkpoint-6 correction: `create_resource_grant()`'s `grantee_access_
+group_id` branch previously checked only campaign scope
+(`AccessGroupNotInCampaignError`) — a group carried no lifecycle of its
+own to check further. Revision 105 (Phase 13E-B checkpoint 6) added
+`security.access_groups.lifecycle_status_id`, and that checkpoint's own
+`dnd_ai.commands.access_groups.deactivate_access_group()` is the first
+command able to move a group out of `active` after creation, so a resource
+grant naming an already-deactivated group could otherwise still be created
+(or, worse, silently regain effect on the read side after a later
+reactivation — the identical "target deactivated after grant" class of gap
+checkpoint 5 already closed for the six target kinds). Fixed by locking
+the group row (`FOR UPDATE OF ag`) and requiring `lifecycle_status_code =
+'active'`, identically to every other "currently true" grantee/target/
+capability check this function already makes, raising the new
+`AccessGroupNotActiveError` (409) — see that error's own docstring."""
 
 import uuid
 from dataclasses import dataclass
@@ -224,6 +240,7 @@ __all__ = [
     "CharacterRelationshipNotActiveError",
     "ChangeCharacterRelationshipNoOpError",
     "AccessGroupNotInCampaignError",
+    "AccessGroupNotActiveError",
     "ResourceGrantNotInCampaignError",
     "ResourceGrantCapabilityNotGrantableError",
     "TargetNotInCampaignWorldError",
@@ -333,6 +350,27 @@ class AccessGroupNotInCampaignError(DomainAuthorizationError):
     nonexistent access group, identically. The supplied ids are included
     only in the constructor's `detail` argument (`str(self)`), never in
     `safe_message`."""
+
+
+class AccessGroupNotActiveError(DomainAuthorizationError):
+    """Raised by `create_resource_grant()` (Phase 13E-B checkpoint 6) when
+    a caller-supplied `grantee_access_group_id`, though it does belong to
+    `campaign_id` (checked first, as `AccessGroupNotInCampaignError`), is
+    not currently an active group to grant a resource grant to — mirrors
+    `MembershipNotActiveError`'s identical eligibility bar for a membership
+    grantee. Before revision 105 added `security.access_groups.lifecycle_
+    status_id`, a group carried no lifecycle of its own to check here; this
+    checkpoint's `dnd_ai.commands.access_groups.deactivate_access_group()`
+    is the first command that can make a group ineligible after creation,
+    so `create_resource_grant()` must now recheck it, the same "currently
+    true" bar every other grantee/target/capability check in this function
+    already applies. 409, not the base class's default 404: the group's
+    existence and campaign scope are already established by the time this
+    raises."""
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
 
 
 class ResourceGrantNotInCampaignError(DomainAuthorizationError):
@@ -1234,8 +1272,13 @@ def create_resource_grant(
     membership — ended, its own status not `active`, or its underlying user
     account not currently platform-active — mirroring `grant_character_
     relationship()`'s identical eligibility bar for the same class of
-    caller-supplied membership id; not applicable to a `grantee_access_
-    group_id` grantee, which carries no such lifecycle of its own. Raises
+    caller-supplied membership id. Raises `AccessGroupNotActiveError` (409,
+    checkpoint 6) for a `grantee_access_group_id` that, though it belongs
+    to `campaign_id`, is not currently active — `dnd_ai.commands.
+    access_groups.deactivate_access_group()` is the first command able to
+    make a group ineligible after creation (revision 105 added `security.
+    access_groups.lifecycle_status_id`; before that, a group carried no
+    lifecycle of its own for this function to check). Raises
     `CampaignNotActiveError` (409, checkpoint 5) if `campaign_id` itself is
     not currently `active` — the identical gap-closing check checkpoint 4
     added to `grant_character_relationship()`/`change_character_relationship()`,
@@ -1258,11 +1301,13 @@ def create_resource_grant(
     pre-checked, matching this module's own "database-enforced invariants
     deliberately not duplicated" policy.
 
-    Locks the grantee (the membership row `FOR UPDATE OF cm`, or nothing
-    further for an access-group grantee — groups carry no mutable lifecycle
-    to protect), then `campaign.campaigns` (`FOR UPDATE OF c`), then,
-    separately, the membership grantee's owning user row (`FOR UPDATE OF u`,
-    skipped for an access-group grantee), then the target resource row
+    Locks the grantee (the membership row `FOR UPDATE OF cm`, or, since
+    checkpoint 6, the group row `FOR UPDATE OF ag` for an access-group
+    grantee — both now carry a mutable lifecycle to protect), then
+    `campaign.campaigns` (`FOR UPDATE OF c`), then, separately, the
+    membership grantee's owning user row (`FOR UPDATE OF u`, skipped for
+    an access-group grantee, which has none of its own), then the target
+    resource row
     (`_validate_resource_grant_target()`'s own lock), then the candidate
     capability row (`FOR UPDATE`) — grantee, then campaign, then owning
     user, then target, then capability: the identical relative order
@@ -1316,14 +1361,30 @@ def create_resource_grant(
             )
         membership_owner_user_id = membership_row["user_id"]
     elif grantee_access_group_id is not None:
-        group_campaign_id = connection.execute(
-            text("SELECT campaign_id FROM security.access_groups WHERE access_group_id = :group"),
-            {"group": grantee_access_group_id},
-        ).scalar()
-        if group_campaign_id is None or group_campaign_id != campaign_id:
+        group_row = (
+            connection.execute(
+                text("""
+                    SELECT ag.campaign_id, ls.code AS lifecycle_status_code
+                    FROM security.access_groups ag
+                    JOIN core.lifecycle_statuses ls
+                        ON ls.lifecycle_status_id = ag.lifecycle_status_id
+                    WHERE ag.access_group_id = :group
+                    FOR UPDATE OF ag
+                """),
+                {"group": grantee_access_group_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if group_row is None or group_row["campaign_id"] != campaign_id:
             raise AccessGroupNotInCampaignError(
                 f"access group {grantee_access_group_id} does not belong to campaign "
-                f"{campaign_id} (actual campaign: {group_campaign_id})"
+                f"{campaign_id} "
+                f"(actual campaign: {group_row['campaign_id'] if group_row is not None else None})"
+            )
+        if group_row["lifecycle_status_code"] != "active":
+            raise AccessGroupNotActiveError(
+                f"access group {grantee_access_group_id} is not currently active"
             )
 
     campaign_status_code = connection.execute(

@@ -461,15 +461,26 @@ def make_relationship_type_capability(
 
 
 def make_access_group(
-    connection: Connection, campaign_id: uuid.UUID, *, name: str = "Test Group"
+    connection: Connection,
+    campaign_id: uuid.UUID,
+    *,
+    name: str = "Test Group",
+    description: str | None = None,
+    lifecycle_status_code: str = "active",
 ) -> uuid.UUID:
     value = connection.execute(
         text("""
-            INSERT INTO security.access_groups (campaign_id, name)
-            VALUES (:campaign, :name)
+            INSERT INTO security.access_groups
+                (campaign_id, name, description, lifecycle_status_id)
+            VALUES (:campaign, :name, :description, :status)
             RETURNING access_group_id
         """),
-        {"campaign": campaign_id, "name": name},
+        {
+            "campaign": campaign_id,
+            "name": name,
+            "description": description,
+            "status": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
+        },
     ).scalar()
     assert isinstance(value, uuid.UUID)
     return value

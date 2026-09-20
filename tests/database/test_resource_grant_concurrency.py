@@ -47,10 +47,14 @@ Not covered here (documented rather than silently skipped):
 - **Change racing anything**: no `change_resource_grant()` exists — see
   `dnd_ai.commands.access_grants`' own module docstring for why revoke-
   plus-add is the deliberate replacement for a generic edit form here.
-- **Access-group-grantee races**: an access group carries no mutable
-  lifecycle of its own to race against (`security.access_groups` has no
-  `is_active`/status column) — see `create_resource_grant()`'s own
-  docstring for why no owning-user lock is taken for that grantee kind.
+- **Access-group-grantee races**: Phase 13E-B checkpoint 6 gave a group
+  its own mutable lifecycle (`security.access_groups.lifecycle_status_id`,
+  revision 105) and `create_resource_grant()`'s own `FOR UPDATE OF ag`
+  lock on it — see `tests/database/test_access_group_concurrency.py` for
+  that coverage (a group-grant create racing that same group's
+  deactivation, and a group deactivation racing a manual revoke of one of
+  its own grants), not duplicated here. No owning-user lock is still taken
+  for a group grantee — a group has none of its own.
 """
 
 import uuid

@@ -76,10 +76,35 @@ export interface CampaignAccessMember {
     grants: AccessResourceGrantSummary[]
 }
 
+export interface AccessGroupMemberSummary {
+    access_group_membership_id: string
+    campaign_membership_id: string
+    display_name: string
+    added_at: string
+}
+
+// Phase 13E-B checkpoint 6. Shares AccessResourceGrantSummary's exact shape
+// (a group-owned grant and a member-owned grant are the same underlying
+// security.resource_grants row, differing only in which grantee column is
+// non-null) — reused rather than duplicated below.
+export interface AccessGroupSummary {
+    access_group_id: string
+    name: string
+    description: string | null
+    // "active" | "archived" (core.lifecycle_statuses codes this checkpoint's
+    // own commands ever write).
+    status_code: string
+    status_display_name: string
+    created_at: string
+    members: AccessGroupMemberSummary[]
+    grants: AccessResourceGrantSummary[]
+}
+
 export interface CampaignAccessOverview {
     members: CampaignAccessMember[]
     assignable_roles: AssignableRole[]
     assignable_characters: AssignableCharacter[]
     assignable_relationship_types: AssignableCharacterRelationshipType[]
     grantable_resource_capabilities: GrantableResourceCapability[]
+    access_groups: AccessGroupSummary[]
 }

@@ -62,6 +62,7 @@ function baseOverview(
                 target_type: "character",
             },
         ],
+        access_groups: [],
     }
 }
 

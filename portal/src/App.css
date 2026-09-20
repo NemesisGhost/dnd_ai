@@ -1815,8 +1815,12 @@
   color: var(--color-text-muted);
 }
 
-.access-role-editor select {
+.access-role-editor select,
+.access-role-editor input,
+.access-role-editor textarea {
   min-height: 2rem;
+  min-width: 0;
+  flex: 1 1 auto;
   padding: 0.25rem 0.4rem;
   color: var(--color-text);
   font: inherit;
@@ -1826,7 +1830,19 @@
   border-radius: 0.25rem;
 }
 
-.access-role-editor select:focus-visible {
+/* Access-group create/edit forms (Phase 13E-B checkpoint 6) are the first
+   .access-role-editor forms with a free-text name/description, not just a
+   select — sized to read as a short paragraph rather than a single input
+   row. */
+.access-role-editor textarea {
+  flex-basis: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+}
+
+.access-role-editor select:focus-visible,
+.access-role-editor input:focus-visible,
+.access-role-editor textarea:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
@@ -1963,4 +1979,14 @@
 .access-add-member__field button:disabled {
   cursor: not-allowed;
   opacity: 0.75;
+}
+
+/* Access groups (Phase 13E-B checkpoint 6): a distinct section below the
+   member list, reusing .access-page__member-list/.access-member-card's
+   own panel/card language rather than a new visual system, and never
+   nested inside a member card — a group is a campaign-level concept. */
+.access-page__groups {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
 }
