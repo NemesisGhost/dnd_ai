@@ -179,6 +179,20 @@ def test_change_summary_role_change_falls_back_to_raw_code_when_join_fails() -> 
     assert summary == "player → Removed role"
 
 
+def test_change_summary_role_change_with_no_recorded_previous_code_is_unknown_not_removed() -> None:
+    # A legacy row that recorded neither a predecessor assignment nor a code:
+    # the old role is unknown, which is not the same claim as "removed".
+    summary = _change_summary(
+        {
+            "previous_status": None,
+            "previous_role_display_name": None,
+            "role_display_name": "Observer",
+        },
+        command_name="change_membership_role",
+    )
+    assert summary == "Unknown role → Observer"
+
+
 def test_change_summary_grant_commands_include_capability_and_grantee() -> None:
     summary = _change_summary(
         {

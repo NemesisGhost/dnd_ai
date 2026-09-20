@@ -43,11 +43,16 @@ relationship, resource grant, invitation, and campaign creation. A wider
 this schema) and is explicitly out of scope here; see this module's and
 `docs/AUDIT_HISTORY_API.md`'s own "Known limitations" sections.
 
-**Safe presentation only.** This module never selects `audit.change_log
+**Safe presentation only.** This module never *returns* `audit.change_log
 .changed_fields` (arbitrary JSONB), `reason`, `correlation_id`,
 `causation_id`, `ai_proposal_id`, or any Foundry-credential column — only
 the fixed, reviewed column set a `dnd_ai.api.audit_history` response
-allowlists. `change_summary`/action/category labels are generated
+allowlists. The one exception to "never reads" is internal to the SQL: the
+`change_membership_role` rows of the role branch extract exactly one key, `changed_fields.previous_membership_role_id`, and only after
+validating it is a canonical UUID string, to identify a role change's actual
+predecessor assignment (`previous_status` is a code that a system role and a
+campaign role may share, so it cannot identify one). That identifier is used
+solely as a join key and is not part of any selected output column. `change_summary`/action/category labels are generated
 server-side from the closed `command_name` vocabulary below, never echoed
 from caller-supplied or free-text data.
 
@@ -186,6 +191,7 @@ KEYSET = "campaign_audit_history"
 _PLACEHOLDER_ACCOUNT_LABEL = "Removed account"
 _PLACEHOLDER_CHARACTER_LABEL = "Removed character"
 _PLACEHOLDER_ROLE_LABEL = "Removed role"
+_UNKNOWN_PREVIOUS_ROLE_LABEL = "Unknown role"
 _PLACEHOLDER_RELATIONSHIP_TYPE_LABEL = "Removed relationship type"
 _PLACEHOLDER_CAPABILITY_LABEL = "Removed capability"
 _PLACEHOLDER_GROUP_LABEL = "Removed access group"
@@ -237,7 +243,9 @@ _QUERY = """
             NULL::uuid AS relationship_type_id,
             NULL::uuid AS grant_capability_id,
             NULL::uuid AS grantee_membership_id,
-            NULL::uuid AS grantee_access_group_id
+            NULL::uuid AS grantee_access_group_id,
+            NULL::uuid AS role_membership_id,
+            NULL::uuid AS previous_membership_role_id
         FROM audit.change_log cl
         JOIN security.campaign_memberships cm ON cm.campaign_membership_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:membership_commands AS text[]))
@@ -248,7 +256,15 @@ _QUERY = """
             cl.change_log_id, cl.command_name, cl.recorded_at,
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             cm.campaign_id, cm.user_id, NULL::uuid,
-            mr.role_id, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid
+            mr.role_id, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid,
+            mr.campaign_membership_id,
+            CASE
+                WHEN cl.command_name = 'change_membership_role'
+                 AND jsonb_typeof(cl.changed_fields -> 'previous_membership_role_id') = 'string'
+                 AND (cl.changed_fields ->> 'previous_membership_role_id')
+                     ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN CAST(cl.changed_fields ->> 'previous_membership_role_id' AS uuid)
+            END
         FROM audit.change_log cl
         JOIN security.membership_roles mr ON mr.membership_role_id = cl.record_id
         JOIN security.campaign_memberships cm ON cm.campaign_membership_id = mr.campaign_membership_id
@@ -260,7 +276,8 @@ _QUERY = """
             cl.change_log_id, cl.command_name, cl.recorded_at,
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             cm.campaign_id, NULL::uuid, mcr.character_id,
-            NULL::uuid, mcr.character_relationship_type_id, NULL::uuid, NULL::uuid, NULL::uuid
+            NULL::uuid, mcr.character_relationship_type_id, NULL::uuid, NULL::uuid, NULL::uuid,
+            NULL::uuid, NULL::uuid
         FROM audit.change_log cl
         JOIN security.membership_character_relationships mcr
             ON mcr.membership_character_relationship_id = cl.record_id
@@ -274,7 +291,8 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             rg.campaign_id, NULL::uuid, NULL::uuid,
             NULL::uuid, NULL::uuid, rg.capability_id,
-            rg.grantee_campaign_membership_id, rg.grantee_access_group_id
+            rg.grantee_campaign_membership_id, rg.grantee_access_group_id,
+            NULL::uuid, NULL::uuid
         FROM audit.change_log cl
         JOIN security.resource_grants rg ON rg.resource_grant_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:grant_commands AS text[]))
@@ -285,7 +303,8 @@ _QUERY = """
             cl.change_log_id, cl.command_name, cl.recorded_at,
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             ci.campaign_id, NULL::uuid, NULL::uuid,
-            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid,
+            NULL::uuid, NULL::uuid
         FROM audit.change_log cl
         JOIN security.campaign_invitations ci ON ci.campaign_invitation_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:invitation_commands AS text[]))
@@ -296,13 +315,14 @@ _QUERY = """
             cl.change_log_id, cl.command_name, cl.recorded_at,
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             c.campaign_id, NULL::uuid, NULL::uuid,
-            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid,
+            NULL::uuid, NULL::uuid
         FROM audit.change_log cl
         JOIN campaign.campaigns c ON c.campaign_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:campaign_commands AS text[]))
     )
     SELECT
-        s.change_log_id, s.command_name, s.recorded_at,
+        s.change_log_id, s.command_name, s.recorded_at, s.previous_status,
         s.actor_user_id, actor.display_name AS actor_display_name, s.actor_service,
         s.target_user_id, target_user.display_name AS target_user_display_name,
         s.target_character_id, target_entity.canonical_name AS target_character_name,
@@ -318,10 +338,25 @@ _QUERY = """
     LEFT JOIN security.users target_user ON target_user.user_id = s.target_user_id
     LEFT JOIN core.entities target_entity ON target_entity.entity_id = s.target_character_id
     LEFT JOIN security.roles role ON role.role_id = s.role_id
+    -- The previous role is resolved by identity, never by code: a system
+    -- role and a role of this campaign may share a `code`, so
+    -- `previous_status` alone can match two rows. `previous_membership_role_id`
+    -- (recorded by `change_membership_role`, validated as a UUID in the
+    -- `scoped` CTE) names the exact revoked assignment; it must belong to
+    -- the same membership as the audited row (hence the same campaign), and
+    -- its role must be a system template or this campaign's own role whose
+    -- `code` still equals the recorded `previous_status`. Every key here is
+    -- a primary key, so this can never multiply rows. Anything that fails
+    -- validation (legacy row without the key, malformed value, foreign or
+    -- unrelated assignment, code disagreement) leaves `prev_role` NULL and
+    -- `_change_summary` shows the recorded code as-is rather than guessing.
+    LEFT JOIN security.membership_roles prev_mr
+        ON prev_mr.membership_role_id = s.previous_membership_role_id
+       AND prev_mr.campaign_membership_id = s.role_membership_id
     LEFT JOIN security.roles prev_role
-        ON s.role_id IS NOT NULL
+        ON prev_role.role_id = prev_mr.role_id
        AND prev_role.code = s.previous_status
-       AND (prev_role.campaign_id = s.resolved_campaign_id OR prev_role.campaign_id IS NULL)
+       AND (prev_role.campaign_id IS NULL OR prev_role.campaign_id = s.resolved_campaign_id)
     LEFT JOIN security.character_relationship_types rel_type
         ON rel_type.character_relationship_type_id = s.relationship_type_id
     LEFT JOIN security.character_relationship_types prev_rel_type
@@ -355,7 +390,16 @@ _QUERY = """
 def _change_summary(row: dict[str, object], *, command_name: str) -> str | None:
     previous_status = row.get("previous_status")
     if command_name == "change_membership_role":
-        old = row.get("previous_role_display_name") or previous_status or _PLACEHOLDER_ROLE_LABEL
+        # `previous_role_display_name` is only ever set when the query proved
+        # the exact predecessor assignment (see `_QUERY`'s `prev_role` join).
+        # Otherwise (a legacy row with no recorded predecessor id, or one
+        # that fails validation) the ledger's own recorded code is shown
+        # verbatim — never a display name picked from a code that more than
+        # one role (system vs. campaign) may share — and a row that recorded
+        # no code at all is labelled unknown, not "removed".
+        old = (
+            row.get("previous_role_display_name") or previous_status or _UNKNOWN_PREVIOUS_ROLE_LABEL
+        )
         new = row.get("role_display_name") or _PLACEHOLDER_ROLE_LABEL
         return f"{old} → {new}"
     if command_name in ("assign_membership_role", "revoke_membership_role"):

@@ -101,7 +101,7 @@ carries only:
 | `actor_type` | `"user"` \| `"service"` \| `"unknown"` | |
 | `target_label` | `security.users.display_name` (account target), `core.entities.canonical_name` (character target), or an access group's `name` — current values, resolved per category (§2's source table) | `null` when the category has no single discrete target (`invitation`, `campaign`). |
 | `target_type` | `"account"` \| `"character"` \| `"access_group"` \| `null` | |
-| `change_summary` | Server-generated from role/relationship-type/capability display names (and, for a `change_*` action, `audit.change_log.previous_status`/`.new_status` — the old/new **codes**, resolved to display names where possible) | Never `changed_fields` (JSONB) verbatim. |
+| `change_summary` | Server-generated from role/relationship-type/capability display names (and, for a `change_*` action, `audit.change_log.previous_status` — the old **code** — resolved to a display name where the old value can be identified exactly; see §3a) | Never `changed_fields` (JSONB) verbatim. |
 | `outcome` | Reserved, always `null` today | No category in scope has a fail/deny outcome yet. |
 
 **Never returned**, even internally selected by the query: `audit.
@@ -110,8 +110,51 @@ change_log.changed_fields` (arbitrary JSONB), `.reason`, `.correlation_id`,
 foundry_connection_id`, `.acting_foundry_device_id`, `.acting_external_
 system_id`, `.source_id`, `.event_id`, `.entity_id`, `.world_id`, or any
 password/session/token/credential column from any joined table. None of
-these columns appear anywhere in `dnd_ai.queries.audit_history`'s `SELECT`
-list at all — not merely dropped at the response boundary.
+these columns appear anywhere in `dnd_ai.queries.audit_history`'s outer
+`SELECT` list — not merely dropped at the response boundary. The one
+narrow exception is internal to the query, never selected as an output
+column: see §3a.
+
+### 3a. Previous-role resolution for `change_membership_role`
+
+`audit.change_log.previous_status` records only the old role's **code**, and
+a code is not an identity: `security.roles` allows a system role
+(`campaign_id IS NULL`) and a role of the audited campaign to share one
+(`uq_roles_campaign_code` scopes uniqueness per campaign; `ux_roles_system_code`
+only forbids two *system* roles sharing a code), and role assignment accepts
+both scopes. Joining `security.roles` by code therefore matched both, turning
+one audit row into two response items with the same `change_log_id` and
+conflicting old-role labels.
+
+`POST .../memberships/roles/{id}/change` already records the exact revoked
+assignment as `changed_fields.previous_membership_role_id`. The query's
+role branch extracts **only that one key**, and only when it is a JSON string
+in canonical UUID form (a malformed value can never raise a cast error and
+fail the whole page). The identifier is a join key and is never returned. The
+old role is then resolved by identity —
+`membership_roles` (that assignment) → `roles` — and accepted only if all of:
+
+1. the assignment belongs to the **same membership** as the audited row
+   (which also pins it to the audited campaign);
+2. its role is a system template or a role of the audited campaign; and
+3. that role's `code` still equals the recorded `previous_status`.
+
+Every join key is a primary key, so this cannot multiply rows: one audit row
+is always one item, and `LIMIT`/cursor pagination count events, not matches.
+
+**When the predecessor cannot be established** — a legacy row written before
+the identifier was recorded, a missing/`null`/non-string/malformed/unknown
+identifier, an assignment of a different membership or campaign, or a code
+that disagrees — the summary shows the **recorded code verbatim**
+(`player → Observer`), or `Unknown role` when not even a code was recorded.
+It deliberately does not pick a display name from the code (system-role or
+campaign-role precedence, `DISTINCT`, `LIMIT 1`): either role could have been
+the real predecessor, so no display name is asserted. The new role is
+unaffected — it is resolved from the audited assignment's own `role_id`.
+`change_character_relationship` has no such ambiguity
+(`security.character_relationship_types.code` is globally unique).
+
+Regression coverage: `tests/database/test_api_audit_history_role_lookup.py`.
 
 ## 4. Endpoint contract
 
