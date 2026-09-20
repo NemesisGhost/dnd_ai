@@ -45,67 +45,131 @@ migration):
     This revision now applies an explicit, deliberate legacy-data policy
     instead, in this order:
 
-    1. **Empty-string descriptions are backfilled to `NULL`.** This is not
-       a new, invented normalization — it is the exact rule `dnd_ai.
-       commands.access_groups.create_access_group()`/`update_access_group()`
-       have already applied to every description passing through the
-       application since checkpoint 6 first shipped ("a blank result
-       [is] stored as NULL rather than an empty string"). Retroactively
+    1. **The constraint is added `NOT VALID` *first*, before anything
+       else.** `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...) NOT VALID`
+       takes a brief `ACCESS EXCLUSIVE` lock for the metadata change only
+       (no scan) — but that lock still has to wait for every transaction
+       already holding a weaker lock on `security.access_groups` (an
+       in-flight `INSERT`/`UPDATE` from a still-running old application
+       instance during a rolling deployment, say) to commit or roll back
+       first, and once granted it blocks any *new* writer from starting
+       until this migration's own transaction ends. This ordering is
+       itself the concurrency fix — see "Concurrency guarantee" below for
+       why running this step first, rather than after the preflight below,
+       is what closes the race this revision corrects.
+    2. **The read-only over-length preflight runs second, in the same
+       transaction, immediately after step 1's lock is granted.** It never
+       silently truncates: no authoritative document in this repository
+       (`docs/DATABASE_CONVENTIONS.md`, `docs/ENTITY_LIFECYCLE.md`,
+       `docs/PHASE13E_ACCESS_CONTRACT.md`) approves truncation as a data
+       policy anywhere, and destroying real, user-authored text with no
+       way to recover it is not a decision this migration is entitled to
+       make silently. Instead it runs a read-only precondition check
+       (mirroring `103_login_failure_audit_action`'s own
+       conditional-downgrade precedent: a Python-side `SELECT` via
+       `op.get_bind()`, not a raw-SQL `RAISE EXCEPTION`) for any `security.
+       access_groups` row whose `description` exceeds 2000 characters. If
+       any exist, it raises `RuntimeError` naming the exact
+       `access_group_id`s affected (a stable, non-sensitive identifier —
+       never the description text itself, arbitrary free-form content
+       that may be sensitive) and instructing the operator to shorten or
+       clear each one, then re-run the migration. Because this raise
+       happens inside the same transaction that added the `NOT VALID`
+       constraint in step 1, PostgreSQL rolls the whole transaction back
+       on the way out — the constraint is undone along with everything
+       else, and nothing in the database is left changed, so a failed
+       attempt is always safe to retry after the data is fixed.
+    3. **Empty-string descriptions are backfilled to `NULL` third, only
+       once the preflight has passed.** This is not a new, invented
+       normalization — it is the exact rule `dnd_ai.commands.
+       access_groups.create_access_group()`/`update_access_group()` have
+       already applied to every description passing through the
+       application since checkpoint 6 first shipped ("a blank result [is]
+       stored as NULL rather than an empty string"). Retroactively
        applying that same, already-documented, already-accepted rule to
        pre-existing rows destroys no textual content — an empty string
        carries none — and makes every row consistent with the invariant
        the application already guarantees going forward. This is the one
-       and only data-mutating step this revision performs.
-    2. **An over-2000-character description blocks the upgrade outright,
-       deliberately and actionably, before any schema change.** Silently
-       truncating a legacy description to fit would destroy real,
-       user-authored text with no way to recover it, and no authoritative
-       document in this repository (`docs/DATABASE_CONVENTIONS.md`,
-       `docs/ENTITY_LIFECYCLE.md`, `docs/PHASE13E_ACCESS_CONTRACT.md`)
-       approves silent truncation as a data policy anywhere — so this
-       migration never does it. Instead, `upgrade()` runs a read-only
-       precondition check (mirroring `103_login_failure_audit_action`'s
-       own conditional-downgrade precedent: a Python-side `SELECT` via
-       `op.get_bind()`, not a raw-SQL `RAISE EXCEPTION`) for any `security.
-       access_groups` row whose `description` exceeds 2000 characters
-       *before* the empty-string backfill or the `ADD CONSTRAINT` ever
-       run. If any exist, it raises `RuntimeError` naming the exact
-       `access_group_id`s affected (a stable, non-sensitive identifier —
-       never the description text itself, arbitrary free-form content
-       that may be sensitive) and instructing the operator to shorten or
-       clear each one, then re-run the migration. Nothing in the database
-       changes when this happens — not even the harmless empty-string
-       backfill — so a failed attempt is always safe to retry after the
-       data is fixed.
-    3. **The constraint is added `NOT VALID`, then validated separately**
-       (`VALIDATE CONSTRAINT`), not as one direct, validating `ADD
-       CONSTRAINT ... CHECK (...)`. `ADD CONSTRAINT` (even `NOT VALID`)
-       takes a brief `ACCESS EXCLUSIVE` lock only for the metadata change;
-       `VALIDATE CONSTRAINT`'s own scan takes only `SHARE UPDATE
-       EXCLUSIVE`, which blocks other DDL but not ordinary reads or
-       writes against `security.access_groups` — unlike a plain `ADD
-       CONSTRAINT ... CHECK (...)`, which holds `ACCESS EXCLUSIVE` (blocking
-       every read and write) for the entire scan. Revision 105's own
-       "Locking considerations" note ("not a concern at this data volume")
-       reflected this checkpoint having no production deployment yet; this
-       correction no longer assumes that, since the very defect it fixes
-       is that assumption failing to hold. The `VALIDATE CONSTRAINT` scan
-       is guaranteed to find nothing by the time it runs — step 2's
-       precondition check already proved no violating row exists, in the
-       same transaction — so this sequence is chosen for lock behavior,
+       and only data-mutating step this revision performs, and it must
+       run before step 4 (`VALIDATE CONSTRAINT` would otherwise fail on
+       any legacy `''`, which the `CHECK` treats as invalid — only `NULL`
+       or 1-2000 characters pass).
+    4. **`VALIDATE CONSTRAINT` runs fourth**, separately from `ADD
+       CONSTRAINT` (never combined into one direct, validating `ADD
+       CONSTRAINT ... CHECK (...)`). Its own scan takes only `SHARE UPDATE
+       EXCLUSIVE`, which blocks other DDL but not ordinary reads or writes
+       — unlike a plain `ADD CONSTRAINT ... CHECK (...)`, which holds
+       `ACCESS EXCLUSIVE` (blocking every read and write) for the entire
+       scan. Revision 105's own "Locking considerations" note ("not a
+       concern at this data volume") reflected this checkpoint having no
+       production deployment yet; this correction no longer assumes that.
+       The scan is guaranteed to find nothing by the time it runs — steps
+       2 and 3 already proved and enforced that no violating row remains,
+       in the same transaction — so this step is chosen for lock behavior,
        not because validation might still fail here.
+    5. **The column `COMMENT` is applied last**, once the constraint is
+       fully installed and validated.
+
+    Concurrency guarantee (why step 1 must come before step 2, not after):
+    An earlier version of this revision ran the preflight *before* `ADD
+    CONSTRAINT`. That left a real window during a rolling deployment: an
+    old application instance, or a direct writer, could commit an empty or
+    over-2000-character `description` *after* the preflight's `SELECT` had
+    already run clean but *before* `ADD CONSTRAINT` took its lock — nothing
+    in that ordering forced such a writer to wait. The later `VALIDATE
+    CONSTRAINT` scan would then find that row and fail with a generic
+    `CheckViolation`, bypassing this migration's own actionable,
+    non-destructive error entirely — the identical class of surprise this
+    whole revision exists to prevent, just moved one step later. Installing
+    `ADD CONSTRAINT ... NOT VALID` *first* closes that window, by ordinary
+    PostgreSQL lock semantics with no extra code required:
+    - Any writer already in flight when `ADD CONSTRAINT` runs holds a
+      lock (e.g. `ROW EXCLUSIVE` from its own `INSERT`/`UPDATE`) that
+      conflicts with the `ACCESS EXCLUSIVE` `ADD CONSTRAINT` needs. `ADD
+      CONSTRAINT` waits for that writer to commit or roll back before it
+      can proceed — so by the time it (and therefore the preflight
+      `SELECT` immediately after it, in the same transaction and the same
+      `READ COMMITTED` snapshot rules) actually runs, that writer's
+      outcome — including any row it committed — is already visible.
+    - Any writer that attempts to start *after* `ADD CONSTRAINT` has
+      already taken its lock is itself blocked, queued behind this
+      migration's own transaction, until that transaction commits or rolls
+      back. If it goes on to commit successfully (this migration's
+      transaction reaches step 4 and 5 and commits), that writer's own
+      `INSERT`/`UPDATE` is then evaluated against the now-fully-installed
+      `CHECK` the moment it is finally allowed to run — a `NOT VALID`
+      constraint still fully enforces itself against every new write from
+      the instant `ADD CONSTRAINT` adds it; only *pre-existing* rows are
+      exempt from validation until `VALIDATE CONSTRAINT` runs. An invalid
+      write queued behind this migration is therefore rejected with an
+      ordinary constraint violation the instant it unblocks, never
+      silently admitted.
+    No invalid `description` can therefore ever reach `VALIDATE
+    CONSTRAINT` undetected: every one either commits early enough to be
+    caught by the preflight (and blocks the whole migration, deliberately
+    and actionably), or attempts to commit late enough to be rejected by
+    the constraint itself (and fails on its own, independently of this
+    migration). `tests/database/
+    test_access_group_description_length_migration.py`'s two-connection
+    concurrency tests exercise both halves of this guarantee directly
+    against real PostgreSQL locks (via `SET LOCAL lock_timeout`, the same
+    deterministic-blocking idiom already established in
+    `tests/database/test_membership_role_concurrency.py`), not just the
+    single-connection sequential path the rest of that file covers.
 
 Forward migration:
-    - Precondition check: any `security.access_groups.description` longer
-      than 2000 characters aborts `upgrade()` with `RuntimeError` before
-      any statement below runs.
-    - `UPDATE security.access_groups SET description = NULL WHERE
-      description = ''` (see policy step 1 above).
     - `ALTER TABLE security.access_groups ADD CONSTRAINT
       ck_access_groups_description_length CHECK (description IS NULL OR
-      char_length(description) BETWEEN 1 AND 2000) NOT VALID`, then
-      `VALIDATE CONSTRAINT ck_access_groups_description_length` (see
-      policy step 3 above).
+      char_length(description) BETWEEN 1 AND 2000) NOT VALID` (see policy
+      step 1 above — this now runs *first*).
+    - Precondition check: any `security.access_groups.description` longer
+      than 2000 characters aborts `upgrade()` with `RuntimeError`,
+      rolling back the `ADD CONSTRAINT` above along with everything else
+      (see policy step 2 and "Concurrency guarantee" above).
+    - `UPDATE security.access_groups SET description = NULL WHERE
+      description = ''` (see policy step 3 above).
+    - `VALIDATE CONSTRAINT ck_access_groups_description_length` (see
+      policy step 4 above).
     - Updates the column's own `COMMENT` to document the new bound,
       matching the Core metadata `Column` comment in
       `src/dnd_ai/persistence/tables/security.py` word for word — `alembic
@@ -125,7 +189,7 @@ Rollback:
 
 Data implications:
     Normalizes any existing empty-string `description` to `NULL` (policy
-    step 1) — see "Production-safety correction" above for why this is
+    step 3) — see "Production-safety correction" above for why this is
     safe and not a new policy. Blocks (via `RuntimeError`, not a schema
     change) if any row's `description` exceeds 2000 characters, requiring
     manual resolution before this migration can proceed on that database.
@@ -133,10 +197,17 @@ Data implications:
     access_groups` rows yet, is unaffected by either case in practice.
 
 Locking considerations:
-    See "Production-safety correction" step 3 above: `ADD CONSTRAINT ...
-    NOT VALID` is a brief `ACCESS EXCLUSIVE` metadata-only change; the
-    separate `VALIDATE CONSTRAINT` takes only `SHARE UPDATE EXCLUSIVE`,
-    permitting concurrent reads and writes against `security.
+    See "Production-safety correction" steps 1 and 4, and "Concurrency
+    guarantee", above: `ADD CONSTRAINT ... NOT VALID` is a brief `ACCESS
+    EXCLUSIVE` metadata-only change — but it waits for any writer already
+    in flight against `security.access_groups` to finish first, and holds
+    that lock for the rest of this migration's own transaction, blocking
+    any new writer until this migration commits or rolls back. This is a
+    real, deliberate difference from revision 105's own "not a concern at
+    this data volume" note: that reflected this checkpoint having no
+    production deployment yet, and this revision no longer assumes that.
+    The separate `VALIDATE CONSTRAINT` afterward takes only `SHARE UPDATE
+    EXCLUSIVE`, permitting concurrent reads and writes against `security.
     access_groups` for the scan's duration. The empty-string backfill
     `UPDATE` takes ordinary row locks only, exactly like any other
     application write to this table.
@@ -155,9 +226,14 @@ See: src/dnd_ai/commands/access_groups.py (ACCESS_GROUP_DESCRIPTION_MAX_LENGTH,
      actionable message before any destructive statement" precedent this
      revision's own precondition check follows)
      tests/database/test_access_group_description_length_migration.py
-     (single-step upgrade/downgrade/re-upgrade coverage for this exact
-     revision, including the blocked-upgrade/resolve/retry path and the
-     final constraint's rejection of a new invalid direct write)
+     (single-connection upgrade/downgrade/re-upgrade coverage for this
+     exact revision, including the blocked-upgrade/resolve/retry path,
+     the final constraint's rejection of a new invalid direct write, and
+     the two-connection real-lock concurrency tests proving the
+     "Concurrency guarantee" above)
+     tests/database/test_membership_role_concurrency.py (the `SET LOCAL
+     lock_timeout` deterministic-blocking idiom this revision's own
+     concurrency tests reuse)
 """
 
 import uuid
@@ -239,14 +315,31 @@ def _format_id_sample(ids: list[uuid.UUID]) -> str:
 
 def upgrade() -> None:
     """Apply the migration. See this module's own "Production-safety
-    correction" docstring section for the full legacy-data policy this
-    implements — in short: block deliberately and actionably on an
-    over-length description (never truncate it), backfill an empty-string
-    description to NULL (the application's own pre-existing, documented
-    normalization, applied retroactively), then add the constraint via
-    NOT VALID/VALIDATE CONSTRAINT rather than one direct, validating ADD
-    CONSTRAINT, for lock behavior on a database that may already carry
-    real rows."""
+    correction" docstring section — especially "Concurrency guarantee" —
+    for why the steps below run in exactly this order: ADD CONSTRAINT ...
+    NOT VALID *first*, so its ACCESS EXCLUSIVE lock forces any in-flight
+    writer to finish (and any new writer to wait) before the over-length
+    preflight ever runs, then the preflight (never truncating; blocking
+    deliberately and actionably instead), then the empty-string-to-NULL
+    backfill (the application's own pre-existing, documented
+    normalization, applied retroactively), then VALIDATE CONSTRAINT, then
+    the column comment. Running the preflight before ADD CONSTRAINT — this
+    revision's own first cut — left a window where a concurrent writer
+    could commit an invalid description after the preflight passed but
+    before the lock was taken, surfacing only a generic CheckViolation
+    from VALIDATE CONSTRAINT instead of this migration's actionable error;
+    this order closes that window using ordinary PostgreSQL lock
+    semantics, no extra code required. If the preflight raises, this
+    migration's own transaction rolls back — undoing the NOT VALID
+    constraint along with everything else — so a failed attempt always
+    leaves the database exactly as it found it."""
+    op.execute("""
+        ALTER TABLE security.access_groups
+        ADD CONSTRAINT ck_access_groups_description_length
+        CHECK (description IS NULL OR char_length(description) BETWEEN 1 AND 2000)
+        NOT VALID;
+    """)
+
     over_length_ids = _over_length_access_group_ids()
     if over_length_ids:
         raise RuntimeError(
@@ -259,12 +352,6 @@ def upgrade() -> None:
 
     op.execute("UPDATE security.access_groups SET description = NULL WHERE description = '';")
 
-    op.execute("""
-        ALTER TABLE security.access_groups
-        ADD CONSTRAINT ck_access_groups_description_length
-        CHECK (description IS NULL OR char_length(description) BETWEEN 1 AND 2000)
-        NOT VALID;
-    """)
     op.execute("""
         ALTER TABLE security.access_groups
         VALIDATE CONSTRAINT ck_access_groups_description_length;

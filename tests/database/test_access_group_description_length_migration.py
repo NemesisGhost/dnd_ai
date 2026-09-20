@@ -23,12 +23,28 @@ one); a valid legacy description is preserved byte-for-byte; the final
 constraint rejects a new invalid direct write; and the migration survives
 a downgrade/re-upgrade round trip.
 
+The concurrency section at the bottom of this file proves this revision's
+own "Concurrency guarantee" docstring section directly against real
+PostgreSQL locks, on two genuinely separate connections, using the
+deterministic `SET LOCAL lock_timeout` blocking idiom already established
+in `tests/database/test_membership_role_concurrency.py`: an invalid
+legacy write racing the migration's `ADD CONSTRAINT ... NOT VALID` can
+never slip past both the preflight and the constraint itself — it either
+commits early enough to be caught by the preflight, or is forced to queue
+behind the migration's own lock and is rejected by the constraint the
+instant it is finally allowed to proceed.
+
 Each test provisions its own disposable, throwaway database — never the
 shared session-scoped `postgres_engine` every other test in this suite
 reuses, since running `alembic upgrade`/`downgrade` as a subprocess
 against a URL mutates that database's actual migration state — mirroring
 `tests/database/test_login_failure_audit_action_migration.py`'s identical
-per-revision pattern.
+per-revision pattern. The concurrency tests still provision their own
+throwaway database (rather than reusing the shared `postgres_engine`
+fixture), specifically because they need a schema state where
+`ck_access_groups_description_length` does not yet exist to install it
+themselves, mid-test, on two live connections — the shared fixture is
+already migrated to head, where the constraint is already present.
 """
 
 import os
@@ -414,6 +430,174 @@ def test_downgrade_then_reupgrade_round_trips_cleanly() -> None:
             with engine.connect() as conn:
                 assert _constraint_exists(conn, "ck_access_groups_description_length")
                 assert _access_group_description(conn, normalized_id) is None
+        finally:
+            engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: proves this revision's own "Concurrency guarantee" docstring
+# section (106_access_group_desc_length.py) against real PostgreSQL locks —
+# not through the alembic subprocess (which cannot be paused mid-transaction
+# to synchronize with a second connection), but through the identical SQL
+# statements upgrade() itself executes in the identical order, run directly
+# against two real, separate connections. `_CONSTRAINT_SQL` mirrors the
+# migration's own ADD CONSTRAINT statement exactly so a drift between the
+# two would fail these tests, not silently diverge.
+# ---------------------------------------------------------------------------
+
+_CONSTRAINT_NAME = "ck_access_groups_description_length"
+_CONSTRAINT_SQL = f"""
+    ALTER TABLE security.access_groups
+    ADD CONSTRAINT {_CONSTRAINT_NAME}
+    CHECK (description IS NULL OR char_length(description) BETWEEN 1 AND 2000)
+    NOT VALID;
+"""
+
+# Matches tests/database/test_membership_role_concurrency.py's identical
+# choice: long enough that a genuinely granted lock never times out on a
+# healthy local/CI database, short enough that a real block (the case these
+# tests exist to prove) fails fast rather than hanging.
+_LOCK_TIMEOUT = "2s"
+
+
+def test_a_write_committed_while_add_constraint_waits_is_caught_by_the_preflight() -> None:
+    """Half one of the "Concurrency guarantee": a writer already in flight
+    when `ADD CONSTRAINT ... NOT VALID` runs must finish first (proven here
+    via a genuine `lock_timeout` block, not a hopeful sleep), and once it
+    commits, its row must already be visible to the preflight `SELECT` that
+    runs immediately afterward in the same transaction — never silently
+    missed."""
+    admin_url, test_url = _provision_database("conc_preflight")
+    try:
+        _alembic_upgrade(test_url, _PREVIOUS_REVISION)
+
+        engine = create_engine(test_url, connect_args=_connect_args())
+        try:
+            with engine.begin() as setup:
+                campaign_id = _make_campaign_at_105(setup, f"conc-preflight-{uuid.uuid4().hex[:8]}")
+
+            with engine.connect() as writer, engine.connect() as migrator:
+                writer.begin()
+                # In flight, uncommitted — holds a ROW EXCLUSIVE lock on
+                # security.access_groups that ADD CONSTRAINT's ACCESS
+                # EXCLUSIVE conflicts with.
+                over_length_id = make_access_group(
+                    writer, campaign_id, name="Racer", description=_OVER_LENGTH_DESCRIPTION
+                )
+
+                migrator.begin()
+                migrator.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'"))
+                with pytest.raises(Exception) as exc:
+                    migrator.execute(text(_CONSTRAINT_SQL))
+                message = str(exc.value)
+                assert "lock_timeout" in message or "canceling statement" in message, (
+                    "expected ADD CONSTRAINT to block on the writer's own in-flight, "
+                    f"uncommitted insert, got: {message}"
+                )
+                migrator.rollback()
+
+                # The writer commits — its over-length row is now durable.
+                writer.commit()
+
+                # Unblocked now: ADD CONSTRAINT proceeds, and the preflight
+                # SELECT immediately after it (same transaction, same
+                # statement-level READ COMMITTED snapshot) must see the row
+                # the writer just committed.
+                migrator.begin()
+                migrator.execute(text(_CONSTRAINT_SQL))
+                found_ids = (
+                    migrator.execute(
+                        text("""
+                            SELECT access_group_id FROM security.access_groups
+                            WHERE description IS NOT NULL AND char_length(description) > 2000
+                        """)
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert over_length_id in found_ids, (
+                    "expected the writer's committed over-length row to be visible to the "
+                    "preflight SELECT run right after ADD CONSTRAINT acquired its lock"
+                )
+                # Mirrors upgrade()'s own behavior on a real violation: raise,
+                # then let the transaction roll back the NOT VALID constraint
+                # along with everything else.
+                migrator.rollback()
+
+            with engine.connect() as verify:
+                assert not _constraint_exists(verify, _CONSTRAINT_NAME)
+                assert _access_group_description(verify, over_length_id) == _OVER_LENGTH_DESCRIPTION
+        finally:
+            engine.dispose()
+    finally:
+        _drop_database(admin_url, test_url)
+
+
+def test_a_write_queued_behind_constraint_installation_is_rejected_once_unblocked() -> None:
+    """Half two of the "Concurrency guarantee": a writer that only attempts
+    an invalid insert *after* `ADD CONSTRAINT ... NOT VALID` has already
+    taken its lock must queue behind it (again proven via a genuine
+    `lock_timeout` block) — and once the migration's transaction commits
+    and the writer is finally allowed to proceed, its invalid insert must
+    be rejected by the now-installed constraint immediately, even though
+    `VALIDATE CONSTRAINT` never ran against it (a NOT VALID constraint
+    still fully enforces itself against every new write)."""
+    admin_url, test_url = _provision_database("conc_enforced")
+    try:
+        _alembic_upgrade(test_url, _PREVIOUS_REVISION)
+
+        engine = create_engine(test_url, connect_args=_connect_args())
+        try:
+            with engine.begin() as setup:
+                campaign_id = _make_campaign_at_105(setup, f"conc-enforced-{uuid.uuid4().hex[:8]}")
+
+            with engine.connect() as migrator, engine.connect() as writer:
+                migrator.begin()
+                # No pre-existing bad rows, so ADD CONSTRAINT succeeds
+                # immediately and holds ACCESS EXCLUSIVE, uncommitted.
+                migrator.execute(text(_CONSTRAINT_SQL))
+
+                writer.begin()
+                writer.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'"))
+                with pytest.raises(Exception) as exc:
+                    make_access_group(
+                        writer, campaign_id, name="Late Racer", description=_OVER_LENGTH_DESCRIPTION
+                    )
+                message = str(exc.value)
+                assert "lock_timeout" in message or "canceling statement" in message, (
+                    "expected the writer's insert to queue behind ADD CONSTRAINT's own "
+                    f"still-uncommitted ACCESS EXCLUSIVE lock, got: {message}"
+                )
+                writer.rollback()
+
+                # The migration finishes and commits — no violating legacy
+                # rows existed, so the preflight, backfill, and VALIDATE
+                # CONSTRAINT (irrelevant to this half — proven separately by
+                # test_upgrading_to_106_normalizes_empty_descriptions_and_
+                # preserves_valid_ones above) all succeed.
+                migrator.execute(
+                    text("""
+                    ALTER TABLE security.access_groups
+                    VALIDATE CONSTRAINT ck_access_groups_description_length;
+                """)
+                )
+                migrator.commit()
+
+            # Unblocked now — the previously-queued write is retried fresh,
+            # and must be rejected by the constraint immediately.
+            with pytest.raises(IntegrityError) as write_exc, engine.begin() as retry:
+                make_access_group(
+                    retry,
+                    campaign_id,
+                    name="Late Racer Retry",
+                    description=_OVER_LENGTH_DESCRIPTION,
+                )
+            assert _CONSTRAINT_NAME in str(write_exc.value)
+
+            with engine.connect() as verify:
+                assert _constraint_exists(verify, _CONSTRAINT_NAME)
         finally:
             engine.dispose()
     finally:
