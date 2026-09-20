@@ -35,6 +35,7 @@ from tests.factories import (
     make_membership_character_relationship,
     make_membership_role,
     make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -243,6 +244,17 @@ class Fixture:
             self.member_relationship_type_id,
         )
 
+        # --- checkpoint 5: end_campaign_membership must also revoke every
+        # unrevoked resource grant it holds, the identical silent-
+        # reactivation gap closed above for character relationships. ---
+        self.member_resource_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            view_summary_capability_id,
+            grantee_campaign_membership_id=self.member_membership_id,
+            character_id=self.member_relationship_character_id,
+        )
+
         # A membership belonging only to the *other* campaign — proves
         # removal never touches a sibling campaign's own memberships.
         self.sibling_user_id = make_user(connection, "Lifecycle Sibling")
@@ -266,6 +278,14 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     WHERE campaign_id IN (
                         SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
                     )
+                )
+            """),
+            {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("""
+                DELETE FROM security.resource_grants WHERE campaign_id IN (
+                    SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :t
                 )
             """),
             {"t": fixture.timeline_id},
@@ -958,6 +978,40 @@ def test_ending_a_membership_also_revokes_its_character_relationships(
     with postgres_engine.connect() as verify:
         access = resolve_access_context(verify, user_id=f.member_user_id, campaign_id=f.campaign_id)
     assert access is None  # the membership itself is ended — no access context at all.
+
+
+def test_ending_a_membership_also_revokes_its_resource_grants(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Checkpoint 5: `end_campaign_membership` must also revoke every
+    unrevoked resource grant a membership holds, the identical silent-
+    reactivation gap closed above for character relationships — see
+    `dnd_ai.commands.memberships.end_campaign_membership`'s own docstring
+    (`test_api_campaign_invitations.py`'s own test proves the combined
+    effect through a real reactivation)."""
+    with client_factory(f.manager_user_id) as client:
+        response = client.post(_end_url(f))
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        grant_row = verify.execute(
+            text("SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :g"),
+            {"g": f.member_resource_grant_id},
+        ).one()
+        assert grant_row.revoked_at is not None
+
+        audit_row = (
+            verify.execute(
+                text("""
+                SELECT changed_fields FROM audit.change_log
+                WHERE table_name = 'campaign_memberships' AND record_id = :m
+            """),
+                {"m": f.member_membership_id},
+            )
+            .mappings()
+            .one()
+        )
+        assert str(f.member_resource_grant_id) in str(audit_row["changed_fields"])
 
 
 def test_ending_a_membership_does_not_affect_a_sibling_campaign(

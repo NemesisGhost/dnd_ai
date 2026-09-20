@@ -19,22 +19,21 @@ import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
 // Exercises the REAL Access page -> AccessOverviewBoundary -> AccessPage ->
-// AddCharacterRelationship/CharacterRelationshipEditor/
-// RevokeCharacterRelationship -> useAdd/Change/RevokeCharacterRelationship
-// -> API client chain — nothing here is mocked except the network boundary
+// AddResourceGrant/RevokeResourceGrant -> useAdd/RevokeResourceGrant -> API
+// client chain — nothing here is mocked except the network boundary
 // (global fetch) and the session context. Mirrors
-// CampaignAccessPage.roleAddRevoke.integration.test.tsx's own shape and
-// reasoning for why the isolated AccessPage.test.tsx coverage alone cannot
-// prove the persistent-announcement-survives-refetch behavior.
+// CampaignAccessPage.characterRelationship.integration.test.tsx's own shape
+// and reasoning for why the isolated AccessPage.test.tsx coverage alone
+// cannot prove the persistent-announcement-survives-refetch behavior.
 
 const CAMPAIGN_ID = "campaign-a"
 const CHARACTER_ID = "character-kestrel"
-const RELATIONSHIP_TYPE_ID = "type-viewer"
-const RELATIONSHIP_ID = "relationship-1"
+const CAPABILITY_CODE = "character.view_full"
+const GRANT_ID = "grant-1"
 const MEMBERSHIP_ID = "membership-a"
 
 function baseOverview(
-    relationships: CampaignAccessOverview["members"][number]["character_relationships"],
+    grants: CampaignAccessOverview["members"][number]["grants"],
 ): CampaignAccessOverview {
     return {
         members: [
@@ -46,33 +45,37 @@ function baseOverview(
                 status_display_name: "Active",
                 joined_at: "2026-01-01T00:00:00Z",
                 roles: [],
-                character_relationships: relationships,
-                grants: [],
+                character_relationships: [],
+                grants,
             },
         ],
         assignable_roles: [],
         assignable_characters: [
             { character_id: CHARACTER_ID, display_name: "Kestrel Vane" },
         ],
-        assignable_relationship_types: [
+        assignable_relationship_types: [],
+        grantable_resource_capabilities: [
             {
-                character_relationship_type_id: RELATIONSHIP_TYPE_ID,
-                code: "viewer",
-                display_name: "Viewer",
+                capability_id: "capability-1",
+                code: CAPABILITY_CODE,
+                display_name: "View Character Full Detail",
+                target_type: "character",
             },
         ],
-        grantable_resource_capabilities: [],
     }
 }
 
 const emptyOverview = baseOverview([])
-const withRelationshipOverview = baseOverview([
+const withGrantOverview = baseOverview([
     {
-        membership_character_relationship_id: RELATIONSHIP_ID,
-        character_id: CHARACTER_ID,
-        character_display_name: "Kestrel Vane",
-        relationship_type_code: "viewer",
-        relationship_type_display_name: "Viewer",
+        resource_grant_id: GRANT_ID,
+        capability_code: CAPABILITY_CODE,
+        capability_display_name: "View Character Full Detail",
+        effect: "allow",
+        target_type: "character",
+        target_id: CHARACTER_ID,
+        target_display_name: "Kestrel Vane",
+        reason: null,
         granted_at: "2026-01-02T00:00:00Z",
         expires_at: null,
     },
@@ -116,7 +119,7 @@ function renderAtCampaign(
 // region once a row's own mutation control is showing an error (each
 // editor/confirm control has its own status paragraph too) — scoped
 // lookup by class, mirroring
-// CampaignAccessPage.roleAddRevoke.integration.test.tsx's identical
+// CampaignAccessPage.characterRelationship.integration.test.tsx's identical
 // helper, rather than screen.getByRole("status"), which would then match
 // more than one element.
 function persistentAnnouncement(container: HTMLElement): HTMLElement | null {
@@ -129,8 +132,8 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-describe("CampaignAccessPage add-character-relationship success announcement", () => {
-    it("keeps 'Character relationship added.' observable through the overview's own loading transition", async () => {
+describe("CampaignAccessPage add-resource-grant success announcement", () => {
+    it("keeps 'Resource access added.' observable through the overview's own loading transition", async () => {
         let overviewCallCount = 0
         let resolveSecondOverview: ((response: Response) => void) | null =
             null
@@ -157,18 +160,11 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
 
                 if (
                     method === "POST" &&
-                    url.includes("/character-relationships") &&
-                    !url.includes("/revoke") &&
-                    !url.includes("/change")
+                    url.includes("/resource-grants") &&
+                    !url.includes("/revoke")
                 ) {
                     return Promise.resolve(
-                        jsonResponse(
-                            {
-                                membership_character_relationship_id:
-                                    RELATIONSHIP_ID,
-                            },
-                            201,
-                        ),
+                        jsonResponse({ resource_grant_id: GRANT_ID }, 201),
                     )
                 }
 
@@ -186,7 +182,7 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
 
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Add character relationship",
+                name: "Add direct resource access",
             }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
@@ -201,11 +197,11 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
         ).not.toBeInTheDocument()
 
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship added.",
+            "Resource access added.",
         )
 
         await act(async () => {
-            resolveSecondOverview?.(jsonResponse(withRelationshipOverview))
+            resolveSecondOverview?.(jsonResponse(withGrantOverview))
         })
 
         await waitFor(() => {
@@ -213,17 +209,18 @@ describe("CampaignAccessPage add-character-relationship success announcement", (
                 screen.getByRole("heading", { name: "Access" }),
             ).toBeInTheDocument()
         })
-        expect(
-            screen.getByText("Kestrel Vane — Viewer"),
-        ).toBeInTheDocument()
+        expect(container.textContent).toContain(
+            "View Character Full Detail",
+        )
+        expect(container.textContent).toContain("Kestrel Vane")
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship added.",
+            "Resource access added.",
         )
     })
 })
 
-describe("CampaignAccessPage revoke-character-relationship success announcement", () => {
-    it("keeps 'Character relationship revoked.' observable through the overview's own loading transition", async () => {
+describe("CampaignAccessPage revoke-resource-grant success announcement", () => {
+    it("keeps 'Resource access revoked.' observable through the overview's own loading transition", async () => {
         let overviewCallCount = 0
         let resolveSecondOverview: ((response: Response) => void) | null =
             null
@@ -245,17 +242,12 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
                     if (overviewCallCount === 2) {
                         return secondOverviewPromise
                     }
-                    return Promise.resolve(
-                        jsonResponse(withRelationshipOverview),
-                    )
+                    return Promise.resolve(jsonResponse(withGrantOverview))
                 }
 
                 if (method === "POST" && url.includes("/revoke")) {
                     return Promise.resolve(
-                        jsonResponse({
-                            membership_character_relationship_id:
-                                RELATIONSHIP_ID,
-                        }),
+                        jsonResponse({ resource_grant_id: GRANT_ID }),
                     )
                 }
 
@@ -272,7 +264,7 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
         ).toBeInTheDocument()
 
         fireEvent.click(
-            screen.getByRole("button", { name: "Revoke relationship" }),
+            screen.getByRole("button", { name: "Revoke access" }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
 
@@ -283,7 +275,7 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
         })
 
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship revoked.",
+            "Resource access revoked.",
         )
 
         await act(async () => {
@@ -296,15 +288,15 @@ describe("CampaignAccessPage revoke-character-relationship success announcement"
             ).toBeInTheDocument()
         })
         expect(
-            screen.getByText("No character relationships."),
+            screen.getByText("No direct resource access."),
         ).toBeInTheDocument()
         expect(persistentAnnouncement(container)).toHaveTextContent(
-            "Character relationship revoked.",
+            "Resource access revoked.",
         )
     })
 })
 
-describe("CampaignAccessPage character-relationship cross-operation announcement lifecycle", () => {
+describe("CampaignAccessPage resource-grant cross-operation announcement lifecycle", () => {
     it("clears a stale success announcement the moment a different mutation starts, and keeps it cleared through that mutation's failure", async () => {
         let overviewCallCount = 0
 
@@ -323,25 +315,18 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
                         jsonResponse(
                             overviewCallCount === 1
                                 ? emptyOverview
-                                : withRelationshipOverview,
+                                : withGrantOverview,
                         ),
                     )
                 }
 
                 if (
                     method === "POST" &&
-                    url.includes("/character-relationships") &&
-                    !url.includes("/revoke") &&
-                    !url.includes("/change")
+                    url.includes("/resource-grants") &&
+                    !url.includes("/revoke")
                 ) {
                     return Promise.resolve(
-                        jsonResponse(
-                            {
-                                membership_character_relationship_id:
-                                    RELATIONSHIP_ID,
-                            },
-                            201,
-                        ),
+                        jsonResponse({ resource_grant_id: GRANT_ID }, 201),
                     )
                 }
 
@@ -364,28 +349,26 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
         // First mutation: add, succeeds.
         fireEvent.click(
             screen.getByRole("button", {
-                name: "Add character relationship",
+                name: "Add direct resource access",
             }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Add" }))
 
         await waitFor(() => {
             expect(persistentAnnouncement(container)).toHaveTextContent(
-                "Character relationship added.",
+                "Resource access added.",
             )
         })
 
         await waitFor(() => {
-            expect(
-                screen.getByText("Kestrel Vane — Viewer"),
-            ).toBeInTheDocument()
+            expect(container.textContent).toContain("Kestrel Vane")
         })
 
         // Second mutation: revoke, starts (clearing the stale success) and
         // then fails (403) — the stale "added" announcement must never
         // resurface.
         fireEvent.click(
-            screen.getByRole("button", { name: "Revoke relationship" }),
+            screen.getByRole("button", { name: "Revoke access" }),
         )
         fireEvent.click(screen.getByRole("button", { name: "Confirm" }))
 
@@ -398,7 +381,7 @@ describe("CampaignAccessPage character-relationship cross-operation announcement
         })
         expect(persistentAnnouncement(container)).toHaveTextContent("")
         expect(
-            screen.queryByText("Character relationship added."),
+            screen.queryByText("Resource access added."),
         ).not.toBeInTheDocument()
     })
 })

@@ -942,17 +942,20 @@ class EndCampaignMembershipResult:
     no-op case (already ended). `dnd_ai.api.memberships.
     end_campaign_membership_endpoint` uses this to write exactly one
     `audit.change_log` row per *actual* removal, never one per HTTP call.
-    `revoked_membership_role_ids`/`revoked_membership_character_relationship_ids`
-    are both empty for the no-op case (nothing was touched) and otherwise
-    list every role/character-relationship row this call revoked, for that
-    same audit record's `changed_fields` (checkpoint-4 correction added the
-    relationship half — see `end_campaign_membership()`'s own docstring for
-    the silent-reactivation gap this closes)."""
+    `revoked_membership_role_ids`/`revoked_membership_character_relationship_ids`/
+    `revoked_resource_grant_ids` are all empty for the no-op case (nothing
+    was touched) and otherwise list every role/character-relationship/
+    resource-grant row this call revoked, for that same audit record's
+    `changed_fields` (checkpoint-4 correction added the relationship half;
+    checkpoint 5 added the resource-grant half — see `end_campaign_
+    membership()`'s own docstring for the silent-reactivation gap both
+    close)."""
 
     campaign_membership_id: uuid.UUID
     ended: bool
     revoked_membership_role_ids: tuple[uuid.UUID, ...]
     revoked_membership_character_relationship_ids: tuple[uuid.UUID, ...]
+    revoked_resource_grant_ids: tuple[uuid.UUID, ...]
 
 
 def end_campaign_membership(
@@ -1004,6 +1007,14 @@ def end_campaign_membership(
     already started with zero roles — any perspective it should regain
     requires an explicit new grant, auditable the normal way.
 
+    Checkpoint 5: the identical gap existed for `security.resource_grants` —
+    every currently active (`revoked_at IS NULL`) row whose `grantee_
+    campaign_membership_id` is this membership is now revoked here too, in
+    the same transaction, for the identical reason. Access-group-targeted
+    grants (`grantee_access_group_id`) are untouched — they belong to the
+    group, not to this membership's own row, and `_activate_or_create_
+    membership`'s reactivation never touches group membership either.
+
     Or does nothing (a harmless no-op, exactly like `revoke_membership_
     role`'s identical "already revoked" case) if `campaign_membership_id`
     is already ended — see `EndCampaignMembershipResult.ended`'s own
@@ -1034,9 +1045,12 @@ def end_campaign_membership(
     (checkpoint-4 correction) a concurrent `grant_character_relationship`/
     `change_character_relationship` against one of its relationship rows
     (each of which independently locks the same membership row `FOR UPDATE
-    OF cm`) cannot race between this function's own read and its writes:
-    whichever transaction acquires the relevant lock first forces the
-    other to wait, then re-observes the first's committed effect."""
+    OF cm`), or (checkpoint 5) a concurrent `create_resource_grant` against
+    one of its resource-grant rows (which likewise independently locks the
+    same membership row `FOR UPDATE OF cm`) cannot race between this
+    function's own read and its writes: whichever transaction acquires the
+    relevant lock first forces the other to wait, then re-observes the
+    first's committed effect."""
     row = (
         connection.execute(
             text("""
@@ -1062,6 +1076,7 @@ def end_campaign_membership(
             ended=False,
             revoked_membership_role_ids=(),
             revoked_membership_character_relationship_ids=(),
+            revoked_resource_grant_ids=(),
         )
 
     revoked_role_ids = (
@@ -1083,6 +1098,19 @@ def end_campaign_membership(
                 UPDATE security.membership_character_relationships SET revoked_at = now()
                 WHERE campaign_membership_id = :membership AND revoked_at IS NULL
                 RETURNING membership_character_relationship_id
+            """),
+            {"membership": campaign_membership_id},
+        )
+        .scalars()
+        .all()
+    )
+
+    revoked_resource_grant_ids = (
+        connection.execute(
+            text("""
+                UPDATE security.resource_grants SET revoked_at = now()
+                WHERE grantee_campaign_membership_id = :membership AND revoked_at IS NULL
+                RETURNING resource_grant_id
             """),
             {"membership": campaign_membership_id},
         )
@@ -1120,4 +1148,5 @@ def end_campaign_membership(
         ended=True,
         revoked_membership_role_ids=tuple(revoked_role_ids),
         revoked_membership_character_relationship_ids=tuple(revoked_relationship_ids),
+        revoked_resource_grant_ids=tuple(revoked_resource_grant_ids),
     )

@@ -39,6 +39,20 @@ member is derived by the portal from that member's own `character_
 relationships` list already in this response, exactly like `assignable_
 roles`' own per-member narrowing is left to the portal.
 
+`grantable_resource_capabilities` (checkpoint 5) is the read-contract
+counterpart to `dnd_ai.api.access_grants`' `create_resource_grant`
+mutation: every `(capability, target_type)` pairing `dnd_ai.domain.access.
+RESOURCE_GRANT_CAPABILITY_CATALOG` currently allows, campaign-independent
+(a fixed server policy, not scoped by `campaign_id`/`world_id`) — see that
+constant's own docstring for the full delegation policy. Each member's own
+`grants[].target_display_name` (checkpoint 5) resolves a safe display name
+for a `character_id`-targeted grant only (from `core.entities.
+canonical_name`, the identical name `character_relationships` already
+uses) and is `None` for every other target kind, matching this module's
+own "non-character grant-target identity" out-of-scope note below — the
+portal's resource-grant management UI is scoped to `character` targets
+only this checkpoint for the identical reason.
+
 Non-disclosure: a caller without an active membership, or without
 `access.manage`, gets the same fixed 404/403 `require_campaign_capability`
 already gives every other `access.manage` route — this route adds no new
@@ -62,6 +76,7 @@ from dnd_ai.queries.access_overview import (
     list_assignable_campaign_characters,
     list_assignable_campaign_roles,
     list_assignable_character_relationship_types,
+    list_grantable_resource_capabilities,
 )
 
 from ._shared import timeline_world_id
@@ -121,9 +136,18 @@ class ResourceGrantSummaryResponse(BaseModel):
     capability_display_name: str
     effect: str
     target_type: str
+    target_id: uuid.UUID
+    target_display_name: str | None
     reason: str | None
     granted_at: datetime
     expires_at: datetime | None
+
+
+class GrantableResourceCapabilityResponse(BaseModel):
+    capability_id: uuid.UUID
+    code: str
+    display_name: str
+    target_type: str
 
 
 class CampaignMemberSummaryResponse(BaseModel):
@@ -151,6 +175,7 @@ class CampaignAccessOverviewResponse(BaseModel):
     assignable_roles: list[AssignableRoleResponse]
     assignable_characters: list[AssignableCharacterResponse]
     assignable_relationship_types: list[AssignableCharacterRelationshipTypeResponse]
+    grantable_resource_capabilities: list[GrantableResourceCapabilityResponse]
 
 
 class EligibleAccountResponse(BaseModel):
@@ -190,6 +215,7 @@ def get_campaign_access_overview_endpoint(
         connection, world_id=timeline_world_id(connection, access.timeline_id)
     )
     assignable_relationship_types = list_assignable_character_relationship_types(connection)
+    grantable_resource_capabilities = list_grantable_resource_capabilities(connection)
     return CampaignAccessOverviewResponse(
         assignable_roles=[
             AssignableRoleResponse(
@@ -210,6 +236,15 @@ def get_campaign_access_overview_endpoint(
                 display_name=relationship_type.display_name,
             )
             for relationship_type in assignable_relationship_types
+        ],
+        grantable_resource_capabilities=[
+            GrantableResourceCapabilityResponse(
+                capability_id=capability.capability_id,
+                code=capability.code,
+                display_name=capability.display_name,
+                target_type=capability.target_type,
+            )
+            for capability in grantable_resource_capabilities
         ],
         members=[
             CampaignMemberSummaryResponse(
@@ -251,6 +286,8 @@ def get_campaign_access_overview_endpoint(
                         capability_display_name=grant.capability_display_name,
                         effect=grant.effect,
                         target_type=grant.target_type,
+                        target_id=grant.target_id,
+                        target_display_name=grant.target_display_name,
                         reason=grant.reason,
                         granted_at=grant.granted_at,
                         expires_at=grant.expires_at,

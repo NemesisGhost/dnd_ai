@@ -8,7 +8,12 @@ and `accept_campaign_invitation`'s full acceptance surface — a fresh
 invitee (new membership), a departed member (reactivation), an
 already-open member (no-op reuse), a replay by the same accepting user
 (idempotent), a wrong/nonexistent token, an expired invitation, a revoked
-invitation, and an invitation already accepted by a different user.
+invitation, and an invitation already accepted by a different user. Also
+covers (checkpoint-4 correction, extended by checkpoint 5) that ending a
+membership through `end_campaign_membership` revokes its character
+relationships *and* resource grants before reactivating it here — proving
+neither silently regains effect through this acceptance flow's own
+"reopen the same row in place" reactivation path.
 """
 
 import uuid
@@ -38,6 +43,7 @@ from tests.factories import (
     make_membership_character_relationship,
     make_membership_role,
     make_relationship_type_capability,
+    make_resource_grant,
     make_role,
     make_role_capability,
     make_timeline,
@@ -124,6 +130,19 @@ class Fixture:
             self.relationship_type_id,
         )
 
+        # --- checkpoint 5: end_campaign_membership must also revoke every
+        # unrevoked resource grant a membership holds, the identical
+        # silent-reactivation gap closed above for character relationships.
+        # Reuses the same membership/character as the relationship above —
+        # one membership demonstrating both revocation halves at once. ---
+        self.pre_reactivation_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            view_summary_capability_id,
+            grantee_campaign_membership_id=self.pre_reactivation_relationship_membership_id,
+            character_id=self.relationship_character_id,
+        )
+
 
 @pytest.fixture
 def f(postgres_engine: Engine) -> Iterator[Fixture]:
@@ -144,6 +163,10 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                     WHERE campaign_id = :c
                 )
             """),
+            {"c": fixture.campaign_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.resource_grants WHERE campaign_id = :c"),
             {"c": fixture.campaign_id},
         )
         cleanup.execute(
@@ -426,7 +449,13 @@ def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its
     held before, with no new grant and no new audit entry to explain why.
     Ending the membership through the real command must revoke that
     relationship first, and reactivating it here must not bring the old
-    relationship back."""
+    relationship back.
+
+    Checkpoint 5 extends this same test to `security.resource_grants`: the
+    identical silent-reactivation gap existed there too — `f.pre_
+    reactivation_grant_id` belongs to the same membership and must be
+    revoked by the same `end_campaign_membership()` call, and must not
+    regain effect on reactivation either."""
     with postgres_engine.begin() as connection:
         end_result = end_campaign_membership(
             connection,
@@ -438,6 +467,7 @@ def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its
     assert end_result.revoked_membership_character_relationship_ids == (
         f.pre_reactivation_relationship_id,
     )
+    assert end_result.revoked_resource_grant_ids == (f.pre_reactivation_grant_id,)
 
     token = _issue_token(postgres_engine, f)
     with client_factory(f.pre_reactivation_relationship_user_id) as client:
@@ -470,12 +500,19 @@ def test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its
         ).scalar_one()
         assert relationship_revoked_at is not None
 
+        grant_revoked_at = verify.execute(
+            text("SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :g"),
+            {"g": f.pre_reactivation_grant_id},
+        ).scalar_one()
+        assert grant_revoked_at is not None
+
     with postgres_engine.connect() as verify:
         access = resolve_access_context(
             verify, user_id=f.pre_reactivation_relationship_user_id, campaign_id=f.campaign_id
         )
     assert access is not None
     assert f.relationship_character_id not in access.character_capabilities
+    assert access.grant_effects == {}
 
 
 def test_accepting_an_invitation_for_an_already_open_member_reuses_the_membership(

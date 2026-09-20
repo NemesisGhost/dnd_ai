@@ -139,7 +139,63 @@ granted or changed stops being authorization-effective on the very next
 request, not just at grant/change time — `revoke_character_relationship()`
 remains deliberately unchecked against all four of these conditions
 (account, character, membership, campaign), matching this module's own
-established "closing access must remain possible for cleanup" policy."""
+established "closing access must remain possible for cleanup" policy.
+
+Checkpoint 5 (direct resource-grant management): `create_resource_grant()`
+is hardened to the identical "currently true" eligibility bar this module
+already established for character relationships — a `grantee_campaign_
+membership_id` grantee must be open, in the `active` membership status, and
+platform-active (`MembershipNotActiveError`, folding all three
+identically); `campaign_id` itself must be `active`
+(`CampaignNotActiveError`, re-exported from `dnd_ai.commands.memberships`);
+whichever of the six target kinds is supplied must currently be active, not
+just in-world/in-campaign (`_validate_resource_grant_target()`'s own
+"checkpoint-5 correction"); and `capability_code` must both be currently
+active and a valid pairing for the supplied target kind under `dnd_ai.
+domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG` — the fixed,
+server-authoritative delegation policy that excludes `access.manage`/
+`import.approve`/`rules_source.manage` from every resource-grant target
+entirely, and restricts `character.*` capability codes to a `character_id`
+target (`ResourceGrantCapabilityNotGrantableError`, folding "doesn't
+exist"/"deactivated"/"incompatible pairing" identically — see that error's
+and that catalog's own docstrings for the full policy and its derivation
+from this codebase's actual `has_capability(...)`/`resource_grant_targets()`
+call sites). `revoke_resource_grant()` stays deliberately unchecked against
+every one of these conditions, matching `revoke_character_relationship()`'s
+identical "closing access must remain possible for cleanup" policy — see
+that function's own docstring.
+
+Lock ordering (checkpoint 5): `create_resource_grant()` locks its grantee
+(the membership row, or nothing further for an access-group grantee), then
+`campaign.campaigns`, then, separately, the membership grantee's owning
+user row, then the target resource row, then the candidate capability row
+— grantee, then campaign, then owning user, then target, then capability:
+the identical relative order `grant_character_relationship()` uses for its
+own disjoint checks (membership, campaign, user, character, type), for the
+identical deadlock-avoidance reasoning this module's own "Lock ordering"
+section above already gives.
+
+`end_campaign_membership()` (`dnd_ai.commands.memberships`, checkpoint 5)
+now also revokes every currently active `security.resource_grants` row
+whose `grantee_campaign_membership_id` is the ending membership, in the
+same transaction that closes it — the identical silent-reactivation gap
+checkpoint 4 closed for character relationships, now closed for resource
+grants too; see that function's own docstring for the full reasoning
+(`_activate_or_create_membership`'s "reopen the same row in place"
+behavior). Access-group-targeted grants are unaffected by any membership
+ending — they belong to the group, not to any one member's own row.
+
+No `change_resource_grant()` exists, and none is planned for this
+checkpoint: unlike a character relationship's single-dimension "swap the
+relationship type" change, a resource grant's meaningful fields — target,
+capability, effect, and temporal/timeline scope — could each independently
+change, and changing more than one of them at once has no single
+unambiguous "this is what changed" audit story the way `change_character_
+relationship()`'s single-field swap does. Revoking the old grant and
+creating a new one (two already-hardened, already-audited, already-
+idempotent mutations) is the deliberate replacement for a generic edit
+form here — see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full
+rationale."""
 
 import uuid
 from dataclasses import dataclass
@@ -147,6 +203,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.memberships import CampaignNotActiveError
+from dnd_ai.domain.access import RESOURCE_GRANT_CAPABILITY_CATALOG
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lookup_id, validate_session_campaign
@@ -160,6 +217,7 @@ __all__ = [
     "ChangeCharacterRelationshipNoOpError",
     "AccessGroupNotInCampaignError",
     "ResourceGrantNotInCampaignError",
+    "ResourceGrantCapabilityNotGrantableError",
     "TargetNotInCampaignWorldError",
     "InvalidRelationshipPeriodError",
     "GrantCharacterRelationshipResult",
@@ -170,6 +228,7 @@ __all__ = [
     "change_character_relationship",
     "CreateResourceGrantResult",
     "create_resource_grant",
+    "RevokeResourceGrantResult",
     "revoke_resource_grant",
 ]
 
@@ -274,6 +333,23 @@ class ResourceGrantNotInCampaignError(DomainAuthorizationError):
     `campaign_id` — including a nonexistent grant, identically. The
     supplied ids are included only in the constructor's `detail` argument
     (`str(self)`), never in `safe_message`."""
+
+
+class ResourceGrantCapabilityNotGrantableError(DomainAuthorizationError):
+    """Raised by `create_resource_grant()` (checkpoint 5) when `capability_
+    code` does not currently name an active `security.capabilities` row, or
+    names one that `dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG`
+    does not list as valid for the target kind actually supplied — folded
+    identically, so a caller can never distinguish "no such capability",
+    "deactivated", or "not applicable to this resource kind" from one
+    another, mirroring `RelationshipTypeNotActiveError`'s identical
+    "doesn't exist"/"deactivated" folding for relationship types, extended
+    here with a third condition specific to resource grants: a resource
+    grant's target kind narrows which capabilities are ever a legitimate
+    pairing (see that catalog's own docstring for the full policy and its
+    derivation), so a syntactically valid but incompatible pairing (e.g.
+    `character.control` against a `quest_id` target) was never a legitimate
+    request either, exactly like a deactivated one."""
 
 
 class TargetNotInCampaignWorldError(DomainAuthorizationError):
@@ -922,6 +998,51 @@ class CreateResourceGrantResult:
     resource_grant_id: uuid.UUID
 
 
+_RESOURCE_GRANT_TARGET_FIELDS = (
+    "character_id",
+    "entity_id",
+    "knowledge_item_id",
+    "quest_id",
+    "session_id",
+    "event_id",
+)
+
+
+def _resource_grant_target_field_name(
+    *,
+    character_id: uuid.UUID | None,
+    entity_id: uuid.UUID | None,
+    knowledge_item_id: uuid.UUID | None,
+    quest_id: uuid.UUID | None,
+    session_id: uuid.UUID | None,
+    event_id: uuid.UUID | None,
+) -> str | None:
+    """Returns the one target column name that is non-`None`, or `None` if
+    zero or more than one are — the malformed-shape case `security.
+    resource_grants`' own `ck_resource_grants_exactly_one_target` `CHECK`
+    constraint (SQLSTATE `23514`) is left to reject at `INSERT` time,
+    exactly as `_validate_resource_grant_target()`'s own docstring already
+    establishes for this module. Used by `create_resource_grant()` (checkpoint
+    5) to select which `dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_
+    CATALOG` entry governs the candidate `capability_code` — for the
+    malformed-shape case, capability validation is skipped entirely and the
+    plain, uncatalogued `lookup_id()` lookup runs instead, so the `CHECK`
+    constraint's own 400 remains the one error a caller sees, never masked
+    by an unrelated capability-catalog rejection first."""
+    values = {
+        "character_id": character_id,
+        "entity_id": entity_id,
+        "knowledge_item_id": knowledge_item_id,
+        "quest_id": quest_id,
+        "session_id": session_id,
+        "event_id": event_id,
+    }
+    supplied = [name for name in _RESOURCE_GRANT_TARGET_FIELDS if values[name] is not None]
+    if len(supplied) != 1:
+        return None
+    return supplied[0]
+
+
 def _validate_resource_grant_target(
     connection: Connection,
     *,
@@ -952,17 +1073,62 @@ def _validate_resource_grant_target(
     resource_grants`' own `ck_resource_grants_exactly_one_target` `CHECK`
     constraint (SQLSTATE `23514`, already correctly classified to a fixed
     400) is the actual enforcement for that shape, exactly like `create_
-    resource_grant`'s existing "exactly one grantee" reasoning."""
+    resource_grant`'s existing "exactly one grantee" reasoning.
+
+    Checkpoint-5 correction: previously checked only world/campaign scope,
+    never whether the target itself is currently active — a resource grant
+    could be created (or, more subtly, silently regain effect on the read
+    side after a later reactivation) naming an already-archived character,
+    entity, knowledge item, quest, or event, or an already-ended session, the
+    same class of gap checkpoint 4 closed for `grant_character_relationship()`'s
+    own `character_id` target. Fixed by locking and checking each target's
+    own currently-active status here, before any write, folded into the
+    same `TargetNotInCampaignWorldError` this function already raises for
+    "wrong world"/"wrong campaign" — mirroring `grant_character_relationship()`'s
+    own identical folding of "wrong world" and "not active" for its
+    character target, so a caller can never distinguish "doesn't exist",
+    "wrong world/campaign", or "deactivated" from one another. `dnd_ai.
+    domain.access.resolve_access_context`/`dnd_ai.queries.access_overview.
+    get_campaign_access_overview` apply the identical exclusion on the read
+    side (same checkpoint), so a resource grant's target deactivated *after*
+    the grant was created stops being authorization-effective on the very
+    next request too, not just at creation time.
+
+    Locks whichever target row is supplied `FOR UPDATE` (`FOR UPDATE OF e`
+    for the five entity-rooted kinds, a plain `FOR UPDATE` on `campaign.
+    sessions` for `session_id`) as part of this same check, so a concurrent
+    deactivation of the target cannot slip in between this read and `create_
+    resource_grant()`'s later `INSERT` — locked after the grantee/campaign/
+    owning-user locks `create_resource_grant()` itself takes first, matching
+    this module's established "dependent-row-then-campaign-row,
+    then-target-then-candidate-type" relative ordering (see this module's
+    own docstring, "Lock ordering")."""
     entity_rooted_target = character_id or entity_id or knowledge_item_id or quest_id or event_id
     if entity_rooted_target is not None:
-        target_world_id = connection.execute(
-            text("SELECT world_id FROM core.entities WHERE entity_id = :target"),
-            {"target": entity_rooted_target},
-        ).scalar()
-        if target_world_id is None or target_world_id != expected_world_id:
+        target_row = (
+            connection.execute(
+                text("""
+                    SELECT e.world_id, ls.code AS lifecycle_status_code
+                    FROM core.entities e
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                    WHERE e.entity_id = :target
+                    FOR UPDATE OF e
+                """),
+                {"target": entity_rooted_target},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        target_is_eligible = (
+            target_row is not None
+            and target_row["world_id"] == expected_world_id
+            and target_row["lifecycle_status_code"] == "active"
+        )
+        if not target_is_eligible:
             raise TargetNotInCampaignWorldError(
                 f"resource grant target {entity_rooted_target} does not exist in world "
-                f"{expected_world_id} (actual world: {target_world_id})"
+                f"{expected_world_id}, or is not currently active "
+                f"(actual world: {target_row['world_id'] if target_row is not None else None})"
             )
 
     if event_id is not None:
@@ -977,6 +1143,53 @@ def _validate_resource_grant_target(
 
     if session_id is not None:
         validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+
+        session_lifecycle_status_code = connection.execute(
+            text("""
+                SELECT ls.code
+                FROM campaign.sessions s
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = s.lifecycle_status_id
+                WHERE s.session_id = :session
+                FOR UPDATE OF s
+            """),
+            {"session": session_id},
+        ).scalar()
+        if session_lifecycle_status_code != "active":
+            raise TargetNotInCampaignWorldError(f"session {session_id} is not currently active")
+
+
+def _resolve_grantable_capability_id(
+    connection: Connection, *, capability_code: str, target_field_name: str
+) -> uuid.UUID:
+    """`create_resource_grant()`'s capability resolution (checkpoint 5) —
+    like `_resolve_active_relationship_type_id_by_code()`, requires
+    `is_active`, and additionally requires `capability_code` to be listed in
+    `dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG[target_field_name]`
+    — the server-authoritative delegation policy for which capability codes
+    are ever a legitimate pairing with which resource-grant target kind.
+    Raises `ResourceGrantCapabilityNotGrantableError` for a nonexistent,
+    deactivated, or catalog-incompatible code, identically (see that error's
+    own docstring)."""
+    row = (
+        connection.execute(
+            text(
+                "SELECT capability_id, is_active FROM security.capabilities "
+                "WHERE code = :code FOR UPDATE"
+            ),
+            {"code": capability_code},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    allowed_codes = RESOURCE_GRANT_CAPABILITY_CATALOG.get(target_field_name, frozenset())
+    if row is None or not row["is_active"] or capability_code not in allowed_codes:
+        raise ResourceGrantCapabilityNotGrantableError(
+            f"capability code {capability_code!r} does not exist, is not currently active, or is "
+            f"not a valid capability for a {target_field_name!r} resource-grant target"
+        )
+    capability_id = row["capability_id"]
+    assert isinstance(capability_id, uuid.UUID)
+    return capability_id
 
 
 def create_resource_grant(
@@ -1004,26 +1217,96 @@ def create_resource_grant(
     exactly one of each pair/group; `security.resource_grants`' own `CHECK`
     constraints reject any other shape as a clean 400, needing no pre-check
     here (see this function's and `_validate_resource_grant_target()`'s own
-    docstrings). Raises `MembershipNotInCampaignError`/
-    `AccessGroupNotInCampaignError` for a grantee outside `campaign_id`, or
-    `TargetNotInCampaignWorldError`/`SessionNotInCampaignError` for a
-    target outside `expected_world_id`/`campaign_id` — all before any row
-    is written. A retry creating the same still-active grant again is
-    rejected as a 409 by `ux_resource_grants_active` (existing
-    `IntegrityError` handler)."""
+    docstrings).
+
+    Raises `MembershipNotInCampaignError`/`AccessGroupNotInCampaignError`
+    for a grantee outside `campaign_id`. Raises `MembershipNotActiveError`
+    (409, checkpoint 5) for a `grantee_campaign_membership_id` that,
+    though it belongs to `campaign_id`, is not currently an eligible, open
+    membership — ended, its own status not `active`, or its underlying user
+    account not currently platform-active — mirroring `grant_character_
+    relationship()`'s identical eligibility bar for the same class of
+    caller-supplied membership id; not applicable to a `grantee_access_
+    group_id` grantee, which carries no such lifecycle of its own. Raises
+    `CampaignNotActiveError` (409, checkpoint 5) if `campaign_id` itself is
+    not currently `active` — the identical gap-closing check checkpoint 4
+    added to `grant_character_relationship()`/`change_character_relationship()`,
+    applied here for the same reason (`require_campaign_capability` never
+    itself consults campaign lifecycle status). Raises
+    `TargetNotInCampaignWorldError`/`SessionNotInCampaignError` for a target
+    outside `expected_world_id`/`campaign_id`, or not currently active
+    (checkpoint 5 — see `_validate_resource_grant_target()`'s own docstring).
+    Raises `ResourceGrantCapabilityNotGrantableError` (404, checkpoint 5)
+    for a `capability_code` that does not exist, is not currently active,
+    or is not a valid pairing for the supplied target kind under `dnd_ai.
+    domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG` — see that constant's
+    own docstring for the full delegation policy this enforces (excludes
+    `access.manage`/`import.approve`/`rules_source.manage` entirely, and
+    restricts `character.*` codes to a `character_id` target). All of the
+    above runs, and every row lock below is taken, before any write — a
+    rejection never leaves a partial write behind. A retry creating the
+    same still-active grant again is rejected as a 409 by `ux_resource_
+    grants_active` (existing `IntegrityError` handler) — deliberately not
+    pre-checked, matching this module's own "database-enforced invariants
+    deliberately not duplicated" policy.
+
+    Locks the grantee (the membership row `FOR UPDATE OF cm`, or nothing
+    further for an access-group grantee — groups carry no mutable lifecycle
+    to protect), then `campaign.campaigns` (`FOR UPDATE OF c`), then,
+    separately, the membership grantee's owning user row (`FOR UPDATE OF u`,
+    skipped for an access-group grantee), then the target resource row
+    (`_validate_resource_grant_target()`'s own lock), then the candidate
+    capability row (`FOR UPDATE`) — grantee, then campaign, then owning
+    user, then target, then capability: the identical relative order
+    `grant_character_relationship()` uses for its own disjoint checks
+    (membership, campaign, user, character, type), so a concurrent ending of
+    this membership, deactivation of the campaign, deactivation of its
+    owning user account, deactivation of the target resource, or
+    deactivation of the candidate capability cannot slip in between this
+    function's own read and its later `INSERT`, and so this function can
+    never deadlock against `grant_character_relationship()`/`change_
+    character_relationship()`/`change_membership_role()` (which lock their
+    own, disjoint row sets in the same relative order) nor against any
+    campaign-role mutation's own deferred `campaign.campaigns` lock (see
+    `grant_character_relationship()`'s own docstring for why campaign is
+    locked here right after the grantee row rather than before it)."""
+    membership_owner_user_id: uuid.UUID | None = None
     if grantee_campaign_membership_id is not None:
-        grantee_campaign_id = connection.execute(
-            text(
-                "SELECT campaign_id FROM security.campaign_memberships "
-                "WHERE campaign_membership_id = :membership"
-            ),
-            {"membership": grantee_campaign_membership_id},
-        ).scalar()
-        if grantee_campaign_id is None or grantee_campaign_id != campaign_id:
+        membership_row = (
+            connection.execute(
+                text("""
+                    SELECT cm.campaign_id, cm.ended_at, cm.user_id,
+                           ms.code AS membership_status_code,
+                           ms.is_active AS membership_status_is_active
+                    FROM security.campaign_memberships cm
+                    JOIN security.membership_statuses ms
+                        ON ms.membership_status_id = cm.membership_status_id
+                    WHERE cm.campaign_membership_id = :membership
+                    FOR UPDATE OF cm
+                """),
+                {"membership": grantee_campaign_membership_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if membership_row is None or membership_row["campaign_id"] != campaign_id:
             raise MembershipNotInCampaignError(
                 f"membership {grantee_campaign_membership_id} does not belong to campaign "
-                f"{campaign_id} (actual campaign: {grantee_campaign_id})"
+                f"{campaign_id} "
+                f"(actual campaign: {membership_row['campaign_id'] if membership_row is not None else None})"
             )
+
+        membership_is_eligible = (
+            membership_row["ended_at"] is None
+            and membership_row["membership_status_code"] == "active"
+            and membership_row["membership_status_is_active"]
+        )
+        if not membership_is_eligible:
+            raise MembershipNotActiveError(
+                f"membership {grantee_campaign_membership_id} is not currently an eligible, open "
+                "membership to grant a resource grant to"
+            )
+        membership_owner_user_id = membership_row["user_id"]
     elif grantee_access_group_id is not None:
         group_campaign_id = connection.execute(
             text("SELECT campaign_id FROM security.access_groups WHERE access_group_id = :group"),
@@ -1033,6 +1316,35 @@ def create_resource_grant(
             raise AccessGroupNotInCampaignError(
                 f"access group {grantee_access_group_id} does not belong to campaign "
                 f"{campaign_id} (actual campaign: {group_campaign_id})"
+            )
+
+    campaign_status_code = connection.execute(
+        text("""
+            SELECT ls.code FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            WHERE c.campaign_id = :campaign
+            FOR UPDATE OF c
+        """),
+        {"campaign": campaign_id},
+    ).scalar()
+    if campaign_status_code != "active":
+        raise CampaignNotActiveError(f"campaign {campaign_id} is not currently active")
+
+    if membership_owner_user_id is not None:
+        user_lifecycle_status_code = connection.execute(
+            text("""
+                SELECT ls.code
+                FROM security.users u
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                WHERE u.user_id = :user
+                FOR UPDATE OF u
+            """),
+            {"user": membership_owner_user_id},
+        ).scalar()
+        if user_lifecycle_status_code != "active":
+            raise MembershipNotActiveError(
+                f"membership {grantee_campaign_membership_id}'s user "
+                f"{membership_owner_user_id} is not currently an active platform account"
             )
 
     _validate_resource_grant_target(
@@ -1047,8 +1359,20 @@ def create_resource_grant(
         event_id=event_id,
     )
 
-    capability_id = lookup_id(
-        connection, "security", "capabilities", "capability_id", capability_code
+    target_field_name = _resource_grant_target_field_name(
+        character_id=character_id,
+        entity_id=entity_id,
+        knowledge_item_id=knowledge_item_id,
+        quest_id=quest_id,
+        session_id=session_id,
+        event_id=event_id,
+    )
+    capability_id = (
+        _resolve_grantable_capability_id(
+            connection, capability_code=capability_code, target_field_name=target_field_name
+        )
+        if target_field_name is not None
+        else lookup_id(connection, "security", "capabilities", "capability_id", capability_code)
     )
     resource_grant_id = connection.execute(
         text("""
@@ -1081,17 +1405,39 @@ def create_resource_grant(
     return CreateResourceGrantResult(resource_grant_id=resource_grant_id)
 
 
+@dataclass(frozen=True)
+class RevokeResourceGrantResult:
+    """`revoked` is `True` only when this specific call transitioned the
+    row from active to revoked — `False` for the documented harmless-no-op
+    case (already revoked). Mirrors `RevokeCharacterRelationshipResult`
+    exactly (checkpoint 5): `dnd_ai.api.access_grants.
+    revoke_resource_grant_endpoint` uses this to write exactly one `audit.
+    change_log` row per *actual* revocation, never one per HTTP call."""
+
+    revoked: bool
+
+
 def revoke_resource_grant(
     connection: Connection, *, resource_grant_id: uuid.UUID, campaign_id: uuid.UUID
-) -> None:
+) -> RevokeResourceGrantResult:
     """Revokes `resource_grant_id` (sets `revoked_at`), or does nothing if
-    it was already revoked — a retry is a harmless no-op, needing no
-    idempotency-key store. Raises `ResourceGrantNotInCampaignError` for a
-    nonexistent `resource_grant_id` or one belonging to a different
-    campaign. `security.resource_grants.campaign_id` is a direct column
-    (unlike `security.membership_roles`/
+    it was already revoked — a retry is a harmless no-op, state-idempotent
+    on its own; see `RevokeResourceGrantResult.revoked` above for how a
+    caller distinguishes an actual revocation from that no-op without this
+    function itself needing a durable idempotency-key store. Raises
+    `ResourceGrantNotInCampaignError` for a nonexistent `resource_grant_id`
+    or one belonging to a different campaign. `security.resource_grants.
+    campaign_id` is a direct column (unlike `security.membership_roles`/
     `.membership_character_relationships`, which resolve it through their
-    owning membership), so no join is needed to check it."""
+    owning membership), so no join is needed to check it.
+
+    Deliberately checks none of `create_resource_grant()`'s own eligibility
+    conditions — not the grantee membership's own status, not its owning
+    user account, not the campaign's lifecycle status, not the target
+    resource's own status — matching this module's own established "closing
+    access must remain possible for cleanup" policy (see this module's own
+    docstring, and `revoke_character_relationship()`'s identical policy for
+    the same reasoning)."""
     row_campaign_id = connection.execute(
         text(
             "SELECT campaign_id FROM security.resource_grants "
@@ -1105,6 +1451,18 @@ def revoke_resource_grant(
             f"(actual campaign: {row_campaign_id})"
         )
 
+    already_revoked = (
+        connection.execute(
+            text(
+                "SELECT revoked_at FROM security.resource_grants WHERE resource_grant_id = :grant"
+            ),
+            {"grant": resource_grant_id},
+        ).scalar()
+        is not None
+    )
+    if already_revoked:
+        return RevokeResourceGrantResult(revoked=False)
+
     connection.execute(
         text(
             "UPDATE security.resource_grants SET revoked_at = now() "
@@ -1112,3 +1470,5 @@ def revoke_resource_grant(
         ),
         {"grant": resource_grant_id},
     )
+
+    return RevokeResourceGrantResult(revoked=True)

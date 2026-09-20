@@ -1778,7 +1778,7 @@ def test_creating_a_resource_grant_targeting_an_entity_succeeds(
             _resource_grants_url(f),
             json={
                 "entity_id": str(f.entity_id),
-                "capability_code": "character.view_summary",
+                "capability_code": "campaign.view",
                 "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
@@ -1799,7 +1799,7 @@ def test_creating_a_resource_grant_targeting_a_knowledge_item_succeeds(
             _resource_grants_url(f),
             json={
                 "knowledge_item_id": str(f.knowledge_item_id),
-                "capability_code": "character.view_summary",
+                "capability_code": "campaign.view",
                 "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
@@ -1814,7 +1814,7 @@ def test_creating_a_resource_grant_targeting_a_quest_succeeds(
             _resource_grants_url(f),
             json={
                 "quest_id": str(f.quest_id),
-                "capability_code": "character.view_summary",
+                "capability_code": "campaign.view",
                 "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
@@ -1844,7 +1844,7 @@ def test_creating_a_resource_grant_targeting_a_session_succeeds(
             _resource_grants_url(f),
             json={
                 "session_id": str(f.session_id),
-                "capability_code": "character.view_summary",
+                "capability_code": "campaign.view",
                 "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
@@ -1874,7 +1874,7 @@ def test_creating_a_resource_grant_targeting_an_event_succeeds(
             _resource_grants_url(f),
             json={
                 "event_id": str(f.event_id),
-                "capability_code": "character.view_summary",
+                "capability_code": "campaign.view",
                 "grantee_campaign_membership_id": str(f.target_membership_id),
             },
         )
@@ -1944,7 +1944,7 @@ def test_revoking_a_resource_grant_succeeds(
         resource_grant_id = grant.json()["resource_grant_id"]
 
         response = client.post(_revoke_grant_url(f, uuid.UUID(resource_grant_id)))
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
 
     with postgres_engine.connect() as verify:
         revoked_at = verify.execute(
@@ -1970,8 +1970,8 @@ def test_revoking_an_already_revoked_resource_grant_is_a_no_op(
 
         first = client.post(_revoke_grant_url(f, resource_grant_id))
         second = client.post(_revoke_grant_url(f, resource_grant_id))
-    assert first.status_code == 204, first.text
-    assert second.status_code == 204, second.text
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
 
 
 def test_revoking_a_resource_grant_from_a_different_campaign_is_rejected(
@@ -1979,4 +1979,289 @@ def test_revoking_a_resource_grant_from_a_different_campaign_is_rejected(
 ) -> None:
     with client_factory(f.admin_user_id) as client:
         response = client.post(_revoke_grant_url(f, uuid.uuid4(), campaign_id=f.other_campaign_id))
+    assert response.status_code == 404, response.text
+
+
+def test_a_sequential_replay_of_revoke_resource_grant_returns_the_original_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint 5: `revoke_resource_grant_endpoint` now accepts an
+    `Idempotency-Key`, mirroring `revoke_character_relationship_endpoint`'s
+    identical hardening."""
+    key = f"revoke-grant-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        grant = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+        resource_grant_id = uuid.UUID(grant.json()["resource_grant_id"])
+
+        first = client.post(
+            _revoke_grant_url(f, resource_grant_id), headers={"Idempotency-Key": key}
+        )
+        second = client.post(
+            _revoke_grant_url(f, resource_grant_id), headers={"Idempotency-Key": key}
+        )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == first.json()
+
+
+# ---------------------------------------------------------------------------
+# create_resource_grant — target-eligibility hardening (checkpoint 5)
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_resource_grant_on_an_ended_membership_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.ended_membership_id),
+            },
+        )
+    assert response.status_code == 409, response.text
+
+
+def test_creating_a_resource_grant_on_a_membership_with_a_disabled_account_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.disabled_account_membership_id),
+            },
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        grant_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.resource_grants "
+                "WHERE grantee_campaign_membership_id = :m"
+            ),
+            {"m": f.disabled_account_membership_id},
+        ).scalar_one()
+        assert grant_count == 0
+
+
+def test_creating_a_resource_grant_on_an_inactive_campaign_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Sequential ordering: the campaign is already inactive by the time
+    the request reaches the command — mirroring `test_granting_a_
+    relationship_on_an_inactive_campaign_is_rejected`'s identical shape."""
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _resource_grants_url(f),
+                json={
+                    "character_id": str(f.character_id),
+                    "capability_code": "character.view_summary",
+                    "grantee_campaign_membership_id": str(f.target_membership_id),
+                },
+            )
+        assert response.status_code == 409, response.text
+
+        with postgres_engine.connect() as verify:
+            grant_count = verify.execute(
+                text("SELECT count(*) FROM security.resource_grants WHERE campaign_id = :c"),
+                {"c": f.campaign_id},
+            ).scalar_one()
+            assert grant_count == 0
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
+
+
+def test_a_resource_grant_rejected_for_campaign_inactivity_does_not_durably_complete_its_idempotency_key(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Mirrors `test_a_grant_rejected_for_campaign_inactivity_does_not_
+    durably_complete_its_idempotency_key`'s identical reasoning: the whole
+    request runs in one transaction, so `CampaignNotActiveError` rolls back
+    the `begin_idempotent_request` reservation along with everything else —
+    the same key, reused once the campaign is active again, must run the
+    real command rather than replay a cached rejection."""
+    key = f"create-grant-campaign-inactive-{uuid.uuid4().hex[:8]}"
+    body = {
+        "character_id": str(f.character_id),
+        "capability_code": "character.view_summary",
+        "grantee_campaign_membership_id": str(f.target_membership_id),
+    }
+    _deactivate_campaign(postgres_engine, f.campaign_id)
+    try:
+        with client_factory(f.admin_user_id) as client:
+            rejected = client.post(
+                _resource_grants_url(f), json=body, headers={"Idempotency-Key": key}
+            )
+        assert rejected.status_code == 409, rejected.text
+    finally:
+        _reactivate_campaign(postgres_engine, f.campaign_id)
+
+    with client_factory(f.admin_user_id) as client:
+        retried = client.post(_resource_grants_url(f), json=body, headers={"Idempotency-Key": key})
+    assert retried.status_code == 201, retried.text
+
+
+def test_creating_a_resource_grant_targeting_an_inactive_character_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.inactive_character_id),
+                "capability_code": "character.view_summary",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_creating_a_resource_grant_targeting_an_ended_session_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """The one resource-grant target kind that is not a `core.entities` row
+    — `campaign.sessions` carries its own `lifecycle_status_id` instead,
+    checked separately by `_validate_resource_grant_target()`."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                UPDATE campaign.sessions SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                ) WHERE session_id = :s
+            """),
+            {"s": f.session_id},
+        )
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "session_id": str(f.session_id),
+                "capability_code": "campaign.view",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+# ---------------------------------------------------------------------------
+# create_resource_grant — delegation policy (checkpoint 5)
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_resource_grant_with_a_capability_incompatible_with_its_target_kind_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """`character.control` is a real, active capability — just never a
+    valid pairing with a `quest_id` target under `dnd_ai.domain.access.
+    RESOURCE_GRANT_CAPABILITY_CATALOG` (only `campaign.view`/`canon.edit`
+    are). Folded into the same 404 as a nonexistent/deactivated code — a
+    caller can never tell "incompatible" from either of those."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "quest_id": str(f.quest_id),
+                "capability_code": "character.control",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+    with client_factory(f.admin_user_id) as client:
+        # The identical capability succeeds against the target kind it
+        # actually belongs to, proving the rejection above is about the
+        # pairing, not the capability code itself.
+        control_response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": "character.control",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert control_response.status_code == 201, control_response.text
+
+
+def test_creating_a_resource_grant_with_a_nonexistent_capability_code_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": f"no-such-capability-{uuid.uuid4().hex[:8]}",
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
+    assert response.status_code == 404, response.text
+
+
+def test_creating_a_resource_grant_with_a_deactivated_capability_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`character.discover` is a real catalog capability, temporarily
+    deactivated for the duration of this test and restored afterward — this
+    codebase's tests run single-worker/sequential (no parallel test
+    execution), the same property `_deactivate_campaign`/the account-
+    disablement tests above already rely on to safely mutate shared rows
+    for one test's duration."""
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE security.capabilities SET is_active = false WHERE code = :c"),
+            {"c": "character.discover"},
+        )
+    try:
+        with client_factory(f.admin_user_id) as client:
+            response = client.post(
+                _resource_grants_url(f),
+                json={
+                    "character_id": str(f.character_id),
+                    "capability_code": "character.discover",
+                    "grantee_campaign_membership_id": str(f.target_membership_id),
+                },
+            )
+        assert response.status_code == 404, response.text
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text("UPDATE security.capabilities SET is_active = true WHERE code = :c"),
+                {"c": "character.discover"},
+            )
+
+
+@pytest.mark.parametrize(
+    "capability_code", ["access.manage", "import.approve", "rules_source.manage"]
+)
+def test_creating_a_resource_grant_with_an_administrative_capability_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, capability_code: str
+) -> None:
+    """`dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG` excludes
+    these three from every resource-grant target kind entirely — delegating
+    platform/campaign administration through a resource grant is disallowed
+    as policy, not merely because it happens to be inert against every real
+    `has_capability(...)` call site today."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _resource_grants_url(f),
+            json={
+                "character_id": str(f.character_id),
+                "capability_code": capability_code,
+                "grantee_campaign_membership_id": str(f.target_membership_id),
+            },
+        )
     assert response.status_code == 404, response.text

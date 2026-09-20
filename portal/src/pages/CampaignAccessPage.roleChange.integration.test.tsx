@@ -78,6 +78,7 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
         ],
         assignable_characters: [],
         assignable_relationship_types: [],
+        grantable_resource_capabilities: [],
     }
 }
 

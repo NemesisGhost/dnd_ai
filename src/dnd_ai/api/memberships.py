@@ -582,6 +582,9 @@ def end_campaign_membership_endpoint(
                     str(relationship_id)
                     for relationship_id in result.revoked_membership_character_relationship_ids
                 ],
+                "revoked_resource_grant_ids": [
+                    str(grant_id) for grant_id in result.revoked_resource_grant_ids
+                ],
             },
         )
 

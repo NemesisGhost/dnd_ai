@@ -26,22 +26,20 @@ mechanism `dnd_ai.api.memberships` uses for its own create/change-shaped
 commands — a naive retry would otherwise hit `ux_membership_character_
 relationships_active_type`/`ux_resource_grants_active` (existing
 `IntegrityError` handler, 409) instead of replaying the original response.
-`revoke_character_relationship_endpoint` also uses it now (character-
-relationship-management checkpoint correction, matching the identical fix
-Phase 13E-B checkpoint 2 already made to `dnd_ai.api.memberships.
-revoke_membership_role_endpoint` — see that route's own docstring): a
-bare-`204`/no-key route relied on the underlying command's state-
-idempotency alone, which covers *state* but not the *audit trail* (every
-call wrote its own row unconditionally). `revoke_resource_grant_endpoint`
-remains on the original no-idempotency-key, unconditional-audit shape —
-resource grants are out of scope for this checkpoint; see `dnd_ai.commands.
-access_grants`' own module docstring for why revocation alone was
-originally judged not to need a durable key.
+`revoke_character_relationship_endpoint`/`revoke_resource_grant_endpoint`
+also use it now (character-relationship-management checkpoint correction
+for the former; checkpoint 5 closed the identical gap for the latter,
+matching the identical fix Phase 13E-B checkpoint 2 already made to
+`dnd_ai.api.memberships.revoke_membership_role_endpoint` — see that
+route's own docstring): a bare-`204`/no-key route relied on the underlying
+command's state-idempotency alone, which covers *state* but not the
+*audit trail* (every call wrote its own row unconditionally).
 
 Auditing: every successful call records one `audit.change_log` row.
 `revoke_character_relationship_endpoint`/`change_character_relationship_
-endpoint` write theirs only for an actual state change — see each route's
-own docstring. `entity_id` is always `None` for the same reason `dnd_ai.api.
+endpoint`/`revoke_resource_grant_endpoint` (checkpoint 5 added the latter)
+write theirs only for an actual state change — see each route's own
+docstring. `entity_id` is always `None` for the same reason `dnd_ai.api.
 memberships` gives — none of `security.membership_character_relationships`/
 `.resource_grants` is a `core.entities` row. `world_id` is resolved
 server-side from the campaign's own pinned timeline.
@@ -477,7 +475,8 @@ def create_resource_grant_endpoint(
 
 @router.post(
     "/campaigns/{campaign_id}/resource-grants/{resource_grant_id}/revoke",
-    status_code=204,
+    response_model=ResourceGrantResponse,
+    status_code=200,
 )
 def revoke_resource_grant_endpoint(
     campaign_id: uuid.UUID,
@@ -486,20 +485,71 @@ def revoke_resource_grant_endpoint(
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
+    idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> None:
-    revoke_resource_grant(connection, resource_grant_id=resource_grant_id, campaign_id=campaign_id)
+) -> ResourceGrantResponse:
+    """Revokes one existing, currently-active resource grant — the portal
+    Access page's "Revoke direct resource access" action.
 
-    record_change_log(
-        connection,
-        change_action_code=_UPDATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="resource_grants",
-        record_id=resource_grant_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
-        event_id=None,
+    Response contract (checkpoint 5): `200`/`ResourceGrantResponse`
+    (`{resource_grant_id: UUID}`, reusing the existing create-grant response
+    shape), not the pre-hardening bare `204 No Content` — the identical
+    correction `revoke_character_relationship_endpoint`/`dnd_ai.api.
+    memberships.revoke_membership_role_endpoint` already made. A bare
+    `204`/no-`Idempotency-Key` route relied on `revoke_resource_grant`'s own
+    state-idempotency (a retry against an already-revoked row is a harmless
+    no-op) to cover *state*, but every call — including a plain retry with
+    no key at all — wrote its own `audit.change_log` row unconditionally,
+    so an ordinary network retry could durably record two revocation events
+    for one real revocation. Fixed the same two ways: (1) an
+    `Idempotency-Key` replay returns the original cached response verbatim,
+    never re-running the command at all; (2) even *without* a matching key,
+    the audit write below is now conditioned on `RevokeResourceGrantResult.
+    revoked`, so a second call that lands on an already-revoked row writes
+    no second row."""
+    reservation_id: uuid.UUID | None = None
+    if idempotency_key is not None:
+        fingerprint_payload: dict[str, Any] = {"resource_grant_id": str(resource_grant_id)}
+        outcome = begin_idempotent_request(
+            connection,
+            actor_user_id=access.user_id,
+            campaign_id=campaign_id,
+            idempotency_key=idempotency_key,
+            command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
+            payload=fingerprint_payload,
+            correlation_id=correlation_id,
+        )
+        if isinstance(outcome, IdempotentReplay):
+            return ResourceGrantResponse.model_validate(outcome.response_body)
+        reservation_id = outcome.idempotent_request_id
+
+    result = revoke_resource_grant(
+        connection, resource_grant_id=resource_grant_id, campaign_id=campaign_id
     )
+
+    if result.revoked:
+        record_change_log(
+            connection,
+            change_action_code=_UPDATED_CHANGE_ACTION,
+            schema_name="security",
+            table_name="resource_grants",
+            record_id=resource_grant_id,
+            entity_id=None,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+            command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
+            event_id=None,
+        )
+
+    response = ResourceGrantResponse(resource_grant_id=resource_grant_id)
+
+    if reservation_id is not None:
+        complete_idempotent_request(
+            connection,
+            idempotent_request_id=reservation_id,
+            response_status_code=200,
+            response_body=response.model_dump(mode="json"),
+        )
+
+    return response

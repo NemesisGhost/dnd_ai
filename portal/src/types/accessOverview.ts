@@ -38,9 +38,27 @@ export interface AccessResourceGrantSummary {
     capability_display_name: string
     effect: string
     target_type: string
+    // Identity only, never rendered as page text — used to detect an
+    // exact active duplicate (target, capability, effect) combination
+    // when adding a new grant, matching character_id's own identical
+    // contract on AccessCharacterRelationshipSummary.
+    target_id: string
+    // Populated only for a "character" target_type — resolved server-side
+    // from core.entities.canonical_name, the identical safe display name
+    // character_relationships already uses. null for every other target
+    // kind (checkpoint 5's own portal scope is limited to character
+    // targets — see dnd_ai.commands.access_grants' module docstring).
+    target_display_name: string | null
     reason: string | null
     granted_at: string
     expires_at: string | null
+}
+
+export interface GrantableResourceCapability {
+    capability_id: string
+    code: string
+    display_name: string
+    target_type: string
 }
 
 export interface CampaignAccessMember {
@@ -63,4 +81,5 @@ export interface CampaignAccessOverview {
     assignable_roles: AssignableRole[]
     assignable_characters: AssignableCharacter[]
     assignable_relationship_types: AssignableCharacterRelationshipType[]
+    grantable_resource_capabilities: GrantableResourceCapability[]
 }
