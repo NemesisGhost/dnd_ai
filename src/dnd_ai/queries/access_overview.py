@@ -71,13 +71,24 @@ identical checkpoint-6 hardening of its own group-membership subquery.
 Deliberately out of scope for this first increment (documented here rather
 than silently omitted):
 
-- `security.users.lifecycle_status_id` (whether the underlying account is
-  platform-active/disabled) — that is account-wide administration, a
-  different capability scope than this campaign's `access.manage`
-  (docs/UI_DESIGN.md's "do not merge account-wide administration with
-  campaign administration unless the existing authorization model
-  explicitly does so"). Only the campaign-scoped `membership_statuses` value
-  is included.
+- `security.users.lifecycle_status_id`'s own raw status code — that
+  remains account-wide administration, a different capability scope than
+  this campaign's `access.manage` (docs/UI_DESIGN.md's "do not merge
+  account-wide administration with campaign administration unless the
+  existing authorization model explicitly does so"). Only the
+  campaign-scoped `membership_statuses` value is exposed as a code/display
+  name pair. **Checkpoint-6 correction:** a single derived boolean,
+  `CampaignMemberView.account_is_active` (`security.users.
+  lifecycle_status_id -> core.lifecycle_statuses.code = 'active'`, never
+  the raw code, login name, email, or identity subject), *is* now
+  included — `dnd_ai.commands.access_groups.add_access_group_member()`
+  already rejects a target membership whose owning account is
+  platform-disabled (`MembershipNotActiveError`), and without this field
+  the portal's own group "Add member" selector had no way to avoid
+  offering exactly that membership and having every such attempt rejected.
+  One narrowly-scoped boolean, used for nothing but that one filtering
+  decision, is not the account-wide disclosure this bullet's own rule
+  otherwise guards against.
 - Pending/outstanding `security.campaign_invitations` — a closed membership
   never existed yet, so it is outside the same "current members" scope this
   overview covers; a future increment may add it once invitation mutations
@@ -174,6 +185,12 @@ class CampaignMemberView:
     status_code: str
     status_display_name: str
     joined_at: datetime
+    # Checkpoint-6 correction: the one minimal, derived boolean this
+    # module's own docstring now documents as an exception to its
+    # "account-wide administration is out of scope" rule — see that note
+    # for why this single field, and nothing more of security.users, is
+    # safe to expose here.
+    account_is_active: bool
     roles: tuple[MemberRoleView, ...]
     character_relationships: tuple[MemberCharacterRelationshipView, ...]
     grants: tuple[MemberResourceGrantView, ...]
@@ -258,9 +275,12 @@ def get_campaign_access_overview(
         connection.execute(
             text("""
             SELECT cm.campaign_membership_id, cm.user_id, u.display_name, cm.joined_at,
-                   ms.code AS status_code, ms.display_name AS status_display_name
+                   ms.code AS status_code, ms.display_name AS status_display_name,
+                   (user_status.code = 'active') AS account_is_active
             FROM security.campaign_memberships cm
             JOIN security.users u ON u.user_id = cm.user_id
+            JOIN core.lifecycle_statuses user_status
+                ON user_status.lifecycle_status_id = u.lifecycle_status_id
             JOIN security.membership_statuses ms ON ms.membership_status_id = cm.membership_status_id
             WHERE cm.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
@@ -402,6 +422,7 @@ def get_campaign_access_overview(
             status_code=row["status_code"],
             status_display_name=row["status_display_name"],
             joined_at=row["joined_at"],
+            account_is_active=bool(row["account_is_active"]),
             roles=tuple(roles_by_membership.get(row["campaign_membership_id"], [])),
             character_relationships=tuple(
                 relationships_by_membership.get(row["campaign_membership_id"], [])

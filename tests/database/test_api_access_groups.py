@@ -36,6 +36,7 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import IntegrityError
 
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
@@ -432,6 +433,85 @@ def test_creating_a_group_with_a_blank_name_is_rejected(
     assert response.status_code == 422, response.text
 
 
+def test_creating_a_group_with_an_over_length_name_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_groups_url(f), json={"name": "x" * 201})
+    # Pydantic's own Field(max_length=200) rejects this before the request
+    # body ever reaches dnd_ai.commands.access_groups.create_access_group.
+    assert response.status_code == 422, response.text
+
+
+def test_creating_a_group_with_an_over_length_description_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _groups_url(f), json={"name": "Bounded Group", "description": "x" * 2001}
+        )
+    assert response.status_code == 422, response.text
+
+
+def test_creating_a_group_with_a_maximum_length_name_and_description_succeeds(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_groups_url(f), json={"name": "y" * 200, "description": "z" * 2000})
+    assert response.status_code == 201, response.text
+
+
+def test_creating_a_group_with_a_whitespace_only_description_records_null_in_the_audit(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """`changed_fields.description` must reflect the normalized, persisted
+    value (`create_access_group`'s own trim-then-blank-to-None rule), never
+    the raw request body — a whitespace-only description is stored (and
+    thus audited) as NULL, not as the literal whitespace string."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _groups_url(f), json={"name": "Whitespace Description Group", "description": "   "}
+        )
+    assert response.status_code == 201, response.text
+    access_group_id = uuid.UUID(response.json()["access_group_id"])
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT description, changed_fields FROM security.access_groups ag
+                JOIN audit.change_log cl
+                    ON cl.table_name = 'access_groups' AND cl.record_id = ag.access_group_id
+                WHERE ag.access_group_id = :g AND cl.command_name = 'create_access_group'
+            """),
+            {"g": access_group_id},
+        ).one()
+        assert row.description is None
+        assert row.changed_fields == {"name": "Whitespace Description Group", "description": None}
+
+
+def test_a_direct_database_insert_with_an_over_length_description_is_rejected(
+    f: Fixture, postgres_engine: Engine
+) -> None:
+    """`ck_access_groups_description_length` (migration 106) is the last
+    line of defense against an over-length description reaching this
+    column at all — proven here by inserting directly, bypassing both the
+    API's Pydantic `Field(max_length=...)` and `dnd_ai.commands.
+    access_groups.create_access_group`'s own pre-check entirely."""
+    with pytest.raises(IntegrityError) as exc, postgres_engine.begin() as connection:
+        connection.execute(
+            text("""
+                INSERT INTO security.access_groups
+                    (campaign_id, name, description, lifecycle_status_id)
+                VALUES (
+                    :campaign, 'Direct Insert Group', :description,
+                    (SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'active')
+                )
+            """),
+            {"campaign": f.campaign_id, "description": "x" * 2001},
+        )
+    assert "ck_access_groups_description_length" in str(exc.value)
+
+
 def test_creating_a_group_with_a_duplicate_name_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
@@ -542,6 +622,52 @@ def test_updating_a_group_with_a_blank_name_is_rejected(
     assert response.status_code == 422, response.text
 
 
+def test_updating_a_group_with_an_over_length_name_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_update_url(f, f.group_id), json={"name": "x" * 201})
+    assert response.status_code == 422, response.text
+
+
+def test_updating_a_group_with_an_over_length_description_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _update_url(f, f.group_id), json={"name": "Lore Circle", "description": "x" * 2001}
+        )
+    assert response.status_code == 422, response.text
+
+
+def test_updating_a_group_with_a_whitespace_only_description_records_null_in_the_audit(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    # The name must actually change too — a request that would leave both
+    # name and (normalized) description identical to the group's current
+    # values is rejected as a no-op (AccessGroupUpdateNoOpError) before this
+    # normalization behavior could even be observed.
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _update_url(f, f.group_id),
+            json={"name": "Lore Circle Renamed", "description": "   "},
+        )
+    assert response.status_code == 200, response.text
+
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text("""
+                SELECT description, changed_fields FROM security.access_groups ag
+                JOIN audit.change_log cl
+                    ON cl.table_name = 'access_groups' AND cl.record_id = ag.access_group_id
+                WHERE ag.access_group_id = :g AND cl.command_name = 'update_access_group'
+            """),
+            {"g": f.group_id},
+        ).one()
+        assert row.description is None
+        assert row.changed_fields == {"description": None}
+
+
 def test_updating_an_archived_group_is_rejected(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
 ) -> None:
@@ -641,6 +767,126 @@ def test_deactivating_a_group_closes_memberships_and_revokes_grants(
             {"r": resource_grant_id},
         ).scalar_one()
         assert revoked_at is not None
+
+
+def test_deactivating_a_group_with_many_dependents_records_bounded_audit_samples(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """More dependent rows than `dnd_ai.api.access_groups.
+    _DEACTIVATE_AUDIT_ID_SAMPLE_LIMIT` (20) — proves deactivation still
+    closes/revokes every one of them (unbounded cleanup, unaffected by the
+    audit-bound correction), immediately removes their authorization
+    effect, and records exactly one audit row with a bounded representation
+    (exact `count`, a capped `sample_ids` prefix, `sample_truncated`)
+    rather than the full, unbounded id list this checkpoint's first cut
+    wrote."""
+    dependent_count = 25
+    extra_user_ids: list[uuid.UUID] = []
+    extra_membership_ids: list[uuid.UUID] = []
+    extra_character_ids: list[uuid.UUID] = []
+    try:
+        with postgres_engine.begin() as connection:
+            for i in range(dependent_count):
+                user_id = make_user(connection, f"Deactivate Sample Member {i}")
+                extra_user_ids.append(user_id)
+                extra_membership_ids.append(
+                    make_campaign_membership(connection, f.campaign_id, user_id)
+                )
+                extra_character_ids.append(
+                    make_character(connection, f.world_id, name=f"Sample Character {i}")
+                )
+
+        with client_factory(f.admin_user_id) as client:
+            for membership_id in extra_membership_ids:
+                response = client.post(
+                    _add_member_url(f, f.group_id),
+                    json={"campaign_membership_id": str(membership_id)},
+                )
+                assert response.status_code == 201, response.text
+
+            for character_id in extra_character_ids:
+                response = client.post(
+                    _grants_url(f),
+                    json={
+                        "character_id": str(character_id),
+                        "capability_code": "character.view_summary",
+                        "grantee_access_group_id": str(f.group_id),
+                    },
+                )
+                assert response.status_code == 201, response.text
+
+            deactivate_response = client.post(_deactivate_url(f, f.group_id))
+        assert deactivate_response.status_code == 200, deactivate_response.text
+
+        with postgres_engine.connect() as verify:
+            open_memberships = verify.execute(
+                text("""
+                    SELECT count(*) FROM security.access_group_memberships
+                    WHERE access_group_id = :g AND removed_at IS NULL
+                """),
+                {"g": f.group_id},
+            ).scalar_one()
+            assert open_memberships == 0
+
+            active_grants = verify.execute(
+                text("""
+                    SELECT count(*) FROM security.resource_grants
+                    WHERE grantee_access_group_id = :g AND revoked_at IS NULL
+                """),
+                {"g": f.group_id},
+            ).scalar_one()
+            assert active_grants == 0
+
+            audit_rows = verify.execute(
+                text("""
+                    SELECT changed_fields FROM audit.change_log
+                    WHERE table_name = 'access_groups' AND record_id = :g
+                      AND command_name = 'deactivate_access_group'
+                """),
+                {"g": f.group_id},
+            ).all()
+            assert len(audit_rows) == 1
+            changed_fields = audit_rows[0].changed_fields
+
+            memberships_summary = changed_fields["removed_access_group_memberships"]
+            assert memberships_summary["count"] == dependent_count
+            assert len(memberships_summary["sample_ids"]) == 20
+            assert memberships_summary["sample_truncated"] is True
+
+            grants_summary = changed_fields["revoked_resource_grants"]
+            assert grants_summary["count"] == dependent_count
+            assert len(grants_summary["sample_ids"]) == 20
+            assert grants_summary["sample_truncated"] is True
+
+        # A subsequent retry against the now-archived group remains the
+        # documented no-op — no second audit row.
+        with client_factory(f.admin_user_id) as client:
+            retry = client.post(_deactivate_url(f, f.group_id))
+        assert retry.status_code == 200, retry.text
+
+        with postgres_engine.connect() as verify:
+            audit_count = verify.execute(
+                text("""
+                    SELECT count(*) FROM audit.change_log
+                    WHERE table_name = 'access_groups' AND record_id = :g
+                      AND command_name = 'deactivate_access_group'
+                """),
+                {"g": f.group_id},
+            ).scalar_one()
+            assert audit_count == 1
+    finally:
+        with postgres_engine.begin() as cleanup:
+            cleanup.execute(
+                text(
+                    "DELETE FROM security.campaign_memberships "
+                    "WHERE user_id = ANY(:users) AND campaign_id = :campaign"
+                ),
+                {"users": extra_user_ids, "campaign": f.campaign_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM security.users WHERE user_id = ANY(:users)"),
+                {"users": extra_user_ids},
+            )
 
 
 def test_deactivating_an_already_archived_group_is_a_no_op(
@@ -1155,6 +1401,32 @@ def test_access_overview_lists_active_and_archived_groups(
     # are what keep an inactive group's membership from ever being counted
     # as currently effective.
     assert archived_group["members"] == []
+
+
+def test_access_overview_reports_account_is_active_per_member(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-6 correction: the read contract exposes exactly one
+    minimal, derived boolean per member (`account_is_active`) — never the
+    account's raw lifecycle status code, login name, email, or identity
+    subject — so the portal's own access-group "Add member" selector can
+    filter out an account `add_access_group_member` would reject anyway."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+
+    members_by_membership_id = {
+        member["campaign_membership_id"]: member for member in response.json()["members"]
+    }
+    assert members_by_membership_id[str(f.target_membership_id)]["account_is_active"] is True
+    assert (
+        members_by_membership_id[str(f.disabled_account_membership_id)]["account_is_active"]
+        is False
+    )
+    # The disabled account's membership still appears on the overview at
+    # all — this field narrows what the group selector offers, it does not
+    # hide the member from the read contract itself.
+    assert str(f.disabled_account_membership_id) in members_by_membership_id
 
 
 # ---------------------------------------------------------------------------

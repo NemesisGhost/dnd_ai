@@ -71,6 +71,13 @@ export interface CampaignAccessMember {
     status_code: string
     status_display_name: string
     joined_at: string
+    // Checkpoint-6 correction: whether the owning account is currently
+    // platform-active. Used only to filter a disabled account out of an
+    // access group's "Add member" selector — the server independently
+    // re-validates regardless (dnd_ai.commands.access_groups.
+    // add_access_group_member), so this narrows what is offered, never the
+    // authorization boundary itself.
+    account_is_active: boolean
     roles: AccessRoleSummary[]
     character_relationships: AccessCharacterRelationshipSummary[]
     grants: AccessResourceGrantSummary[]

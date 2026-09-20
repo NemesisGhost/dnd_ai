@@ -90,7 +90,11 @@ __all__ = [
     "MembershipNotInCampaignError",
     "MembershipNotActiveError",
     "BlankAccessGroupNameError",
+    "AccessGroupNameTooLongError",
+    "AccessGroupDescriptionTooLongError",
     "AccessGroupUpdateNoOpError",
+    "ACCESS_GROUP_NAME_MAX_LENGTH",
+    "ACCESS_GROUP_DESCRIPTION_MAX_LENGTH",
     "CreateAccessGroupResult",
     "create_access_group",
     "UpdateAccessGroupResult",
@@ -108,6 +112,18 @@ __all__ = [
 _ACTIVE_LIFECYCLE_STATUS_CODE = "active"
 _ARCHIVED_LIFECYCLE_STATUS_CODE = "archived"
 
+# Checkpoint-6 correction: security.access_groups.name/.description had no
+# application-layer length bound at all — name relies entirely on
+# ck_access_groups_name_length (migration 080, 1-200 characters) surfacing
+# as an unclassified-looking-but-actually-fine 400 IntegrityError, and
+# description had no bound anywhere until revision 106's ck_access_groups_
+# description_length added one. These constants are the single source of
+# truth `dnd_ai.api.access_groups`' own Pydantic `Field(max_length=...)`
+# imports rather than duplicating the numbers, so the API-layer rejection,
+# this module's own pre-check below, and the database CHECK all agree.
+ACCESS_GROUP_NAME_MAX_LENGTH = 200
+ACCESS_GROUP_DESCRIPTION_MAX_LENGTH = 2000
+
 
 class BlankAccessGroupNameError(SafeMessageError):
     """Raised by `create_access_group()`/`update_access_group()` when
@@ -120,6 +136,34 @@ class BlankAccessGroupNameError(SafeMessageError):
     safe_status_code = 422
     safe_error_code = "invalid_access_group_name"
     safe_message = "The access group name must not be blank."
+
+
+class AccessGroupNameTooLongError(SafeMessageError):
+    """Raised by `create_access_group()`/`update_access_group()` when the
+    trimmed `name` exceeds `ACCESS_GROUP_NAME_MAX_LENGTH` (200 —
+    unchanged from `ck_access_groups_name_length`'s own pre-existing
+    database bound, migration 080). Checked before any write, mirroring
+    `BlankAccessGroupNameError`'s own reasoning — the database `CHECK`
+    would otherwise reject this too (as a correctly-classified 400
+    `IntegrityError`, not an unclassified 500), but pre-checking here gives
+    a clearer, dedicated error code instead of relying solely on that
+    generic mapping, exactly like the blank-name case above."""
+
+    safe_status_code = 422
+    safe_error_code = "access_group_name_too_long"
+    safe_message = "The access group name must be 200 characters or fewer."
+
+
+class AccessGroupDescriptionTooLongError(SafeMessageError):
+    """Raised by `create_access_group()`/`update_access_group()` when the
+    trimmed `description` exceeds `ACCESS_GROUP_DESCRIPTION_MAX_LENGTH`
+    (2000 — `ck_access_groups_description_length`, migration 106).
+    Checked before any write, the identical reasoning `AccessGroupNameTooLongError`
+    applies for `name`."""
+
+    safe_status_code = 422
+    safe_error_code = "access_group_description_too_long"
+    safe_message = "The access group description must be 2000 characters or fewer."
 
 
 class AccessGroupUpdateNoOpError(SafeMessageError):
@@ -148,6 +192,12 @@ class AccessGroupMembershipNotInCampaignError(DomainAuthorizationError):
 class CreateAccessGroupResult:
     access_group_id: uuid.UUID
     name: str
+    # Normalized (trimmed, blank-to-None) — never the raw request value.
+    # `dnd_ai.api.access_groups.create_access_group_endpoint` records this,
+    # not `body.description`, in `changed_fields` so a caller-supplied
+    # description containing only whitespace (persisted as NULL) is never
+    # misrepresented in the audit trail as some non-empty value.
+    description: str | None
 
 
 def create_access_group(
@@ -185,8 +235,17 @@ def create_access_group(
     normalized_name = name.strip()
     if not normalized_name:
         raise BlankAccessGroupNameError("access group name must not be blank")
+    if len(normalized_name) > ACCESS_GROUP_NAME_MAX_LENGTH:
+        raise AccessGroupNameTooLongError("access group name exceeds the maximum length")
     normalized_description = description.strip() if description else None
     normalized_description = normalized_description or None
+    if (
+        normalized_description is not None
+        and len(normalized_description) > ACCESS_GROUP_DESCRIPTION_MAX_LENGTH
+    ):
+        raise AccessGroupDescriptionTooLongError(
+            "access group description exceeds the maximum length"
+        )
 
     campaign_status_code = connection.execute(
         text("""
@@ -222,7 +281,9 @@ def create_access_group(
         },
     ).scalar()
     assert isinstance(access_group_id, uuid.UUID)
-    return CreateAccessGroupResult(access_group_id=access_group_id, name=normalized_name)
+    return CreateAccessGroupResult(
+        access_group_id=access_group_id, name=normalized_name, description=normalized_description
+    )
 
 
 @dataclass(frozen=True)
@@ -230,6 +291,9 @@ class UpdateAccessGroupResult:
     access_group_id: uuid.UUID
     previous_name: str
     name: str
+    # Normalized (trimmed, blank-to-None) — never the raw request value; see
+    # CreateAccessGroupResult.description's identical contract.
+    description: str | None
 
 
 def update_access_group(
@@ -290,8 +354,17 @@ def update_access_group(
     normalized_name = name.strip()
     if not normalized_name:
         raise BlankAccessGroupNameError("access group name must not be blank")
+    if len(normalized_name) > ACCESS_GROUP_NAME_MAX_LENGTH:
+        raise AccessGroupNameTooLongError("access group name exceeds the maximum length")
     normalized_description = description.strip() if description else None
     normalized_description = normalized_description or None
+    if (
+        normalized_description is not None
+        and len(normalized_description) > ACCESS_GROUP_DESCRIPTION_MAX_LENGTH
+    ):
+        raise AccessGroupDescriptionTooLongError(
+            "access group description exceeds the maximum length"
+        )
 
     if normalized_name == row["name"] and normalized_description == row["description"]:
         raise AccessGroupUpdateNoOpError(
@@ -306,7 +379,10 @@ def update_access_group(
         {"name": normalized_name, "description": normalized_description, "group": access_group_id},
     )
     return UpdateAccessGroupResult(
-        access_group_id=access_group_id, previous_name=row["name"], name=normalized_name
+        access_group_id=access_group_id,
+        previous_name=row["name"],
+        name=normalized_name,
+        description=normalized_description,
     )
 
 

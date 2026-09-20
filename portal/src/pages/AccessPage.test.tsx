@@ -30,6 +30,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-01T00:00:00Z",
+            account_is_active: true,
             roles: [
                 {
                     membership_role_id:
@@ -79,6 +80,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-04T00:00:00Z",
+            account_is_active: true,
             roles: [],
             character_relationships: [],
             grants: [],
@@ -91,6 +93,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-05T00:00:00Z",
+            account_is_active: true,
             roles: [
                 {
                     membership_role_id:
@@ -1983,6 +1986,49 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
         ).not.toBeInTheDocument()
     })
 
+    it("creates a group: rejects an over-length name/description before submitting", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Create access group" }),
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        const nameInput = screen.getByLabelText(/New access group name/)
+        const descriptionInput = screen.getByLabelText("Description (optional)")
+
+        fireEvent.change(nameInput, { target: { value: "New Group" } })
+        expect(saveButton).toBeEnabled()
+
+        // Mirrors dnd_ai.commands.access_groups.
+        // ACCESS_GROUP_DESCRIPTION_MAX_LENGTH (2000) — jsdom's fireEvent
+        // does not itself enforce the textarea's maxLength attribute the
+        // way a real browser does, so this exercises the component's own
+        // JS-level inline validation, not just the HTML attribute.
+        fireEvent.change(descriptionInput, {
+            target: { value: "x".repeat(2001) },
+        })
+        expect(saveButton).toBeDisabled()
+        expect(
+            screen.getByText("Description must be 2000 characters or fewer."),
+        ).toBeInTheDocument()
+        expect(descriptionInput).toHaveAttribute("maxLength", "2000")
+
+        fireEvent.change(descriptionInput, {
+            target: { value: "a reasonable description" },
+        })
+        expect(saveButton).toBeEnabled()
+        expect(
+            screen.queryByText("Description must be 2000 characters or fewer."),
+        ).not.toBeInTheDocument()
+
+        fireEvent.click(saveButton)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
     it("edit access group: disables Save until the name/description actually changes", () => {
         const fetchMock = vi.fn()
         vi.stubGlobal("fetch", fetchMock)
@@ -2031,6 +2077,51 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
         // Quiet Observer already belongs to the group and must not be
         // offered again; Aria the GM and Multi Role Member remain eligible.
         expect(options).toEqual(["Aria the GM", "Multi Role Member"])
+    })
+
+    it("add member: excludes an active membership whose account is platform-disabled", () => {
+        const overviewWithDisabledAccount: CampaignAccessOverview = {
+            ...groupOverview,
+            members: [
+                ...groupOverview.members,
+                {
+                    campaign_membership_id:
+                        "7a1e9e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    user_id: "8b2f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    display_name: "Disabled Account Member",
+                    status_code: "active",
+                    status_display_name: "Active",
+                    joined_at: "2026-01-06T00:00:00Z",
+                    // dnd_ai.commands.access_groups.add_access_group_member
+                    // already rejects this membership (its owning account is
+                    // platform-disabled) — the selector must not offer it in
+                    // the first place, checkpoint-6 correction.
+                    account_is_active: false,
+                    roles: [],
+                    character_relationships: [],
+                    grants: [],
+                },
+            ],
+        }
+
+        renderPage(overviewWithDisabledAccount)
+
+        // The member-overview contract still requires this member to be
+        // visible on the main page — only the group's own selector excludes
+        // them.
+        expect(
+            screen.getByText("Disabled Account Member"),
+        ).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Add member" }))
+
+        const select = screen.getByLabelText("Add a member to Lore Circle")
+        const options = Array.from(select.querySelectorAll("option")).map(
+            (option) => option.textContent,
+        )
+
+        expect(options).toEqual(["Aria the GM", "Multi Role Member"])
+        expect(options).not.toContain("Disabled Account Member")
     })
 
     it("remove member confirmation names both the member and the group", () => {

@@ -1,6 +1,14 @@
 import { useId, useState } from "react"
 import { useCreateAccessGroup } from "../hooks/useCreateAccessGroup"
 
+// Mirrors dnd_ai.commands.access_groups.ACCESS_GROUP_NAME_MAX_LENGTH/
+// ACCESS_GROUP_DESCRIPTION_MAX_LENGTH exactly — the server remains
+// authoritative (both are re-enforced there, at the Pydantic and command
+// layers), but matching bounds here means a caller sees the rejection
+// before ever submitting rather than after a round trip.
+const NAME_MAX_LENGTH = 200
+const DESCRIPTION_MAX_LENGTH = 2000
+
 interface CreateAccessGroupProps {
     campaignId: string
     campaignName: string
@@ -50,6 +58,9 @@ export function CreateAccessGroup({
 
     const isPending = status.kind === "pending"
     const trimmedName = name.trim()
+    const isNameTooLong = trimmedName.length > NAME_MAX_LENGTH
+    const trimmedDescription = description.trim()
+    const isDescriptionTooLong = trimmedDescription.length > DESCRIPTION_MAX_LENGTH
 
     if (!isEditing) {
         return (
@@ -73,11 +84,11 @@ export function CreateAccessGroup({
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (trimmedName === "") {
+                if (trimmedName === "" || isNameTooLong || isDescriptionTooLong) {
                     return
                 }
                 onMutationStart()
-                submit(trimmedName, description.trim() === "" ? null : description.trim())
+                submit(trimmedName, trimmedDescription === "" ? null : trimmedDescription)
             }}
         >
             <label htmlFor={nameInputId}>
@@ -88,11 +99,16 @@ export function CreateAccessGroup({
                 type="text"
                 value={name}
                 disabled={isPending}
-                maxLength={200}
+                maxLength={NAME_MAX_LENGTH}
                 onChange={(event) => {
                     setName(event.currentTarget.value)
                 }}
             />
+            {isNameTooLong && (
+                <p role="alert">
+                    Access group name must be {NAME_MAX_LENGTH} characters or fewer.
+                </p>
+            )}
 
             <label htmlFor={descriptionInputId}>
                 Description (optional)
@@ -101,15 +117,26 @@ export function CreateAccessGroup({
                 id={descriptionInputId}
                 value={description}
                 disabled={isPending}
+                maxLength={DESCRIPTION_MAX_LENGTH}
                 onChange={(event) => {
                     setDescription(event.currentTarget.value)
                 }}
             />
+            {isDescriptionTooLong && (
+                <p role="alert">
+                    Description must be {DESCRIPTION_MAX_LENGTH} characters or fewer.
+                </p>
+            )}
 
             <div className="access-role-editor__actions">
                 <button
                     type="submit"
-                    disabled={isPending || trimmedName === ""}
+                    disabled={
+                        isPending ||
+                        trimmedName === "" ||
+                        isNameTooLong ||
+                        isDescriptionTooLong
+                    }
                     aria-busy={isPending}
                 >
                     {isPending ? "Creating…" : "Save"}

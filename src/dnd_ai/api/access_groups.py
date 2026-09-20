@@ -42,10 +42,12 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.access_groups import (
+    ACCESS_GROUP_DESCRIPTION_MAX_LENGTH,
+    ACCESS_GROUP_NAME_MAX_LENGTH,
     add_access_group_member,
     create_access_group,
     deactivate_access_group,
@@ -76,6 +78,32 @@ _REMOVE_GROUP_MEMBER_COMMAND_NAME = "remove_access_group_member"
 _CREATED_CHANGE_ACTION = "created"
 _UPDATED_CHANGE_ACTION = "updated"
 
+# Checkpoint-6 correction: deactivate_access_group_endpoint used to write
+# every removed access_group_membership_id/revoked resource_grant_id into
+# changed_fields verbatim — an unbounded JSONB payload sized by however many
+# open memberships/active grants the group happened to own at the moment it
+# was archived, with no cap at all. Full transactional cleanup
+# (dnd_ai.commands.access_groups.deactivate_access_group) is unaffected —
+# every dependent row is still closed/revoked regardless of how many there
+# are — only this audit *representation* is bounded now.
+_DEACTIVATE_AUDIT_ID_SAMPLE_LIMIT = 20
+
+
+def _bounded_id_sample(ids: tuple[uuid.UUID, ...]) -> dict[str, Any]:
+    """Bounds an unboundedly-sized tuple of ids for one `changed_fields`
+    entry: an exact `count`, a `sample_ids` prefix capped at
+    `_DEACTIVATE_AUDIT_ID_SAMPLE_LIMIT`, and a `sample_truncated` flag
+    naming whether `sample_ids` is the whole list (`False`) or only a
+    prefix of it (`True`) — so a reader of the raw `audit.change_log` row
+    can always tell the two apart rather than mistaking a capped sample for
+    the complete set."""
+    sample = ids[:_DEACTIVATE_AUDIT_ID_SAMPLE_LIMIT]
+    return {
+        "count": len(ids),
+        "sample_ids": [str(entity_id) for entity_id in sample],
+        "sample_truncated": len(ids) > len(sample),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Request/response contracts
@@ -83,13 +111,22 @@ _UPDATED_CHANGE_ACTION = "updated"
 
 
 class CreateAccessGroupRequest(BaseModel):
-    name: str
-    description: str | None = None
+    # Bounds mirror ck_access_groups_name_length (migration 080)/
+    # ck_access_groups_description_length (migration 106) exactly —
+    # imported from dnd_ai.commands.access_groups rather than restated, so
+    # an over-limit value is rejected here, before any database round trip,
+    # with the same numbers the database and dnd_ai.commands.access_groups'
+    # own pre-check (AccessGroupNameTooLongError/
+    # AccessGroupDescriptionTooLongError) enforce. A too-long value that
+    # somehow reached the command layer anyway (this endpoint is not the
+    # only caller in principle) is still rejected there, not just here.
+    name: str = Field(max_length=ACCESS_GROUP_NAME_MAX_LENGTH)
+    description: str | None = Field(default=None, max_length=ACCESS_GROUP_DESCRIPTION_MAX_LENGTH)
 
 
 class UpdateAccessGroupRequest(BaseModel):
-    name: str
-    description: str | None = None
+    name: str = Field(max_length=ACCESS_GROUP_NAME_MAX_LENGTH)
+    description: str | None = Field(default=None, max_length=ACCESS_GROUP_DESCRIPTION_MAX_LENGTH)
 
 
 class AccessGroupResponse(BaseModel):
@@ -163,7 +200,12 @@ def create_access_group_endpoint(
         correlation_id=correlation_id,
         command_name=_CREATE_GROUP_COMMAND_NAME,
         event_id=None,
-        changed_fields={"name": result.name, "description": body.description},
+        # The command's own normalized description (trimmed, blank-to-
+        # None), never body.description raw — a caller-supplied
+        # whitespace-only description is persisted as NULL, and the audit
+        # record must agree with what was actually stored, not what was
+        # merely requested.
+        changed_fields={"name": result.name, "description": result.description},
     )
 
     response = AccessGroupResponse(access_group_id=result.access_group_id, name=result.name)
@@ -243,7 +285,9 @@ def update_access_group_endpoint(
         event_id=None,
         previous_status=result.previous_name,
         new_status=result.name,
-        changed_fields={"description": body.description},
+        # result.description, not body.description raw — see
+        # create_access_group_endpoint's identical comment above.
+        changed_fields={"description": result.description},
     )
 
     response = AccessGroupResponse(access_group_id=result.access_group_id, name=result.name)
@@ -281,7 +325,12 @@ def deactivate_access_group_endpoint(
     carries everything this command needs. The audit write below is
     conditioned on `DeactivateAccessGroupResult.deactivated`, so a plain
     retry that lands on an already-archived group (whether or not it
-    reuses a key) writes no second row."""
+    reuses a key) writes no second row. `changed_fields` records each
+    dependent list (`removed_access_group_memberships`/`revoked_
+    resource_grants`) as a bounded `_bounded_id_sample()` summary — exact
+    `count`, a capped `sample_ids` prefix, `sample_truncated` — never the
+    full, unbounded id list; full transactional cleanup is unaffected by
+    this bound, only its audit representation."""
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {"access_group_id": str(access_group_id)}
@@ -327,13 +376,10 @@ def deactivate_access_group_endpoint(
             previous_status="active",
             new_status="archived",
             changed_fields={
-                "removed_access_group_membership_ids": [
-                    str(membership_id)
-                    for membership_id in result.removed_access_group_membership_ids
-                ],
-                "revoked_resource_grant_ids": [
-                    str(grant_id) for grant_id in result.revoked_resource_grant_ids
-                ],
+                "removed_access_group_memberships": _bounded_id_sample(
+                    result.removed_access_group_membership_ids
+                ),
+                "revoked_resource_grants": _bounded_id_sample(result.revoked_resource_grant_ids),
             },
         )
 

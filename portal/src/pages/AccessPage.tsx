@@ -310,6 +310,7 @@ function AccessGroupCard({
         .filter(
             (member) =>
                 member.status_code === "active" &&
+                member.account_is_active &&
                 !groupMembershipIds.has(member.campaign_membership_id),
         )
         .map((member) => ({

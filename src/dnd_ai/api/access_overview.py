@@ -180,6 +180,15 @@ class CampaignMemberSummaryResponse(BaseModel):
     status_code: str
     status_display_name: str
     joined_at: datetime
+    # Checkpoint-6 correction: whether the owning account is currently
+    # platform-active — never the raw lifecycle_status_id code, login name,
+    # email, or identity subject. Exists solely so the portal's access-group
+    # "Add member" selector can filter out a membership that dnd_ai.commands.
+    # access_groups.add_access_group_member() would reject anyway, rather
+    # than offering it and having every such attempt fail. See
+    # dnd_ai.queries.access_overview's own module docstring for the full
+    # non-disclosure reasoning.
+    account_is_active: bool
     roles: list[RoleSummaryResponse]
     character_relationships: list[CharacterRelationshipSummaryResponse]
     grants: list[ResourceGrantSummaryResponse]
@@ -304,6 +313,7 @@ def get_campaign_access_overview_endpoint(
                 status_code=member.status_code,
                 status_display_name=member.status_display_name,
                 joined_at=member.joined_at,
+                account_is_active=member.account_is_active,
                 roles=[
                     RoleSummaryResponse(
                         membership_role_id=role.membership_role_id,

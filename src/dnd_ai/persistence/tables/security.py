@@ -583,7 +583,20 @@ access_groups = Table(
         nullable=False,
     ),
     Column("name", Text(), nullable=False),
-    Column("description", Text()),
+    # Length bound added by revision 106 (Phase 13E-B checkpoint-6
+    # correction) — comment text must match that migration's own `COMMENT
+    # ON COLUMN` exactly (alembic check compares comments unconditionally).
+    Column(
+        "description",
+        Text(),
+        comment=(
+            "Optional free-text description; when present, 1-2000 characters "
+            "(ck_access_groups_description_length, migration 106). A blank value "
+            "normalizes to NULL before storage (dnd_ai.commands.access_groups."
+            "create_access_group/update_access_group), never stored as an empty "
+            "string."
+        ),
+    ),
     # Added by revision 105 (Phase 13E-B checkpoint 6) — see that migration's
     # own docstring for why this reuses the shared core.lifecycle_statuses
     # lookup rather than a bespoke boolean, and why reactivating a group
