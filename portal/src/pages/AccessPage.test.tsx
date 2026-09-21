@@ -17,6 +17,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { AccessPage } from "./AccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 const campaignId = sessionBootstrapFixture.campaigns[0].campaign_id
 const campaignName = sessionBootstrapFixture.campaigns[0].campaign_name
 
@@ -189,6 +193,8 @@ function renderPage(
                 overview={overview}
                 onChanged={onChanged}
                 onMutationStart={onMutationStart}
+                issuedInvitationToken={null}
+                onIssuedInvitationTokenChange={vi.fn()}
             />
         </SessionContext.Provider>,
     )

@@ -78,7 +78,7 @@ this endpoint is designed to sit alongside, once a later PR wires it in).
 | `role` | `assign_membership_role`, `revoke_membership_role`, `change_membership_role` | `security.membership_roles` |
 | `character_relationship` | `grant_character_relationship`, `change_character_relationship`, `revoke_character_relationship` | `security.membership_character_relationships` |
 | `resource_grant` | `create_resource_grant`, `revoke_resource_grant` | `security.resource_grants` |
-| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation` | `security.campaign_invitations` |
+| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation` | `security.campaign_invitations` |
 | `campaign` | `create_campaign` | `campaign.campaigns` |
 | `access_group` | `create_access_group`, `update_access_group`, `deactivate_access_group`, `reactivate_access_group` | `security.access_groups` |
 | `access_group_membership` | `add_access_group_member`, `remove_access_group_member` | `security.access_group_memberships` |
@@ -115,7 +115,7 @@ carries only:
 | `change_log_id` | `audit.change_log.change_log_id` | Identity only — a React list key, never rendered as page text. |
 | `occurred_at` | `audit.change_log.recorded_at` | |
 | `category` | Derived from `command_name` (§2) | Closed enum. |
-| `action_label` | Derived from `command_name`, a fixed server-owned string (e.g. `"Member added"`) | Never free text. |
+| `action_label` | Derived from `command_name`, a fixed server-owned string (e.g. `"Member added"`, `"Invitation revoked"`) | Never free text. |
 | `actor_label` | `security.users.display_name` (current), or `audit.change_log.actor_service`, or a fixed `"Unknown actor"`/`"Removed account"` fallback | Never email, never a login identifier. |
 | `actor_type` | `"user"` \| `"service"` \| `"unknown"` | |
 | `target_label` | `security.users.display_name` (account target), `core.entities.canonical_name` (character target), or an access group's `name` — current values, resolved per category (§2's source table) | `null` when the category has no single discrete target (`invitation`, `campaign`). |

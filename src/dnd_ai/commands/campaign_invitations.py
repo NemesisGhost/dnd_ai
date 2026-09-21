@@ -92,6 +92,27 @@ class InvitationNotAcceptableError(DomainAuthorizationError):
     only, never `safe_message`."""
 
 
+class InvitationNotInCampaignError(DomainAuthorizationError):
+    """Raised by `revoke_campaign_invitation()` when the target invitation
+    does not exist or does not belong to `campaign_id`, identically, so a
+    caller cannot distinguish cross-campaign probing from absence."""
+
+
+class InvitationNotRevocableError(DomainAuthorizationError):
+    """Raised by `revoke_campaign_invitation()` when the invitation exists
+    in the target campaign but is no longer outstanding because it was
+    accepted or expired. The exact cause remains undisclosed.
+
+    Unlike `InvitationNotInCampaignError`, the row's existence and scope
+    are already established by the time this raises, so this is a fixed
+    conflict rather than a 404.
+    """
+
+    safe_status_code = 409
+    safe_error_code = "conflict"
+    safe_message = "The request could not be completed due to a conflicting change."
+
+
 def _hash_invitation_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -146,6 +167,11 @@ def create_campaign_invitation(
 class AcceptCampaignInvitationResult:
     campaign_id: uuid.UUID
     campaign_membership_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class RevokeCampaignInvitationResult:
+    revoked: bool
 
 
 def _activate_or_create_membership(
@@ -288,3 +314,54 @@ def accept_campaign_invitation(
     return AcceptCampaignInvitationResult(
         campaign_id=invitation["campaign_id"], campaign_membership_id=membership_id
     )
+
+
+def revoke_campaign_invitation(
+    connection: Connection, *, campaign_id: uuid.UUID, campaign_invitation_id: uuid.UUID
+) -> RevokeCampaignInvitationResult:
+    """Revokes one outstanding invitation in `campaign_id`.
+
+    Locks the invitation row `FOR UPDATE` so concurrent accept/revoke and
+    revoke/revoke pairs serialize on the same row. Accepted or expired
+    invitations are rejected with one fixed conflict-class error; an
+    already-revoked invitation is a documented success/no-op.
+    """
+    invitation = (
+        connection.execute(
+            text("""
+                SELECT campaign_id, accepted_by_user_id, accepted_at, revoked_at,
+                       (expires_at <= now()) AS expired
+                FROM security.campaign_invitations
+                WHERE campaign_invitation_id = :campaign_invitation
+                FOR UPDATE
+            """),
+            {"campaign_invitation": campaign_invitation_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if invitation is None or invitation["campaign_id"] != campaign_id:
+        raise InvitationNotInCampaignError(
+            f"invitation {campaign_invitation_id} does not belong to campaign {campaign_id} "
+            f"(actual campaign: {invitation['campaign_id'] if invitation is not None else None})"
+        )
+
+    if invitation["revoked_at"] is not None:
+        return RevokeCampaignInvitationResult(revoked=False)
+
+    if invitation["accepted_by_user_id"] is not None or invitation["accepted_at"] is not None:
+        raise InvitationNotRevocableError(
+            f"invitation {campaign_invitation_id} has already been accepted"
+        )
+    if invitation["expired"]:
+        raise InvitationNotRevocableError(f"invitation {campaign_invitation_id} is expired")
+
+    connection.execute(
+        text("""
+            UPDATE security.campaign_invitations
+            SET revoked_at = now()
+            WHERE campaign_invitation_id = :campaign_invitation
+        """),
+        {"campaign_invitation": campaign_invitation_id},
+    )
+    return RevokeCampaignInvitationResult(revoked=True)

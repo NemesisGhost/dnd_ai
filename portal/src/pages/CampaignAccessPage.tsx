@@ -33,6 +33,7 @@ export function CampaignAccessPage() {
     // live region, regardless of what else unmounts alongside it.
     const [announcement, setAnnouncement] =
         useState<RoleChangeAnnouncement | null>(null)
+    const [issuedInvitationToken, setIssuedInvitationToken] = useState<string | null>(null)
 
     if (campaignId === undefined) {
         return (
@@ -106,6 +107,8 @@ export function CampaignAccessPage() {
                             handleRoleChanged(retry, message)
                         }
                         onMutationStart={handleMutationStart}
+                        issuedInvitationToken={issuedInvitationToken}
+                        onIssuedInvitationTokenChange={setIssuedInvitationToken}
                     />
                 )}
             </AccessOverviewBoundary>

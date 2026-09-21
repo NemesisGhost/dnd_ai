@@ -133,7 +133,10 @@ _RELATIONSHIP_TABLE_COMMANDS: tuple[str, ...] = (
     "revoke_character_relationship",
 )
 _GRANT_TABLE_COMMANDS: tuple[str, ...] = ("create_resource_grant", "revoke_resource_grant")
-_INVITATION_TABLE_COMMANDS: tuple[str, ...] = ("create_campaign_invitation",)
+_INVITATION_TABLE_COMMANDS: tuple[str, ...] = (
+    "create_campaign_invitation",
+    "revoke_campaign_invitation",
+)
 _CAMPAIGN_TABLE_COMMANDS: tuple[str, ...] = ("create_campaign",)
 # Phase 13E-B checkpoint 6. Grouped separately from _GRANT_TABLE_COMMANDS
 # even though both concern access groups: these resolve against
@@ -172,7 +175,11 @@ _COMMANDS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
     "role": _ROLE_TABLE_COMMANDS,
     "character_relationship": _RELATIONSHIP_TABLE_COMMANDS,
     "resource_grant": _GRANT_TABLE_COMMANDS,
-    "invitation": ("create_campaign_invitation", "accept_campaign_invitation"),
+    "invitation": (
+        "create_campaign_invitation",
+        "accept_campaign_invitation",
+        "revoke_campaign_invitation",
+    ),
     "campaign": _CAMPAIGN_TABLE_COMMANDS,
     "access_group": _ACCESS_GROUP_TABLE_COMMANDS,
     "access_group_membership": _ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS,
@@ -205,6 +212,7 @@ _ACTION_LABEL_BY_COMMAND: dict[str, str] = {
     "revoke_resource_grant": "Access grant revoked",
     "create_campaign_invitation": "Invitation sent",
     "accept_campaign_invitation": "Invitation accepted",
+    "revoke_campaign_invitation": "Invitation revoked",
     "create_campaign": "Campaign created",
     "create_access_group": "Access group created",
     "update_access_group": "Access group updated",

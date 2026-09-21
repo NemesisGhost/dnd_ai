@@ -17,6 +17,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 const { boundaryPropsSpy, retryMock } = vi.hoisted(() => ({
     boundaryPropsSpy: vi.fn(),
     retryMock: vi.fn(),

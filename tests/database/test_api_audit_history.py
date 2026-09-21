@@ -337,6 +337,24 @@ class Fixture:
             record_id=invitation_id,
         )
 
+        # 11b. revoke invitation (a second, distinct invitation row)
+        revoked_invitation_id = make_campaign_invitation(
+            connection, self.campaign_id, self.admin_membership_id
+        )
+        connection.execute(
+            text(
+                "UPDATE security.campaign_invitations SET revoked_at = now() "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"i": revoked_invitation_id},
+        )
+        _record(
+            command="revoke_campaign_invitation",
+            action="updated",
+            table="campaign_invitations",
+            record_id=revoked_invitation_id,
+        )
+
         # 12. accept invitation (actor is the accepting user, matching the
         # real command's own attribution — not the inviting admin)
         self.accepted_user_id = make_user(connection, "Audit History Accepted Member")
@@ -613,8 +631,8 @@ def test_authorized_admin_reads_the_full_curated_history(
     assert response.status_code == 200
     body = response.json()
     assert body["next_cursor"] is None
-    # 14 events recorded for campaign A (13 numbered + 1 ghost-actor event).
-    assert len(body["items"]) == 14
+    # 15 events recorded for campaign A (14 numbered + 1 ghost-actor event).
+    assert len(body["items"]) == 15
     categories = {item["category"] for item in body["items"]}
     assert categories == {
         "membership",
@@ -624,6 +642,7 @@ def test_authorized_admin_reads_the_full_curated_history(
         "invitation",
         "campaign",
     }
+    assert any(item["action_label"] == "Invitation revoked" for item in body["items"])
 
 
 def test_ordering_is_deterministic_newest_first_under_a_real_timestamp_tie(
@@ -654,7 +673,7 @@ def test_pagination_is_stable_across_the_timestamp_tie(
 
         page3 = client.get(_url(f.campaign_id, limit=5, cursor=page2["next_cursor"])).json()
         assert page3["next_cursor"] is None
-        assert len(page3["items"]) == 4  # 14 total - 5 - 5
+        assert len(page3["items"]) == 5  # 15 total - 5 - 5
 
     all_ids = [i["change_log_id"] for i in page1["items"] + page2["items"] + page3["items"]]
     assert len(all_ids) == len(set(all_ids)), "pagination must never repeat a row"
@@ -679,7 +698,14 @@ def test_pagination_is_stable_across_the_timestamp_tie(
             },
         ),
         ("resource_grant", {"create_resource_grant", "revoke_resource_grant"}),
-        ("invitation", {"create_campaign_invitation", "accept_campaign_invitation"}),
+        (
+            "invitation",
+            {
+                "create_campaign_invitation",
+                "accept_campaign_invitation",
+                "revoke_campaign_invitation",
+            },
+        ),
         ("campaign", {"create_campaign"}),
     ],
 )
@@ -742,7 +768,7 @@ def test_campaign_a_never_sees_campaign_b_history(
         response = client.get(_url(f.campaign_id, limit=100))
     body = response.json()
     change_log_ids = {item["change_log_id"] for item in body["items"]}
-    assert len(change_log_ids) == 14
+    assert len(change_log_ids) == 15
     # Every change_log_id here must have been produced for campaign A —
     # cross-checked structurally by re-querying campaign B and confirming
     # no overlap in ids at all.
