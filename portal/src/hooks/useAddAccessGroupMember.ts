@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+} from "react"
 import {
     AddAccessGroupMemberRequestError,
     addAccessGroupMember,
@@ -15,7 +20,10 @@ export type AddAccessGroupMemberStatus =
 
 export interface UseAddAccessGroupMemberResult {
     status: AddAccessGroupMemberStatus
-    submit: (accessGroupId: string, campaignMembershipIds: string[]) => void
+    submit: (
+        accessGroupId: string,
+        campaignMembershipIds: string[],
+    ) => void
     reset: () => void
 }
 
@@ -30,23 +38,37 @@ interface IdempotencyReservation {
     key: string
 }
 
-const idleStatus: AddAccessGroupMemberStatus = { kind: "idle" }
+const idleStatus: AddAccessGroupMemberStatus = {
+    kind: "idle",
+}
 
-// Mirrors useAssignMembershipRole's shape exactly (Phase 13E-B checkpoint
-// 6's "Add member to group" control) — one hook instance per group's
-// Add-member control.
+function normalizeMembershipIds(
+    campaignMembershipIds: readonly string[],
+): string[] {
+    return [
+        ...new Set(campaignMembershipIds),
+    ].sort()
+}
+
 export function useAddAccessGroupMember(
     campaignId: string,
     onSuccess: (addedCount: number) => void,
 ): UseAddAccessGroupMemberResult {
-    const { state: sessionState, reload } = useSession()
-    const controllerRef = useRef<AbortController | null>(null)
-    const idempotencyRef = useRef<IdempotencyReservation | null>(null)
+    const {
+        state: sessionState,
+        reload,
+    } = useSession()
 
-    const [snapshot, setSnapshot] = useState<Snapshot>(() => ({
-        campaignId,
-        status: idleStatus,
-    }))
+    const controllerRef =
+        useRef<AbortController | null>(null)
+    const idempotencyRef =
+        useRef<IdempotencyReservation | null>(null)
+
+    const [snapshot, setSnapshot] =
+        useState<Snapshot>(() => ({
+            campaignId,
+            status: idleStatus,
+        }))
 
     useEffect(() => {
         return () => {
@@ -56,52 +78,88 @@ export function useAddAccessGroupMember(
     }, [campaignId])
 
     const resolveIdempotencyKey = useCallback(
-        (accessGroupId: string, campaignMembershipIds: readonly string[]): string => {
+        (
+            accessGroupId: string,
+            normalizedMembershipIds: readonly string[],
+        ): string => {
             const reserved = idempotencyRef.current
-            const normalizedMembershipIds = [...campaignMembershipIds].sort()
+
             if (
                 reserved !== null &&
-                reserved.accessGroupId === accessGroupId &&
-                reserved.campaignMembershipIds.length === normalizedMembershipIds.length &&
-                reserved.campaignMembershipIds.every((id, index) => id === normalizedMembershipIds[index])
+                reserved.accessGroupId ===
+                    accessGroupId &&
+                reserved.campaignMembershipIds.length ===
+                    normalizedMembershipIds.length &&
+                reserved.campaignMembershipIds.every(
+                    (membershipId, index) =>
+                        membershipId ===
+                        normalizedMembershipIds[index],
+                )
             ) {
                 return reserved.key
             }
 
-            const key = globalThis.crypto.randomUUID()
+            const key =
+                globalThis.crypto.randomUUID()
+
             idempotencyRef.current = {
                 accessGroupId,
-                campaignMembershipIds: normalizedMembershipIds,
+                campaignMembershipIds: [
+                    ...normalizedMembershipIds,
+                ],
                 key,
             }
+
             return key
         },
         [],
     )
 
     const status =
-        snapshot.campaignId === campaignId ? snapshot.status : idleStatus
+        snapshot.campaignId === campaignId
+            ? snapshot.status
+            : idleStatus
 
     const submit = useCallback(
-        (accessGroupId: string, campaignMembershipIds: string[]) => {
+        (
+            accessGroupId: string,
+            campaignMembershipIds: string[],
+        ) => {
             if (status.kind === "pending") {
                 return
             }
-            if (sessionState.status !== "authenticated") {
+
+            if (
+                sessionState.status !==
+                "authenticated"
+            ) {
                 return
             }
-            if (campaignMembershipIds.length === 0) {
+
+            const normalizedMembershipIds =
+                normalizeMembershipIds(
+                    campaignMembershipIds,
+                )
+
+            if (
+                normalizedMembershipIds.length === 0
+            ) {
                 return
             }
 
             const requestCampaignId = campaignId
-            const csrfToken = sessionState.bootstrap.csrf_token
-            const idempotencyKey = resolveIdempotencyKey(
-                accessGroupId,
-                campaignMembershipIds,
-            )
-            const controller = new AbortController()
+            const csrfToken =
+                sessionState.bootstrap.csrf_token
+            const idempotencyKey =
+                resolveIdempotencyKey(
+                    accessGroupId,
+                    normalizedMembershipIds,
+                )
+
+            const controller =
+                new AbortController()
             controllerRef.current = controller
+
             setSnapshot({
                 campaignId: requestCampaignId,
                 status: { kind: "pending" },
@@ -110,66 +168,107 @@ export function useAddAccessGroupMember(
             void addAccessGroupMember(
                 requestCampaignId,
                 accessGroupId,
-                campaignMembershipIds,
+                normalizedMembershipIds,
                 csrfToken,
                 idempotencyKey,
                 controller.signal,
             )
                 .then((response) => {
-                    if (controller.signal.aborted) {
+                    if (
+                        controller.signal.aborted
+                    ) {
                         return
                     }
 
                     idempotencyRef.current = null
+
                     setSnapshot({
-                        campaignId: requestCampaignId,
-                        status: { kind: "success" },
+                        campaignId:
+                            requestCampaignId,
+                        status: {
+                            kind: "success",
+                        },
                     })
+
                     onSuccess(response.added_count)
                     reload()
                 })
                 .catch((cause: unknown) => {
-                    if (controller.signal.aborted) {
+                    if (
+                        controller.signal.aborted
+                    ) {
                         return
                     }
 
-                    if (cause instanceof AddAccessGroupMemberRequestError) {
+                    if (
+                        cause instanceof
+                        AddAccessGroupMemberRequestError
+                    ) {
                         if (cause.status === 401) {
                             setSnapshot({
-                                campaignId: requestCampaignId,
+                                campaignId:
+                                    requestCampaignId,
                                 status: idleStatus,
                             })
                             reload()
                             return
                         }
-                        if (cause.status === 403 || cause.status === 404) {
+
+                        if (
+                            cause.status === 403 ||
+                            cause.status === 404
+                        ) {
                             setSnapshot({
-                                campaignId: requestCampaignId,
-                                status: { kind: "denied" },
+                                campaignId:
+                                    requestCampaignId,
+                                status: {
+                                    kind: "denied",
+                                },
                             })
                             return
                         }
+
                         if (cause.status === 409) {
                             setSnapshot({
-                                campaignId: requestCampaignId,
-                                status: { kind: "conflict" },
+                                campaignId:
+                                    requestCampaignId,
+                                status: {
+                                    kind: "conflict",
+                                },
                             })
                             return
                         }
                     }
 
                     setSnapshot({
-                        campaignId: requestCampaignId,
-                        status: { kind: "error" },
+                        campaignId:
+                            requestCampaignId,
+                        status: {
+                            kind: "error",
+                        },
                     })
                 })
         },
-        [status.kind, sessionState, campaignId, onSuccess, reload, resolveIdempotencyKey],
+        [
+            status.kind,
+            sessionState,
+            campaignId,
+            onSuccess,
+            reload,
+            resolveIdempotencyKey,
+        ],
     )
 
     const reset = useCallback(() => {
-        setSnapshot({ campaignId, status: idleStatus })
+        setSnapshot({
+            campaignId,
+            status: idleStatus,
+        })
     }, [campaignId])
 
-    return { status, submit, reset }
+    return {
+        status,
+        submit,
+        reset,
+    }
 }

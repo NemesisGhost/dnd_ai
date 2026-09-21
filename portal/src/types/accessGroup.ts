@@ -1,5 +1,5 @@
 // Request/response shapes for the Phase 13E-B checkpoint 6 access-group
-// lifecycle/membership routes (dnd_ai.api.access_groups).
+// lifecycle and membership routes.
 
 export interface CreateAccessGroupRequest {
     name: string
@@ -16,12 +16,16 @@ export interface AccessGroupResponse {
     name: string
 }
 
-export interface AddAccessGroupMemberRequest {
+export interface AddAccessGroupMembersRequest {
     campaign_membership_ids: string[]
-    campaign_membership_id?: string
 }
 
-export interface AccessGroupMembershipResponse {
+export interface AddAccessGroupMembersResponse {
+    access_group_membership_id: string | null
     access_group_membership_ids: string[]
     added_count: number
+}
+
+export interface RemoveAccessGroupMemberResponse {
+    access_group_membership_id: string
 }

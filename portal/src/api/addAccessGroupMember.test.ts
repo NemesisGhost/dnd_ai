@@ -10,6 +10,7 @@ describe("addAccessGroupMember", () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(
                 JSON.stringify({
+                    access_group_membership_id: null,
                     access_group_membership_ids: ["link-1", "link-2"],
                     added_count: 2,
                 }),
@@ -27,6 +28,7 @@ describe("addAccessGroupMember", () => {
                 "fixture-idempotency-key",
             ),
         ).resolves.toEqual({
+            access_group_membership_id: null,
             access_group_membership_ids: ["link-1", "link-2"],
             added_count: 2,
         })
