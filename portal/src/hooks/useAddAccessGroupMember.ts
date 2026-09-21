@@ -37,7 +37,7 @@ const idleStatus: AddAccessGroupMemberStatus = { kind: "idle" }
 // Add-member control.
 export function useAddAccessGroupMember(
     campaignId: string,
-    onSuccess: () => void,
+    onSuccess: (addedCount: number) => void,
 ): UseAddAccessGroupMemberResult {
     const { state: sessionState, reload } = useSession()
     const controllerRef = useRef<AbortController | null>(null)
@@ -115,7 +115,7 @@ export function useAddAccessGroupMember(
                 idempotencyKey,
                 controller.signal,
             )
-                .then(() => {
+                .then((response) => {
                     if (controller.signal.aborted) {
                         return
                     }
@@ -125,7 +125,7 @@ export function useAddAccessGroupMember(
                         campaignId: requestCampaignId,
                         status: { kind: "success" },
                     })
-                    onSuccess()
+                    onSuccess(response.added_count)
                     reload()
                 })
                 .catch((cause: unknown) => {

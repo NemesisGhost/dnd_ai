@@ -812,7 +812,7 @@ describe("AccessPage — revoke role (Phase 13E-B checkpoint 2)", () => {
 describe("AccessPage — onMutationStart (persistent-announcement clearing)", () => {
     it("calls onMutationStart immediately when a role change is submitted, never merely on opening the editor", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -834,7 +834,7 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
     it("calls onMutationStart immediately when a role is added, never merely on opening the control", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -849,7 +849,7 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
     it("calls onMutationStart immediately when a role revocation is confirmed, never merely on opening the confirmation", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -2067,16 +2067,40 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
     it("add member: offers only currently active members not already in the group", () => {
         renderPage(groupOverview)
 
-        fireEvent.click(screen.getByRole("button", { name: "Add member" }))
-
-        const select = screen.getByLabelText("Add a member to Lore Circle")
-        const options = Array.from(select.querySelectorAll("option")).map(
-            (option) => option.textContent,
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add members",
+            }),
         )
 
-        // Quiet Observer already belongs to the group and must not be
-        // offered again; Aria the GM and Multi Role Member remain eligible.
-        expect(options).toEqual(["Aria the GM", "Multi Role Member"])
+        const picker = screen.getByRole("group", {
+            name: "Add members to Lore Circle",
+        })
+
+        const checkboxes =
+            within(picker).getAllByRole("checkbox")
+
+        expect(checkboxes).toHaveLength(2)
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Aria the GM",
+            }),
+        ).not.toBeChecked()
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Multi Role Member",
+            }),
+        ).not.toBeChecked()
+
+        // Quiet Observer already belongs to the group and must
+        // not be offered again.
+        expect(
+            within(picker).queryByRole("checkbox", {
+                name: "Quiet Observer",
+            }),
+        ).not.toBeInTheDocument()
     })
 
     it("add member: excludes an active membership whose account is platform-disabled", () => {
@@ -2087,15 +2111,16 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
                 {
                     campaign_membership_id:
                         "7a1e9e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
-                    user_id: "8b2f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    user_id:
+                        "8b2f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
                     display_name: "Disabled Account Member",
                     status_code: "active",
                     status_display_name: "Active",
                     joined_at: "2026-01-06T00:00:00Z",
-                    // dnd_ai.commands.access_groups.add_access_group_member
-                    // already rejects this membership (its owning account is
-                    // platform-disabled) — the selector must not offer it in
-                    // the first place, checkpoint-6 correction.
+                    // The backend independently rejects this
+                    // membership because its owning account is
+                    // platform-disabled. The picker should also
+                    // omit it from the available choices.
                     account_is_active: false,
                     roles: [],
                     character_relationships: [],
@@ -2106,22 +2131,39 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
 
         renderPage(overviewWithDisabledAccount)
 
-        // The member-overview contract still requires this member to be
-        // visible on the main page — only the group's own selector excludes
-        // them.
+        // The member remains visible in the campaign overview.
+        // Only access-group eligibility excludes it.
         expect(
             screen.getByText("Disabled Account Member"),
         ).toBeInTheDocument()
 
-        fireEvent.click(screen.getByRole("button", { name: "Add member" }))
-
-        const select = screen.getByLabelText("Add a member to Lore Circle")
-        const options = Array.from(select.querySelectorAll("option")).map(
-            (option) => option.textContent,
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add members",
+            }),
         )
 
-        expect(options).toEqual(["Aria the GM", "Multi Role Member"])
-        expect(options).not.toContain("Disabled Account Member")
+        const picker = screen.getByRole("group", {
+            name: "Add members to Lore Circle",
+        })
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Aria the GM",
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Multi Role Member",
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            within(picker).queryByRole("checkbox", {
+                name: "Disabled Account Member",
+            }),
+        ).not.toBeInTheDocument()
     })
 
     it("remove member confirmation names both the member and the group", () => {

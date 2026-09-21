@@ -52,14 +52,14 @@ describe("useAddAccessGroupMember", () => {
         )
 
         act(() => {
-            result.current.submit("group-1", "membership-1")
+            result.current.submit("group-1", ["membership-1"])
         })
 
         expect(result.current.status).toEqual({ kind: "pending" })
         expect(addAccessGroupMemberMock).toHaveBeenCalledWith(
             "campaign-a",
             "group-1",
-            "membership-1",
+            ["membership-1"],
             "fixture-csrf-token",
             expect.any(String),
             expect.any(AbortSignal),
@@ -86,7 +86,7 @@ describe("useAddAccessGroupMember", () => {
         )
 
         act(() => {
-            result.current.submit("group-1", "membership-1")
+            result.current.submit("group-1", ["membership-1"])
         })
 
         await waitFor(() => {
@@ -104,7 +104,7 @@ describe("useAddAccessGroupMember", () => {
         )
 
         act(() => {
-            result.current.submit("group-1", "membership-1")
+            result.current.submit("group-1", ["membership-1"])
         })
 
         await waitFor(() => {

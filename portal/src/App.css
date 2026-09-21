@@ -279,7 +279,7 @@
   padding: 0;
   margin: 1rem 0 0;
   list-style: none;
-  }
+}
 
 .campaign-selection__link {
   display: block;
@@ -479,11 +479,9 @@
   min-height: 100vh;
   padding: 1rem;
   background:
-    linear-gradient(
-      135deg,
+    linear-gradient(135deg,
       var(--color-chrome) 0%,
-      var(--color-chrome-secondary) 100%
-    );
+      var(--color-chrome-secondary) 100%);
 }
 
 .login-container {
@@ -552,12 +550,9 @@
 .form-input:focus {
   border-color: var(--color-primary);
   box-shadow:
-    0 0 0 3px
-    color-mix(
-      in srgb,
+    0 0 0 3px color-mix(in srgb,
       var(--color-focus) 25%,
-      transparent
-    );
+      transparent);
 }
 
 .form-input:disabled {
@@ -798,8 +793,7 @@
 
 .infobox select,
 .campaign-context-panel__control,
-.campaign-context-panel__section
-  .character-perspective-selector select {
+.campaign-context-panel__section .character-perspective-selector select {
   width: 100%;
   padding: 0.35rem 0.5rem;
   color: var(--color-infobox-text);
@@ -812,9 +806,7 @@
 
 .infobox select:disabled,
 .campaign-context-panel__control:disabled,
-.campaign-context-panel__section
-  .character-perspective-selector
-  select:disabled {
+.campaign-context-panel__section .character-perspective-selector select:disabled {
   color: var(--color-infobox-muted);
   background-color:
     var(--color-infobox-control-disabled);
@@ -1292,7 +1284,7 @@
 
 /* Spellcasting profile: a repeated subrecord inside the Spellcasting
    panel, grouping its own spells by level. */
-.spellcasting-profile + .spellcasting-profile {
+.spellcasting-profile+.spellcasting-profile {
   margin-top: 1.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--color-border);
@@ -1389,28 +1381,54 @@
   list-style: none;
 }
 
-.character-disclosure-card summary::-webkit-details-marker { display: none; }
-.character-disclosure-card summary:hover { background: var(--color-surface-hover); }
+.character-disclosure-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.character-disclosure-card summary:hover {
+  background: var(--color-surface-hover);
+}
+
 .character-disclosure-card summary:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-.character-disclosure-card summary strong { flex-basis: 100%; }
+.character-disclosure-card summary strong {
+  flex-basis: 100%;
+}
+
 .character-disclosure-card summary span:not(.character-disclosure-card__indicator) {
   font-size: 0.8rem;
   color: var(--color-text-muted);
 }
-.character-disclosure-card__indicator { margin-left: auto; }
-.character-disclosure-card__indicator::after { content: "Expand +"; font-size: 0.8rem; }
-.character-disclosure-card[open] .character-disclosure-card__indicator::after { content: "Collapse −"; }
+
+.character-disclosure-card__indicator {
+  margin-left: auto;
+}
+
+.character-disclosure-card__indicator::after {
+  content: "Expand +";
+  font-size: 0.8rem;
+}
+
+.character-disclosure-card[open] .character-disclosure-card__indicator::after {
+  content: "Collapse −";
+}
+
 .character-disclosure-card__body {
   padding: 0.75rem;
   border-top: 1px solid var(--color-border);
   overflow-wrap: anywhere;
 }
-.character-disclosure-card__body p { margin: 0.75rem 0 0; }
-.character-disclosure-card__body p:first-child { margin-top: 0; }
+
+.character-disclosure-card__body p {
+  margin: 0.75rem 0 0;
+}
+
+.character-disclosure-card__body p:first-child {
+  margin-top: 0;
+}
 
 .stat-card--hit-points {
   grid-column: span 2;
@@ -1418,7 +1436,9 @@
 }
 
 @media (max-width: 22rem) {
-  .stat-card--hit-points { grid-column: auto; }
+  .stat-card--hit-points {
+    grid-column: auto;
+  }
 }
 
 /* Shared collection card grid (World, Knowledge, Quests). auto-fit with a
@@ -1732,21 +1752,40 @@
   list-style: none;
 }
 
-.access-member-card summary::-webkit-details-marker { display: none; }
-.access-member-card summary:hover { background: var(--color-surface-hover); }
+.access-member-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.access-member-card summary:hover {
+  background: var(--color-surface-hover);
+}
+
 .access-member-card summary:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-.access-member-card summary strong { flex-basis: 100%; }
+.access-member-card summary strong {
+  flex-basis: 100%;
+}
+
 .access-member-card summary span:not(.access-member-card__indicator) {
   font-size: 0.8rem;
   color: var(--color-text-muted);
 }
-.access-member-card__indicator { margin-left: auto; }
-.access-member-card__indicator::after { content: "Expand +"; font-size: 0.8rem; }
-.access-member-card[open] .access-member-card__indicator::after { content: "Collapse −"; }
+
+.access-member-card__indicator {
+  margin-left: auto;
+}
+
+.access-member-card__indicator::after {
+  content: "Expand +";
+  font-size: 0.8rem;
+}
+
+.access-member-card[open] .access-member-card__indicator::after {
+  content: "Collapse −";
+}
 
 .access-member-card__body {
   display: flex;
@@ -1887,6 +1926,84 @@
 
 .access-role-editor__status--error {
   color: var(--color-danger);
+}
+
+/* Batch access-group membership picker. Each eligible campaign member is
+   an ordinary checkbox so selecting several members does not depend on
+   platform-specific multi-select keyboard gestures. */
+.access-group-member-picker {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+}
+
+.access-group-member-picker legend {
+  padding: 0 0.25rem;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.access-group-member-picker__list {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.access-group-member-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.access-group-member-picker__item:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.access-group-member-picker__item label {
+  flex: 1 1 auto;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.access-role-editor .access-group-member-picker__checkbox {
+  flex: 0 0 auto;
+  width: 1rem;
+  min-width: 1rem;
+  height: 1rem;
+  min-height: 1rem;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.access-role-editor .access-group-member-picker__checkbox:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.access-group-member-picker:disabled .access-group-member-picker__item,
+.access-group-member-picker:disabled .access-group-member-picker__item label,
+.access-group-member-picker:disabled .access-group-member-picker__checkbox {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.access-group-member-picker__count {
+  margin: 0.6rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
 }
 
 /* Add-role/revoke-role controls (Phase 13E-B checkpoint 2) reuse every

@@ -17,27 +17,30 @@ interface AddAccessGroupMemberProps {
 
 function statusMessage(
     kind: "pending" | "success" | "denied" | "conflict" | "error",
+    selectedCount: number,
 ): string {
     switch (kind) {
         case "pending":
-            return "Adding member…"
+            return selectedCount === 1
+                ? "Adding 1 member…"
+                : `Adding ${selectedCount} members…`
         case "success":
-            return "Member added to group."
+            return "Members added to group."
         case "denied":
             return "You do not have permission to make this change."
         case "conflict":
             return "This group's membership changed elsewhere. Reload the page to see the current state."
         case "error":
-            return "The member could not be added. Try again."
+            return "The selected members could not be added. Try again."
     }
 }
 
-// One control per group — "add a member" names an existing, active
-// campaign member and the group to add them to. eligibleMembers is already
-// narrowed by the caller (AccessPage) to currently active campaign members
-// not already open in this group — presentation only; the server
-// independently re-validates and re-locks the target membership and group
-// regardless (dnd_ai.commands.access_groups.add_access_group_member).
+function addedMessage(addedCount: number): string {
+    return addedCount === 1
+        ? "1 member added to group."
+        : `${addedCount} members added to group.`
+}
+
 export function AddAccessGroupMember({
     campaignId,
     accessGroupId,
@@ -46,17 +49,34 @@ export function AddAccessGroupMember({
     onChanged,
     onMutationStart,
 }: AddAccessGroupMemberProps) {
-    const selectId = useId()
+    const checkboxGroupId = useId()
+    const selectionCountId = useId()
     const statusId = useId()
 
     const [isEditing, setIsEditing] = useState(false)
-    const [selectedMembershipIds, setSelectedMembershipIds] = useState<string[]>(
-        eligibleMembers.length > 0 ? [eligibleMembers[0].campaign_membership_id] : [],
+    const [selectedMembershipIds, setSelectedMembershipIds] =
+        useState<string[]>([])
+
+    const eligibleMembershipIds = new Set(
+        eligibleMembers.map(
+            (member) => member.campaign_membership_id,
+        ),
     )
 
-    const { status, submit, reset } = useAddAccessGroupMember(campaignId, () =>
-        onChanged("Members added to group."),
-    )
+    const validSelectedMembershipIds =
+        selectedMembershipIds.filter((membershipId) =>
+            eligibleMembershipIds.has(membershipId),
+        )
+
+    const { status, submit, reset } =
+        useAddAccessGroupMember(
+            campaignId,
+            (addedCount) => {
+                setSelectedMembershipIds([])
+                setIsEditing(false)
+                onChanged(addedMessage(addedCount))
+            },
+        )
 
     const isPending = status.kind === "pending"
 
@@ -71,13 +91,11 @@ export function AddAccessGroupMember({
                 className="access-role-editor__trigger"
                 onClick={() => {
                     reset()
-                    setSelectedMembershipIds(
-                        eligibleMembers.length > 0 ? [eligibleMembers[0].campaign_membership_id] : [],
-                    )
+                    setSelectedMembershipIds([])
                     setIsEditing(true)
                 }}
             >
-                Add member
+                Add members
             </button>
         )
     }
@@ -87,47 +105,118 @@ export function AddAccessGroupMember({
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (selectedMembershipIds.length === 0) {
+
+                if (
+                    validSelectedMembershipIds.length === 0
+                ) {
                     return
                 }
+
                 onMutationStart()
-                submit(accessGroupId, selectedMembershipIds)
+                submit(
+                    accessGroupId,
+                    validSelectedMembershipIds,
+                )
             }}
         >
-            <label htmlFor={selectId}>Add members to {groupName}</label>
-
-            <select
-                id={selectId}
-                value={selectedMembershipIds}
-                multiple
-                size={Math.min(eligibleMembers.length, 8)}
+            <fieldset
+                className="access-group-member-picker"
                 disabled={isPending}
-                aria-describedby={statusId}
-                onChange={(event) => {
-                    const nextIds = Array.from(
-                        event.currentTarget.selectedOptions,
-                        (option) => option.value,
-                    )
-                    setSelectedMembershipIds(nextIds)
-                }}
+                aria-describedby={`${selectionCountId} ${statusId}`}
             >
-                {eligibleMembers.map((member) => (
-                    <option
-                        key={member.campaign_membership_id}
-                        value={member.campaign_membership_id}
-                    >
-                        {member.display_name}
-                    </option>
-                ))}
-            </select>
+                <legend>
+                    Add members to {groupName}
+                </legend>
+
+                <ul
+                    id={checkboxGroupId}
+                    className="access-group-member-picker__list"
+                >
+                    {eligibleMembers.map((member, index) => {
+                        const checkboxId =
+                            `${checkboxGroupId}-${index}`
+                        const isSelected =
+                            validSelectedMembershipIds.includes(
+                                member.campaign_membership_id,
+                            )
+
+                        return (
+                            <li
+                                key={
+                                    member.campaign_membership_id
+                                }
+                                className="access-group-member-picker__item"
+                            >
+                                <input
+                                    id={checkboxId}
+                                    className="access-group-member-picker__checkbox"
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(event) => {
+                                        if (
+                                            event.currentTarget
+                                                .checked
+                                        ) {
+                                            setSelectedMembershipIds(
+                                                (
+                                                    currentIds,
+                                                ) => [
+                                                        ...currentIds,
+                                                        member.campaign_membership_id,
+                                                    ],
+                                            )
+                                            return
+                                        }
+
+                                        setSelectedMembershipIds(
+                                            (currentIds) =>
+                                                currentIds.filter(
+                                                    (
+                                                        membershipId,
+                                                    ) =>
+                                                        membershipId !==
+                                                        member.campaign_membership_id,
+                                                ),
+                                        )
+                                    }}
+                                />
+
+                                <label htmlFor={checkboxId}>
+                                    {member.display_name}
+                                </label>
+                            </li>
+                        )
+                    })}
+                </ul>
+
+                <p
+                    id={selectionCountId}
+                    className="access-group-member-picker__count"
+                    aria-live="polite"
+                >
+                    {validSelectedMembershipIds.length ===
+                        0
+                        ? "No members selected."
+                        : validSelectedMembershipIds.length ===
+                            1
+                            ? "1 member selected."
+                            : `${validSelectedMembershipIds.length} members selected.`}
+                </p>
+            </fieldset>
 
             <div className="access-role-editor__actions">
                 <button
                     type="submit"
-                    disabled={isPending || selectedMembershipIds.length === 0}
+                    disabled={
+                        isPending ||
+                        validSelectedMembershipIds.length ===
+                        0
+                    }
                     aria-busy={isPending}
                 >
-                    {isPending ? "Adding…" : "Add"}
+                    {isPending
+                        ? "Adding…"
+                        : "Add selected members"}
                 </button>
 
                 <button
@@ -135,6 +224,7 @@ export function AddAccessGroupMember({
                     disabled={isPending}
                     onClick={() => {
                         reset()
+                        setSelectedMembershipIds([])
                         setIsEditing(false)
                     }}
                 >
@@ -146,15 +236,20 @@ export function AddAccessGroupMember({
                 id={statusId}
                 className={
                     status.kind === "denied" ||
-                    status.kind === "conflict" ||
-                    status.kind === "error"
+                        status.kind === "conflict" ||
+                        status.kind === "error"
                         ? "access-role-editor__status access-role-editor__status--error"
                         : "access-role-editor__status"
                 }
                 role="status"
                 aria-live="polite"
             >
-                {status.kind === "idle" ? "" : statusMessage(status.kind)}
+                {status.kind === "idle"
+                    ? ""
+                    : statusMessage(
+                        status.kind,
+                        validSelectedMembershipIds.length,
+                    )}
             </p>
         </form>
     )

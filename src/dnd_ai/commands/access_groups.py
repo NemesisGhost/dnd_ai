@@ -95,6 +95,7 @@ __all__ = [
     "AccessGroupUpdateNoOpError",
     "ACCESS_GROUP_NAME_MAX_LENGTH",
     "ACCESS_GROUP_DESCRIPTION_MAX_LENGTH",
+    "ACCESS_GROUP_MEMBER_BATCH_MAX_SIZE",
     "CreateAccessGroupResult",
     "create_access_group",
     "UpdateAccessGroupResult",
@@ -125,6 +126,7 @@ _ARCHIVED_LIFECYCLE_STATUS_CODE = "archived"
 # this module's own pre-check below, and the database CHECK all agree.
 ACCESS_GROUP_NAME_MAX_LENGTH = 200
 ACCESS_GROUP_DESCRIPTION_MAX_LENGTH = 2000
+ACCESS_GROUP_MEMBER_BATCH_MAX_SIZE = 100
 
 
 class BlankAccessGroupNameError(SafeMessageError):
@@ -579,12 +581,17 @@ def reactivate_access_group(
 
 @dataclass(frozen=True)
 class AddAccessGroupMemberResult:
+    campaign_membership_id: uuid.UUID
     access_group_membership_id: uuid.UUID
 
 
 @dataclass(frozen=True)
 class AddAccessGroupMembersResult:
-    access_group_membership_ids: tuple[uuid.UUID, ...]
+    memberships: tuple[AddAccessGroupMemberResult, ...]
+
+    @property
+    def access_group_membership_ids(self) -> tuple[uuid.UUID, ...]:
+        return tuple(membership.access_group_membership_id for membership in self.memberships)
 
 
 def add_access_group_members(
@@ -595,20 +602,34 @@ def add_access_group_members(
     campaign_id: uuid.UUID,
     added_by_membership_id: uuid.UUID,
 ) -> AddAccessGroupMembersResult:
-    """Adds a batch of existing, active campaign memberships to an existing,
-    active access group in one transaction. An empty batch is rejected before any
-    write; any duplicate or currently ineligible membership rejects the whole batch
-    atomically, leaving no partial inserts behind."""
-    normalized_ids = tuple(dict.fromkeys(uuid.UUID(str(member_id)) for member_id in campaign_membership_ids))
-    if not normalized_ids:
+    """Adds one or more campaign memberships to an active access group.
+
+    Membership identifiers are deduplicated and sorted so validation,
+    locking, insertion, auditing, idempotency, and the response can all use
+    one deterministic ordering.
+
+    The caller's transaction makes the operation atomic: if validation or
+    insertion fails for any member, no membership from this batch commits.
+    """
+    requested_ids = tuple(
+        uuid.UUID(str(membership_id)) for membership_id in campaign_membership_ids
+    )
+
+    if not requested_ids:
         raise ValueError("campaign_membership_ids cannot be empty")
+
+    if len(requested_ids) > ACCESS_GROUP_MEMBER_BATCH_MAX_SIZE:
+        raise ValueError("campaign_membership_ids exceeds the maximum batch size")
+
+    normalized_ids = tuple(sorted(set(requested_ids), key=lambda membership_id: membership_id.int))
 
     group_row = (
         connection.execute(
             text("""
                 SELECT ag.campaign_id, ls.code AS lifecycle_status_code
                 FROM security.access_groups ag
-                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = ag.lifecycle_status_id
+                JOIN core.lifecycle_statuses ls
+                    ON ls.lifecycle_status_id = ag.lifecycle_status_id
                 WHERE ag.access_group_id = :group
                 FOR UPDATE OF ag
             """),
@@ -617,37 +638,49 @@ def add_access_group_members(
         .mappings()
         .one_or_none()
     )
+
     if group_row is None or group_row["campaign_id"] != campaign_id:
         raise AccessGroupNotInCampaignError(
-            f"access group {access_group_id} does not belong to campaign {campaign_id} "
-            f"(actual campaign: {group_row['campaign_id'] if group_row is not None else None})"
+            f"access group {access_group_id} does not belong to "
+            f"campaign {campaign_id} "
+            f"(actual campaign: "
+            f"{group_row['campaign_id'] if group_row is not None else None})"
         )
+
     if group_row["lifecycle_status_code"] != "active":
         raise AccessGroupNotActiveError(f"access group {access_group_id} is not currently active")
 
     campaign_status_code = connection.execute(
         text("""
-            SELECT ls.code FROM campaign.campaigns c
-            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            SELECT ls.code
+            FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls
+                ON ls.lifecycle_status_id = c.lifecycle_status_id
             WHERE c.campaign_id = :campaign
             FOR UPDATE OF c
         """),
         {"campaign": campaign_id},
     ).scalar()
+
     if campaign_status_code != "active":
         raise CampaignNotActiveError(f"campaign {campaign_id} is not currently active")
 
     eligible_membership_ids: list[uuid.UUID] = []
+
     for campaign_membership_id in normalized_ids:
         membership_row = (
             connection.execute(
                 text("""
-                    SELECT cm.campaign_id, cm.ended_at, cm.user_id,
-                           ms.code AS membership_status_code,
-                           ms.is_active AS membership_status_is_active
+                    SELECT
+                        cm.campaign_id,
+                        cm.ended_at,
+                        cm.user_id,
+                        ms.code AS membership_status_code,
+                        ms.is_active AS membership_status_is_active
                     FROM security.campaign_memberships cm
                     JOIN security.membership_statuses ms
-                        ON ms.membership_status_id = cm.membership_status_id
+                        ON ms.membership_status_id =
+                           cm.membership_status_id
                     WHERE cm.campaign_membership_id = :membership
                     FOR UPDATE OF cm
                 """),
@@ -656,45 +689,61 @@ def add_access_group_members(
             .mappings()
             .one_or_none()
         )
+
         if membership_row is None or membership_row["campaign_id"] != campaign_id:
-            raise MembershipNotInCampaignError(
-                f"membership {campaign_membership_id} does not belong to campaign {campaign_id} "
-                f"(actual campaign: "
-                f"{membership_row['campaign_id'] if membership_row is not None else None})"
+            actual_campaign_id = (
+                membership_row["campaign_id"] if membership_row is not None else None
             )
+            raise MembershipNotInCampaignError(
+                f"membership {campaign_membership_id} does not belong to "
+                f"campaign {campaign_id} "
+                f"(actual campaign: {actual_campaign_id})"
+            )
+
         membership_is_eligible = (
             membership_row["ended_at"] is None
             and membership_row["membership_status_code"] == "active"
             and membership_row["membership_status_is_active"]
         )
+
         if not membership_is_eligible:
             raise MembershipNotActiveError(
-                f"membership {campaign_membership_id} is not currently an eligible, open "
-                "membership to add to an access group"
+                f"membership {campaign_membership_id} is not currently "
+                "an eligible, open membership to add to an access group"
             )
 
         user_lifecycle_status_code = connection.execute(
             text("""
-                SELECT ls.code FROM security.users u
-                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                SELECT ls.code
+                FROM security.users u
+                JOIN core.lifecycle_statuses ls
+                    ON ls.lifecycle_status_id = u.lifecycle_status_id
                 WHERE u.user_id = :user
                 FOR UPDATE OF u
             """),
             {"user": membership_row["user_id"]},
         ).scalar()
+
         if user_lifecycle_status_code != "active":
             raise MembershipNotActiveError(
-                f"membership {campaign_membership_id}'s user {membership_row['user_id']} is not "
-                "currently an active platform account"
+                f"membership {campaign_membership_id}'s user "
+                f"{membership_row['user_id']} is not currently an active "
+                "platform account"
             )
+
         eligible_membership_ids.append(campaign_membership_id)
 
-    inserted_ids: list[uuid.UUID] = []
+    added_memberships: list[AddAccessGroupMemberResult] = []
+
     for campaign_membership_id in eligible_membership_ids:
-        inserted_id = connection.execute(
+        access_group_membership_id = connection.execute(
             text("""
                 INSERT INTO security.access_group_memberships
-                    (access_group_id, campaign_membership_id, added_by_membership_id)
+                    (
+                        access_group_id,
+                        campaign_membership_id,
+                        added_by_membership_id
+                    )
                 VALUES (:group, :membership, :added_by)
                 RETURNING access_group_membership_id
             """),
@@ -703,11 +752,18 @@ def add_access_group_members(
                 "membership": campaign_membership_id,
                 "added_by": added_by_membership_id,
             },
-        ).scalar()
-        assert isinstance(inserted_id, uuid.UUID)
-        inserted_ids.append(inserted_id)
+        ).scalar_one()
 
-    return AddAccessGroupMembersResult(access_group_membership_ids=tuple(inserted_ids))
+        assert isinstance(access_group_membership_id, uuid.UUID)
+
+        added_memberships.append(
+            AddAccessGroupMemberResult(
+                campaign_membership_id=campaign_membership_id,
+                access_group_membership_id=access_group_membership_id,
+            )
+        )
+
+    return AddAccessGroupMembersResult(memberships=tuple(added_memberships))
 
 
 def add_access_group_member(
@@ -718,8 +774,7 @@ def add_access_group_member(
     campaign_id: uuid.UUID,
     added_by_membership_id: uuid.UUID,
 ) -> AddAccessGroupMemberResult:
-    """Backward-compatible wrapper around `add_access_group_members()` for the
-    single-member call sites that still exist in the older contract."""
+    """Compatibility wrapper for existing single-member command callers."""
     result = add_access_group_members(
         connection,
         access_group_id=access_group_id,
@@ -727,7 +782,8 @@ def add_access_group_member(
         campaign_id=campaign_id,
         added_by_membership_id=added_by_membership_id,
     )
-    return AddAccessGroupMemberResult(access_group_membership_id=result.access_group_membership_ids[0])
+
+    return result.memberships[0]
 
 
 @dataclass(frozen=True)

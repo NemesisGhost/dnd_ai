@@ -63,6 +63,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.commands.access_grants import create_resource_grant, revoke_resource_grant
 from dnd_ai.commands.access_groups import (
     add_access_group_member,
+    add_access_group_members,
     create_access_group,
     deactivate_access_group,
     reactivate_access_group,
@@ -480,6 +481,170 @@ def test_two_concurrent_additions_of_the_same_pair_cannot_both_succeed(
             assert count == 1
     finally:
         _cleanup_access_group_fixture(engine, timeline_id, world_id)
+
+
+def test_batch_add_locks_every_selected_membership(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-group-batch-end-{uuid.uuid4().hex[:8]}"
+
+    with engine.begin() as setup:
+        fx = _AccessGroupFixture(setup, slug)
+        world_id = fx.world_id
+        timeline_id = fx.timeline_id
+        campaign_id = fx.campaign_id
+        group_id = fx.group_id
+        target_membership_id = fx.target_membership_id
+        manager_membership_id = fx.manager_membership_id
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            result = add_access_group_members(
+                first,
+                access_group_id=group_id,
+                campaign_membership_ids=(
+                    target_membership_id,
+                    manager_membership_id,
+                ),
+                campaign_id=campaign_id,
+                added_by_membership_id=manager_membership_id,
+            )
+
+            assert len(result.memberships) == 2
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+
+            with pytest.raises(Exception) as exc:
+                end_campaign_membership(
+                    second,
+                    campaign_membership_id=target_membership_id,
+                    campaign_id=campaign_id,
+                    ended_by_membership_id=manager_membership_id,
+                )
+
+            _assert_blocked(
+                exc.value,
+                context=(
+                    "membership ending while a batch addition holds the selected membership lock"
+                ),
+            )
+            second.rollback()
+            first.commit()
+
+        with engine.connect() as verify:
+            active_link_count = verify.execute(
+                text("""
+                    SELECT count(*)
+                    FROM security.access_group_memberships
+                    WHERE access_group_id = :group_id
+                      AND campaign_membership_id = ANY(
+                          :membership_ids
+                      )
+                      AND removed_at IS NULL
+                """),
+                {
+                    "group_id": group_id,
+                    "membership_ids": [
+                        target_membership_id,
+                        manager_membership_id,
+                    ],
+                },
+            ).scalar_one()
+
+        assert active_link_count == 2
+    finally:
+        _cleanup_access_group_fixture(
+            engine,
+            timeline_id,
+            world_id,
+        )
+
+
+def test_overlapping_batch_additions_serialize_on_the_group(
+    postgres_engine: Engine,
+) -> None:
+    engine = postgres_engine
+    slug = f"conc-group-batch-batch-{uuid.uuid4().hex[:8]}"
+
+    with engine.begin() as setup:
+        fx = _AccessGroupFixture(setup, slug)
+        world_id = fx.world_id
+        timeline_id = fx.timeline_id
+        campaign_id = fx.campaign_id
+        group_id = fx.group_id
+        target_membership_id = fx.target_membership_id
+        manager_membership_id = fx.manager_membership_id
+
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            first.begin()
+            second.begin()
+
+            first_result = add_access_group_members(
+                first,
+                access_group_id=group_id,
+                campaign_membership_ids=(
+                    target_membership_id,
+                    manager_membership_id,
+                ),
+                campaign_id=campaign_id,
+                added_by_membership_id=manager_membership_id,
+            )
+
+            assert len(first_result.memberships) == 2
+
+            second.execute(text("SET LOCAL lock_timeout = '2s'"))
+
+            with pytest.raises(Exception) as exc:
+                add_access_group_members(
+                    second,
+                    access_group_id=group_id,
+                    campaign_membership_ids=(
+                        manager_membership_id,
+                        target_membership_id,
+                    ),
+                    campaign_id=campaign_id,
+                    added_by_membership_id=manager_membership_id,
+                )
+
+            _assert_blocked(
+                exc.value,
+                context=("an overlapping batch addition targeting the same access group"),
+            )
+            second.rollback()
+            first.commit()
+
+        with engine.connect() as verify:
+            active_link_count = verify.execute(
+                text("""
+                    SELECT count(*)
+                    FROM security.access_group_memberships
+                    WHERE access_group_id = :group_id
+                      AND campaign_membership_id = ANY(
+                          :membership_ids
+                      )
+                      AND removed_at IS NULL
+                """),
+                {
+                    "group_id": group_id,
+                    "membership_ids": [
+                        target_membership_id,
+                        manager_membership_id,
+                    ],
+                },
+            ).scalar_one()
+
+        assert active_link_count == 2
+    finally:
+        _cleanup_access_group_fixture(
+            engine,
+            timeline_id,
+            world_id,
+        )
 
 
 def test_two_concurrent_removals_of_the_same_row_serialize(postgres_engine: Engine) -> None:

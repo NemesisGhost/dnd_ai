@@ -41,6 +41,9 @@ from sqlalchemy.exc import IntegrityError
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.access_groups import (
+    ACCESS_GROUP_MEMBER_BATCH_MAX_SIZE,
+)
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -1057,7 +1060,12 @@ def test_adding_multiple_members_succeeds(
     with client_factory(f.admin_user_id) as client:
         response = client.post(
             _add_member_url(f, f.group_id),
-            json={"campaign_membership_ids": [str(f.target_membership_id), str(f.second_membership_id)]},
+            json={
+                "campaign_membership_ids": [
+                    str(f.target_membership_id),
+                    str(f.second_membership_id),
+                ]
+            },
         )
     assert response.status_code == 201, response.text
     payload = response.json()
@@ -1105,6 +1113,282 @@ def test_adding_an_empty_member_batch_is_rejected(
             _add_member_url(f, f.group_id),
             json={"campaign_membership_ids": []},
         )
+    assert response.status_code == 422, response.text
+
+
+def test_batch_add_canonicalizes_duplicates_and_audits_the_correct_memberships(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    requested_membership_ids = [
+        f.second_membership_id,
+        f.target_membership_id,
+        f.second_membership_id,
+    ]
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _add_member_url(f, f.group_id),
+            json={
+                "campaign_membership_ids": [
+                    str(membership_id) for membership_id in requested_membership_ids
+                ]
+            },
+        )
+
+    assert response.status_code == 201, response.text
+
+    payload = response.json()
+    access_group_membership_ids = [
+        uuid.UUID(value) for value in payload["access_group_membership_ids"]
+    ]
+    expected_membership_ids = sorted(
+        {
+            f.target_membership_id,
+            f.second_membership_id,
+        },
+        key=lambda membership_id: membership_id.int,
+    )
+
+    assert payload["added_count"] == 2
+    assert payload["access_group_membership_id"] is None
+    assert len(access_group_membership_ids) == 2
+
+    with postgres_engine.connect() as verify:
+        membership_rows = verify.execute(
+            text("""
+                SELECT
+                    access_group_membership_id,
+                    campaign_membership_id
+                FROM security.access_group_memberships
+                WHERE access_group_membership_id = ANY(:membership_ids)
+            """),
+            {"membership_ids": access_group_membership_ids},
+        ).all()
+
+        membership_by_link_id = {
+            row.access_group_membership_id: row.campaign_membership_id for row in membership_rows
+        }
+
+        assert [
+            membership_by_link_id[access_group_membership_id]
+            for access_group_membership_id in access_group_membership_ids
+        ] == expected_membership_ids
+
+        audit_rows = verify.execute(
+            text("""
+                SELECT record_id, changed_fields
+                FROM audit.change_log
+                WHERE command_name = 'add_access_group_member'
+                  AND record_id = ANY(:membership_ids)
+            """),
+            {"membership_ids": access_group_membership_ids},
+        ).all()
+
+        audit_by_link_id = {
+            row.record_id: uuid.UUID(row.changed_fields["campaign_membership_id"])
+            for row in audit_rows
+        }
+
+        assert audit_by_link_id == {
+            access_group_membership_id: membership_by_link_id[access_group_membership_id]
+            for access_group_membership_id in access_group_membership_ids
+        }
+
+
+def test_batch_add_replays_when_the_same_set_is_sent_in_a_different_order(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    idempotency_key = f"bulk-group-members-{uuid.uuid4().hex[:8]}"
+
+    first_body = {
+        "campaign_membership_ids": [
+            str(f.target_membership_id),
+            str(f.second_membership_id),
+        ]
+    }
+    reordered_body = {
+        "campaign_membership_ids": [
+            str(f.second_membership_id),
+            str(f.target_membership_id),
+        ]
+    }
+
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _add_member_url(f, f.group_id),
+            json=first_body,
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        replay = client.post(
+            _add_member_url(f, f.group_id),
+            json=reordered_body,
+            headers={"Idempotency-Key": idempotency_key},
+        )
+
+    assert first.status_code == 201, first.text
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == first.json()
+
+    with postgres_engine.connect() as verify:
+        membership_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM security.access_group_memberships
+                WHERE access_group_id = :group_id
+                  AND campaign_membership_id = ANY(:membership_ids)
+                  AND removed_at IS NULL
+            """),
+            {
+                "group_id": f.group_id,
+                "membership_ids": [
+                    f.target_membership_id,
+                    f.second_membership_id,
+                ],
+            },
+        ).scalar_one()
+
+        audit_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM audit.change_log
+                WHERE command_name = 'add_access_group_member'
+                  AND changed_fields ->> 'access_group_id' = :group_id
+            """),
+            {"group_id": str(f.group_id)},
+        ).scalar_one()
+
+        reservation_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM security.idempotent_requests
+                WHERE idempotency_key = :idempotency_key
+            """),
+            {"idempotency_key": idempotency_key},
+        ).scalar_one()
+
+    assert membership_count == 2
+    assert audit_count == 2
+    assert reservation_count == 1
+
+
+def test_batch_add_rolls_back_when_one_membership_is_ineligible(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    idempotency_key = f"bulk-group-rollback-{uuid.uuid4().hex[:8]}"
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _add_member_url(f, f.group_id),
+            json={
+                "campaign_membership_ids": [
+                    str(f.target_membership_id),
+                    str(f.ended_membership_id),
+                ]
+            },
+            headers={"Idempotency-Key": idempotency_key},
+        )
+
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        membership_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM security.access_group_memberships
+                WHERE access_group_id = :group_id
+                  AND campaign_membership_id = ANY(:membership_ids)
+                  AND removed_at IS NULL
+            """),
+            {
+                "group_id": f.group_id,
+                "membership_ids": [
+                    f.target_membership_id,
+                    f.ended_membership_id,
+                ],
+            },
+        ).scalar_one()
+
+        audit_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM audit.change_log
+                WHERE command_name = 'add_access_group_member'
+                  AND changed_fields ->> 'access_group_id' = :group_id
+            """),
+            {"group_id": str(f.group_id)},
+        ).scalar_one()
+
+        reservation_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM security.idempotent_requests
+                WHERE idempotency_key = :idempotency_key
+            """),
+            {"idempotency_key": idempotency_key},
+        ).scalar_one()
+
+    assert membership_count == 0
+    assert audit_count == 0
+    assert reservation_count == 0
+
+
+def test_batch_add_rejects_combining_legacy_and_batch_properties(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _add_member_url(f, f.group_id),
+            json={
+                "campaign_membership_id": str(f.target_membership_id),
+                "campaign_membership_ids": [str(f.second_membership_id)],
+            },
+        )
+
+    assert response.status_code == 422, response.text
+
+    with postgres_engine.connect() as verify:
+        membership_count = verify.execute(
+            text("""
+                SELECT count(*)
+                FROM security.access_group_memberships
+                WHERE access_group_id = :group_id
+                  AND campaign_membership_id = ANY(:membership_ids)
+                  AND removed_at IS NULL
+            """),
+            {
+                "group_id": f.group_id,
+                "membership_ids": [
+                    f.target_membership_id,
+                    f.second_membership_id,
+                ],
+            },
+        ).scalar_one()
+
+    assert membership_count == 0
+
+
+def test_batch_add_rejects_more_than_the_maximum_number_of_members(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+) -> None:
+    membership_ids = [str(uuid.uuid4()) for _ in range(ACCESS_GROUP_MEMBER_BATCH_MAX_SIZE + 1)]
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _add_member_url(f, f.group_id),
+            json={
+                "campaign_membership_ids": membership_ids,
+            },
+        )
+
     assert response.status_code == 422, response.text
 
 

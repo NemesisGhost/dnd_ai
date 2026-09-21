@@ -304,7 +304,14 @@ describe("CampaignAccessPage add/remove access-group member lifecycle", () => {
                 if (method === "POST" && url.includes("/members")) {
                     return Promise.resolve(
                         jsonResponse(
-                            { access_group_membership_id: GROUP_MEMBERSHIP_ID },
+                            {
+                                access_group_membership_id:
+                                    GROUP_MEMBERSHIP_ID,
+                                access_group_membership_ids: [
+                                    GROUP_MEMBERSHIP_ID,
+                                ],
+                                added_count: 1,
+                            },
                             201,
                         ),
                     )
@@ -330,12 +337,29 @@ describe("CampaignAccessPage add/remove access-group member lifecycle", () => {
             await screen.findByRole("heading", { name: "Access" }),
         ).toBeInTheDocument()
 
-        fireEvent.click(screen.getByRole("button", { name: "Add member" }))
-        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add members",
+            }),
+        )
+
+        fireEvent.click(
+            screen.getByRole("checkbox", {
+                name: "Aria the GM",
+            }),
+        )
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add selected members",
+            }),
+        )
 
         await waitFor(() => {
-            expect(persistentAnnouncement(container)).toHaveTextContent(
-                "Member added to group.",
+            expect(
+                persistentAnnouncement(container),
+            ).toHaveTextContent(
+                "1 member added to group.",
             )
         })
         await waitFor(() => {
