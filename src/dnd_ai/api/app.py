@@ -10,9 +10,9 @@ is delivered and used by the command endpoints below
 (`dnd_ai.api.encounters`, `dnd_ai.api.items`, `dnd_ai.api.quests`,
 `dnd_ai.api.relationships`, `dnd_ai.api.events`, `dnd_ai.api.interactions`,
 `dnd_ai.api.integration`, `dnd_ai.api.memberships`,
-`dnd_ai.api.access_grants`) and the query endpoints (`dnd_ai.api.dungeon`,
-`dnd_ai.api.characters`, `dnd_ai.api.knowledge`, `dnd_ai.api.summary`,
-`dnd_ai.api.access_overview`) via
+`dnd_ai.api.access_grants`, `dnd_ai.api.access_groups`) and the query
+endpoints (`dnd_ai.api.dungeon`, `dnd_ai.api.characters`, `dnd_ai.api.knowledge`,
+`dnd_ai.api.summary`, `dnd_ai.api.access_overview`) via
 `dnd_ai.api.access`. `dnd_ai.api.campaigns` is the one exception: it has no
 campaign yet to resolve `dnd_ai.api.access.require_campaign_capability`
 against, so it authenticates the caller directly via `dnd_ai.api.auth.
@@ -49,6 +49,7 @@ from starlette.responses import JSONResponse
 from dnd_ai.config import PRODUCTION_REQUIRED_DATABASE_ROLE, foundry_allowed_origins_tuple, settings
 
 from .access_grants import router as access_grants_router
+from .access_groups import router as access_groups_router
 from .access_overview import router as access_overview_router
 from .ai_npc import router as ai_npc_router
 from .ai_synthesis import router as ai_synthesis_router
@@ -136,6 +137,7 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
+    app.include_router(access_groups_router)
     app.include_router(access_overview_router)
     app.include_router(ai_npc_router)
     app.include_router(ai_synthesis_router)

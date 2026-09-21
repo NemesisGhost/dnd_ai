@@ -3,6 +3,7 @@ import {
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react"
 import {
     afterEach,
@@ -29,6 +30,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-01T00:00:00Z",
+            account_is_active: true,
             roles: [
                 {
                     membership_role_id:
@@ -78,6 +80,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-04T00:00:00Z",
+            account_is_active: true,
             roles: [],
             character_relationships: [],
             grants: [],
@@ -90,6 +93,7 @@ const fullOverview: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-05T00:00:00Z",
+            account_is_active: true,
             roles: [
                 {
                     membership_role_id:
@@ -162,6 +166,7 @@ const fullOverview: CampaignAccessOverview = {
             target_type: "character",
         },
     ],
+    access_groups: [],
 }
 
 function renderPage(
@@ -280,6 +285,7 @@ describe("AccessPage", () => {
             assignable_characters: [],
             assignable_relationship_types: [],
             grantable_resource_capabilities: [],
+            access_groups: [],
         })
 
         expect(
@@ -522,6 +528,7 @@ describe("AccessPage", () => {
             "Add character relationship",
             "Add direct resource access",
             "Revoke access",
+            "Create access group",
         ])
         buttonNames.forEach((name) => {
             expect(allowedNames.has(name ?? "")).toBe(true)
@@ -805,7 +812,7 @@ describe("AccessPage — revoke role (Phase 13E-B checkpoint 2)", () => {
 describe("AccessPage — onMutationStart (persistent-announcement clearing)", () => {
     it("calls onMutationStart immediately when a role change is submitted, never merely on opening the editor", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -827,7 +834,7 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
     it("calls onMutationStart immediately when a role is added, never merely on opening the control", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -842,7 +849,7 @@ describe("AccessPage — onMutationStart (persistent-announcement clearing)", ()
 
     it("calls onMutationStart immediately when a role revocation is confirmed, never merely on opening the confirmation", () => {
         const onMutationStart = vi.fn()
-        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})))
+        vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => { })))
 
         renderPage(fullOverview, vi.fn(), onMutationStart)
 
@@ -1840,5 +1847,367 @@ describe("AccessPage — revoke resource grant, deny effect (checkpoint-5 correc
             expect(screen.getByText(successMessage)).toBeInTheDocument()
         })
         expect(onChanged).toHaveBeenCalledWith(successMessage)
+    })
+})
+
+describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
+    const groupOverview: CampaignAccessOverview = {
+        ...fullOverview,
+        grantable_resource_capabilities: [
+            ...fullOverview.grantable_resource_capabilities,
+            {
+                capability_id: "7a3b9e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                code: "character.view_summary",
+                display_name: "View Character Summary",
+                target_type: "character",
+            },
+        ],
+        access_groups: [
+            {
+                access_group_id: "3c9d5e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                name: "Lore Circle",
+                description: "For the lore fans",
+                status_code: "active",
+                status_display_name: "Active",
+                created_at: "2026-01-05T00:00:00Z",
+                members: [
+                    {
+                        access_group_membership_id:
+                            "4d0e6e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                        campaign_membership_id:
+                            "1a6f2e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                        display_name: "Quiet Observer",
+                        added_at: "2026-01-05T00:00:00Z",
+                    },
+                ],
+                grants: [
+                    {
+                        resource_grant_id:
+                            "5e1f7e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                        capability_code: "character.view_full",
+                        capability_display_name: "View Character Full Detail",
+                        effect: "allow",
+                        target_type: "character",
+                        target_id: "9e4f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                        target_display_name: "Kestrel Vane",
+                        reason: null,
+                        granted_at: "2026-01-05T00:00:00Z",
+                        expires_at: null,
+                    },
+                ],
+            },
+            {
+                access_group_id: "6f2a8e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                name: "Retired Group",
+                description: null,
+                status_code: "archived",
+                status_display_name: "Archived",
+                created_at: "2026-01-01T00:00:00Z",
+                members: [],
+                grants: [],
+            },
+        ],
+    }
+
+    it("shows a deliberate empty state when the campaign has no access groups", () => {
+        renderPage(fullOverview)
+
+        expect(
+            screen.getByText("No access groups exist yet for this campaign."),
+        ).toBeInTheDocument()
+    })
+
+    it("renders a group's name, status, description, members, and grants", () => {
+        const { container } = renderPage(groupOverview)
+
+        expect(screen.getByText("Lore Circle")).toBeInTheDocument()
+        expect(screen.getByText("For the lore fans")).toBeInTheDocument()
+        expect(screen.getByText("Retired Group")).toBeInTheDocument()
+        expect(screen.getByText("Archived")).toBeInTheDocument()
+        expect(
+            screen.getAllByText("Quiet Observer").length,
+        ).toBeGreaterThan(0)
+        expect(container.textContent).toContain(
+            "View Character Full Detail",
+        )
+        expect(container.textContent).toContain("(Allow) on Kestrel Vane")
+    })
+
+    it("never renders a raw UUID as user-facing text for access groups", () => {
+        const { container } = renderPage(groupOverview)
+
+        const uuidPattern =
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+        expect(uuidPattern.test(container.textContent ?? "")).toBe(false)
+    })
+
+    it("offers Edit/Deactivate for an active group and only Reactivate for an archived one", () => {
+        renderPage(groupOverview)
+
+        expect(
+            screen.getAllByRole("button", { name: "Edit" }),
+        ).toHaveLength(1)
+        expect(
+            screen.getAllByRole("button", { name: "Deactivate" }),
+        ).toHaveLength(1)
+        expect(
+            screen.getAllByRole("button", { name: "Reactivate" }),
+        ).toHaveLength(1)
+    })
+
+    it("creates a group: trigger, inline validation, Save/Cancel", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Create access group" }),
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.change(screen.getByLabelText(/New access group name/), {
+            target: { value: "   " },
+        })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.change(screen.getByLabelText(/New access group name/), {
+            target: { value: "New Group" },
+        })
+        expect(saveButton).toBeEnabled()
+
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(
+            screen.queryByLabelText(/New access group name/),
+        ).not.toBeInTheDocument()
+    })
+
+    it("creates a group: rejects an over-length name/description before submitting", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(fullOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Create access group" }),
+        )
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        const nameInput = screen.getByLabelText(/New access group name/)
+        const descriptionInput = screen.getByLabelText("Description (optional)")
+
+        fireEvent.change(nameInput, { target: { value: "New Group" } })
+        expect(saveButton).toBeEnabled()
+
+        // Mirrors dnd_ai.commands.access_groups.
+        // ACCESS_GROUP_DESCRIPTION_MAX_LENGTH (2000) — jsdom's fireEvent
+        // does not itself enforce the textarea's maxLength attribute the
+        // way a real browser does, so this exercises the component's own
+        // JS-level inline validation, not just the HTML attribute.
+        fireEvent.change(descriptionInput, {
+            target: { value: "x".repeat(2001) },
+        })
+        expect(saveButton).toBeDisabled()
+        expect(
+            screen.getByText("Description must be 2000 characters or fewer."),
+        ).toBeInTheDocument()
+        expect(descriptionInput).toHaveAttribute("maxLength", "2000")
+
+        fireEvent.change(descriptionInput, {
+            target: { value: "a reasonable description" },
+        })
+        expect(saveButton).toBeEnabled()
+        expect(
+            screen.queryByText("Description must be 2000 characters or fewer."),
+        ).not.toBeInTheDocument()
+
+        fireEvent.click(saveButton)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("edit access group: disables Save until the name/description actually changes", () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal("fetch", fetchMock)
+
+        renderPage(groupOverview)
+
+        fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0])
+
+        const saveButton = screen.getByRole("button", { name: "Save" })
+        expect(saveButton).toBeDisabled()
+
+        fireEvent.change(screen.getByLabelText("Access group name"), {
+            target: { value: "Renamed Circle" },
+        })
+        expect(saveButton).toBeEnabled()
+
+        fireEvent.click(saveButton)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("deactivate confirmation names the group and explains the consequences", () => {
+        renderPage(groupOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Deactivate" })[0],
+        )
+
+        expect(
+            screen.getByText(/Deactivate "Lore Circle"\?/),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/lose any access this group grants immediately/),
+        ).toBeInTheDocument()
+    })
+
+    it("add member: offers only currently active members not already in the group", () => {
+        renderPage(groupOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add members",
+            }),
+        )
+
+        const picker = screen.getByRole("group", {
+            name: "Add members to Lore Circle",
+        })
+
+        const checkboxes =
+            within(picker).getAllByRole("checkbox")
+
+        expect(checkboxes).toHaveLength(2)
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Aria the GM",
+            }),
+        ).not.toBeChecked()
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Multi Role Member",
+            }),
+        ).not.toBeChecked()
+
+        // Quiet Observer already belongs to the group and must
+        // not be offered again.
+        expect(
+            within(picker).queryByRole("checkbox", {
+                name: "Quiet Observer",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("add member: excludes an active membership whose account is platform-disabled", () => {
+        const overviewWithDisabledAccount: CampaignAccessOverview = {
+            ...groupOverview,
+            members: [
+                ...groupOverview.members,
+                {
+                    campaign_membership_id:
+                        "7a1e9e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    user_id:
+                        "8b2f0e3a-2c4d-4a9b-9e3f-8a2b3c4d5e6f",
+                    display_name: "Disabled Account Member",
+                    status_code: "active",
+                    status_display_name: "Active",
+                    joined_at: "2026-01-06T00:00:00Z",
+                    // The backend independently rejects this
+                    // membership because its owning account is
+                    // platform-disabled. The picker should also
+                    // omit it from the available choices.
+                    account_is_active: false,
+                    roles: [],
+                    character_relationships: [],
+                    grants: [],
+                },
+            ],
+        }
+
+        renderPage(overviewWithDisabledAccount)
+
+        // The member remains visible in the campaign overview.
+        // Only access-group eligibility excludes it.
+        expect(
+            screen.getByText("Disabled Account Member"),
+        ).toBeInTheDocument()
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: "Add members",
+            }),
+        )
+
+        const picker = screen.getByRole("group", {
+            name: "Add members to Lore Circle",
+        })
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Aria the GM",
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            within(picker).getByRole("checkbox", {
+                name: "Multi Role Member",
+            }),
+        ).toBeInTheDocument()
+
+        expect(
+            within(picker).queryByRole("checkbox", {
+                name: "Disabled Account Member",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("remove member confirmation names both the member and the group", () => {
+        renderPage(groupOverview)
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Remove from group" }),
+        )
+
+        expect(
+            screen.getByText(
+                /Remove Quiet Observer from Lore Circle\?/,
+            ),
+        ).toBeInTheDocument()
+    })
+
+    it("add group resource access: character and capability selectors only, no resource-type selector", () => {
+        renderPage(groupOverview)
+
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Add resource access" })[0],
+        )
+
+        expect(
+            screen.getByLabelText("Add resource access for Lore Circle — Character"),
+        ).toBeInTheDocument()
+        expect(screen.getByLabelText("Permission")).toBeInTheDocument()
+        // Only one combobox pair (character, capability) — never a
+        // third "resource type" selector, unlike the member-grant flow.
+        expect(screen.getAllByRole("combobox")).toHaveLength(2)
+    })
+
+    it("reuses the effect-aware revoke flow for a group-owned grant", () => {
+        renderPage(groupOverview)
+
+        const groupCard = screen
+            .getByText("Lore Circle")
+            .closest("details") as HTMLElement
+        fireEvent.click(
+            within(groupCard).getByRole("button", { name: "Revoke access" }),
+        )
+
+        expect(
+            screen.getByText(/Revoke Lore Circle's/),
+        ).toBeInTheDocument()
     })
 })

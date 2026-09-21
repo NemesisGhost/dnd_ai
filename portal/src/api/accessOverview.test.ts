@@ -22,6 +22,7 @@ const overviewFixture: CampaignAccessOverview = {
             status_code: "active",
             status_display_name: "Active",
             joined_at: "2026-01-01T00:00:00Z",
+            account_is_active: true,
             roles: [
                 {
                     membership_role_id: "membership-role-a",
@@ -44,6 +45,7 @@ const overviewFixture: CampaignAccessOverview = {
     assignable_characters: [],
     assignable_relationship_types: [],
     grantable_resource_capabilities: [],
+    access_groups: [],
 }
 
 afterEach(() => {

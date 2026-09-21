@@ -52,7 +52,14 @@ router = APIRouter(tags=["audit-history"])
 _AUDIT_HISTORY_CAPABILITY = "access.manage"
 
 AuditHistoryCategory = Literal[
-    "membership", "role", "character_relationship", "resource_grant", "invitation", "campaign"
+    "membership",
+    "role",
+    "character_relationship",
+    "resource_grant",
+    "invitation",
+    "campaign",
+    "access_group",
+    "access_group_membership",
 ]
 AuditActorType = Literal["user", "service", "unknown"]
 AuditTargetType = Literal["account", "character", "access_group"]
