@@ -12,7 +12,7 @@ export interface PendingCampaignInvitationList {
 
 export interface CreateCampaignInvitationResponse {
     campaign_invitation_id: string
-    token: string
+    token: string | null
 }
 
 export interface RevokeCampaignInvitationResponse {

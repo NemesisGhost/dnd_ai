@@ -73,7 +73,7 @@ class CreateCampaignInvitationRequest(BaseModel):
 
 class CreateCampaignInvitationResponse(BaseModel):
     campaign_invitation_id: uuid.UUID
-    token: str
+    token: str | None = None
 
 
 class AcceptCampaignInvitationRequest(BaseModel):
@@ -160,6 +160,10 @@ def create_campaign_invitation_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            # Invitation tokens are bearer credentials shown exactly once.
+            # A replay returns the already-created invitation id only,
+            # never the original raw token, and the durable idempotency row
+            # stores only that sanitized body.
             return CreateCampaignInvitationResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -193,7 +197,7 @@ def create_campaign_invitation_endpoint(
             connection,
             idempotent_request_id=reservation_id,
             response_status_code=201,
-            response_body=response.model_dump(mode="json"),
+            response_body={"campaign_invitation_id": str(result.campaign_invitation_id)},
         )
 
     return response

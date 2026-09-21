@@ -9,6 +9,11 @@ interface RoleChangeAnnouncement {
     message: string
 }
 
+interface IssuedInvitationToken {
+    campaignId: string
+    token: string
+}
+
 // Every role-mutation control (change/add/revoke) reports its own outcome
 // text through this one path (Phase 13E-B checkpoint 2) — a single
 // persistent announcement mechanism rather than three parallel ones, so
@@ -33,7 +38,7 @@ export function CampaignAccessPage() {
     // live region, regardless of what else unmounts alongside it.
     const [announcement, setAnnouncement] =
         useState<RoleChangeAnnouncement | null>(null)
-    const [issuedInvitationToken, setIssuedInvitationToken] = useState<string | null>(null)
+    const [issuedInvitationToken, setIssuedInvitationToken] = useState<IssuedInvitationToken | null>(null)
 
     if (campaignId === undefined) {
         return (
@@ -59,6 +64,12 @@ export function CampaignAccessPage() {
         announcement.campaignId === activeCampaignId
             ? announcement.message
             : ""
+
+    const activeIssuedInvitationToken =
+        issuedInvitationToken !== null &&
+        issuedInvitationToken.campaignId === activeCampaignId
+            ? issuedInvitationToken.token
+            : null
 
     function handleRoleChanged(
         retry: () => void,
@@ -88,6 +99,17 @@ export function CampaignAccessPage() {
         setAnnouncement(null)
     }
 
+    function handleIssuedInvitationTokenChange(token: string | null): void {
+        setIssuedInvitationToken(
+            token === null
+                ? null
+                : {
+                      campaignId: activeCampaignId,
+                      token,
+                  },
+        )
+    }
+
     return (
         <>
             <p
@@ -107,8 +129,8 @@ export function CampaignAccessPage() {
                             handleRoleChanged(retry, message)
                         }
                         onMutationStart={handleMutationStart}
-                        issuedInvitationToken={issuedInvitationToken}
-                        onIssuedInvitationTokenChange={setIssuedInvitationToken}
+                        issuedInvitationToken={activeIssuedInvitationToken}
+                        onIssuedInvitationTokenChange={handleIssuedInvitationTokenChange}
                     />
                 )}
             </AccessOverviewBoundary>

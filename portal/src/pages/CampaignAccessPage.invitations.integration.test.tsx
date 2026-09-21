@@ -1,10 +1,12 @@
 import {
+    act,
     fireEvent,
     render,
     screen,
     waitFor,
 } from "@testing-library/react"
 import {
+    Link,
     MemoryRouter,
     Route,
     Routes,
@@ -21,6 +23,7 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
 const CAMPAIGN_ID = sessionBootstrapFixture.campaigns[0].campaign_id
+const OTHER_CAMPAIGN_ID = "other-campaign"
 
 const overview = {
     members: [],
@@ -56,6 +59,39 @@ function renderAtCampaign(fetchMock: ReturnType<typeof vi.fn>) {
             }}
         >
             <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>
+                <Routes>
+                    <Route path="/app/:campaignId/access" element={<CampaignAccessPage />} />
+                </Routes>
+            </MemoryRouter>
+        </SessionContext.Provider>,
+    )
+}
+
+function renderAcrossCampaigns(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal("fetch", fetchMock)
+
+    return render(
+        <SessionContext.Provider
+            value={{
+                state: {
+                    status: "authenticated",
+                    bootstrap: {
+                        ...sessionBootstrapFixture,
+                        campaigns: [
+                            ...sessionBootstrapFixture.campaigns,
+                            {
+                                ...sessionBootstrapFixture.campaigns[0],
+                                campaign_id: OTHER_CAMPAIGN_ID,
+                                campaign_name: "Other Campaign",
+                            },
+                        ],
+                    },
+                },
+                reload: vi.fn().mockResolvedValue(undefined),
+            }}
+        >
+            <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>
+                <Link to={`/app/${OTHER_CAMPAIGN_ID}/access`}>Switch campaign</Link>
                 <Routes>
                     <Route path="/app/:campaignId/access" element={<CampaignAccessPage />} />
                 </Routes>
@@ -150,5 +186,71 @@ describe("CampaignAccessPage invitations integration", () => {
             expect(clipboardWriteText).toHaveBeenCalledWith("one-time-token")
         })
         expect(screen.getByText("Token copied.")).toBeInTheDocument()
+    })
+
+    it("clears an issued token synchronously when routing from campaign A to campaign B", async () => {
+        const clipboardWriteText = vi.fn().mockResolvedValue(undefined)
+        vi.stubGlobal("navigator", { clipboard: { writeText: clipboardWriteText } })
+
+        const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = requestUrl(input)
+            const method = init?.method ?? "GET"
+
+            if (method === "GET" && url.includes("/access-overview")) {
+                return Promise.resolve(jsonResponse(overview))
+            }
+
+            if (method === "GET" && url.endsWith(`/campaigns/${CAMPAIGN_ID}/invitations`)) {
+                return Promise.resolve(jsonResponse({ invitations: [] }))
+            }
+
+            if (method === "GET" && url.endsWith(`/campaigns/${OTHER_CAMPAIGN_ID}/invitations`)) {
+                return Promise.resolve(
+                    jsonResponse({
+                        invitations: [
+                            {
+                                campaign_invitation_id: "33333333-3333-3333-3333-333333333333",
+                                invited_email: "other@example.com",
+                                invited_by_display_name: "Aria the GM",
+                                created_at: "2026-01-03T00:00:00Z",
+                                expires_at: "2026-01-10T00:00:00Z",
+                            },
+                        ],
+                    }),
+                )
+            }
+
+            if (method === "POST" && url.endsWith(`/campaigns/${CAMPAIGN_ID}/invitations`)) {
+                return Promise.resolve(
+                    jsonResponse(
+                        {
+                            campaign_invitation_id: "a-issued-id",
+                            token: "campaign-a-token",
+                        },
+                        201,
+                    ),
+                )
+            }
+
+            return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`))
+        })
+
+        renderAcrossCampaigns(fetchMock)
+
+        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
+        expect(await screen.findByDisplayValue("campaign-a-token")).toBeInTheDocument()
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("link", { name: "Switch campaign" }))
+        })
+
+        expect(await screen.findByText("other@example.com")).toBeInTheDocument()
+        expect(screen.queryByDisplayValue("campaign-a-token")).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Copy token" })).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
+        expect(clipboardWriteText).not.toHaveBeenCalled()
     })
 })

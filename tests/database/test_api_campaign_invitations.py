@@ -474,7 +474,7 @@ def test_creating_an_invitation_succeeds(
 
 
 def test_a_sequential_replay_of_create_invitation_returns_the_original_response(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     key = f"create-invitation-{uuid.uuid4().hex[:8]}"
     with client_factory(f.admin_user_id) as client:
@@ -482,7 +482,65 @@ def test_a_sequential_replay_of_create_invitation_returns_the_original_response(
         second = client.post(_invitations_url(f), json={}, headers={"Idempotency-Key": key})
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
-    assert second.json() == first.json()
+    first_payload = first.json()
+    second_payload = second.json()
+    assert second_payload == {
+        "campaign_invitation_id": first_payload["campaign_invitation_id"],
+        "token": None,
+    }
+
+    raw_token = first_payload["token"]
+    invitation_id = uuid.UUID(first_payload["campaign_invitation_id"])
+    with postgres_engine.connect() as verify:
+        row = (
+            verify.execute(
+                text("""
+                    SELECT response_status_code, response_body::text AS response_body
+                    FROM security.idempotent_requests
+                    WHERE campaign_id = :campaign AND idempotency_key = :key
+                """),
+                {"campaign": f.campaign_id, "key": key},
+            )
+            .mappings()
+            .one()
+        )
+        assert row["response_status_code"] == 201
+        response_body = str(row["response_body"])
+        assert raw_token not in response_body
+        assert '"token"' not in response_body
+        assert str(invitation_id) in response_body
+
+
+def test_create_invitation_idempotency_state_never_persists_the_raw_token(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"create-invitation-state-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    raw_token = payload["token"]
+
+    with postgres_engine.connect() as verify:
+        durable_state = (
+            verify.execute(
+                text("""
+                    SELECT response_body::text AS response_body
+                    FROM security.idempotent_requests
+                    WHERE campaign_id = :campaign AND idempotency_key = :key
+                """),
+                {"campaign": f.campaign_id, "key": key},
+            )
+            .mappings()
+            .one()
+        )
+        serialized = str(durable_state["response_body"])
+        assert raw_token not in serialized
+        assert '"token"' not in serialized
 
 
 def test_listing_pending_invitations_returns_only_outstanding_rows_in_deterministic_order(
