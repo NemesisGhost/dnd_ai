@@ -186,6 +186,8 @@ export function InvitationsSection({
             if (result.token !== null) {
                 onIssuedTokenChange(result.token)
                 onChanged("Invitation issued.")
+            } else {
+                onIssuedTokenChange(null)
             }
             setCopyStatus("idle")
             retry()
@@ -223,6 +225,8 @@ export function InvitationsSection({
                     if (isCreatePending) {
                         return
                     }
+                    onIssuedTokenChange(null)
+                    setCopyStatus("idle")
                     onMutationStart()
                     submit(invitedEmail.trim() === "" ? null : invitedEmail.trim())
                 }}

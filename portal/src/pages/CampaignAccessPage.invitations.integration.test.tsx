@@ -312,4 +312,83 @@ describe("CampaignAccessPage invitations integration", () => {
         expect(screen.queryByRole("heading", { name: "Copy invitation token now" })).not.toBeInTheDocument()
         expect(container.textContent).not.toContain("Invitation issued.")
     })
+
+    it("clears an older issued token before showing replay guidance for a later issuance replay", async () => {
+        const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = requestUrl(input)
+            const method = init?.method ?? "GET"
+
+            if (method === "GET" && url.includes("/access-overview")) {
+                return Promise.resolve(jsonResponse(overview))
+            }
+
+            if (method === "GET" && url.includes("/invitations")) {
+                return Promise.resolve(
+                    jsonResponse({
+                        invitations: [
+                            {
+                                campaign_invitation_id: "55555555-5555-5555-5555-555555555555",
+                                invited_email: "player@example.com",
+                                invited_by_display_name: "Aria the GM",
+                                created_at: "2026-01-05T00:00:00Z",
+                                expires_at: "2026-01-12T00:00:00Z",
+                            },
+                        ],
+                    }),
+                )
+            }
+
+            if (method === "POST" && url.endsWith(`/campaigns/${CAMPAIGN_ID}/invitations`)) {
+                const body = String(init?.body ?? "")
+                if (body.includes("first@example.com")) {
+                    return Promise.resolve(
+                        jsonResponse(
+                            {
+                                campaign_invitation_id: "first-issued-id",
+                                token: "older-token",
+                            },
+                            201,
+                        ),
+                    )
+                }
+                return Promise.resolve(
+                    jsonResponse(
+                        {
+                            campaign_invitation_id: "first-issued-id",
+                            token: null,
+                        },
+                        201,
+                    ),
+                )
+            }
+
+            return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`))
+        })
+
+        renderAtCampaign(fetchMock)
+
+        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+
+        fireEvent.change(screen.getByLabelText("Optional email label"), {
+            target: { value: "first@example.com" },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
+
+        expect(await screen.findByDisplayValue("older-token")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Copy token" })).toBeInTheDocument()
+
+        fireEvent.change(screen.getByLabelText("Optional email label"), {
+            target: { value: "second@example.com" },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
+
+        expect(screen.queryByDisplayValue("older-token")).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Copy token" })).not.toBeInTheDocument()
+        expect(
+            await screen.findByText(/already issued, but the original token is unavailable/i),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/revoke the pending invitation and issue a new one if the token was not received/i),
+        ).toBeInTheDocument()
+    })
 })
