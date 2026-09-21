@@ -42,13 +42,14 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.access_groups import (
     ACCESS_GROUP_DESCRIPTION_MAX_LENGTH,
     ACCESS_GROUP_NAME_MAX_LENGTH,
     add_access_group_member,
+    add_access_group_members,
     create_access_group,
     deactivate_access_group,
     reactivate_access_group,
@@ -135,11 +136,27 @@ class AccessGroupResponse(BaseModel):
 
 
 class AddAccessGroupMemberRequest(BaseModel):
-    campaign_membership_id: uuid.UUID
+    campaign_membership_ids: list[uuid.UUID] = Field(min_length=1)
+    campaign_membership_id: uuid.UUID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_single_id(cls, value: object) -> object:
+        if isinstance(value, dict):
+            ids = value.get("campaign_membership_ids")
+            if ids is None and "campaign_membership_id" in value:
+                ids = [value["campaign_membership_id"]]
+            elif isinstance(ids, (str, uuid.UUID)):
+                ids = [ids]
+            if ids is not None:
+                value = {**value, "campaign_membership_ids": ids}
+        return value
 
 
 class AccessGroupMembershipResponse(BaseModel):
-    access_group_membership_id: uuid.UUID
+    access_group_membership_id: uuid.UUID | None = None
+    access_group_membership_ids: list[uuid.UUID] = []
+    added_count: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -494,17 +511,13 @@ def add_access_group_member_endpoint(
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> AccessGroupMembershipResponse:
-    """Adds an existing, active campaign membership to an existing, active
-    access group — the portal's "Add member to group" action. `campaign_
-    membership_id` is the authoritative campaign-membership id, never a
-    bare user id — the portal's member selector already offers only
-    server-authoritative active campaign members (the same `members` list
-    `GET /campaigns/{campaign_id}/access-overview` already returns)."""
+    """Adds one or more existing, active campaign memberships to an existing,
+    active access group in a single atomic transaction."""
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
         fingerprint_payload: dict[str, Any] = {
             "access_group_id": str(access_group_id),
-            **body.model_dump(mode="json"),
+            "campaign_membership_ids": [str(membership_id) for membership_id in body.campaign_membership_ids],
         }
         outcome = begin_idempotent_request(
             connection,
@@ -519,34 +532,42 @@ def add_access_group_member_endpoint(
             return AccessGroupMembershipResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
-    result = add_access_group_member(
+    result = add_access_group_members(
         connection,
         access_group_id=access_group_id,
-        campaign_membership_id=body.campaign_membership_id,
+        campaign_membership_ids=tuple(body.campaign_membership_ids),
         campaign_id=campaign_id,
         added_by_membership_id=access.campaign_membership_id,
     )
 
-    record_change_log(
-        connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="access_group_memberships",
-        record_id=result.access_group_membership_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_ADD_GROUP_MEMBER_COMMAND_NAME,
-        event_id=None,
-        changed_fields={
-            "access_group_id": str(access_group_id),
-            "campaign_membership_id": str(body.campaign_membership_id),
-        },
-    )
+    for requested_membership_id, access_group_membership_id in zip(
+        body.campaign_membership_ids,
+        result.access_group_membership_ids,
+    ):
+        record_change_log(
+            connection,
+            change_action_code=_CREATED_CHANGE_ACTION,
+            schema_name="security",
+            table_name="access_group_memberships",
+            record_id=access_group_membership_id,
+            entity_id=None,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+            command_name=_ADD_GROUP_MEMBER_COMMAND_NAME,
+            event_id=None,
+            changed_fields={
+                "access_group_id": str(access_group_id),
+                "campaign_membership_id": str(requested_membership_id),
+            },
+        )
 
     response = AccessGroupMembershipResponse(
-        access_group_membership_id=result.access_group_membership_id
+        access_group_membership_id=(
+            result.access_group_membership_ids[0] if len(result.access_group_membership_ids) == 1 else None
+        ),
+        access_group_membership_ids=list(result.access_group_membership_ids),
+        added_count=len(result.access_group_membership_ids),
     )
 
     if reservation_id is not None:

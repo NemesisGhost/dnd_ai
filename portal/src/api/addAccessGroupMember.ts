@@ -16,7 +16,7 @@ export class AddAccessGroupMemberRequestError extends Error {
 export async function addAccessGroupMember(
     campaignId: string,
     accessGroupId: string,
-    campaignMembershipId: string,
+    campaignMembershipIds: string[],
     csrfToken: string,
     idempotencyKey: string,
     signal?: AbortSignal,
@@ -25,7 +25,7 @@ export async function addAccessGroupMember(
     const encodedGroupId = encodeURIComponent(accessGroupId)
 
     const body: AddAccessGroupMemberRequest = {
-        campaign_membership_id: campaignMembershipId,
+        campaign_membership_ids: campaignMembershipIds,
     }
 
     const response = await fetch(

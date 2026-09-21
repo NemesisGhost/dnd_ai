@@ -1051,28 +1051,34 @@ def test_deactivating_a_group_requires_deliberate_confirmation_shaped_request(
 # ---------------------------------------------------------------------------
 
 
-def test_adding_a_member_succeeds(
+def test_adding_multiple_members_succeeds(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     with client_factory(f.admin_user_id) as client:
         response = client.post(
             _add_member_url(f, f.group_id),
-            json={"campaign_membership_id": str(f.target_membership_id)},
+            json={"campaign_membership_ids": [str(f.target_membership_id), str(f.second_membership_id)]},
         )
     assert response.status_code == 201, response.text
-    access_group_membership_id = uuid.UUID(response.json()["access_group_membership_id"])
+    payload = response.json()
+    ids = [uuid.UUID(value) for value in payload["access_group_membership_ids"]]
+    assert payload["added_count"] == 2
+    assert len(ids) == 2
 
     with postgres_engine.connect() as verify:
-        row = verify.execute(
+        rows = verify.execute(
             text("""
                 SELECT access_group_id, campaign_membership_id, removed_at
-                FROM security.access_group_memberships WHERE access_group_membership_id = :m
+                FROM security.access_group_memberships
+                WHERE access_group_membership_id = ANY(:members)
             """),
-            {"m": access_group_membership_id},
-        ).one()
-        assert row.access_group_id == f.group_id
-        assert row.campaign_membership_id == f.target_membership_id
-        assert row.removed_at is None
+            {"members": list(ids)},
+        ).all()
+        assert [row.access_group_id for row in rows] == [f.group_id, f.group_id]
+        assert sorted(row.campaign_membership_id for row in rows) == sorted(
+            [f.target_membership_id, f.second_membership_id]
+        )
+        assert all(row.removed_at is None for row in rows)
 
 
 def test_adding_a_duplicate_active_member_is_rejected(
@@ -1081,14 +1087,25 @@ def test_adding_a_duplicate_active_member_is_rejected(
     with client_factory(f.admin_user_id) as client:
         first = client.post(
             _add_member_url(f, f.group_id),
-            json={"campaign_membership_id": str(f.target_membership_id)},
+            json={"campaign_membership_ids": [str(f.target_membership_id)]},
         )
         assert first.status_code == 201, first.text
         second = client.post(
             _add_member_url(f, f.group_id),
-            json={"campaign_membership_id": str(f.target_membership_id)},
+            json={"campaign_membership_ids": [str(f.target_membership_id)]},
         )
     assert second.status_code == 409, second.text
+
+
+def test_adding_an_empty_member_batch_is_rejected(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _add_member_url(f, f.group_id),
+            json={"campaign_membership_ids": []},
+        )
+    assert response.status_code == 422, response.text
 
 
 def test_adding_a_member_to_an_archived_group_is_rejected(

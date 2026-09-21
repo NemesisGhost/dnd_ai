@@ -50,19 +50,17 @@ export function AddAccessGroupMember({
     const statusId = useId()
 
     const [isEditing, setIsEditing] = useState(false)
-    const [selectedMembershipId, setSelectedMembershipId] = useState(
-        eligibleMembers[0]?.campaign_membership_id ?? "",
+    const [selectedMembershipIds, setSelectedMembershipIds] = useState<string[]>(
+        eligibleMembers.length > 0 ? [eligibleMembers[0].campaign_membership_id] : [],
     )
 
     const { status, submit, reset } = useAddAccessGroupMember(campaignId, () =>
-        onChanged("Member added to group."),
+        onChanged("Members added to group."),
     )
 
     const isPending = status.kind === "pending"
 
     if (eligibleMembers.length === 0) {
-        // No currently active campaign member is eligible to add — never
-        // show a control with nothing left to add.
         return null
     }
 
@@ -73,8 +71,8 @@ export function AddAccessGroupMember({
                 className="access-role-editor__trigger"
                 onClick={() => {
                     reset()
-                    setSelectedMembershipId(
-                        eligibleMembers[0]?.campaign_membership_id ?? "",
+                    setSelectedMembershipIds(
+                        eligibleMembers.length > 0 ? [eligibleMembers[0].campaign_membership_id] : [],
                     )
                     setIsEditing(true)
                 }}
@@ -89,21 +87,28 @@ export function AddAccessGroupMember({
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (selectedMembershipId === "") {
+                if (selectedMembershipIds.length === 0) {
                     return
                 }
                 onMutationStart()
-                submit(accessGroupId, selectedMembershipId)
+                submit(accessGroupId, selectedMembershipIds)
             }}
         >
-            <label htmlFor={selectId}>Add a member to {groupName}</label>
+            <label htmlFor={selectId}>Add members to {groupName}</label>
 
             <select
                 id={selectId}
-                value={selectedMembershipId}
+                value={selectedMembershipIds}
+                multiple
+                size={Math.min(eligibleMembers.length, 8)}
                 disabled={isPending}
+                aria-describedby={statusId}
                 onChange={(event) => {
-                    setSelectedMembershipId(event.currentTarget.value)
+                    const nextIds = Array.from(
+                        event.currentTarget.selectedOptions,
+                        (option) => option.value,
+                    )
+                    setSelectedMembershipIds(nextIds)
                 }}
             >
                 {eligibleMembers.map((member) => (
@@ -119,7 +124,7 @@ export function AddAccessGroupMember({
             <div className="access-role-editor__actions">
                 <button
                     type="submit"
-                    disabled={isPending || selectedMembershipId === ""}
+                    disabled={isPending || selectedMembershipIds.length === 0}
                     aria-busy={isPending}
                 >
                     {isPending ? "Adding…" : "Add"}

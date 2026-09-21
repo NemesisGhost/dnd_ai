@@ -17,9 +17,11 @@ export interface AccessGroupResponse {
 }
 
 export interface AddAccessGroupMemberRequest {
-    campaign_membership_id: string
+    campaign_membership_ids: string[]
+    campaign_membership_id?: string
 }
 
 export interface AccessGroupMembershipResponse {
-    access_group_membership_id: string
+    access_group_membership_ids: string[]
+    added_count: number
 }

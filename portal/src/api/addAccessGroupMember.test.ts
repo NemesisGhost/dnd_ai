@@ -6,10 +6,13 @@ afterEach(() => {
 })
 
 describe("addAccessGroupMember", () => {
-    it("posts to the group-scoped members route with the CSRF header, Idempotency-Key header, JSON body, and same-origin credentials", async () => {
+    it("posts the bulk membership set to the group-scoped members route with the CSRF header, Idempotency-Key header, JSON body, and same-origin credentials", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(
-                JSON.stringify({ access_group_membership_id: "link-1" }),
+                JSON.stringify({
+                    access_group_membership_ids: ["link-1", "link-2"],
+                    added_count: 2,
+                }),
                 { status: 201, headers: { "Content-Type": "application/json" } },
             ),
         )
@@ -19,17 +22,20 @@ describe("addAccessGroupMember", () => {
             addAccessGroupMember(
                 "campaign-a",
                 "group-1",
-                "membership-1",
+                ["membership-1", "membership-2"],
                 "fixture-csrf-token",
                 "fixture-idempotency-key",
             ),
-        ).resolves.toEqual({ access_group_membership_id: "link-1" })
+        ).resolves.toEqual({
+            access_group_membership_ids: ["link-1", "link-2"],
+            added_count: 2,
+        })
 
         expect(fetchMock).toHaveBeenCalledWith(
             "/api/campaigns/campaign-a/access-groups/group-1/members",
             expect.objectContaining({
                 method: "POST",
-                body: JSON.stringify({ campaign_membership_id: "membership-1" }),
+                body: JSON.stringify({ campaign_membership_ids: ["membership-1", "membership-2"] }),
             }),
         )
     })
@@ -44,7 +50,7 @@ describe("addAccessGroupMember", () => {
             addAccessGroupMember(
                 "campaign-a",
                 "group-1",
-                "membership-1",
+                ["membership-1"],
                 "fixture-csrf-token",
                 "fixture-idempotency-key",
             ),

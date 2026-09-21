@@ -15,7 +15,7 @@ export type AddAccessGroupMemberStatus =
 
 export interface UseAddAccessGroupMemberResult {
     status: AddAccessGroupMemberStatus
-    submit: (accessGroupId: string, campaignMembershipId: string) => void
+    submit: (accessGroupId: string, campaignMembershipIds: string[]) => void
     reset: () => void
 }
 
@@ -26,7 +26,7 @@ interface Snapshot {
 
 interface IdempotencyReservation {
     accessGroupId: string
-    campaignMembershipId: string
+    campaignMembershipIds: readonly string[]
     key: string
 }
 
@@ -56,12 +56,14 @@ export function useAddAccessGroupMember(
     }, [campaignId])
 
     const resolveIdempotencyKey = useCallback(
-        (accessGroupId: string, campaignMembershipId: string): string => {
+        (accessGroupId: string, campaignMembershipIds: readonly string[]): string => {
             const reserved = idempotencyRef.current
+            const normalizedMembershipIds = [...campaignMembershipIds].sort()
             if (
                 reserved !== null &&
                 reserved.accessGroupId === accessGroupId &&
-                reserved.campaignMembershipId === campaignMembershipId
+                reserved.campaignMembershipIds.length === normalizedMembershipIds.length &&
+                reserved.campaignMembershipIds.every((id, index) => id === normalizedMembershipIds[index])
             ) {
                 return reserved.key
             }
@@ -69,7 +71,7 @@ export function useAddAccessGroupMember(
             const key = globalThis.crypto.randomUUID()
             idempotencyRef.current = {
                 accessGroupId,
-                campaignMembershipId,
+                campaignMembershipIds: normalizedMembershipIds,
                 key,
             }
             return key
@@ -81,11 +83,14 @@ export function useAddAccessGroupMember(
         snapshot.campaignId === campaignId ? snapshot.status : idleStatus
 
     const submit = useCallback(
-        (accessGroupId: string, campaignMembershipId: string) => {
+        (accessGroupId: string, campaignMembershipIds: string[]) => {
             if (status.kind === "pending") {
                 return
             }
             if (sessionState.status !== "authenticated") {
+                return
+            }
+            if (campaignMembershipIds.length === 0) {
                 return
             }
 
@@ -93,7 +98,7 @@ export function useAddAccessGroupMember(
             const csrfToken = sessionState.bootstrap.csrf_token
             const idempotencyKey = resolveIdempotencyKey(
                 accessGroupId,
-                campaignMembershipId,
+                campaignMembershipIds,
             )
             const controller = new AbortController()
             controllerRef.current = controller
@@ -105,7 +110,7 @@ export function useAddAccessGroupMember(
             void addAccessGroupMember(
                 requestCampaignId,
                 accessGroupId,
-                campaignMembershipId,
+                campaignMembershipIds,
                 csrfToken,
                 idempotencyKey,
                 controller.signal,
