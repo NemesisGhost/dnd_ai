@@ -15,6 +15,8 @@ import {
     vi,
 } from "vitest"
 import { InvitationsSection } from "./InvitationsSection"
+import type { CreateCampaignInvitationStatus } from "../hooks/useCreateCampaignInvitation"
+import type { CreateCampaignInvitationResponse } from "../types/campaignInvitations"
 
 const { invitationsStateRef, retryMock, createHookRef, createSuccessRef, revokeHookRef } = vi.hoisted(() => ({
     invitationsStateRef: {
@@ -34,13 +36,13 @@ const { invitationsStateRef, retryMock, createHookRef, createSuccessRef, revokeH
     retryMock: vi.fn(),
     createHookRef: {
         current: {
-            status: { kind: "idle" as const },
+            status: { kind: "idle" as CreateCampaignInvitationStatus["kind"] },
             submit: vi.fn(),
             reset: vi.fn(),
         },
     },
     createSuccessRef: {
-        current: null as null | ((result: { campaign_invitation_id: string; token: string }) => void),
+        current: null as null | ((result: CreateCampaignInvitationResponse) => void),
     },
     revokeHookRef: {
         current: {
@@ -61,7 +63,7 @@ vi.mock("../hooks/useCampaignInvitations", () => ({
 vi.mock("../hooks/useCreateCampaignInvitation", () => ({
     useCreateCampaignInvitation: (
         campaignId: string,
-        onSuccess: (result: { campaign_invitation_id: string; token: string }) => void,
+        onSuccess: (result: CreateCampaignInvitationResponse) => void,
     ) => {
         void campaignId
         createSuccessRef.current = onSuccess
@@ -177,6 +179,48 @@ describe("InvitationsSection", () => {
         fireEvent.click(screen.getByRole("button", { name: "Dismiss token" }))
 
         expect(screen.queryByDisplayValue("raw-token-2")).not.toBeInTheDocument()
+    })
+
+    it("shows lost-response guidance instead of a fresh success when the token is unavailable on replay", async () => {
+        const onChanged = vi.fn()
+
+        function Wrapper() {
+            const [issuedToken, setIssuedToken] = useState<string | null>(null)
+
+            return (
+                <InvitationsSection
+                    campaignId="campaign-a"
+                    onChanged={onChanged}
+                    onMutationStart={vi.fn()}
+                    issuedToken={issuedToken}
+                    onIssuedTokenChange={setIssuedToken}
+                />
+            )
+        }
+
+        createHookRef.current = {
+            status: { kind: "replayed" },
+            submit: vi.fn(),
+            reset: vi.fn(),
+        }
+
+        render(<Wrapper />)
+
+        await act(async () => {
+            createSuccessRef.current?.({
+                campaign_invitation_id: "invitation-2",
+                token: null,
+            })
+        })
+
+        expect(
+            screen.getByText(/already issued, but the original token is unavailable/i),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/revoke the pending invitation and issue a new one/i),
+        ).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Copy invitation token now" })).not.toBeInTheDocument()
+        expect(onChanged).not.toHaveBeenCalledWith("Invitation issued.")
     })
 
     it("does not use browser storage or the URL when handling the one-time token", () => {

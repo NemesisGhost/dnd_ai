@@ -543,6 +543,43 @@ def test_create_invitation_idempotency_state_never_persists_the_raw_token(
         assert '"token"' not in serialized
 
 
+def test_a_lost_response_replay_returns_no_token_and_does_not_create_a_second_invitation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"create-invitation-lost-response-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["token"] is not None
+    assert second_payload == {
+        "campaign_invitation_id": first_payload["campaign_invitation_id"],
+        "token": None,
+    }
+
+    with postgres_engine.connect() as verify:
+        invitation_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_invitations "
+                "WHERE campaign_id = :campaign AND invited_email = :email"
+            ),
+            {"campaign": f.campaign_id, "email": "player@example.com"},
+        ).scalar_one()
+        assert invitation_count == 1
+
+
 def test_listing_pending_invitations_returns_only_outstanding_rows_in_deterministic_order(
     client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:

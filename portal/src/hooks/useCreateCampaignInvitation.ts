@@ -10,6 +10,7 @@ export type CreateCampaignInvitationStatus =
     | { kind: "idle" }
     | { kind: "pending" }
     | { kind: "success" }
+    | { kind: "replayed" }
     | { kind: "denied" }
     | { kind: "conflict" }
     | { kind: "error" }
@@ -100,7 +101,9 @@ export function useCreateCampaignInvitation(
                     idempotencyRef.current = null
                     setSnapshot({
                         campaignId: requestCampaignId,
-                        status: { kind: "success" },
+                        status: {
+                            kind: result.token === null ? "replayed" : "success",
+                        },
                     })
                     onSuccess(result)
                 })

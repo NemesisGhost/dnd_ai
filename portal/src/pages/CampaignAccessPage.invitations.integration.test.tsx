@@ -253,4 +253,63 @@ describe("CampaignAccessPage invitations integration", () => {
         fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
         expect(clipboardWriteText).not.toHaveBeenCalled()
     })
+
+    it("shows explicit lost-response guidance for an idempotent replay with no token", async () => {
+        const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = requestUrl(input)
+            const method = init?.method ?? "GET"
+
+            if (method === "GET" && url.includes("/access-overview")) {
+                return Promise.resolve(jsonResponse(overview))
+            }
+
+            if (method === "GET" && url.includes("/invitations")) {
+                return Promise.resolve(
+                    jsonResponse({
+                        invitations: [
+                            {
+                                campaign_invitation_id: "44444444-4444-4444-4444-444444444444",
+                                invited_email: "player@example.com",
+                                invited_by_display_name: "Aria the GM",
+                                created_at: "2026-01-04T00:00:00Z",
+                                expires_at: "2026-01-11T00:00:00Z",
+                            },
+                        ],
+                    }),
+                )
+            }
+
+            if (method === "POST" && url.endsWith(`/campaigns/${CAMPAIGN_ID}/invitations`)) {
+                return Promise.resolve(
+                    jsonResponse(
+                        {
+                            campaign_invitation_id: "44444444-4444-4444-4444-444444444444",
+                            token: null,
+                        },
+                        201,
+                    ),
+                )
+            }
+
+            return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`))
+        })
+
+        const { container } = renderAtCampaign(fetchMock)
+
+        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+
+        fireEvent.change(screen.getByLabelText("Optional email label"), {
+            target: { value: "player@example.com" },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
+
+        expect(
+            await screen.findByText(/already issued, but the original token is unavailable/i),
+        ).toBeInTheDocument()
+        expect(
+            screen.getByText(/revoke the pending invitation and issue a new one if the token was not received/i),
+        ).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Copy invitation token now" })).not.toBeInTheDocument()
+        expect(container.textContent).not.toContain("Invitation issued.")
+    })
 })

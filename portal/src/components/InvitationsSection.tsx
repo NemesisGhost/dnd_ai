@@ -20,13 +20,15 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function createStatusMessage(
-    kind: "pending" | "success" | "denied" | "conflict" | "error",
+    kind: "pending" | "success" | "replayed" | "denied" | "conflict" | "error",
 ): string {
     switch (kind) {
         case "pending":
             return "Issuing invitation…"
         case "success":
             return "Invitation issued."
+        case "replayed":
+            return "This invitation was already issued, but the original token is unavailable. Revoke the pending invitation and issue a new one if the token was not received."
         case "denied":
             return "You do not have permission to issue invitations."
         case "conflict":
@@ -181,9 +183,11 @@ export function InvitationsSection({
     const { status: createStatus, submit, reset } = useCreateCampaignInvitation(
         campaignId,
         (result) => {
-            onIssuedTokenChange(result.token)
+            if (result.token !== null) {
+                onIssuedTokenChange(result.token)
+                onChanged("Invitation issued.")
+            }
             setCopyStatus("idle")
-            onChanged("Invitation issued.")
             retry()
         },
     )
@@ -251,6 +255,7 @@ export function InvitationsSection({
                 <p
                     id={createStatusId}
                     className={
+                        createStatus.kind === "replayed" ||
                         createStatus.kind === "denied" ||
                         createStatus.kind === "conflict" ||
                         createStatus.kind === "error"

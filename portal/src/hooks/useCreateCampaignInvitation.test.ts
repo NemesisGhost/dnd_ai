@@ -76,6 +76,30 @@ describe("useCreateCampaignInvitation", () => {
         })
     })
 
+    it("derives a replayed status when the invitation already exists and the raw token is unavailable", async () => {
+        const onSuccess = vi.fn()
+        createCampaignInvitationMock.mockResolvedValue({
+            campaign_invitation_id: "invitation-1",
+            token: null,
+        })
+
+        const { result } = renderHook(() =>
+            useCreateCampaignInvitation("campaign-a", onSuccess),
+        )
+
+        act(() => {
+            result.current.submit("player@example.com")
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "replayed" })
+        })
+        expect(onSuccess).toHaveBeenCalledWith({
+            campaign_invitation_id: "invitation-1",
+            token: null,
+        })
+    })
+
     it("reuses the idempotency key across a retry for the same email label", async () => {
         createCampaignInvitationMock
             .mockRejectedValueOnce(new Error("network down"))
