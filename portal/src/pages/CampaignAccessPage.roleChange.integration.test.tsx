@@ -23,6 +23,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 // This file exercises the REAL CampaignAccessPage/AccessOverviewBoundary/
 // AccessPage/MemberRoleEditor/useChangeMembershipRole chain — nothing here
 // is mocked except the network boundary (global fetch) and the session

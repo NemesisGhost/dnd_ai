@@ -18,6 +18,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 // Exercises the REAL Access page -> AccessOverviewBoundary -> AccessPage ->
 // AddCharacterRelationship/CharacterRelationshipEditor/
 // RevokeCharacterRelationship -> useAdd/Change/RevokeCharacterRelationship

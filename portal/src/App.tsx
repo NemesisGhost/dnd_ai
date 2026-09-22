@@ -18,6 +18,7 @@ import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
+import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 
 function App() {
   return (
@@ -61,6 +62,11 @@ function App() {
               )}
             </AuthenticatedSessionBoundary>
           }
+        />
+
+        <Route
+          path="/campaign-invitations/accept"
+          element={<AcceptCampaignInvitationPage />}
         />
 
         <Route

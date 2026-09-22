@@ -18,6 +18,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 // The add-role/revoke-role counterpart to CampaignAccessPage.roleChange.
 // integration.test.tsx: exercises the REAL CampaignAccessPage/
 // AccessOverviewBoundary/AccessPage/AddMemberRole/RevokeMemberRole/

@@ -27,13 +27,20 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.api.local_auth import (
+    get_login_account_rate_limiter,
+    get_login_ip_rate_limiter,
+    get_token_consumption_rate_limiter,
+)
 from dnd_ai.commands.campaign_invitations import create_campaign_invitation
+from dnd_ai.commands.local_auth import _activate_local_account_impl, _create_local_account_impl
 from dnd_ai.commands.memberships import end_campaign_membership
 from dnd_ai.domain.access import (
     FOUNDRY_SYSTEM_AUTH_METHOD,
     AuthenticatedPrincipal,
     resolve_access_context,
 )
+from dnd_ai.domain.rate_limit import RateLimiter
 from tests.factories import (
     lookup_id,
     make_access_group,
@@ -44,6 +51,7 @@ from tests.factories import (
     make_character_relationship_type,
     make_membership_character_relationship,
     make_membership_role,
+    make_platform_administrator,
     make_relationship_type_capability,
     make_resource_grant,
     make_role,
@@ -56,6 +64,13 @@ from tests.factories import (
 
 pytestmark = pytest.mark.database
 
+_DEV_ORIGIN = "http://localhost:5173"
+_LOCAL_MANAGER_PASSWORD = "a genuinely random passphrase 1"
+
+
+def _generous_rate_limiter() -> RateLimiter:
+    return RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+
 
 class Fixture:
     def __init__(self, connection: Connection, slug: str) -> None:
@@ -66,6 +81,9 @@ class Fixture:
         # identical reasoning; nothing here exercises that invariant.
         self.campaign_id = make_campaign(
             connection, self.timeline_id, lifecycle_status_code="pending"
+        )
+        self.other_campaign_id = make_campaign(
+            connection, self.timeline_id, "Other Campaign", lifecycle_status_code="pending"
         )
 
         access_manage_id = lookup_id(
@@ -86,6 +104,19 @@ class Fixture:
         )
         make_membership_role(connection, self.admin_membership_id, admin_role_id)
 
+        other_admin_role_id = make_role(
+            connection,
+            campaign_id=self.other_campaign_id,
+            code=f"other_admin_{uuid.uuid4().hex[:8]}",
+        )
+        make_role_capability(connection, other_admin_role_id, access_manage_id)
+        make_role_capability(connection, other_admin_role_id, view_capability_id)
+        self.other_admin_user_id = make_user(connection, "Invitation API Other Admin")
+        self.other_admin_membership_id = make_campaign_membership(
+            connection, self.other_campaign_id, self.other_admin_user_id
+        )
+        make_membership_role(connection, self.other_admin_membership_id, other_admin_role_id)
+
         self.capless_user_id = make_user(connection, "Invitation API Capless Member")
         make_campaign_membership(connection, self.campaign_id, self.capless_user_id)
 
@@ -104,6 +135,25 @@ class Fixture:
         )
 
         self.other_user_id = make_user(connection, "Invitation API Other User")
+
+        self.platform_admin_user_id = make_platform_administrator(connection)
+        issued_local_manager = _create_local_account_impl(
+            connection,
+            created_by_user_id=self.platform_admin_user_id,
+            login_name=f"invitation.local.manager.{uuid.uuid4().hex[:8]}",
+            display_name="Invitation Local Manager",
+        )
+        self.local_manager_user_id = issued_local_manager.user_id
+        self.local_manager_login_name = issued_local_manager.login_name
+        _activate_local_account_impl(
+            connection,
+            raw_activation_token=issued_local_manager.raw_token,
+            raw_password=_LOCAL_MANAGER_PASSWORD,
+        )
+        self.local_manager_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.local_manager_user_id
+        )
+        make_membership_role(connection, self.local_manager_membership_id, admin_role_id)
 
         # --- checkpoint-4 correction: end_campaign_membership must revoke
         # every unrevoked character relationship a membership holds, so a
@@ -186,22 +236,22 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         cleanup.execute(
-            text("DELETE FROM security.campaign_invitations WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
+            text("DELETE FROM security.campaign_invitations WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
             text("""
                 DELETE FROM security.membership_character_relationships
                 WHERE campaign_membership_id IN (
                     SELECT campaign_membership_id FROM security.campaign_memberships
-                    WHERE campaign_id = :c
+                    WHERE campaign_id = ANY(:campaigns)
                 )
             """),
-            {"c": fixture.campaign_id},
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
-            text("DELETE FROM security.resource_grants WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
+            text("DELETE FROM security.resource_grants WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
             text(
@@ -221,33 +271,34 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             text("""
                 DELETE FROM security.membership_roles WHERE campaign_membership_id IN (
                     SELECT campaign_membership_id FROM security.campaign_memberships
-                    WHERE campaign_id = :c
+                    WHERE campaign_id = ANY(:campaigns)
                 )
             """),
-            {"c": fixture.campaign_id},
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
             text("""
                 DELETE FROM security.role_capabilities WHERE role_id IN (
-                    SELECT role_id FROM security.roles WHERE campaign_id = :c
+                    SELECT role_id FROM security.roles WHERE campaign_id = ANY(:campaigns)
                 )
             """),
-            {"c": fixture.campaign_id},
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
-            text("DELETE FROM security.roles WHERE campaign_id = :c"), {"c": fixture.campaign_id}
+            text("DELETE FROM security.roles WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
-            text("DELETE FROM security.idempotent_requests WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
+            text("DELETE FROM security.idempotent_requests WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
-            text("DELETE FROM security.campaign_memberships WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
+            text("DELETE FROM security.campaign_memberships WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
-            text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"),
-            {"c": fixture.campaign_id},
+            text("DELETE FROM campaign.campaigns WHERE campaign_id = ANY(:campaigns)"),
+            {"campaigns": [fixture.campaign_id, fixture.other_campaign_id]},
         )
         cleanup.execute(
             text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
@@ -260,12 +311,15 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             {
                 "users": [
                     fixture.admin_user_id,
+                    fixture.other_admin_user_id,
                     fixture.capless_user_id,
                     fixture.outsider_user_id,
                     fixture.fresh_invitee_user_id,
                     fixture.departed_user_id,
                     fixture.open_member_user_id,
                     fixture.other_user_id,
+                    fixture.platform_admin_user_id,
+                    fixture.local_manager_user_id,
                     fixture.pre_reactivation_relationship_user_id,
                     fixture.pre_reactivation_access_group_user_id,
                 ]
@@ -279,6 +333,19 @@ def client_factory(postgres_engine: Engine) -> Callable[[uuid.UUID], TestClient]
         app = create_app()
         app.dependency_overrides[get_engine] = lambda: postgres_engine
         app.dependency_overrides[get_authenticated_user_id] = lambda: oidc_principal(user_id)
+        return TestClient(app, raise_server_exceptions=False)
+
+    return _make
+
+
+@pytest.fixture
+def browser_client_factory(postgres_engine: Engine) -> Callable[[], TestClient]:
+    def _make() -> TestClient:
+        app = create_app()
+        app.dependency_overrides[get_engine] = lambda: postgres_engine
+        app.dependency_overrides[get_login_ip_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_login_account_rate_limiter] = _generous_rate_limiter
+        app.dependency_overrides[get_token_consumption_rate_limiter] = _generous_rate_limiter
         return TestClient(app, raise_server_exceptions=False)
 
     return _make
@@ -310,6 +377,23 @@ def test_a_foundrysystem_credential_cannot_accept_an_invitation(
 
 def _invitations_url(f: Fixture) -> str:
     return f"/campaigns/{f.campaign_id}/invitations"
+
+
+def _revoke_invitation_url(
+    f: Fixture, invitation_id: uuid.UUID, *, campaign_id: uuid.UUID | None = None
+) -> str:
+    active_campaign_id = f.campaign_id if campaign_id is None else campaign_id
+    return f"/campaigns/{active_campaign_id}/invitations/{invitation_id}/revoke"
+
+
+def _login_local_manager(client: TestClient, f: Fixture) -> str:
+    response = client.post(
+        "/auth/login",
+        json={"login_name": f.local_manager_login_name, "password": _LOCAL_MANAGER_PASSWORD},
+        headers={"Origin": _DEV_ORIGIN},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["csrf_token"]
 
 
 def _issue_token(postgres_engine: Engine, f: Fixture, *, ttl: timedelta = timedelta(days=7)) -> str:
@@ -355,12 +439,14 @@ def test_creating_an_invitation_succeeds(
         response = client.post(_invitations_url(f), json={"invited_email": "player@example.com"})
     assert response.status_code == 201, response.text
     payload = response.json()
-    assert len(payload["token"]) > 20
+    raw_token = payload["token"]
+    assert len(raw_token) > 20
 
     with postgres_engine.connect() as verify:
         row = verify.execute(
             text("""
-                SELECT campaign_id, invited_email, invited_by_membership_id, accepted_at,
+                SELECT campaign_id, invited_email, invited_by_membership_id, invitation_token_hash,
+                       accepted_at,
                        revoked_at, expires_at > now() AS not_yet_expired
                 FROM security.campaign_invitations WHERE campaign_invitation_id = :i
             """),
@@ -369,6 +455,8 @@ def test_creating_an_invitation_succeeds(
         assert row.campaign_id == f.campaign_id
         assert row.invited_email == "player@example.com"
         assert row.invited_by_membership_id == f.admin_membership_id
+        assert row.invitation_token_hash != raw_token
+        assert len(row.invitation_token_hash) == 64
         assert row.accepted_at is None
         assert row.revoked_at is None
         assert row.not_yet_expired is True
@@ -386,7 +474,7 @@ def test_creating_an_invitation_succeeds(
 
 
 def test_a_sequential_replay_of_create_invitation_returns_the_original_response(
-    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
 ) -> None:
     key = f"create-invitation-{uuid.uuid4().hex[:8]}"
     with client_factory(f.admin_user_id) as client:
@@ -394,7 +482,493 @@ def test_a_sequential_replay_of_create_invitation_returns_the_original_response(
         second = client.post(_invitations_url(f), json={}, headers={"Idempotency-Key": key})
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert second_payload == {
+        "campaign_invitation_id": first_payload["campaign_invitation_id"],
+        "token": None,
+    }
+
+    raw_token = first_payload["token"]
+    invitation_id = uuid.UUID(first_payload["campaign_invitation_id"])
+    with postgres_engine.connect() as verify:
+        row = (
+            verify.execute(
+                text("""
+                    SELECT response_status_code, response_body::text AS response_body
+                    FROM security.idempotent_requests
+                    WHERE campaign_id = :campaign AND idempotency_key = :key
+                """),
+                {"campaign": f.campaign_id, "key": key},
+            )
+            .mappings()
+            .one()
+        )
+        assert row["response_status_code"] == 201
+        response_body = str(row["response_body"])
+        assert raw_token not in response_body
+        assert '"token"' not in response_body
+        assert str(invitation_id) in response_body
+
+
+def test_create_invitation_idempotency_state_never_persists_the_raw_token(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"create-invitation-state-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    raw_token = payload["token"]
+
+    with postgres_engine.connect() as verify:
+        durable_state = (
+            verify.execute(
+                text("""
+                    SELECT response_body::text AS response_body
+                    FROM security.idempotent_requests
+                    WHERE campaign_id = :campaign AND idempotency_key = :key
+                """),
+                {"campaign": f.campaign_id, "key": key},
+            )
+            .mappings()
+            .one()
+        )
+        serialized = str(durable_state["response_body"])
+        assert raw_token not in serialized
+        assert '"token"' not in serialized
+
+
+def test_a_lost_response_replay_returns_no_token_and_does_not_create_a_second_invitation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"create-invitation-lost-response-{uuid.uuid4().hex[:8]}"
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+        second = client.post(
+            _invitations_url(f),
+            json={"invited_email": "player@example.com"},
+            headers={"Idempotency-Key": key},
+        )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["token"] is not None
+    assert second_payload == {
+        "campaign_invitation_id": first_payload["campaign_invitation_id"],
+        "token": None,
+    }
+
+    with postgres_engine.connect() as verify:
+        invitation_count = verify.execute(
+            text(
+                "SELECT count(*) FROM security.campaign_invitations "
+                "WHERE campaign_id = :campaign AND invited_email = :email"
+            ),
+            {"campaign": f.campaign_id, "email": "player@example.com"},
+        ).scalar_one()
+        assert invitation_count == 1
+
+
+def test_listing_pending_invitations_returns_only_outstanding_rows_in_deterministic_order(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        first_pending_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            invited_email="first@example.com",
+        ).campaign_invitation_id
+        second_pending_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+        accepted_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            invited_email="accepted@example.com",
+        ).campaign_invitation_id
+        revoked_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            invited_email="revoked@example.com",
+        ).campaign_invitation_id
+        expired_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            invited_email="expired@example.com",
+            ttl=timedelta(seconds=-1),
+        ).campaign_invitation_id
+        other_campaign_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.other_campaign_id,
+            invited_by_membership_id=f.other_admin_membership_id,
+            invited_email="other@example.com",
+        ).campaign_invitation_id
+
+        connection.execute(
+            text(
+                "UPDATE security.campaign_invitations SET created_at = now() - interval '2 days' "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"i": first_pending_id},
+        )
+        connection.execute(
+            text(
+                "UPDATE security.campaign_invitations SET created_at = now() - interval '1 day' "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"i": second_pending_id},
+        )
+        connection.execute(
+            text(
+                "UPDATE security.campaign_invitations "
+                "SET accepted_by_user_id = :user, accepted_at = now() "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"user": f.fresh_invitee_user_id, "i": accepted_id},
+        )
+        connection.execute(
+            text(
+                "UPDATE security.campaign_invitations SET revoked_at = now() "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"i": revoked_id},
+        )
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_invitations_url(f))
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert [item["campaign_invitation_id"] for item in body["invitations"]] == [
+        str(first_pending_id),
+        str(second_pending_id),
+    ]
+    assert body["invitations"][0]["invited_email"] == "first@example.com"
+    assert body["invitations"][1]["invited_email"] is None
+    assert all(
+        item["invited_by_display_name"] == "Invitation API Admin" for item in body["invitations"]
+    )
+
+    serialized = str(body)
+    assert str(accepted_id) not in serialized
+    assert str(revoked_id) not in serialized
+    assert str(expired_id) not in serialized
+    assert str(other_campaign_id) not in serialized
+    assert "token" not in serialized.lower()
+    assert "hash" not in serialized.lower()
+    assert "accepted_by_user_id" not in serialized
+
+
+def test_listing_pending_invitations_can_return_an_empty_list(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_invitations_url(f))
+    assert response.status_code == 200, response.text
+    assert response.json() == {"invitations": []}
+
+
+def test_listing_pending_invitations_requires_access_manage(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        response = client.get(_invitations_url(f))
+    assert response.status_code == 403
+
+
+def test_listing_pending_invitations_is_non_disclosing_for_non_members(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        response = client.get(_invitations_url(f))
+    assert response.status_code == 404
+
+
+def test_revoking_an_invitation_succeeds_and_writes_one_redacted_audit_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        created = client.post(_invitations_url(f), json={"invited_email": "player@example.com"})
+        assert created.status_code == 201, created.text
+        payload = created.json()
+        invitation_id = uuid.UUID(payload["campaign_invitation_id"])
+        raw_token = payload["token"]
+
+        response = client.post(_revoke_invitation_url(f, invitation_id))
+    assert response.status_code == 200, response.text
+    assert response.json() == {"campaign_invitation_id": str(invitation_id)}
+
+    with postgres_engine.connect() as verify:
+        revoked_at = verify.execute(
+            text(
+                "SELECT revoked_at FROM security.campaign_invitations "
+                "WHERE campaign_invitation_id = :i"
+            ),
+            {"i": invitation_id},
+        ).scalar_one()
+        assert revoked_at is not None
+
+        audit_rows = (
+            verify.execute(
+                text("""
+                    SELECT changed_fields, previous_status, new_status, reason
+                    FROM audit.change_log
+                    WHERE table_name = 'campaign_invitations'
+                      AND record_id = :i
+                      AND command_name = 'revoke_campaign_invitation'
+                """),
+                {"i": invitation_id},
+            )
+            .mappings()
+            .all()
+        )
+        assert len(audit_rows) == 1
+        serialized = str(dict(audit_rows[0]))
+        assert raw_token not in serialized
+        assert "player@example.com" not in serialized
+        assert "token_hash" not in serialized
+
+
+def test_revoking_an_already_revoked_invitation_is_a_no_op_without_duplicate_audit(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(_revoke_invitation_url(f, invitation_id))
+        second = client.post(_revoke_invitation_url(f, invitation_id))
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
     assert second.json() == first.json()
+
+    with postgres_engine.connect() as verify:
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE table_name = 'campaign_invitations' "
+                "AND record_id = :i AND command_name = 'revoke_campaign_invitation'"
+            ),
+            {"i": invitation_id},
+        ).scalar_one()
+        assert audit_count == 1
+
+
+def test_revoking_an_accepted_invitation_is_rejected_as_a_fixed_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    token = _issue_token(postgres_engine, f)
+    with client_factory(f.fresh_invitee_user_id) as invitee_client:
+        accepted = invitee_client.post("/campaign-invitations/accept", json={"token": token})
+    assert accepted.status_code == 200, accepted.text
+
+    with postgres_engine.connect() as verify:
+        invitation_id = verify.execute(
+            text(
+                "SELECT campaign_invitation_id FROM security.campaign_invitations "
+                "WHERE campaign_id = :c AND accepted_by_user_id = :u"
+            ),
+            {"c": f.campaign_id, "u": f.fresh_invitee_user_id},
+        ).scalar_one()
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_revoke_invitation_url(f, invitation_id))
+    assert response.status_code == 409, response.text
+
+
+def test_revoking_an_expired_invitation_is_rejected_as_a_fixed_conflict(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            ttl=timedelta(seconds=-1),
+        ).campaign_invitation_id
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_revoke_invitation_url(f, invitation_id))
+    assert response.status_code == 409, response.text
+
+
+def test_revoking_a_missing_invitation_is_non_disclosing_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_revoke_invitation_url(f, uuid.uuid4()))
+    assert response.status_code == 404
+
+
+def test_revoking_an_invitation_from_a_different_campaign_is_non_disclosing_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.other_campaign_id,
+            invited_by_membership_id=f.other_admin_membership_id,
+        ).campaign_invitation_id
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(_revoke_invitation_url(f, invitation_id))
+    assert response.status_code == 404, response.text
+
+
+def test_revoking_an_invitation_requires_access_manage(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with client_factory(f.capless_user_id) as client:
+        response = client.post(_revoke_invitation_url(f, invitation_id))
+    assert response.status_code == 403
+
+
+def test_a_sequential_replay_of_revoke_invitation_returns_the_original_response(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"revoke-invitation-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with client_factory(f.admin_user_id) as client:
+        first = client.post(
+            _revoke_invitation_url(f, invitation_id), headers={"Idempotency-Key": key}
+        )
+        second = client.post(
+            _revoke_invitation_url(f, invitation_id), headers={"Idempotency-Key": key}
+        )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == first.json()
+
+    with postgres_engine.connect() as verify:
+        audit_count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE table_name = 'campaign_invitations' "
+                "AND record_id = :i AND command_name = 'revoke_campaign_invitation'"
+            ),
+            {"i": invitation_id},
+        ).scalar_one()
+        assert audit_count == 1
+
+
+def test_rejected_revoke_does_not_leave_a_completed_idempotency_reservation(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    key = f"revoke-invitation-conflict-{uuid.uuid4().hex[:8]}"
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+            ttl=timedelta(seconds=-1),
+        ).campaign_invitation_id
+
+    with client_factory(f.admin_user_id) as client:
+        response = client.post(
+            _revoke_invitation_url(f, invitation_id), headers={"Idempotency-Key": key}
+        )
+    assert response.status_code == 409, response.text
+
+    with postgres_engine.connect() as verify:
+        reservation_count = verify.execute(
+            text("SELECT count(*) FROM security.idempotent_requests WHERE idempotency_key = :key"),
+            {"key": key},
+        ).scalar_one()
+        assert reservation_count == 0
+
+
+def test_browser_session_revoke_without_csrf_header_is_rejected(
+    browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with browser_client_factory() as client:
+        _login_local_manager(client, f)
+        response = client.post(
+            _revoke_invitation_url(f, invitation_id),
+            headers={"Origin": _DEV_ORIGIN},
+        )
+    assert response.status_code == 403, response.text
+
+
+def test_browser_session_revoke_without_origin_is_rejected(
+    browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with browser_client_factory() as client:
+        csrf_token = _login_local_manager(client, f)
+        response = client.post(
+            _revoke_invitation_url(f, invitation_id),
+            headers={"X-CSRF-Token": csrf_token},
+        )
+    assert response.status_code == 403, response.text
+
+
+def test_browser_session_revoke_from_a_disallowed_origin_is_rejected(
+    browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        invitation_id = create_campaign_invitation(
+            connection,
+            campaign_id=f.campaign_id,
+            invited_by_membership_id=f.admin_membership_id,
+        ).campaign_invitation_id
+
+    with browser_client_factory() as client:
+        csrf_token = _login_local_manager(client, f)
+        response = client.post(
+            _revoke_invitation_url(f, invitation_id),
+            headers={
+                "Origin": "https://evil.example.com",
+                "X-CSRF-Token": csrf_token,
+            },
+        )
+    assert response.status_code == 403, response.text
 
 
 # ---------------------------------------------------------------------------

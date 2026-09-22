@@ -13,6 +13,7 @@ import { MemberRoleEditor } from "../components/MemberRoleEditor"
 import { ReactivateAccessGroup } from "../components/ReactivateAccessGroup"
 import { RemoveAccessGroupMember } from "../components/RemoveAccessGroupMember"
 import { RemoveCampaignMember } from "../components/RemoveCampaignMember"
+import { InvitationsSection } from "../components/InvitationsSection"
 import { RevokeCharacterRelationship } from "../components/RevokeCharacterRelationship"
 import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { RevokeResourceGrant } from "../components/RevokeResourceGrant"
@@ -460,6 +461,8 @@ interface AccessPageProps {
     overview: CampaignAccessOverview
     onChanged: (message: string) => void
     onMutationStart: () => void
+    issuedInvitationToken: string | null
+    onIssuedInvitationTokenChange: (token: string | null) => void
 }
 
 export function AccessPage({
@@ -467,6 +470,8 @@ export function AccessPage({
     overview,
     onChanged,
     onMutationStart,
+    issuedInvitationToken,
+    onIssuedInvitationTokenChange,
 }: AccessPageProps) {
     const { state: sessionState } = useSession()
 
@@ -499,6 +504,14 @@ export function AccessPage({
                 assignableRoles={overview.assignable_roles}
                 onChanged={onChanged}
                 onMutationStart={onMutationStart}
+            />
+
+            <InvitationsSection
+                campaignId={campaignId}
+                onChanged={onChanged}
+                onMutationStart={onMutationStart}
+                issuedToken={issuedInvitationToken}
+                onIssuedTokenChange={onIssuedInvitationTokenChange}
             />
 
             {overview.members.length > 0 ? (
