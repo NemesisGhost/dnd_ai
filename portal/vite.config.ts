@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react()],
 
   server: {
+    port: 5173,
+    strictPort: true,
+
     proxy: {
       "/api": {
         target: "http://localhost:8000",
@@ -19,7 +22,6 @@ export default defineConfig({
       },
     },
   },
-
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
