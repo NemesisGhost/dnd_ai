@@ -98,7 +98,7 @@ from dnd_ai.domain.rate_limit import RateLimiter
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from .audit import record_change_log
-from .auth import get_authenticated_user_id, require_human_user_id
+from .auth import get_authenticated_user_id, require_allowed_origin, require_human_user_id
 from .client_address import resolve_client_ip
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
@@ -301,6 +301,7 @@ def login_endpoint(
     ip_rate_limiter: Annotated[RateLimiter, Depends(get_login_ip_rate_limiter)],
     account_rate_limiter: Annotated[RateLimiter, Depends(get_login_account_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> LoginResponse:
     """docs/PLAN.md §23.4 steps 1-4: rate limit, constant-work credential
     check, session creation with a rotated identifier, and the `Set-Cookie`
@@ -717,7 +718,7 @@ class CreateAccountRequest(BaseModel):
 class CreateAccountResponse(BaseModel):
     user_id: uuid.UUID
     login_name: str
-    raw_activation_token: str
+    raw_activation_token: str = Field(repr=False)
     expires_at: str
 
 
@@ -767,7 +768,7 @@ class IssuePasswordResetRequest(BaseModel):
 
 class IssuePasswordResetResponse(BaseModel):
     user_id: uuid.UUID
-    raw_reset_token: str
+    raw_reset_token: str = Field(repr=False)
     expires_at: str
 
 
@@ -978,6 +979,7 @@ def activate_account_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> ActivateAccountResponse:
     if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
@@ -1017,6 +1019,7 @@ def reset_password_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> ResetPasswordResponse:
     if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()

@@ -696,6 +696,26 @@ def _resolve_foundry_access_principal_dependency(
     return principal
 
 
+def require_allowed_origin(request: Request) -> None:
+    """Enforces docs/PLAN.md §23.4's allowed-Origin requirement on a request
+    that has no authenticated principal yet for `_enforce_csrf_and_origin`
+    below to hang its own check off of — `/auth/login`, `/auth/activate`,
+    `/auth/password-reset`, and every single-link invitation-onboarding
+    mutation (`PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §7.1 S-3: "login
+    CSRF on the pre-authentication boundary" — without this, a cross-site
+    POST could force-log a victim's browser into an attacker-controlled
+    account before any session-scoped CSRF check could ever apply).
+    Depended on explicitly per-route, unlike `_enforce_csrf_and_origin`,
+    which only ever runs for an already-resolved `LOCAL_SESSION_AUTH_
+    METHOD` principal inside `get_authenticated_user_id`. Raises
+    `ForbiddenError` (403) for a missing or disallowed `Origin` header,
+    identically for every caller — never discloses which allowed origins
+    exist."""
+    origin = request.headers.get("origin")
+    if origin is None or origin not in local_session_allowed_origins_tuple(settings):
+        raise ForbiddenError()
+
+
 def _enforce_csrf_and_origin(
     request: Request, connection: Connection, principal: AuthenticatedPrincipal
 ) -> None:
@@ -721,9 +741,7 @@ def _enforce_csrf_and_origin(
         return
     assert principal.local_session_id is not None
 
-    origin = request.headers.get("origin")
-    if origin is None or origin not in local_session_allowed_origins_tuple(settings):
-        raise ForbiddenError()
+    require_allowed_origin(request)
 
     submitted_csrf_token = request.headers.get("x-csrf-token")
     stored_csrf_token = resolve_browser_session_csrf_token(
