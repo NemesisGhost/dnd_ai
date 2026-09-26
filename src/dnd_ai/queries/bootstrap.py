@@ -76,7 +76,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
 
 # The capability `dnd_ai.api.access.resolve_party_perspective` requires the
 # caller to hold for a character before it will authorize *any* party
@@ -143,6 +143,13 @@ class SessionBootstrapView:
 
     user_id: uuid.UUID
     display_name: str
+    # Additive Phase 13E checkpoint 9 field: the only server-authoritative
+    # signal the portal has for whether to render an admin surface at all
+    # (CP 10's /admin/accounts page) — campaign-scoped `access.manage`
+    # grants nothing here; this is the same campaign-independent primitive
+    # `dnd_ai.commands.local_auth._create_local_account_impl`/`_issue_
+    # password_reset_token_impl` already gate on.
+    is_platform_administrator: bool
     selected_campaign_id: uuid.UUID | None
     campaigns: tuple[CampaignBootstrapView, ...]
 
@@ -356,6 +363,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
     return SessionBootstrapView(
         user_id=user_id,
         display_name=display_name,
+        is_platform_administrator=is_platform_administrator(connection, user_id=user_id),
         selected_campaign_id=selected_campaign_id,
         campaigns=tuple(campaigns),
     )

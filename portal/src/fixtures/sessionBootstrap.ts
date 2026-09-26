@@ -9,6 +9,7 @@ export const sessionBootstrapFixture = {
   selected_campaign_id: "mundivita",
   csrf_token: "fixture-csrf-token-not-a-secret",
   browser_session_id: "browser-session-fixture-001",
+  is_platform_administrator: false,
 
   campaigns: [
     {

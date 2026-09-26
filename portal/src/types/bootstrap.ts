@@ -39,6 +39,10 @@ export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
   browser_session_id: string | null
+  // Phase 13E checkpoint 9: the only server-authoritative signal for
+  // whether to render an admin surface at all (CP 10's /admin/accounts
+  // page) — campaign-scoped access.manage grants nothing here.
+  is_platform_administrator: boolean
   selected_campaign_id: string | null
   campaigns: CampaignContext[]
   features: FeatureManifest

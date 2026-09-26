@@ -24,6 +24,7 @@ describe("CampaignsPage", () => {
         <CampaignsPage
           bootstrap={{
             ...sessionBootstrapFixture,
+            is_platform_administrator: false,
             selected_campaign_id: null,
             campaigns: [],
           }}
@@ -87,6 +88,7 @@ describe("CampaignsPage", () => {
         <CampaignsPage
           bootstrap={{
             ...sessionBootstrapFixture,
+            is_platform_administrator: false,
             selected_campaign_id: null,
             campaigns: [
               {

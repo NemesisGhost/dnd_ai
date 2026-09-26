@@ -70,6 +70,7 @@ function buildSessionState(
             },
             csrf_token: "fixture-csrf-token",
             browser_session_id: "browser-session-a",
+            is_platform_administrator: false,
             selected_campaign_id: "campaign-a",
             campaigns: [
                 {
