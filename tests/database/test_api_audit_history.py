@@ -381,6 +381,41 @@ class Fixture:
             record_id=self.departing_membership_id,
         )
 
+        # 14. invitation-onboarding completion (checkpoint 14): the record
+        # names the campaign_membership_id it activates, exactly like
+        # accept_campaign_invitation above, resolved through the same
+        # membership branch.
+        self.onboarded_user_id = make_user(connection, "Audit History Onboarded Member")
+        onboarded_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.onboarded_user_id
+        )
+        self.onboarded_membership_id = onboarded_membership_id
+        _record(
+            command="invitation_onboarding.complete",
+            action="updated",
+            table="campaign_memberships",
+            record_id=onboarded_membership_id,
+            actor_user_id=self.onboarded_user_id,
+        )
+
+        # 15. create a *deny* resource grant (checkpoint 14: change_summary
+        # must mark a deny grant distinctly from an ordinary allow one).
+        denied_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            grant_capability_id,
+            grantee_campaign_membership_id=self.member_membership_id,
+            character_id=self.character_id,
+            effect="deny",
+        )
+        self.denied_grant_id = denied_grant_id
+        _record(
+            command="create_resource_grant",
+            action="created",
+            table="resource_grants",
+            record_id=denied_grant_id,
+        )
+
         # A service-attributed event: audit.change_log.actor_service is set
         # *instead of* actor_user_id (dnd_ai.api.audit.record_change_log's
         # own contract — used today only by dnd_ai.api.local_auth's failed-
@@ -631,8 +666,8 @@ def test_authorized_admin_reads_the_full_curated_history(
     assert response.status_code == 200
     body = response.json()
     assert body["next_cursor"] is None
-    # 15 events recorded for campaign A (14 numbered + 1 ghost-actor event).
-    assert len(body["items"]) == 15
+    # 17 events recorded for campaign A (16 numbered + 1 ghost-actor event).
+    assert len(body["items"]) == 17
     categories = {item["category"] for item in body["items"]}
     assert categories == {
         "membership",
@@ -643,6 +678,44 @@ def test_authorized_admin_reads_the_full_curated_history(
         "campaign",
     }
     assert any(item["action_label"] == "Invitation revoked" for item in body["items"])
+
+
+def test_invitation_onboarding_completion_appears_under_the_invitation_category(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    body = response.json()
+    matching = [
+        item for item in body["items"] if item["action_label"] == "Invitation onboarding completed"
+    ]
+    assert len(matching) == 1
+    item = matching[0]
+    assert item["category"] == "invitation"
+    assert item["actor_label"] == "Audit History Onboarded Member"
+    assert item["target_label"] == "Audit History Onboarded Member"
+    assert item["target_type"] == "account"
+
+
+def test_a_deny_resource_grant_is_marked_distinctly_in_its_summary(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    body = response.json()
+    grant_items = [item for item in body["items"] if item["category"] == "resource_grant"]
+    deny_items = [
+        item
+        for item in grant_items
+        if item["change_summary"] is not None and "(deny)" in item["change_summary"]
+    ]
+    assert len(deny_items) == 1
+    allow_items = [
+        item
+        for item in grant_items
+        if item["change_summary"] is not None and "(deny)" not in item["change_summary"]
+    ]
+    assert len(allow_items) >= 1
 
 
 def test_ordering_is_deterministic_newest_first_under_a_real_timestamp_tie(
@@ -671,9 +744,9 @@ def test_pagination_is_stable_across_the_timestamp_tie(
         page2 = client.get(_url(f.campaign_id, limit=5, cursor=page1["next_cursor"])).json()
         assert len(page2["items"]) == 5
 
-        page3 = client.get(_url(f.campaign_id, limit=5, cursor=page2["next_cursor"])).json()
+        page3 = client.get(_url(f.campaign_id, limit=7, cursor=page2["next_cursor"])).json()
         assert page3["next_cursor"] is None
-        assert len(page3["items"]) == 5  # 15 total - 5 - 5
+        assert len(page3["items"]) == 7  # 17 total - 5 - 5
 
     all_ids = [i["change_log_id"] for i in page1["items"] + page2["items"] + page3["items"]]
     assert len(all_ids) == len(set(all_ids)), "pagination must never repeat a row"
@@ -768,7 +841,7 @@ def test_campaign_a_never_sees_campaign_b_history(
         response = client.get(_url(f.campaign_id, limit=100))
     body = response.json()
     change_log_ids = {item["change_log_id"] for item in body["items"]}
-    assert len(change_log_ids) == 15
+    assert len(change_log_ids) == 17
     # Every change_log_id here must have been produced for campaign A —
     # cross-checked structurally by re-querying campaign B and confirming
     # no overlap in ids at all.

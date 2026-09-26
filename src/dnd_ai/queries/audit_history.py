@@ -37,11 +37,27 @@ never derived from request data.
 
 **Scope (13E-B audit-history foundation).** Exactly the categories the
 Access page's own mutations produce — membership, role, character
-relationship, resource grant, invitation, and campaign creation. A wider
-"every audited table" history is a different, materially harder feature
-(entity/state/narrative audit trails are not campaign-scoped at all in
-this schema) and is explicitly out of scope here; see this module's and
-`docs/AUDIT_HISTORY_API.md`'s own "Known limitations" sections.
+relationship, resource grant, invitation, campaign creation, access group,
+and access group membership. A wider "every audited table" history is a
+different, materially harder feature (entity/state/narrative audit trails
+are not campaign-scoped at all in this schema) and is explicitly out of
+scope here; see this module's and `docs/AUDIT_HISTORY_API.md`'s own "Known
+limitations" sections.
+
+**Checkpoint 14 addition.** `invitation_onboarding.complete` (`dnd_ai.api.
+invitation_onboarding.complete_invitation_onboarding_endpoint`) is folded
+into the "invitation" category — its audit row names the `campaign_
+memberships` row it activates, resolved through the same membership branch
+`accept_campaign_invitation` already uses, since both events end in an
+identical state: an existing membership becoming active. `invitation_
+onboarding.register` (`dnd_ai.api.invitation_onboarding.
+register_invited_account_endpoint`) is **not** added, and never can be
+through this module's join-by-record_id design: its audit row names the
+`security.users` row it creates, and a user account is not scoped to one
+campaign at all — there is no exact `campaign_id` to resolve it against.
+Registering a new account remains visible in this campaign's history only
+indirectly, once the same person's `invitation_onboarding.complete` event
+fires immediately afterward.
 
 **Safe presentation only.** This module never *returns* `audit.change_log
 .changed_fields` (arbitrary JSONB), `reason`, `correlation_id`,
@@ -121,6 +137,16 @@ _MEMBERSHIP_TABLE_COMMANDS: tuple[str, ...] = (
     "add_campaign_member",
     "end_campaign_membership",
     "accept_campaign_invitation",
+    # Checkpoint 14: dnd_ai.api.invitation_onboarding.
+    # complete_invitation_onboarding_endpoint's own audit row names the
+    # campaign_membership_id it activates, table_name='campaign_memberships'
+    # — the identical shape accept_campaign_invitation already resolves
+    # through this same branch. invitation_onboarding.register's own row
+    # (table_name='users', record_id=user_id) has no campaign to resolve
+    # at all — a security.users row is not scoped to one campaign — and is
+    # therefore deliberately never added to this module's allowlist; see
+    # the module docstring's "Scope" paragraph, above.
+    "invitation_onboarding.complete",
 )
 _ROLE_TABLE_COMMANDS: tuple[str, ...] = (
     "assign_membership_role",
@@ -179,6 +205,7 @@ _COMMANDS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
         "create_campaign_invitation",
         "accept_campaign_invitation",
         "revoke_campaign_invitation",
+        "invitation_onboarding.complete",
     ),
     "campaign": _CAMPAIGN_TABLE_COMMANDS,
     "access_group": _ACCESS_GROUP_TABLE_COMMANDS,
@@ -213,6 +240,7 @@ _ACTION_LABEL_BY_COMMAND: dict[str, str] = {
     "create_campaign_invitation": "Invitation sent",
     "accept_campaign_invitation": "Invitation accepted",
     "revoke_campaign_invitation": "Invitation revoked",
+    "invitation_onboarding.complete": "Invitation onboarding completed",
     "create_campaign": "Campaign created",
     "create_access_group": "Access group created",
     "update_access_group": "Access group updated",
@@ -281,7 +309,8 @@ _QUERY = """
             NULL::uuid AS grantee_membership_id,
             NULL::uuid AS grantee_access_group_id,
             NULL::uuid AS role_membership_id,
-            NULL::uuid AS previous_membership_role_id
+            NULL::uuid AS previous_membership_role_id,
+            NULL::text AS grant_effect
         FROM audit.change_log cl
         JOIN security.campaign_memberships cm ON cm.campaign_membership_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:membership_commands AS text[]))
@@ -300,7 +329,8 @@ _QUERY = """
                  AND (cl.changed_fields ->> 'previous_membership_role_id')
                      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 THEN CAST(cl.changed_fields ->> 'previous_membership_role_id' AS uuid)
-            END
+            END,
+            NULL::text
         FROM audit.change_log cl
         JOIN security.membership_roles mr ON mr.membership_role_id = cl.record_id
         JOIN security.campaign_memberships cm ON cm.campaign_membership_id = mr.campaign_membership_id
@@ -313,7 +343,7 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             cm.campaign_id, NULL::uuid, mcr.character_id,
             NULL::uuid, mcr.character_relationship_type_id, NULL::uuid, NULL::uuid, NULL::uuid,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::text
         FROM audit.change_log cl
         JOIN security.membership_character_relationships mcr
             ON mcr.membership_character_relationship_id = cl.record_id
@@ -328,7 +358,7 @@ _QUERY = """
             rg.campaign_id, NULL::uuid, NULL::uuid,
             NULL::uuid, NULL::uuid, rg.capability_id,
             rg.grantee_campaign_membership_id, rg.grantee_access_group_id,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, rg.effect
         FROM audit.change_log cl
         JOIN security.resource_grants rg ON rg.resource_grant_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:grant_commands AS text[]))
@@ -340,7 +370,7 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             ci.campaign_id, NULL::uuid, NULL::uuid,
             NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::text
         FROM audit.change_log cl
         JOIN security.campaign_invitations ci ON ci.campaign_invitation_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:invitation_commands AS text[]))
@@ -352,7 +382,7 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             c.campaign_id, NULL::uuid, NULL::uuid,
             NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::text
         FROM audit.change_log cl
         JOIN campaign.campaigns c ON c.campaign_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:campaign_commands AS text[]))
@@ -370,7 +400,7 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             ag.campaign_id, NULL::uuid, NULL::uuid,
             NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, ag.access_group_id,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::text
         FROM audit.change_log cl
         JOIN security.access_groups ag ON ag.access_group_id = cl.record_id
         WHERE cl.command_name = ANY(CAST(:access_group_commands AS text[]))
@@ -388,7 +418,7 @@ _QUERY = """
             cl.actor_user_id, cl.actor_service, cl.previous_status, cl.new_status,
             cm.campaign_id, cm.user_id, NULL::uuid,
             NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, agm.access_group_id,
-            NULL::uuid, NULL::uuid
+            NULL::uuid, NULL::uuid, NULL::text
         FROM audit.change_log cl
         JOIN security.access_group_memberships agm
             ON agm.access_group_membership_id = cl.record_id
@@ -407,7 +437,8 @@ _QUERY = """
         prev_rel_type.display_name AS previous_relationship_type_display_name,
         capability.display_name AS capability_display_name,
         s.grantee_membership_id, grantee_user.display_name AS grantee_user_display_name,
-        s.grantee_access_group_id, grantee_group.name AS grantee_group_name
+        s.grantee_access_group_id, grantee_group.name AS grantee_group_name,
+        s.grant_effect
     FROM scoped s
     LEFT JOIN security.users actor ON actor.user_id = s.actor_user_id
     LEFT JOIN security.users target_user ON target_user.user_id = s.target_user_id
@@ -495,10 +526,17 @@ def _change_summary(row: dict[str, object], *, command_name: str) -> str | None:
         return str(type_label)
     if command_name in ("create_resource_grant", "revoke_resource_grant"):
         capability_label = row.get("capability_display_name") or _PLACEHOLDER_CAPABILITY_LABEL
+        # Checkpoint 14: distinguishes a deny grant from an allow one
+        # (checkpoint 12 first made a deny grant creatable through the
+        # portal) — "(deny)" is appended only for that effect, never for
+        # "allow", so an ordinary grant's summary text is unchanged from
+        # before checkpoint 12 introduced the effect column at all.
+        effect_suffix = " (deny)" if row.get("grant_effect") == "deny" else ""
+        capability_label_with_effect = f"{capability_label}{effect_suffix}"
         grantee = row.get("grantee_user_display_name") or row.get("grantee_group_name")
         if grantee is not None:
-            return f"{capability_label} — {grantee}"
-        return str(capability_label)
+            return f"{capability_label_with_effect} — {grantee}"
+        return capability_label_with_effect
     if command_name == "update_access_group":
         # previous_status/new_status hold the group's own previous/new name
         # here (dnd_ai.api.access_groups.update_access_group_endpoint),
