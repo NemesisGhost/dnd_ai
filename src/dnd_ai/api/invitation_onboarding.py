@@ -215,6 +215,15 @@ class OnboardingStatusResponse(BaseModel):
     campaign_display_name: str
     invitation_expires_at: str
     onboarding_expires_at: str
+    # Additive correction to §8.2's original contract table (found while
+    # building the portal page around it): without this, a page refresh
+    # loses the only copy of the onboarding CSRF token, permanently
+    # blocking register/cancel for the rest of that session -- there is no
+    # separate reissue endpoint. `/auth/session` already re-returns a fresh
+    # `csrf_token` on every call (that endpoint's own docstring); this
+    # mirrors the identical "the current token is always available from a
+    # plain read" shape for the onboarding session's own CSRF secret.
+    onboarding_csrf_token: str = Field(repr=False)
     next_action: str
     signed_in_display_name: str | None = None
 
@@ -237,6 +246,7 @@ def invitation_onboarding_status_endpoint(
         campaign_display_name=status.campaign_display_name,
         invitation_expires_at=status.invitation_expires_at.isoformat(),
         onboarding_expires_at=status.onboarding_expires_at.isoformat(),
+        onboarding_csrf_token=status.onboarding_csrf_token,
         next_action=next_action,
         signed_in_display_name=signed_in_display_name,
     )

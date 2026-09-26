@@ -406,3 +406,34 @@ def test_cancel_clears_the_cookie_and_a_subsequent_status_is_unavailable(
 
         status_response = client.get(_STATUS_URL)
     assert status_response.status_code == 404
+
+
+def test_status_returns_the_same_onboarding_csrf_token_as_start(
+    browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    """Without this, a page refresh loses the only copy of the onboarding
+    CSRF token and permanently blocks register/cancel for the rest of that
+    session -- there is no separate reissue endpoint."""
+    with postgres_engine.begin() as connection:
+        raw_token = f.invite(connection)
+    with browser_client_factory() as client:
+        begun = _start(client, raw_token)
+        status_response = client.get(_STATUS_URL)
+        assert status_response.status_code == 200, status_response.text
+        assert status_response.json()["onboarding_csrf_token"] == begun["onboarding_csrf_token"]
+
+        # register succeeds using only the csrf token obtained from status,
+        # proving a refreshed page can still complete registration.
+        register_response = client.post(
+            _REGISTER_URL,
+            json={
+                "login_name": f"onb.afterrefresh.{uuid.uuid4().hex[:10]}",
+                "display_name": "After Refresh",
+                "password": "correct-onboarding-password-15",
+            },
+            headers={
+                "Origin": _DEV_ORIGIN,
+                "X-Onboarding-CSRF-Token": status_response.json()["onboarding_csrf_token"],
+            },
+        )
+    assert register_response.status_code == 201, register_response.text

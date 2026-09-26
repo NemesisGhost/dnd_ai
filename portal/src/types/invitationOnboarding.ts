@@ -13,6 +13,7 @@ export interface InvitationOnboardingStatus {
     campaign_display_name: string
     invitation_expires_at: string
     onboarding_expires_at: string
+    onboarding_csrf_token: string
     next_action: InvitationOnboardingNextAction
     signed_in_display_name: string | null
 }
