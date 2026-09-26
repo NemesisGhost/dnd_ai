@@ -14,7 +14,14 @@ import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 
-from tests.factories import make_entity, make_entity_type, make_user, make_world, status_id
+from tests.factories import (
+    make_entity,
+    make_entity_type,
+    make_ownership_scope,
+    make_user,
+    make_world,
+    status_id,
+)
 
 pytestmark = pytest.mark.database
 
@@ -28,10 +35,16 @@ def test_world_can_be_created(db_connection: Connection) -> None:
     assert make_world(db_connection) is not None
 
 
-def test_world_rejects_duplicate_slug(db_connection: Connection) -> None:
-    make_world(db_connection, slug="dupe-world")
+def test_world_rejects_duplicate_slug_within_the_same_ownership_scope(
+    db_connection: Connection,
+) -> None:
+    """Slug uniqueness is scoped to an ownership scope (ADR 0014), not
+    global — see tests/database/test_ownership.py for the companion proof
+    that two *different* scopes may reuse the same slug."""
+    scope_id = make_ownership_scope(db_connection)
+    make_world(db_connection, slug="dupe-world", ownership_scope_id=scope_id)
     with pytest.raises(IntegrityError):
-        make_world(db_connection, slug="dupe-world")
+        make_world(db_connection, slug="dupe-world", ownership_scope_id=scope_id)
 
 
 @pytest.mark.parametrize("bad_slug", ["Uppercase", "has_underscore", "9-leading-digit", ""])

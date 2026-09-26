@@ -293,7 +293,7 @@ def remove_ownership_scope_member(
         )
 
     connection.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext('ownership_scope:' || :scope::text))"),
+        text("SELECT pg_advisory_xact_lock(hashtext('ownership_scope:' || :scope))"),
         {"scope": str(unlocked_scope_id)},
     )
 

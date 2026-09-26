@@ -145,6 +145,41 @@ def make_world(
     name: str = "Test World",
     ownership_scope_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
+    """`ownership_scope_id` is auto-provisioned (a fresh throwaway scope)
+    when omitted, matching `core.worlds.ownership_scope_id` being `NOT
+    NULL` at head — but some tests (e.g. tests/database/
+    test_downgrade_deferred_trigger_ordering.py) deliberately pin their
+    connection at a revision *before* `105_world_ownership_scope` added
+    that column at all, the same way `make_timeline`'s `branch_event_id`
+    predates revision 058. This checks for the column's existence rather
+    than assuming it, so this one helper keeps working unchanged for a
+    caller testing either schema shape."""
+    has_ownership_scope_column = (
+        connection.execute(
+            text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'core' AND table_name = 'worlds'
+                  AND column_name = 'ownership_scope_id'
+            """)
+        ).scalar()
+        is not None
+    )
+    if not has_ownership_scope_column:
+        value = connection.execute(
+            text("""
+                INSERT INTO core.worlds (name, slug, lifecycle_status_id)
+                VALUES (:name, :slug, :status)
+                RETURNING world_id
+            """),
+            {
+                "name": name,
+                "slug": slug,
+                "status": status_id(connection, "lifecycle_statuses", "active"),
+            },
+        ).scalar()
+        assert isinstance(value, uuid.UUID)
+        return value
+
     if ownership_scope_id is None:
         ownership_scope_id = make_ownership_scope(connection)
     value = connection.execute(
