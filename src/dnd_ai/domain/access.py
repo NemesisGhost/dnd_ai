@@ -538,6 +538,43 @@ def is_platform_administrator(connection: Connection, *, user_id: uuid.UUID) -> 
     return bool(value)
 
 
+def is_world_administrator(
+    connection: Connection, *, world_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """True iff `user_id` holds an active membership of any role
+    (`owner` or `member`) in the ownership scope administering `world_id`
+    (ADR 0014, docs/architecture/DATABASE_MODEL.md §19.9).
+
+    Deliberately independent of every other authorization primitive in this
+    module: it does not consult `security.campaign_memberships`/`.roles`
+    (a campaign's `gm`/`campaign_owner` role says nothing about who
+    administers the *world* that campaign's timeline belongs to — a world
+    can outlive or be shared by many campaigns) and does not consult
+    `is_platform_administrator` above (a platform administrator is never
+    silently treated as the owner of every world). A caller that also needs
+    campaign-scoped capabilities resolves them separately via
+    `resolve_access_context` — the two checks are never combined into one
+    query, so neither can accidentally satisfy the other."""
+    value = connection.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM core.worlds w
+                JOIN security.ownership_scope_memberships osm
+                    ON osm.ownership_scope_id = w.ownership_scope_id
+                JOIN security.membership_statuses ms
+                    ON ms.membership_status_id = osm.membership_status_id
+                WHERE w.world_id = :world_id
+                  AND osm.user_id = :user_id
+                  AND osm.ended_at IS NULL
+                  AND ms.code = 'active'
+            )
+        """),
+        {"world_id": world_id, "user_id": user_id},
+    ).scalar()
+    return bool(value)
+
+
 def foundry_issuer(external_system_id: uuid.UUID) -> str:
     """The synthetic `security.external_identities.issuer` value that scopes
     a Foundry-side user id to one registered `integration.external_systems`

@@ -1739,9 +1739,45 @@ def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
     )
 
 
-def _get_or_create_world(connection: Connection, summary: _Summary) -> uuid.UUID:
+_DEV_OWNERSHIP_SCOPE_NAME = "Phase 13C Dev Data"
+
+
+def _get_or_create_dev_ownership_scope(
+    connection: Connection, summary: _Summary, *, owner_user_id: uuid.UUID
+) -> uuid.UUID:
+    """Finds or creates the ownership scope this dev-data script's worlds
+    belong to (ADR 0014), with `owner_user_id` as its `owner`. Every world
+    `core.worlds.ownership_scope_id` needs one — there is no `create_world`
+    command yet, so this raw-insert dev-data script resolves its own scope
+    the same way `tests/factories.py::make_ownership_scope` does for tests."""
     existing = connection.execute(
-        text("SELECT world_id FROM core.worlds WHERE slug = :slug"), {"slug": _WORLD_SLUG}
+        text("SELECT ownership_scope_id FROM security.ownership_scopes WHERE name = :name"),
+        {"name": _DEV_OWNERSHIP_SCOPE_NAME},
+    ).scalar()
+    if existing is not None:
+        assert isinstance(existing, uuid.UUID)
+        summary.add(created=False, label="dev ownership scope", record_id=existing)
+        return existing
+
+    from dnd_ai.commands.ownership import create_ownership_scope
+
+    result = create_ownership_scope(
+        connection, name=_DEV_OWNERSHIP_SCOPE_NAME, owner_user_id=owner_user_id
+    )
+    summary.add(created=True, label="dev ownership scope", record_id=result.ownership_scope_id)
+    return result.ownership_scope_id
+
+
+def _get_or_create_world(
+    connection: Connection, summary: _Summary, *, owner_user_id: uuid.UUID
+) -> uuid.UUID:
+    ownership_scope_id = _get_or_create_dev_ownership_scope(
+        connection, summary, owner_user_id=owner_user_id
+    )
+
+    existing = connection.execute(
+        text("SELECT world_id FROM core.worlds WHERE ownership_scope_id = :scope AND slug = :slug"),
+        {"scope": ownership_scope_id, "slug": _WORLD_SLUG},
     ).scalar()
     if existing is not None:
         assert isinstance(existing, uuid.UUID)
@@ -1753,8 +1789,8 @@ def _get_or_create_world(connection: Connection, summary: _Summary) -> uuid.UUID
     )
     world_id = connection.execute(
         text("""
-            INSERT INTO core.worlds (name, slug, description, lifecycle_status_id)
-            VALUES (:name, :slug, :description, :status)
+            INSERT INTO core.worlds (name, slug, description, lifecycle_status_id, ownership_scope_id)
+            VALUES (:name, :slug, :description, :status, :ownership_scope_id)
             RETURNING world_id
         """),
         {
@@ -1762,6 +1798,7 @@ def _get_or_create_world(connection: Connection, summary: _Summary) -> uuid.UUID
             "slug": _WORLD_SLUG,
             "description": _FIXTURE_DESCRIPTION,
             "status": active_status,
+            "ownership_scope_id": ownership_scope_id,
         },
     ).scalar()
     assert isinstance(world_id, uuid.UUID)
@@ -5954,7 +5991,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
 
     ruleset_id, ruleset_version_id = _get_ruleset(connection)
 
-    world_id = _get_or_create_world(connection, summary)
+    world_id = _get_or_create_world(connection, summary, owner_user_id=user.user_id)
     _ensure_world_ruleset(connection, summary, world_id=world_id, ruleset_id=ruleset_id)
     _ensure_relationship_type_capabilities(connection, summary)
 

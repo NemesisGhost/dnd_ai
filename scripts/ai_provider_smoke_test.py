@@ -121,15 +121,30 @@ def _create_fixture(connection: Connection) -> _Fixture:
     make_character/make_party/... — this script cannot import that test-only
     module, so the same schema requirements are reproduced here instead).
     Entirely disposable — every row's name/content below says so."""
+    # core.worlds.ownership_scope_id is NOT NULL (ADR 0014); this disposable
+    # fixture has no security.users row to own it, so the scope is created
+    # with zero memberships — same as the migration's own legacy scope, just
+    # throwaway rather than requiring an operator claim.
+    ownership_scope_id = connection.execute(
+        text("""
+            INSERT INTO security.ownership_scopes (name, lifecycle_status_id)
+            VALUES ('AI Provider Smoke Test Ownership Scope', :status)
+            RETURNING ownership_scope_id
+        """),
+        {"status": _status_id(connection, "lifecycle_statuses", "active")},
+    ).scalar()
+    assert isinstance(ownership_scope_id, uuid.UUID)
+
     world_id = connection.execute(
         text("""
-            INSERT INTO core.worlds (name, slug, lifecycle_status_id)
-            VALUES ('AI Provider Smoke Test World', :slug, :status)
+            INSERT INTO core.worlds (name, slug, lifecycle_status_id, ownership_scope_id)
+            VALUES ('AI Provider Smoke Test World', :slug, :status, :ownership_scope_id)
             RETURNING world_id
         """),
         {
             "slug": f"ai-smoke-test-{uuid.uuid4().hex[:8]}",
             "status": _status_id(connection, "lifecycle_statuses", "active"),
+            "ownership_scope_id": ownership_scope_id,
         },
     ).scalar()
     assert isinstance(world_id, uuid.UUID)
