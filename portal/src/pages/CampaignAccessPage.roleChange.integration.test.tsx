@@ -23,6 +23,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 // This file exercises the REAL CampaignAccessPage/AccessOverviewBoundary/
 // AccessPage/MemberRoleEditor/useChangeMembershipRole chain — nothing here
 // is mocked except the network boundary (global fetch) and the session
@@ -52,6 +56,7 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
                 status_code: "active",
                 status_display_name: "Active",
                 joined_at: "2026-01-01T00:00:00Z",
+                account_is_active: true,
                 roles: [
                     {
                         membership_role_id: MEMBERSHIP_ROLE_ID,
@@ -78,6 +83,8 @@ function makeOverview(memberDisplayName: string): CampaignAccessOverview {
         ],
         assignable_characters: [],
         assignable_relationship_types: [],
+        grantable_resource_capabilities: [],
+        access_groups: [],
     }
 }
 

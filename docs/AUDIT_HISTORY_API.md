@@ -34,11 +34,12 @@ this endpoint is designed to sit alongside, once a later PR wires it in).
   *real* table its own `schema_name`/`table_name` columns name, via
   `record_id = <that table>.<primary key>`, and reads that table's own
   `campaign_id` — directly (`security.campaign_memberships`,
-  `.resource_grants`, `.campaign_invitations`, `campaign.campaigns`) or one
-  hop through `security.campaign_memberships.campaign_id`
-  (`security.membership_roles`, `.membership_character_relationships`).
-  This join is exact, not approximate, because none of these six tables is
-  ever physically deleted by an application command (CLAUDE.md rule 9 —
+  `.resource_grants`, `.campaign_invitations`, `campaign.campaigns`,
+  `.access_groups`) or one hop through `security.campaign_memberships.
+  campaign_id` (`security.membership_roles`,
+  `.membership_character_relationships`, `.access_group_memberships`).
+  This join is exact, not approximate, because none of these eight tables
+  is ever physically deleted by an application command (CLAUDE.md rule 9 —
   each one closes a row instead: `revoked_at`/`ended_at`).
 - **Actor identity:** `actor_user_id` (FK `security.users`, `ON DELETE SET
   NULL`) XOR `actor_service` (free text, set only for a non-human actor
@@ -64,7 +65,7 @@ this endpoint is designed to sit alongside, once a later PR wires it in).
   explicitly out of scope for this workstream.
 - **Older events and campaigns:** every row this endpoint can return
   resolves its campaign via a live join to a row that still exists (see
-  above) — there is no "orphaned campaign reference" case for the six
+  above) — there is no "orphaned campaign reference" case for the eight
   tables in scope. A `command_name` outside this endpoint's closed
   allowlist (e.g. a quest, item, or narrative-event change) is never
   attempted and never surfaced — see §6.
@@ -77,14 +78,32 @@ this endpoint is designed to sit alongside, once a later PR wires it in).
 | `role` | `assign_membership_role`, `revoke_membership_role`, `change_membership_role` | `security.membership_roles` |
 | `character_relationship` | `grant_character_relationship`, `change_character_relationship`, `revoke_character_relationship` | `security.membership_character_relationships` |
 | `resource_grant` | `create_resource_grant`, `revoke_resource_grant` | `security.resource_grants` |
-| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation` | `security.campaign_invitations` |
+| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation` | `security.campaign_invitations` |
 | `campaign` | `create_campaign` | `campaign.campaigns` |
+| `access_group` | `create_access_group`, `update_access_group`, `deactivate_access_group`, `reactivate_access_group` | `security.access_groups` |
+| `access_group_membership` | `add_access_group_member`, `remove_access_group_member` | `security.access_group_memberships` |
 
 Every `command_name` value above is copied verbatim from the literal each
 command's own `dnd_ai.api.audit.record_change_log(...)` call site passes
 today (`dnd_ai.api.memberships`/`.access_grants`/`.campaign_invitations`/
-`.campaigns`). A `command_name` outside this set is never selected by any
-branch of the query and never appears in a response.
+`.campaigns`/`.access_groups`). A `command_name` outside this set is never
+selected by any branch of the query and never appears in a response.
+
+`access_group`'s four commands resolve against `security.access_groups`
+directly (`record_id` *is* the group), reusing the same `grantee_access_
+group_id`/`grantee_group_name` resolution the `resource_grant` branch
+already uses for a group-targeted grant. `access_group_membership`'s two
+commands resolve against `security.access_group_memberships` (`record_id`
+*is* the membership row), reusing the same `target_user_id`/`target_user_
+display_name` resolution the `membership`/`role` branches already use for
+their own account target — the added/removed member is this category's
+`target_label`/`target_type` (`"account"`), and the owning group's name is
+carried in `change_summary` instead (mirroring how `resource_grant`'s own
+`change_summary` names its grantee alongside the capability). A group-
+owned resource grant's own create/revoke events stay in the `resource_
+grant` category unchanged — creating or revoking a *grant* is a different
+audited action from creating, renaming, (de)activating a *group*, or
+adding/removing a *member* of one.
 
 ## 3. Safe-presentation allowlist (server-generated projection)
 
@@ -96,7 +115,7 @@ carries only:
 | `change_log_id` | `audit.change_log.change_log_id` | Identity only — a React list key, never rendered as page text. |
 | `occurred_at` | `audit.change_log.recorded_at` | |
 | `category` | Derived from `command_name` (§2) | Closed enum. |
-| `action_label` | Derived from `command_name`, a fixed server-owned string (e.g. `"Member added"`) | Never free text. |
+| `action_label` | Derived from `command_name`, a fixed server-owned string (e.g. `"Member added"`, `"Invitation revoked"`) | Never free text. |
 | `actor_label` | `security.users.display_name` (current), or `audit.change_log.actor_service`, or a fixed `"Unknown actor"`/`"Removed account"` fallback | Never email, never a login identifier. |
 | `actor_type` | `"user"` \| `"service"` \| `"unknown"` | |
 | `target_label` | `security.users.display_name` (account target), `core.entities.canonical_name` (character target), or an access group's `name` — current values, resolved per category (§2's source table) | `null` when the category has no single discrete target (`invitation`, `campaign`). |
@@ -170,7 +189,7 @@ invented here.
 
 | Param | Type | Notes |
 |---|---|---|
-| `category` | one of §2's six category codes, optional | A value outside the closed set is a 422 (FastAPI `Literal` validation) before the handler runs. |
+| `category` | one of §2's eight category codes, optional | A value outside the closed set is a 422 (FastAPI `Literal` validation) before the handler runs. |
 | `actor_user_id` | UUID, optional | A malformed UUID is a 422. |
 | `occurred_from` | ISO-8601 datetime, optional | |
 | `occurred_to` | ISO-8601 datetime, optional | A range with `occurred_from > occurred_to` is not rejected — it simply matches no rows. |
@@ -229,7 +248,7 @@ Phase 13D precedent) — a page reports only whether a `next_cursor` exists.
 
 ## 6. Known limitations
 
-- **Scope is curated, not exhaustive.** Only the six categories in §2 are
+- **Scope is curated, not exhaustive.** Only the eight categories in §2 are
   covered. A generalized "every audited table, scoped by campaign"
   history is a materially harder feature — most audited tables (character
   state, quests, interactions, narrative events, ...) have no reliable

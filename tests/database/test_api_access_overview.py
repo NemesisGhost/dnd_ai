@@ -45,6 +45,7 @@ from tests.factories import (
     make_timeline,
     make_user,
     make_world,
+    make_world_time,
     oidc_principal,
 )
 
@@ -187,6 +188,32 @@ class Fixture:
             connection, self.campaign_id, self.departed_user_id, status_code="departed", ended=True
         )
 
+        # A fully fictional-time-bounded (closed) relationship — checkpoint-4
+        # correction: `effective_from_world_time_id`/`effective_to_world_
+        # time_id` both set makes this a closed historical interval, never
+        # a currently-active one (see `dnd_ai.domain.access.
+        # resolve_access_context`'s own docstring for the "current record"
+        # rule this overview now applies identically). On the *same*
+        # member/character `member_membership_id` already holds an active
+        # `primary_controller` relationship for, proving this exclusion is
+        # per-row, not per-member.
+        bounded_from_time = make_world_time(connection, self.world_id, 100)
+        bounded_to_time = make_world_time(connection, self.world_id, 200)
+        self.bounded_relationship_id = make_membership_character_relationship(
+            connection,
+            self.member_membership_id,
+            self.character_id,
+            lookup_id(
+                connection,
+                "security",
+                "character_relationship_types",
+                "character_relationship_type_id",
+                "viewer",
+            ),
+            effective_from_world_time_id=bounded_from_time,
+            effective_to_world_time_id=bounded_to_time,
+        )
+
         # A grant targeting an access group rather than a membership — out
         # of scope for this first increment; must never surface under any
         # member's grants.
@@ -224,6 +251,36 @@ class Fixture:
                 WHERE entity_id = :character
             """),
             {"character": self.archived_character_id},
+        )
+
+        # A relationship to an already-archived character (checkpoint-4
+        # review correction) — must never appear as a member's current
+        # character relationship, matching `dnd_ai.domain.access.
+        # resolve_access_context`'s own identical exclusion.
+        self.archived_character_relationship_id = make_membership_character_relationship(
+            connection,
+            self.member_membership_id,
+            self.archived_character_id,
+            lookup_id(
+                connection,
+                "security",
+                "character_relationship_types",
+                "character_relationship_type_id",
+                "viewer",
+            ),
+        )
+        # A resource grant targeting the same already-archived character
+        # (checkpoint 5) — must never appear as a member's current grant,
+        # matching `dnd_ai.domain.access.resolve_access_context`'s own
+        # identical exclusion for a resource-grant target that is no
+        # longer active.
+        self.archived_character_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            view_capability_id,
+            grantee_campaign_membership_id=self.member_membership_id,
+            character_id=self.archived_character_id,
+            granted_by_membership_id=self.admin_membership_id,
         )
         self.deactivated_relationship_type_id = make_character_relationship_type(connection)
         connection.execute(
@@ -476,7 +533,22 @@ def test_authorized_gm_sees_the_full_overview(
     assert grant["capability_display_name"] == "View Campaign"
     assert grant["effect"] == "allow"
     assert grant["target_type"] == "character"
+    assert grant["target_id"] == str(f.character_id)
+    assert grant["target_display_name"] == "Overview PC"
     assert grant["reason"] == "Overview test visibility"
+
+    grantable_by_target: dict[str, set[str]] = {}
+    for capability in payload["grantable_resource_capabilities"]:
+        grantable_by_target.setdefault(capability["target_type"], set()).add(capability["code"])
+    assert "character.view_full" in grantable_by_target["character"]
+    assert "character.control" in grantable_by_target["character"]
+    assert "campaign.view" in grantable_by_target["entity"]
+    assert "canon.edit" in grantable_by_target["quest"]
+    all_grantable_codes = {code for codes in grantable_by_target.values() for code in codes}
+    assert "access.manage" not in all_grantable_codes
+    assert "import.approve" not in all_grantable_codes
+    assert "rules_source.manage" not in all_grantable_codes
+    assert "character.view_full" not in grantable_by_target.get("quest", set())
 
     assignable_character_ids = {c["character_id"] for c in payload["assignable_characters"]}
     assert str(f.character_id) in assignable_character_ids
@@ -515,6 +587,64 @@ def test_a_revoked_role_relationship_and_grant_are_all_excluded(
     assert member["roles"] == []
     assert member["character_relationships"] == []
     assert member["grants"] == []
+
+
+def test_a_fully_fictional_time_bounded_relationship_is_excluded(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-4 correction: `f.bounded_relationship_id` (both fictional-
+    time endpoints set) must never appear, even though `f.member_
+    membership_id`'s *other*, unbounded relationship (`f.relationship_id`)
+    to the same character still does — proving the exclusion is per-row."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    member = _member(response.json(), f.member_membership_id)
+    relationship_ids = {
+        r["membership_character_relationship_id"] for r in member["character_relationships"]
+    }
+    assert str(f.bounded_relationship_id) not in relationship_ids
+    assert str(f.relationship_id) in relationship_ids
+
+
+def test_a_relationship_to_an_archived_character_is_excluded(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-4 review correction: `f.archived_character_relationship_id`
+    (a relationship to an already-archived character) must never appear,
+    even though `f.member_membership_id`'s *other* relationship (`f.
+    relationship_id`, to a currently-active character) still does — the
+    identical per-row exclusion `dnd_ai.domain.access.resolve_access_
+    context` now applies too, so the overview and effective access
+    resolution can never disagree."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    member = _member(response.json(), f.member_membership_id)
+    relationship_ids = {
+        r["membership_character_relationship_id"] for r in member["character_relationships"]
+    }
+    assert str(f.archived_character_relationship_id) not in relationship_ids
+    assert str(f.relationship_id) in relationship_ids
+
+
+def test_a_grant_targeting_an_archived_character_is_excluded(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint 5: `f.archived_character_grant_id` (a resource grant
+    targeting an already-archived character) must never appear, even
+    though `f.member_membership_id`'s *other* grant (`f.grant_id`, to a
+    currently-active character) still does — the generalization of the
+    checkpoint-4 review correction above, applied to resource grants:
+    `dnd_ai.domain.access.resolve_access_context` excludes it identically,
+    so the overview and effective access resolution can never disagree."""
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    member = _member(response.json(), f.member_membership_id)
+    grant_ids = {g["resource_grant_id"] for g in member["grants"]}
+    assert str(f.archived_character_grant_id) not in grant_ids
+    assert str(f.grant_id) in grant_ids
 
 
 def test_a_departed_membership_is_excluded_entirely(

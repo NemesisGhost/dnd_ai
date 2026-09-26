@@ -169,6 +169,62 @@ class Fixture:
             timeline_id=self.timeline_id,
         )
 
+        # Checkpoint-4 correction: a fully fictional-time-bounded
+        # relationship (both endpoints set) is a closed historical
+        # interval, never currently active — must be treated identically
+        # to holding none at all by this endpoint's own character-scoped
+        # capability check (dnd_ai.api.access.resolve_character_view_tier),
+        # not merely by dnd_ai.queries.bootstrap/access_overview.
+        self.later_world_time_id = make_world_time(connection, self.world_id, 200)
+        self.bounded_relationship_user_id = make_user(
+            connection, "Character API Bounded Relationship Viewer"
+        )
+        bounded_relationship_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.bounded_relationship_user_id
+        )
+        make_membership_role(connection, bounded_relationship_membership_id, base_role_id)
+        make_membership_character_relationship(
+            connection,
+            bounded_relationship_membership_id,
+            self.character_id,
+            self.full_view_relationship_type_id,
+            effective_from_world_time_id=self.world_time_id,
+            effective_to_world_time_id=self.later_world_time_id,
+        )
+
+        # Checkpoint-4 review correction: a relationship to an already-
+        # archived character must grant no access either — the identical
+        # "no longer a legitimate target" bar `grant_character_relationship`
+        # already enforces at grant time, now also re-checked by `dnd_ai.
+        # domain.access.resolve_access_context` on every subsequent read.
+        self.archived_character_id = make_character(
+            connection, self.world_id, name="Character API Archived Character"
+        )
+        connection.execute(
+            text("""
+                UPDATE core.entities SET lifecycle_status_id = (
+                    SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+                )
+                WHERE entity_id = :character
+            """),
+            {"character": self.archived_character_id},
+        )
+        self.archived_character_relationship_user_id = make_user(
+            connection, "Character API Archived Character Viewer"
+        )
+        archived_character_relationship_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.archived_character_relationship_user_id
+        )
+        make_membership_role(
+            connection, archived_character_relationship_membership_id, base_role_id
+        )
+        make_membership_character_relationship(
+            connection,
+            archived_character_relationship_membership_id,
+            self.archived_character_id,
+            self.full_view_relationship_type_id,
+        )
+
         self.summary_view_user_id = make_user(connection, "Character API Summary Viewer")
         summary_view_membership_id = make_campaign_membership(
             connection, self.campaign_id, self.summary_view_user_id
@@ -384,6 +440,8 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
                 "users": [
                     fixture.gm_user_id,
                     fixture.full_view_user_id,
+                    fixture.bounded_relationship_user_id,
+                    fixture.archived_character_relationship_user_id,
                     fixture.summary_view_user_id,
                     fixture.no_character_capability_user_id,
                     fixture.capless_user_id,
@@ -451,6 +509,40 @@ def test_a_member_with_campaign_view_but_no_character_capability_gets_not_found(
 ) -> None:
     with client_factory(f.no_character_capability_user_id) as client:
         response = client.get(_character_url(f))
+    assert response.status_code == 404
+
+
+def test_a_fully_fictional_time_bounded_relationship_grants_no_access(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-4 correction, perspective-sensitive-endpoint coverage: a
+    relationship with both `effective_from_world_time_id`/`effective_to_
+    world_time_id` set is a closed historical interval — `AccessContext.
+    character_capabilities` must never carry it (`dnd_ai.domain.access.
+    resolve_access_context`'s own docstring has the full "current record"
+    reasoning), so a member holding only this bounded relationship gets the
+    identical fixed, non-disclosing 404 as one holding no relationship to
+    this character at all, even though the relationship's own type maps to
+    `character.view_full`."""
+    with client_factory(f.bounded_relationship_user_id) as client:
+        response = client.get(_character_url(f))
+    assert response.status_code == 404
+
+
+def test_a_relationship_to_an_archived_character_grants_no_access(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Checkpoint-4 review correction, perspective-sensitive-endpoint
+    coverage: `f.archived_character_id` was already archived when its
+    relationship was created — `dnd_ai.domain.access.resolve_access_
+    context`'s own character-capabilities join now requires `core.
+    lifecycle_statuses.code = 'active'` for the relationship's character, so
+    a member holding only a relationship to an archived character gets the
+    identical fixed, non-disclosing 404 as one holding no relationship at
+    all, even though the relationship's own type maps to `character.
+    view_full`."""
+    with client_factory(f.archived_character_relationship_user_id) as client:
+        response = client.get(_character_url(f, f.archived_character_id))
     assert response.status_code == 404
 
 

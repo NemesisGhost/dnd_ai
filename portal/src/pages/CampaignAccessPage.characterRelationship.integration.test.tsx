@@ -18,6 +18,10 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
+vi.mock("../components/InvitationsSection", () => ({
+    InvitationsSection: () => null,
+}))
+
 // Exercises the REAL Access page -> AccessOverviewBoundary -> AccessPage ->
 // AddCharacterRelationship/CharacterRelationshipEditor/
 // RevokeCharacterRelationship -> useAdd/Change/RevokeCharacterRelationship
@@ -45,6 +49,7 @@ function baseOverview(
                 status_code: "active",
                 status_display_name: "Active",
                 joined_at: "2026-01-01T00:00:00Z",
+                account_is_active: true,
                 roles: [],
                 character_relationships: relationships,
                 grants: [],
@@ -61,6 +66,8 @@ function baseOverview(
                 display_name: "Viewer",
             },
         ],
+        grantable_resource_capabilities: [],
+        access_groups: [],
     }
 }
 

@@ -17,8 +17,11 @@ docstring for the full behavior and error contract.
 are the portal Access page's "Add campaign member"/"Remove member"
 actions: adding an existing, eligible account to the campaign with one
 initial role, and ending an existing membership (closing it and every one
-of its active role assignments) — never account creation, invitations, or
-reactivating a previously-departed membership. `POST .../memberships`
+of its active role assignments — and, as of checkpoint-5's own correction,
+every active character relationship, direct resource grant, and access-group
+membership too, so a later reopened membership never silently regains any of
+them) — never account creation, invitations, or reactivating a previously-
+departed membership. `POST .../memberships`
 (previously reserved/unused, docs/PHASE13E_ACCESS_CONTRACT.md §2) is
 hardened this checkpoint to require an initial `role_id` and return both
 the new membership and role ids atomically. See `dnd_ai.commands.
@@ -577,6 +580,17 @@ def end_campaign_membership_endpoint(
             changed_fields={
                 "revoked_membership_role_ids": [
                     str(role_id) for role_id in result.revoked_membership_role_ids
+                ],
+                "revoked_membership_character_relationship_ids": [
+                    str(relationship_id)
+                    for relationship_id in result.revoked_membership_character_relationship_ids
+                ],
+                "revoked_resource_grant_ids": [
+                    str(grant_id) for grant_id in result.revoked_resource_grant_ids
+                ],
+                "removed_access_group_membership_ids": [
+                    str(access_group_membership_id)
+                    for access_group_membership_id in result.removed_access_group_membership_ids
                 ],
             },
         )

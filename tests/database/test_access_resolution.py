@@ -403,6 +403,64 @@ def test_expired_grant_does_not_apply(db_connection: Connection, f: Fixture) -> 
     )
 
 
+def test_a_grant_targeting_a_deactivated_entity_rooted_resource_does_not_apply(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Checkpoint 5: generalizes the deactivated-character exclusion above
+    to every entity-rooted resource-grant target kind (`character_id`/
+    `entity_id`/`knowledge_item_id`/`quest_id`/`event_id` are all
+    `core.entities` rows via class-table inheritance) — a quest deactivated
+    after a grant was issued must stop being authorization-effective on the
+    very next call, exactly like an archived character relationship
+    already does."""
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.role_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        quest_id=f.quest_id,
+    )
+    db_connection.execute(
+        text("""
+            UPDATE core.entities SET lifecycle_status_id = (
+                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+            )
+            WHERE entity_id = :quest
+        """),
+        {"quest": f.quest_id},
+    )
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
+    assert ctx is not None
+    assert ctx.has_capability("test.role_capability", quest_id=f.quest_id) is False
+
+
+def test_a_grant_targeting_an_ended_session_does_not_apply(
+    db_connection: Connection, f: Fixture
+) -> None:
+    """Checkpoint 5: the identical exclusion for `session_id` — the one
+    resource-grant target kind that is not a `core.entities` row (`campaign.
+    sessions` carries its own `lifecycle_status_id` instead)."""
+    make_resource_grant(
+        db_connection,
+        f.campaign_id,
+        f.role_capability_id,
+        grantee_campaign_membership_id=f.membership_id,
+        session_id=f.session_id,
+    )
+    db_connection.execute(
+        text("""
+            UPDATE campaign.sessions SET lifecycle_status_id = (
+                SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived'
+            )
+            WHERE session_id = :session
+        """),
+        {"session": f.session_id},
+    )
+    ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
+    assert ctx is not None
+    assert ctx.has_capability("test.role_capability", session_id=f.session_id) is False
+
+
 def test_has_capability_rejects_more_than_one_target(db_connection: Connection, f: Fixture) -> None:
     ctx = resolve_access_context(db_connection, user_id=f.user_id, campaign_id=f.campaign_id)
     assert ctx is not None

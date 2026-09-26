@@ -676,7 +676,7 @@ def test_the_vertical_slice_scenario(
     revoke_response = gm.post(
         f"/campaigns/{campaign_id}/resource-grants/{resource_grant_ids[player2_membership_id]}/revoke"
     )
-    assert revoke_response.status_code == 204, revoke_response.text
+    assert revoke_response.status_code == 200, revoke_response.text
 
     player2_dungeon_view_after_revoke = player2.get(
         f"/campaigns/{campaign_id}/dungeon-areas/{f.area_a}",

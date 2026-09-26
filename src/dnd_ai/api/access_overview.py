@@ -39,6 +39,34 @@ member is derived by the portal from that member's own `character_
 relationships` list already in this response, exactly like `assignable_
 roles`' own per-member narrowing is left to the portal.
 
+`grantable_resource_capabilities` (checkpoint 5) is the read-contract
+counterpart to `dnd_ai.api.access_grants`' `create_resource_grant`
+mutation: every `(capability, target_type)` pairing `dnd_ai.domain.access.
+RESOURCE_GRANT_CAPABILITY_CATALOG` currently allows, campaign-independent
+(a fixed server policy, not scoped by `campaign_id`/`world_id`) — see that
+constant's own docstring for the full delegation policy. Each member's own
+`grants[].target_display_name` (checkpoint 5) resolves a safe display name
+for a `character_id`-targeted grant only (from `core.entities.
+canonical_name`, the identical name `character_relationships` already
+uses) and is `None` for every other target kind, matching this module's
+own "non-character grant-target identity" out-of-scope note below — the
+portal's resource-grant management UI is scoped to `character` targets
+only this checkpoint for the identical reason.
+
+`access_groups` (Phase 13E-B checkpoint 6) is the read-contract
+counterpart to `dnd_ai.api.access_groups`' own lifecycle/membership
+mutations: every access group in the campaign, active and archived, each
+with its currently open members and currently active, group-owned
+resource grants (`dnd_ai.queries.access_overview.
+list_campaign_access_groups`). Reuses `ResourceGrantSummaryResponse`'s own
+shape for group-owned grants (`AccessGroupResourceGrantResponse` below) so
+the portal's group-grant UI can share rendering/labeling logic with its
+existing member-grant UI. The portal's own group-grant management is
+scoped to `character` targets only, the identical reason `grantable_
+resource_capabilities`' own note above gives — a backend-created grant of
+another target kind, or a `deny` effect, may still appear here for display/
+revocation, matching `grants[]`' own contract on `CampaignMemberSummaryResponse`.
+
 Non-disclosure: a caller without an active membership, or without
 `access.manage`, gets the same fixed 404/403 `require_campaign_capability`
 already gives every other `access.manage` route — this route adds no new
@@ -62,6 +90,8 @@ from dnd_ai.queries.access_overview import (
     list_assignable_campaign_characters,
     list_assignable_campaign_roles,
     list_assignable_character_relationship_types,
+    list_campaign_access_groups,
+    list_grantable_resource_capabilities,
 )
 
 from ._shared import timeline_world_id
@@ -121,9 +151,18 @@ class ResourceGrantSummaryResponse(BaseModel):
     capability_display_name: str
     effect: str
     target_type: str
+    target_id: uuid.UUID
+    target_display_name: str | None
     reason: str | None
     granted_at: datetime
     expires_at: datetime | None
+
+
+class GrantableResourceCapabilityResponse(BaseModel):
+    capability_id: uuid.UUID
+    code: str
+    display_name: str
+    target_type: str
 
 
 class CampaignMemberSummaryResponse(BaseModel):
@@ -141,9 +180,49 @@ class CampaignMemberSummaryResponse(BaseModel):
     status_code: str
     status_display_name: str
     joined_at: datetime
+    # Checkpoint-6 correction: whether the owning account is currently
+    # platform-active — never the raw lifecycle_status_id code, login name,
+    # email, or identity subject. Exists solely so the portal's access-group
+    # "Add member" selector can filter out a membership that dnd_ai.commands.
+    # access_groups.add_access_group_member() would reject anyway, rather
+    # than offering it and having every such attempt fail. See
+    # dnd_ai.queries.access_overview's own module docstring for the full
+    # non-disclosure reasoning.
+    account_is_active: bool
     roles: list[RoleSummaryResponse]
     character_relationships: list[CharacterRelationshipSummaryResponse]
     grants: list[ResourceGrantSummaryResponse]
+
+
+class AccessGroupMemberSummaryResponse(BaseModel):
+    access_group_membership_id: uuid.UUID
+    campaign_membership_id: uuid.UUID
+    display_name: str
+    added_at: datetime
+
+
+class AccessGroupResourceGrantResponse(BaseModel):
+    resource_grant_id: uuid.UUID
+    capability_code: str
+    capability_display_name: str
+    effect: str
+    target_type: str
+    target_id: uuid.UUID
+    target_display_name: str | None
+    reason: str | None
+    granted_at: datetime
+    expires_at: datetime | None
+
+
+class AccessGroupSummaryResponse(BaseModel):
+    access_group_id: uuid.UUID
+    name: str
+    description: str | None
+    status_code: str
+    status_display_name: str
+    created_at: datetime
+    members: list[AccessGroupMemberSummaryResponse]
+    grants: list[AccessGroupResourceGrantResponse]
 
 
 class CampaignAccessOverviewResponse(BaseModel):
@@ -151,6 +230,8 @@ class CampaignAccessOverviewResponse(BaseModel):
     assignable_roles: list[AssignableRoleResponse]
     assignable_characters: list[AssignableCharacterResponse]
     assignable_relationship_types: list[AssignableCharacterRelationshipTypeResponse]
+    grantable_resource_capabilities: list[GrantableResourceCapabilityResponse]
+    access_groups: list[AccessGroupSummaryResponse]
 
 
 class EligibleAccountResponse(BaseModel):
@@ -190,6 +271,10 @@ def get_campaign_access_overview_endpoint(
         connection, world_id=timeline_world_id(connection, access.timeline_id)
     )
     assignable_relationship_types = list_assignable_character_relationship_types(connection)
+    grantable_resource_capabilities = list_grantable_resource_capabilities(connection)
+    access_groups = list_campaign_access_groups(
+        connection, campaign_id=campaign_id, timeline_id=access.timeline_id
+    )
     return CampaignAccessOverviewResponse(
         assignable_roles=[
             AssignableRoleResponse(
@@ -211,6 +296,15 @@ def get_campaign_access_overview_endpoint(
             )
             for relationship_type in assignable_relationship_types
         ],
+        grantable_resource_capabilities=[
+            GrantableResourceCapabilityResponse(
+                capability_id=capability.capability_id,
+                code=capability.code,
+                display_name=capability.display_name,
+                target_type=capability.target_type,
+            )
+            for capability in grantable_resource_capabilities
+        ],
         members=[
             CampaignMemberSummaryResponse(
                 campaign_membership_id=member.campaign_membership_id,
@@ -219,6 +313,7 @@ def get_campaign_access_overview_endpoint(
                 status_code=member.status_code,
                 status_display_name=member.status_display_name,
                 joined_at=member.joined_at,
+                account_is_active=member.account_is_active,
                 roles=[
                     RoleSummaryResponse(
                         membership_role_id=role.membership_role_id,
@@ -251,6 +346,8 @@ def get_campaign_access_overview_endpoint(
                         capability_display_name=grant.capability_display_name,
                         effect=grant.effect,
                         target_type=grant.target_type,
+                        target_id=grant.target_id,
+                        target_display_name=grant.target_display_name,
                         reason=grant.reason,
                         granted_at=grant.granted_at,
                         expires_at=grant.expires_at,
@@ -259,6 +356,41 @@ def get_campaign_access_overview_endpoint(
                 ],
             )
             for member in members
+        ],
+        access_groups=[
+            AccessGroupSummaryResponse(
+                access_group_id=group.access_group_id,
+                name=group.name,
+                description=group.description,
+                status_code=group.status_code,
+                status_display_name=group.status_display_name,
+                created_at=group.created_at,
+                members=[
+                    AccessGroupMemberSummaryResponse(
+                        access_group_membership_id=member.access_group_membership_id,
+                        campaign_membership_id=member.campaign_membership_id,
+                        display_name=member.display_name,
+                        added_at=member.added_at,
+                    )
+                    for member in group.members
+                ],
+                grants=[
+                    AccessGroupResourceGrantResponse(
+                        resource_grant_id=grant.resource_grant_id,
+                        capability_code=grant.capability_code,
+                        capability_display_name=grant.capability_display_name,
+                        effect=grant.effect,
+                        target_type=grant.target_type,
+                        target_id=grant.target_id,
+                        target_display_name=grant.target_display_name,
+                        reason=grant.reason,
+                        granted_at=grant.granted_at,
+                        expires_at=grant.expires_at,
+                    )
+                    for grant in group.grants
+                ],
+            )
+            for group in access_groups
         ],
     )
 

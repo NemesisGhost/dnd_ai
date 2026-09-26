@@ -23,21 +23,72 @@ resource-grants query additionally requires `cap.is_active`, matching
 explicit grant of a deactivated capability confers no effective access
 there, so it must not appear here as a current grant either (a review
 correction; the first cut joined `security.capabilities` for its
-`code`/`display_name` but omitted this check).
+`code`/`display_name` but omitted this check). Character relationships
+additionally require `mcr.effective_to_world_time_id IS NULL`
+(checkpoint-4 correction) — the identical fictional-time "current record"
+rule `dnd_ai.domain.access.resolve_access_context`'s own docstring
+explains in full: a relationship with both fictional-time endpoints set is
+a closed historical interval, never currently active regardless of where
+those endpoints fall, since this schema tracks no "current fictional now"
+to compare against — and `core.lifecycle_statuses.code = 'active'` for the
+relationship's own character (checkpoint-4 review correction): a character
+archived after a relationship was granted previously stayed on this
+overview indefinitely, disagreeing with `resolve_access_context`'s own
+capability resolution, which already excludes it; the two now apply the
+identical join/filter, so this overview's own "current character
+relationships" list can never overstate what a member's own effective
+access actually is.
+
+Resource grants additionally require their own target to currently be
+active (checkpoint 5) — the same generalization `dnd_ai.domain.access.
+resolve_access_context`'s own docstring describes in full, applied here so
+this overview can never show a grant targeting a resource that resolver
+would no longer authorize through. `MemberResourceGrantView.target_
+display_name` (checkpoint 5) is populated only for a `character_id` target
+— resolved from `core.entities.canonical_name`, the identical safe display
+name `character_relationships` already uses — and left `None` for every
+other target kind, per this module's own "specific display identity...is a
+larger surface than this focused read needs" note below, unchanged for the
+other five kinds.
+
+`list_campaign_access_groups` (Phase 13E-B checkpoint 6) is the read-side
+counterpart for `dnd_ai.commands.access_groups`' own lifecycle/membership
+mutations: every `security.access_groups` row in the campaign — both
+`active` and `archived`, so the portal can offer "Reactivate" for an
+archived one — each with its currently open members and currently active,
+group-owned resource grants. Applies the identical "currently true"
+filters (`removed_at IS NULL`/`revoked_at IS NULL`/`expires_at IS NULL OR
+expires_at > now()`/timeline scope/`cap.is_active`/target-active) `get_
+campaign_access_overview`'s own per-member queries already use, plus one
+more of its own: both the members and grants queries additionally require
+the owning group's own status to be `active`. Under normal operation an
+archived group's members/grants arrays would already come back empty
+without that filter — `deactivate_access_group()` closes/revokes every one
+of them at deactivation time — but the filter is included anyway as
+defense in depth, matching `dnd_ai.domain.access.resolve_access_context`'s
+identical checkpoint-6 hardening of its own group-membership subquery.
 
 Deliberately out of scope for this first increment (documented here rather
 than silently omitted):
 
-- Access-group-targeted resource grants (`resource_grants.
-  grantee_access_group_id`) — only membership-targeted grants are included.
-  Groups are a separate, not-yet-surfaced concept on this screen.
-- `security.users.lifecycle_status_id` (whether the underlying account is
-  platform-active/disabled) — that is account-wide administration, a
-  different capability scope than this campaign's `access.manage`
-  (docs/UI_DESIGN.md's "do not merge account-wide administration with
-  campaign administration unless the existing authorization model
-  explicitly does so"). Only the campaign-scoped `membership_statuses` value
-  is included.
+- `security.users.lifecycle_status_id`'s own raw status code — that
+  remains account-wide administration, a different capability scope than
+  this campaign's `access.manage` (docs/UI_DESIGN.md's "do not merge
+  account-wide administration with campaign administration unless the
+  existing authorization model explicitly does so"). Only the
+  campaign-scoped `membership_statuses` value is exposed as a code/display
+  name pair. **Checkpoint-6 correction:** a single derived boolean,
+  `CampaignMemberView.account_is_active` (`security.users.
+  lifecycle_status_id -> core.lifecycle_statuses.code = 'active'`, never
+  the raw code, login name, email, or identity subject), *is* now
+  included — `dnd_ai.commands.access_groups.add_access_group_member()`
+  already rejects a target membership whose owning account is
+  platform-disabled (`MembershipNotActiveError`), and without this field
+  the portal's own group "Add member" selector had no way to avoid
+  offering exactly that membership and having every such attempt rejected.
+  One narrowly-scoped boolean, used for nothing but that one filtering
+  decision, is not the account-wide disclosure this bullet's own rule
+  otherwise guards against.
 - Pending/outstanding `security.campaign_invitations` — a closed membership
   never existed yet, so it is outside the same "current members" scope this
   overview covers; a future increment may add it once invitation mutations
@@ -46,7 +97,13 @@ than silently omitted):
   (`entity_id`/`knowledge_item_id`/`quest_id`/`session_id`/`event_id`) —
   resolving a display name for each of five unrelated resource kinds is a
   larger surface than this focused read needs; only the target *kind* is
-  returned (`target_type`), never the raw id.
+  returned (`target_type`), never the raw id. A `character_id` target is
+  the one exception (checkpoint 5): `target_display_name` resolves it from
+  `core.entities.canonical_name`, the same safe name already used for
+  character relationships — the portal's own resource-grant management UI
+  is scoped to character targets only this checkpoint for the identical
+  reason (see `dnd_ai.commands.access_grants`' module docstring and
+  `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full rationale).
 
 This is a pure read: no idempotency key, no `audit.change_log` row, no
 mutation. Authorization is entirely the caller's concern
@@ -62,7 +119,7 @@ from datetime import datetime
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.local_auth import normalize_login_name
-from dnd_ai.domain.access import LOCAL_AUTH_ISSUER
+from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, RESOURCE_GRANT_CAPABILITY_CATALOG
 
 _GRANT_TARGET_COLUMNS = (
     "character_id",
@@ -100,6 +157,14 @@ class MemberResourceGrantView:
     capability_display_name: str
     effect: str
     target_type: str
+    # Identity only, never rendered as page text — matching every other
+    # raw id this module already returns for the same reason (character_id
+    # on MemberCharacterRelationshipView, role_id on MemberRoleView).
+    # Populated for all six target kinds so the portal can detect an exact
+    # active duplicate combination universally, even though only a
+    # "character" target has a UI to add through this checkpoint.
+    target_id: uuid.UUID
+    target_display_name: str | None
     reason: str | None
     granted_at: datetime
     expires_at: datetime | None
@@ -120,6 +185,12 @@ class CampaignMemberView:
     status_code: str
     status_display_name: str
     joined_at: datetime
+    # Checkpoint-6 correction: the one minimal, derived boolean this
+    # module's own docstring now documents as an exception to its
+    # "account-wide administration is out of scope" rule — see that note
+    # for why this single field, and nothing more of security.users, is
+    # safe to expose here.
+    account_is_active: bool
     roles: tuple[MemberRoleView, ...]
     character_relationships: tuple[MemberCharacterRelationshipView, ...]
     grants: tuple[MemberResourceGrantView, ...]
@@ -144,6 +215,50 @@ class AssignableCharacterRelationshipTypeView:
     display_name: str
 
 
+@dataclass(frozen=True)
+class GrantableResourceCapabilityView:
+    capability_id: uuid.UUID
+    code: str
+    display_name: str
+    target_type: str
+
+
+@dataclass(frozen=True)
+class AccessGroupMemberView:
+    access_group_membership_id: uuid.UUID
+    campaign_membership_id: uuid.UUID
+    display_name: str
+    added_at: datetime
+
+
+@dataclass(frozen=True)
+class AccessGroupResourceGrantView:
+    resource_grant_id: uuid.UUID
+    capability_code: str
+    capability_display_name: str
+    effect: str
+    target_type: str
+    # Identity only, never rendered as page text — matching `MemberResourceGrantView.
+    # target_id`'s identical contract.
+    target_id: uuid.UUID
+    target_display_name: str | None
+    reason: str | None
+    granted_at: datetime
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AccessGroupView:
+    access_group_id: uuid.UUID
+    name: str
+    description: str | None
+    status_code: str
+    status_display_name: str
+    created_at: datetime
+    members: tuple[AccessGroupMemberView, ...]
+    grants: tuple[AccessGroupResourceGrantView, ...]
+
+
 def get_campaign_access_overview(
     connection: Connection,
     *,
@@ -160,9 +275,12 @@ def get_campaign_access_overview(
         connection.execute(
             text("""
             SELECT cm.campaign_membership_id, cm.user_id, u.display_name, cm.joined_at,
-                   ms.code AS status_code, ms.display_name AS status_display_name
+                   ms.code AS status_code, ms.display_name AS status_display_name,
+                   (user_status.code = 'active') AS account_is_active
             FROM security.campaign_memberships cm
             JOIN security.users u ON u.user_id = cm.user_id
+            JOIN core.lifecycle_statuses user_status
+                ON user_status.lifecycle_status_id = u.lifecycle_status_id
             JOIN security.membership_statuses ms ON ms.membership_status_id = cm.membership_status_id
             WHERE cm.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
@@ -215,11 +333,14 @@ def get_campaign_access_overview(
             JOIN security.character_relationship_types rt
               ON rt.character_relationship_type_id = mcr.character_relationship_type_id
             JOIN core.entities e ON e.entity_id = mcr.character_id
+            JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE cm.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+              AND mcr.effective_to_world_time_id IS NULL
               AND (mcr.timeline_id IS NULL OR mcr.timeline_id = :timeline_id)
+              AND cls.code = 'active'
             ORDER BY e.canonical_name, mcr.membership_character_relationship_id
         """),
         {"campaign_id": campaign_id, "timeline_id": timeline_id},
@@ -242,11 +363,22 @@ def get_campaign_access_overview(
         text(f"""
             SELECT rg.grantee_campaign_membership_id, rg.resource_grant_id,
                    cap.code AS capability_code, cap.display_name AS capability_display_name,
-                   rg.effect, rg.reason, rg.granted_at, rg.expires_at, {target_column_list}
+                   rg.effect, rg.reason, rg.granted_at, rg.expires_at,
+                   target_entity.canonical_name AS target_entity_display_name,
+                   {target_column_list}
             FROM security.resource_grants rg
             JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
             JOIN security.campaign_memberships cm
               ON cm.campaign_membership_id = rg.grantee_campaign_membership_id
+            LEFT JOIN core.entities target_entity
+              ON target_entity.entity_id = COALESCE(
+                     rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
+                 )
+            LEFT JOIN core.lifecycle_statuses target_entity_status
+              ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
+            LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
+            LEFT JOIN core.lifecycle_statuses target_session_status
+              ON target_session_status.lifecycle_status_id = target_session.lifecycle_status_id
             WHERE rg.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
               AND rg.grantee_campaign_membership_id IS NOT NULL
@@ -254,12 +386,19 @@ def get_campaign_access_overview(
               AND (rg.expires_at IS NULL OR rg.expires_at > now())
               AND (rg.timeline_id IS NULL OR rg.timeline_id = :timeline_id)
               AND cap.is_active
+              AND (
+                    (rg.session_id IS NULL AND target_entity_status.code = 'active')
+                    OR (rg.session_id IS NOT NULL AND target_session_status.code = 'active')
+                  )
             ORDER BY rg.granted_at, rg.resource_grant_id
         """),
         {"campaign_id": campaign_id, "timeline_id": timeline_id},
     ).mappings():
         target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
         target_type = target_column.removesuffix("_id")
+        target_display_name = (
+            row["target_entity_display_name"] if target_column == "character_id" else None
+        )
         grants_by_membership.setdefault(row["grantee_campaign_membership_id"], []).append(
             MemberResourceGrantView(
                 resource_grant_id=row["resource_grant_id"],
@@ -267,6 +406,8 @@ def get_campaign_access_overview(
                 capability_display_name=row["capability_display_name"],
                 effect=row["effect"],
                 target_type=target_type,
+                target_id=row[target_column],
+                target_display_name=target_display_name,
                 reason=row["reason"],
                 granted_at=row["granted_at"],
                 expires_at=row["expires_at"],
@@ -281,6 +422,7 @@ def get_campaign_access_overview(
             status_code=row["status_code"],
             status_display_name=row["status_display_name"],
             joined_at=row["joined_at"],
+            account_is_active=bool(row["account_is_active"]),
             roles=tuple(roles_by_membership.get(row["campaign_membership_id"], [])),
             character_relationships=tuple(
                 relationships_by_membership.get(row["campaign_membership_id"], [])
@@ -386,6 +528,52 @@ def list_assignable_character_relationship_types(
     )
 
 
+def list_grantable_resource_capabilities(
+    connection: Connection,
+) -> tuple[GrantableResourceCapabilityView, ...]:
+    """Every currently `is_active` `security.capabilities` row that `dnd_ai.
+    commands.access_grants.create_resource_grant()` would actually accept
+    for at least one resource-grant target kind right now, one row per
+    `(capability, target_type)` pairing it is valid for — the read-contract
+    support for the portal's "Add direct resource access" action, mirroring
+    `list_assignable_campaign_roles`/`list_assignable_character_relationship_
+    types`' identical "never hardcode or guess the assignable set" purpose.
+
+    Server-authoritative and campaign-independent: `dnd_ai.domain.access.
+    RESOURCE_GRANT_CAPABILITY_CATALOG` is a fixed policy table, not scoped
+    by `campaign_id`/`world_id` — see that constant's own docstring for the
+    full delegation-policy rationale (which capability codes apply to which
+    target kind, and why `access.manage`/`import.approve`/`rules_source.
+    manage` are excluded from every kind entirely). The portal's own
+    resource-grant management UI only offers `character` as a selectable
+    resource type this checkpoint (see `dnd_ai.commands.access_grants`'
+    module docstring for why the other five target kinds are deferred), so
+    in practice this currently returns only `target_type == "character"`
+    rows — but the shape here is general: a future checkpoint that adds a
+    safe display/search contract for another target kind needs no change to
+    this function, only a new value in `RESOURCE_GRANT_CAPABILITY_CATALOG`
+    to have it appear here automatically."""
+    rows = connection.execute(
+        text("""
+            SELECT capability_id, code, display_name
+            FROM security.capabilities
+            WHERE is_active
+        """)
+    ).mappings()
+    capabilities = {row["code"]: row for row in rows}
+    return tuple(
+        GrantableResourceCapabilityView(
+            capability_id=capabilities[code]["capability_id"],
+            code=code,
+            display_name=capabilities[code]["display_name"],
+            target_type=target_column.removesuffix("_id"),
+        )
+        for target_column, allowed_codes in RESOURCE_GRANT_CAPABILITY_CATALOG.items()
+        for code in sorted(allowed_codes)
+        if code in capabilities
+    )
+
+
 def find_eligible_campaign_account(
     connection: Connection, *, campaign_id: uuid.UUID, login_name: str
 ) -> EligibleAccountView | None:
@@ -476,3 +664,135 @@ def find_eligible_campaign_account(
     if row is None:
         return None
     return EligibleAccountView(user_id=row["user_id"], display_name=row["display_name"])
+
+
+def list_campaign_access_groups(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+) -> tuple[AccessGroupView, ...]:
+    """Every `security.access_groups` row in `campaign_id` — both `active`
+    and `archived` — each with its currently open members and currently
+    active, group-owned resource grants. `timeline_id` must already be the
+    campaign's own pinned timeline, matching `get_campaign_access_
+    overview`'s identical contract. See this module's own docstring for
+    why an archived group's `members`/`grants` come back empty (`dnd_ai.
+    commands.access_groups.deactivate_access_group()` already closed/
+    revoked them, not a special case here)."""
+    group_rows = (
+        connection.execute(
+            text("""
+                SELECT ag.access_group_id, ag.name, ag.description, ag.created_at,
+                       ls.code AS status_code, ls.display_name AS status_display_name
+                FROM security.access_groups ag
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = ag.lifecycle_status_id
+                WHERE ag.campaign_id = :campaign_id
+                ORDER BY ag.name, ag.access_group_id
+            """),
+            {"campaign_id": campaign_id},
+        )
+        .mappings()
+        .all()
+    )
+
+    members_by_group: dict[uuid.UUID, list[AccessGroupMemberView]] = {}
+    for row in connection.execute(
+        text("""
+            SELECT agm.access_group_id, agm.access_group_membership_id,
+                   agm.campaign_membership_id, u.display_name, agm.added_at
+            FROM security.access_group_memberships agm
+            JOIN security.access_groups ag ON ag.access_group_id = agm.access_group_id
+            JOIN core.lifecycle_statuses ag_status
+                ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
+            JOIN security.campaign_memberships cm
+                ON cm.campaign_membership_id = agm.campaign_membership_id
+            JOIN security.users u ON u.user_id = cm.user_id
+            WHERE ag.campaign_id = :campaign_id
+              AND ag_status.code = 'active'
+              AND agm.removed_at IS NULL
+              AND cm.ended_at IS NULL
+            ORDER BY u.display_name, agm.access_group_membership_id
+        """),
+        {"campaign_id": campaign_id},
+    ).mappings():
+        members_by_group.setdefault(row["access_group_id"], []).append(
+            AccessGroupMemberView(
+                access_group_membership_id=row["access_group_membership_id"],
+                campaign_membership_id=row["campaign_membership_id"],
+                display_name=row["display_name"],
+                added_at=row["added_at"],
+            )
+        )
+
+    grants_by_group: dict[uuid.UUID, list[AccessGroupResourceGrantView]] = {}
+    target_column_list = ", ".join(f"rg.{column}" for column in _GRANT_TARGET_COLUMNS)
+    for row in connection.execute(
+        text(f"""
+            SELECT rg.grantee_access_group_id, rg.resource_grant_id,
+                   cap.code AS capability_code, cap.display_name AS capability_display_name,
+                   rg.effect, rg.reason, rg.granted_at, rg.expires_at,
+                   target_entity.canonical_name AS target_entity_display_name,
+                   {target_column_list}
+            FROM security.resource_grants rg
+            JOIN security.capabilities cap ON cap.capability_id = rg.capability_id
+            JOIN security.access_groups ag ON ag.access_group_id = rg.grantee_access_group_id
+            JOIN core.lifecycle_statuses ag_status
+                ON ag_status.lifecycle_status_id = ag.lifecycle_status_id
+            LEFT JOIN core.entities target_entity
+              ON target_entity.entity_id = COALESCE(
+                     rg.character_id, rg.entity_id, rg.knowledge_item_id, rg.quest_id, rg.event_id
+                 )
+            LEFT JOIN core.lifecycle_statuses target_entity_status
+              ON target_entity_status.lifecycle_status_id = target_entity.lifecycle_status_id
+            LEFT JOIN campaign.sessions target_session ON target_session.session_id = rg.session_id
+            LEFT JOIN core.lifecycle_statuses target_session_status
+              ON target_session_status.lifecycle_status_id = target_session.lifecycle_status_id
+            WHERE ag.campaign_id = :campaign_id
+              AND rg.grantee_access_group_id IS NOT NULL
+              AND ag_status.code = 'active'
+              AND rg.revoked_at IS NULL
+              AND (rg.expires_at IS NULL OR rg.expires_at > now())
+              AND (rg.timeline_id IS NULL OR rg.timeline_id = :timeline_id)
+              AND cap.is_active
+              AND (
+                    (rg.session_id IS NULL AND target_entity_status.code = 'active')
+                    OR (rg.session_id IS NOT NULL AND target_session_status.code = 'active')
+                  )
+            ORDER BY rg.granted_at, rg.resource_grant_id
+        """),
+        {"campaign_id": campaign_id, "timeline_id": timeline_id},
+    ).mappings():
+        target_column = next(column for column in _GRANT_TARGET_COLUMNS if row[column] is not None)
+        target_type = target_column.removesuffix("_id")
+        target_display_name = (
+            row["target_entity_display_name"] if target_column == "character_id" else None
+        )
+        grants_by_group.setdefault(row["grantee_access_group_id"], []).append(
+            AccessGroupResourceGrantView(
+                resource_grant_id=row["resource_grant_id"],
+                capability_code=row["capability_code"],
+                capability_display_name=row["capability_display_name"],
+                effect=row["effect"],
+                target_type=target_type,
+                target_id=row[target_column],
+                target_display_name=target_display_name,
+                reason=row["reason"],
+                granted_at=row["granted_at"],
+                expires_at=row["expires_at"],
+            )
+        )
+
+    return tuple(
+        AccessGroupView(
+            access_group_id=row["access_group_id"],
+            name=row["name"],
+            description=row["description"],
+            status_code=row["status_code"],
+            status_display_name=row["status_display_name"],
+            created_at=row["created_at"],
+            members=tuple(members_by_group.get(row["access_group_id"], [])),
+            grants=tuple(grants_by_group.get(row["access_group_id"], [])),
+        )
+        for row in group_rows
+    )

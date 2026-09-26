@@ -196,7 +196,7 @@ run_quality() {
   # unmodified against a stripped-down sandbox (tests/unit/test_verify_
   # sh.py's own stubbed CWD) that has no foundry-module/ at all.
   if [[ -d foundry-module ]]; then
-    run_stage "node --test foundry-module" node --test foundry-module/test/
+    run_stage "node --test foundry-module" node --test foundry-module/test/*.test.mjs
   fi
 }
 
