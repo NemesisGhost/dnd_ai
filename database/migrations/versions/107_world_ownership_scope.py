@@ -61,13 +61,33 @@ Existing-data migration:
     scope is created for that world instead.
 
 Rollback:
-    Supported. Drops core.worlds.ownership_scope_id and its constraint/
-    index (recreating the old global ux_worlds_slug — safe only because
-    forward migration guarantees ownership_scope_id was NOT NULL, so no
-    world can have acquired a slug colliding with another scope's while
-    this revision was applied, other than through the same slug value
-    already being globally unique before this revision ran), then drops
-    the three new tables in dependency order.
+    Conditional, not unconditionally safe — correcting a false claim this
+    section originally made. Recreating the old global `ux_worlds_slug`
+    requires every existing `core.worlds.slug` value to be globally
+    unique at the moment of downgrade. That is true immediately after this
+    revision first applies (every pre-existing world was still unique
+    under the *old* global constraint, and the migration itself creates no
+    new worlds), but it is **not** an invariant this revision preserves
+    once the database is live on it: `dnd_ai.commands.ownership.
+    create_ownership_scope` and ordinary application use are explicitly
+    intended to let two different ownership scopes each own a world with
+    the identical slug (the entire point of ADR 0014, exercised directly
+    by `tests/database/test_ownership.py::
+    test_two_ownership_scopes_may_each_own_a_world_with_the_same_slug`).
+    Downgrading a database that has since acquired such a collision fails
+    the `ADD CONSTRAINT ux_worlds_slug UNIQUE (slug)` step with an ordinary
+    `UniqueViolation` — a safe, loud failure, not silent data loss or
+    corruption — and the downgrade simply does not proceed past that
+    statement. This is a development/rollback-testing operation, not a
+    production recovery path: do not delete, rename, or otherwise force
+    apart colliding worlds' slugs to push a downgrade through; an operator
+    who genuinely needs to downgrade a database in this state must resolve
+    the collision as a deliberate, reviewed data decision first (or simply
+    stay on/roll forward from this revision instead, which is always safe
+    and requires no such choice). Every other step — dropping
+    `core.worlds.ownership_scope_id` and its index, and the three new
+    tables, in dependency order — is unconditionally safe and destroys
+    only structure this revision itself added.
 
 Data implications:
     The ADD COLUMN + UPDATE + SET NOT NULL sequence rewrites core.worlds

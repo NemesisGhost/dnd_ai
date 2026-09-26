@@ -224,3 +224,88 @@ def test_downgrade_then_reupgrade_round_trips_cleanly() -> None:
         assert ownership_scope_id is not None
     finally:
         _drop_database(admin_url, test_url)
+
+
+def test_downgrade_fails_safely_when_two_scopes_share_a_slug() -> None:
+    """Corrects a false claim this revision's own docstring used to make:
+    downgrading is not unconditionally safe once two different ownership
+    scopes each legitimately own a world with the same slug (ADR 0014's
+    entire point, and exactly what `dnd_ai.commands.ownership.
+    create_ownership_scope` lets happen). The downgrade must fail loudly
+    (an ordinary UniqueViolation) rather than silently dropping or
+    renaming either world to force the old global constraint back — and
+    both worlds, and their distinct scopes, must still be exactly as they
+    were afterward."""
+    from dnd_ai.commands.ownership import create_ownership_scope
+
+    admin_url, test_url = _provision_database("slugcollision")
+    try:
+        _alembic_upgrade(test_url, "head")
+
+        engine = create_engine(test_url, connect_args=_connect_args())
+        try:
+            with engine.begin() as conn:
+                owner_id = conn.execute(
+                    text(
+                        "INSERT INTO security.users (display_name, lifecycle_status_id) "
+                        "VALUES ('Collision Owner', "
+                        "(SELECT lifecycle_status_id FROM core.lifecycle_statuses "
+                        "WHERE code = 'active')) RETURNING user_id"
+                    )
+                ).scalar_one()
+                scope_a = create_ownership_scope(
+                    conn, name="Collision Scope A", owner_user_id=owner_id
+                ).ownership_scope_id
+                scope_b = create_ownership_scope(
+                    conn, name="Collision Scope B", owner_user_id=owner_id
+                ).ownership_scope_id
+                world_a = conn.execute(
+                    text(
+                        "INSERT INTO core.worlds (name, slug, lifecycle_status_id, ownership_scope_id) "
+                        "VALUES ('World A', 'shared-slug', "
+                        "(SELECT lifecycle_status_id FROM core.lifecycle_statuses "
+                        "WHERE code = 'active'), :scope) RETURNING world_id"
+                    ),
+                    {"scope": scope_a},
+                ).scalar_one()
+                world_b = conn.execute(
+                    text(
+                        "INSERT INTO core.worlds (name, slug, lifecycle_status_id, ownership_scope_id) "
+                        "VALUES ('World B', 'shared-slug', "
+                        "(SELECT lifecycle_status_id FROM core.lifecycle_statuses "
+                        "WHERE code = 'active'), :scope) RETURNING world_id"
+                    ),
+                    {"scope": scope_b},
+                ).scalar_one()
+        finally:
+            engine.dispose()
+
+        downgrade_result = _alembic(test_url, "downgrade", _PREVIOUS_REVISION)
+        assert downgrade_result.returncode != 0
+        combined = downgrade_result.stdout + downgrade_result.stderr
+        assert "UniqueViolation" in combined or "duplicate key" in combined
+
+        # Failed migration transactions roll back — head is unchanged, and
+        # both worlds are exactly where they were.
+        assert _current_revision(test_url) == "108_ownership_scope_guards"
+
+        engine = create_engine(test_url, connect_args=_connect_args())
+        try:
+            with engine.connect() as conn:
+                scopes = (
+                    conn.execute(
+                        text(
+                            "SELECT world_id, ownership_scope_id FROM core.worlds "
+                            "WHERE world_id IN (:a, :b)"
+                        ),
+                        {"a": world_a, "b": world_b},
+                    )
+                    .mappings()
+                    .all()
+                )
+        finally:
+            engine.dispose()
+        resolved = {row["world_id"]: row["ownership_scope_id"] for row in scopes}
+        assert resolved == {world_a: scope_a, world_b: scope_b}
+    finally:
+        _drop_database(admin_url, test_url)
