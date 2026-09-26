@@ -60,27 +60,27 @@ Status categories used throughout this document and `docs/PROJECT_STATUS.md`:
 | Capability | Status | Notes |
 |---|---|---|
 | Campaign, membership, and role authorization | Built | Phase 10 (`docs/PLAN.md` §24) |
-| Access/audit-history review (portal) | Built | Phase 13E-A/13E-B |
-| World ownership boundary (this change) | Built (foundation only) | No authoring commands yet — see §9 |
-| Core authoring commands (create world/timeline/entity/character/NPC/location/quest, canon lifecycle transitions, archive/restore, timeline branching) | Planned | Missing prerequisite identified below; see §9 |
-| Session-note import, entity/claim extraction, contradiction detection, canon review | Planned | Phase 15, depends on §9 |
-| GenAI preparation copilot (quests, encounters, NPCs, clues) | Planned | Depends on session intelligence and rules management |
-| NPC portrayal profiles and AI-assisted NPC roleplay | Planned | Requires a creature/NPC modeling decision — ADR TBD, see §10 |
-| Structured GM-controlled interaction scenes (noncombat actions, DCs, outcomes) | Planned | Depends on rules engine + NPC portrayal |
-| Custom creature builder and party-specific encounter analysis | Planned | Requires the creature-model decision (§10) |
+| Access/audit-history review (portal) | Built | Phase 13E-A/13E-B, now including the membership/role, access-group, resource-grant, and invitation mutation workflow — see `docs/PROJECT_STATUS.md` |
+| World ownership boundary (this change) | Built (foundation only) | Authorization, final-owner retention, and membership-identity guards are enforced; no `create_world` command yet — see §9 |
+| Core authoring commands (create world/timeline/entity/character/NPC/location/quest, canon lifecycle transitions, archive/restore, timeline branching) | Planned | Actually scheduled in `docs/PLAN.md` §15 (the missing authoring prerequisite); see §9 |
+| Session-note import, entity/claim extraction, contradiction detection, canon review | Planned | Phase 15 in `docs/PLAN.md`, depends on §9 |
+| GenAI preparation copilot (quests, encounters, NPCs, clues) | Deferred | Not scheduled in any `docs/PLAN.md` delivery phase today — corrects an earlier "Planned" label this capability never earned under this document's own definition (§7) |
+| NPC portrayal profiles and AI-assisted NPC roleplay | Deferred | Not scheduled; also requires a creature/NPC modeling decision — ADR 0015, see §10 |
+| Structured GM-controlled interaction scenes (noncombat actions, DCs, outcomes) | Deferred | Not scheduled; depends on rules engine + NPC portrayal, neither of which is scheduled either |
+| Custom creature builder and party-specific encounter analysis | Deferred | Not scheduled; also requires the creature-model decision (§10) |
 
 ### Player-facing
 
 | Capability | Status | Notes |
 |---|---|---|
 | Character-filtered campaign browsing | Partial | Portal surfaces exist for GM tools; player-facing views are earlier-phase |
-| Personalized dashboard, recaps, timelines | Planned | Depends on session intelligence |
-| NPC/faction/quest memory views | Planned | Depends on session intelligence |
-| Player notes, bookmarks, theories | Planned | |
+| Personalized dashboard, recaps, timelines | Partial | The Phase 13D Home dashboard (recap, active quests, recent discoveries, relevant NPCs/factions, reminders) and the Phase 10 summary query it reads from are already delivered; character-specific, import-derived recaps depend on Phase 15 and remain not started |
+| NPC/faction/quest memory views | Partial | Phase 13D's World/Characters/Quests browsing screens already exist; the personalized "memory" framing (what this character specifically has learned/met) depends on Phase 15 knowledge extraction and is not started |
+| Player notes, bookmarks, theories | Deferred | Not scheduled in any `docs/PLAN.md` delivery phase or recorded elsewhere in this repository — corrects an earlier "Planned" label |
 | Player-private discussions/threads, immutable share snapshots | Deferred (architecture only) | See §11; no schema or API exists yet |
-| Rules-aware character advancement | Planned | Depends on rules-aware character management |
-| Character-aware player advisor | Planned | Depends on portrayal profiles + rules management |
-| Player-owned session-note imports and rules sources | Planned | Same import foundation as GM-facing imports, permission-scoped to the player |
+| Rules-aware character advancement | Deferred | Not scheduled — Phase 4's already-complete rules/character data model is a prerequisite, not this guided-advancement workflow itself |
+| Character-aware player advisor | Deferred | Not scheduled; depends on portrayal profiles (also deferred) and rules-aware management |
+| Player-owned session-note imports and rules sources | Deferred | Not scheduled as its own item; distinct from the GM-facing Phase 15 import this capability would reuse |
 
 ## 8. What the platform is not
 
