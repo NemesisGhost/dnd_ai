@@ -1053,6 +1053,17 @@ _RESOURCE_GRANT_TARGET_FIELDS = (
     "event_id",
 )
 
+# core.entity_types.code values belonging to the four resource-grant target
+# kinds that have their own dedicated column (character_id/event_id/
+# quest_id/knowledge_item_id) — every one of these also satisfies
+# core.entities(entity_id) via class-table inheritance (P-8, this module's
+# own "CTI column trap" docstring below), so an entity_id target resolving
+# to one of these codes must be rejected rather than silently accepted into
+# the wrong column.
+_OWN_COLUMN_ENTITY_TYPE_CODES = frozenset(
+    {"character", "npc", "player_character", "event", "quest", "knowledge_item"}
+)
+
 
 def _resource_grant_target_field_name(
     *,
@@ -1154,9 +1165,10 @@ def _validate_resource_grant_target(
         target_row = (
             connection.execute(
                 text("""
-                    SELECT e.world_id, ls.code AS lifecycle_status_code
+                    SELECT e.world_id, ls.code AS lifecycle_status_code, et.code AS entity_type_code
                     FROM core.entities e
                     JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id
+                    JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
                     WHERE e.entity_id = :target
                     FOR UPDATE OF e
                 """),
@@ -1175,6 +1187,28 @@ def _validate_resource_grant_target(
                 f"resource grant target {entity_rooted_target} does not exist in world "
                 f"{expected_world_id}, or is not currently active "
                 f"(actual world: {target_row['world_id'] if target_row is not None else None})"
+            )
+        assert target_row is not None
+        # P-8: the CTI column trap
+        # (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §5.3). character.
+        # characters/narrative.quests/narrative.events/knowledge.
+        # knowledge_items all key off core.entities(entity_id) via class-
+        # table inheritance, so one UUID can satisfy several of the six
+        # mutually exclusive target columns at once, and the CHECK
+        # constraint that enforces "exactly one column" cannot tell which
+        # column the caller *meant*. The read side always keys off a
+        # specific column (dnd_ai.api.world_explorer's own resource_grant_
+        # targets(cap, "event_id") call reads event_id, never entity_id),
+        # so a grant written to the wrong column is not rejected anywhere
+        # else -- it is silently inert against every real reader while
+        # still displaying as an active grant on the access overview.
+        # Rejected here, folded into the same non-disclosing
+        # TargetNotInCampaignWorldError this function already raises for
+        # "wrong world"/"not active", rather than a new error shape.
+        if entity_id is not None and target_row["entity_type_code"] in _OWN_COLUMN_ENTITY_TYPE_CODES:
+            raise TargetNotInCampaignWorldError(
+                f"entity {entity_id} is a {target_row['entity_type_code']!r} entity, which has its "
+                "own resource-grant target column and must not be granted through entity_id"
             )
 
     if event_id is not None:
