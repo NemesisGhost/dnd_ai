@@ -1205,7 +1205,10 @@ def _validate_resource_grant_target(
         # Rejected here, folded into the same non-disclosing
         # TargetNotInCampaignWorldError this function already raises for
         # "wrong world"/"not active", rather than a new error shape.
-        if entity_id is not None and target_row["entity_type_code"] in _OWN_COLUMN_ENTITY_TYPE_CODES:
+        if (
+            entity_id is not None
+            and target_row["entity_type_code"] in _OWN_COLUMN_ENTITY_TYPE_CODES
+        ):
             raise TargetNotInCampaignWorldError(
                 f"entity {entity_id} is a {target_row['entity_type_code']!r} entity, which has its "
                 "own resource-grant target column and must not be granted through entity_id"
