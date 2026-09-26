@@ -2186,7 +2186,7 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
         ).toBeInTheDocument()
     })
 
-    it("add group resource access: character and capability selectors only, no resource-type selector", () => {
+    it("add group resource access: resource-type, character, and capability selectors, reusing ResourceTargetSelector", () => {
         renderPage(groupOverview)
 
         fireEvent.click(
@@ -2194,12 +2194,13 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
         )
 
         expect(
-            screen.getByLabelText("Add resource access for Lore Circle — Character"),
+            screen.getByLabelText("Add resource access for Lore Circle"),
         ).toBeInTheDocument()
         expect(screen.getByLabelText("Permission")).toBeInTheDocument()
-        // Only one combobox pair (character, capability) — never a
-        // third "resource type" selector, unlike the member-grant flow.
-        expect(screen.getAllByRole("combobox")).toHaveLength(2)
+        // With only "character" ever grantable in this fixture, the
+        // resource-type selector renders but stays disabled (a single
+        // option) — type, character, and capability comboboxes.
+        expect(screen.getAllByRole("combobox")).toHaveLength(3)
     })
 
     it("reuses the effect-aware revoke flow for a group-owned grant", () => {

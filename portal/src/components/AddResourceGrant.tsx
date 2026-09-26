@@ -1,10 +1,12 @@
 import { useId, useState } from "react"
+import { ResourceTargetSelector } from "./ResourceTargetSelector"
 import { useAddResourceGrant } from "../hooks/useAddResourceGrant"
 import type {
     AccessResourceGrantSummary,
     AssignableCharacter,
     GrantableResourceCapability,
 } from "../types/accessOverview"
+import type { ResourceGrantEffect, ResourceGrantTargetField } from "../types/resourceGrantTarget"
 import { humanizeCode } from "../utils/humanize"
 
 interface AddResourceGrantProps {
@@ -19,14 +21,7 @@ interface AddResourceGrantProps {
     onMutationStart: () => void
 }
 
-interface ResourceOption {
-    id: string
-    display_name: string
-}
-
-function statusMessage(
-    kind: "pending" | "success" | "denied" | "conflict" | "error",
-): string {
+function statusMessage(kind: "pending" | "success" | "denied" | "conflict" | "error"): string {
     switch (kind) {
         case "pending":
             return "Adding resource access…"
@@ -41,35 +36,26 @@ function statusMessage(
     }
 }
 
-// Every resource type this checkpoint's portal knows how to safely search
-// and display — currently just "character" (dnd_ai.queries.access_overview.
-// list_assignable_campaign_characters). A future increment that adds a
-// safe display/search contract for another target kind needs only a new
-// case here, matching the equally general grantable_resource_capabilities
-// metadata the server already returns for every kind it allows.
-function resourceOptionsForType(
-    targetType: string,
-    assignableCharacters: AssignableCharacter[],
-): ResourceOption[] {
-    if (targetType === "character") {
-        return assignableCharacters.map((character) => ({
-            id: character.character_id,
-            display_name: character.display_name,
-        }))
-    }
-    return []
+// Mirrors dnd_ai.commands.access_grants._RESOURCE_GRANT_TARGET_FIELDS'
+// own "target_type = target_column.removesuffix('_id')" derivation
+// (dnd_ai.queries.access_overview), inverted — every target_type this
+// checkpoint's grantableCapabilities ever names is exactly one of these
+// six kinds, so the inverse is total.
+function targetFieldForType(targetType: string): ResourceGrantTargetField {
+    return `${targetType}_id` as ResourceGrantTargetField
 }
 
 // One control per member (never per resource): "add resource access"
-// names a member, a resource type, a specific resource, and a capability
-// to grant. A guided, server-driven sequence — resource type, then
-// resource, then capability — with each lower selection reset whenever a
-// higher one changes, mirroring AddCharacterRelationship's own identical
-// cascade for character/relationship-type. Capability choices are always
-// narrowed to dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG (via
-// the server-supplied grantableCapabilities list) and to whichever are not
-// already actively granted for the *currently selected* resource — the
-// server independently re-validates and enforces its own delegation
+// names a member, a resource type, a specific resource, an effect, and a
+// capability to grant. A guided, server-driven sequence — resource type,
+// then resource (via ResourceTargetSelector, §8.5), then effect, then
+// capability — with each lower selection reset whenever a higher one
+// changes, mirroring AddCharacterRelationship's own identical cascade.
+// Capability choices are always narrowed to dnd_ai.domain.access.
+// RESOURCE_GRANT_CAPABILITY_CATALOG (via the server-supplied
+// grantableCapabilities list) and to whichever are not already actively
+// granted, with the same effect, for the *currently selected* resource —
+// the server independently re-validates and enforces its own delegation
 // policy regardless (dnd_ai.commands.access_grants.create_resource_grant).
 export function AddResourceGrant({
     campaignId,
@@ -83,51 +69,50 @@ export function AddResourceGrant({
     onMutationStart,
 }: AddResourceGrantProps) {
     const typeSelectId = useId()
-    const resourceSelectId = useId()
+    const resourceLabelId = useId()
+    const effectGroupId = useId()
     const capabilitySelectId = useId()
     const statusId = useId()
 
     const [isEditing, setIsEditing] = useState(false)
+    const [denyConfirmed, setDenyConfirmed] = useState(false)
 
     const targetTypes = Array.from(
         new Set(grantableCapabilities.map((capability) => capability.target_type)),
     )
-
-    const [selectedTargetType, setSelectedTargetType] = useState(
-        targetTypes[0] ?? "",
+    // "character" is the one target kind resolved synchronously from a
+    // prop rather than an async read hook, so it is the one kind this
+    // component can still know ahead of time has nothing to offer —
+    // excluded here so the trigger is never shown for a form that can
+    // only ever land on an empty character picker with no other target
+    // kind to fall back to. The four async kinds cannot be pre-checked
+    // this way; an empty result for one of those still opens the form,
+    // which then shows "No eligible resource of this type is available."
+    const usableTargetTypes = targetTypes.filter(
+        (targetType) => targetType !== "character" || assignableCharacters.length > 0,
     )
 
-    // Tracks its own "which type was this chosen for" alongside the chosen
-    // resource id, purely so a type change can be detected and reset
-    // during render (React's own documented "adjusting state when a prop
-    // changes" pattern) without an effect — mirrors AddCharacterRelationship's
-    // identical character/type cascade, one level deeper here.
+    const [selectedTargetType, setSelectedTargetType] = useState(usableTargetTypes[0] ?? "")
     const [selectedResource, setSelectedResource] = useState<{
         targetType: string
         id: string
     }>({ targetType: "", id: "" })
+    const [selectedEffect, setSelectedEffect] = useState<ResourceGrantEffect>("allow")
     const [selectedCapability, setSelectedCapability] = useState<{
         targetType: string
         resourceId: string
+        effect: ResourceGrantEffect
         code: string
-    }>({ targetType: "", resourceId: "", code: "" })
+    }>({ targetType: "", resourceId: "", effect: "allow", code: "" })
 
     const { status, submit, reset } = useAddResourceGrant(campaignId, () =>
-        onChanged("Resource access added."),
+        onChanged(selectedEffect === "deny" ? "Resource denial added." : "Resource access added."),
     )
 
     const isPending = status.kind === "pending"
 
-    const resourceOptions = resourceOptionsForType(
-        selectedTargetType,
-        assignableCharacters,
-    )
-
-    let selectedResourceId = selectedResource.id
-    if (selectedResource.targetType !== selectedTargetType) {
-        selectedResourceId = resourceOptions[0]?.id ?? ""
-        setSelectedResource({ targetType: selectedTargetType, id: selectedResourceId })
-    }
+    const selectedResourceId =
+        selectedResource.targetType === selectedTargetType ? selectedResource.id : ""
 
     const capabilitiesForType = grantableCapabilities.filter(
         (capability) => capability.target_type === selectedTargetType,
@@ -138,7 +123,7 @@ export function AddResourceGrant({
                 (grant) =>
                     grant.target_type === selectedTargetType &&
                     grant.target_id === selectedResourceId &&
-                    grant.effect === "allow",
+                    grant.effect === selectedEffect,
             )
             .map((grant) => grant.capability_code),
     )
@@ -149,21 +134,22 @@ export function AddResourceGrant({
     let selectedCapabilityCode = selectedCapability.code
     if (
         selectedCapability.targetType !== selectedTargetType ||
-        selectedCapability.resourceId !== selectedResourceId
+        selectedCapability.resourceId !== selectedResourceId ||
+        selectedCapability.effect !== selectedEffect
     ) {
-        selectedCapabilityCode =
-            availableCapabilitiesForSelectedResource[0]?.code ?? ""
+        selectedCapabilityCode = availableCapabilitiesForSelectedResource[0]?.code ?? ""
         setSelectedCapability({
             targetType: selectedTargetType,
             resourceId: selectedResourceId,
+            effect: selectedEffect,
             code: selectedCapabilityCode,
         })
     }
 
-    if (targetTypes.length === 0 || assignableCharacters.length === 0) {
-        // Nothing the contract marks as a grantable capability, or nothing
-        // eligible to target — never show a control with nowhere safe to
-        // send it.
+    if (usableTargetTypes.length === 0) {
+        // Nothing the contract marks as a grantable capability, or the
+        // only kind available is "character" with none assignable — never
+        // show a control with nowhere safe to send it.
         return null
     }
 
@@ -174,7 +160,9 @@ export function AddResourceGrant({
                 className="access-role-editor__trigger"
                 onClick={() => {
                     reset()
-                    setSelectedTargetType(targetTypes[0] ?? "")
+                    setSelectedTargetType(usableTargetTypes[0] ?? "")
+                    setSelectedEffect("allow")
+                    setDenyConfirmed(false)
                     setIsEditing(true)
                 }}
             >
@@ -183,70 +171,107 @@ export function AddResourceGrant({
         )
     }
 
+    const canSubmit =
+        selectedTargetType !== "" &&
+        selectedResourceId !== "" &&
+        selectedCapabilityCode !== "" &&
+        (selectedEffect === "allow" || denyConfirmed)
+
     return (
         <form
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (
-                    selectedTargetType === "" ||
-                    selectedResourceId === "" ||
-                    selectedCapabilityCode === ""
-                ) {
+                if (!canSubmit) {
                     return
                 }
                 onMutationStart()
                 submit(
                     campaignMembershipId,
-                    selectedResourceId,
+                    { field: targetFieldForType(selectedTargetType), id: selectedResourceId },
                     selectedCapabilityCode,
+                    selectedEffect,
                 )
             }}
         >
             <label htmlFor={typeSelectId}>
-                Add direct resource access for {memberDisplayName} in{" "}
-                {campaignName}
+                Add direct resource access for {memberDisplayName} in {campaignName}
             </label>
 
             <select
                 id={typeSelectId}
                 value={selectedTargetType}
-                disabled={isPending || targetTypes.length <= 1}
+                disabled={isPending || usableTargetTypes.length <= 1}
                 onChange={(event) => {
                     setSelectedTargetType(event.currentTarget.value)
                 }}
             >
-                {targetTypes.map((targetType) => (
+                {usableTargetTypes.map((targetType) => (
                     <option key={targetType} value={targetType}>
                         {humanizeCode(targetType)}
                     </option>
                 ))}
             </select>
 
-            <label htmlFor={resourceSelectId}>
-                {humanizeCode(selectedTargetType)}
-            </label>
+            <label id={resourceLabelId}>{humanizeCode(selectedTargetType)}</label>
+            <ResourceTargetSelector
+                campaignId={campaignId}
+                targetType={selectedTargetType}
+                assignableCharacters={assignableCharacters}
+                value={selectedResourceId}
+                disabled={isPending}
+                labelId={resourceLabelId}
+                onChange={(option) => {
+                    setSelectedResource({
+                        targetType: selectedTargetType,
+                        id: option?.id ?? "",
+                    })
+                }}
+            />
 
-            {resourceOptions.length > 0 ? (
-                <select
-                    id={resourceSelectId}
-                    value={selectedResourceId}
-                    disabled={isPending}
-                    onChange={(event) => {
-                        setSelectedResource({
-                            targetType: selectedTargetType,
-                            id: event.currentTarget.value,
-                        })
-                    }}
-                >
-                    {resourceOptions.map((resource) => (
-                        <option key={resource.id} value={resource.id}>
-                            {resource.display_name}
-                        </option>
-                    ))}
-                </select>
-            ) : (
-                <p>No eligible resource of this type is available.</p>
+            <fieldset id={effectGroupId}>
+                <legend>Effect</legend>
+                <label>
+                    <input
+                        type="radio"
+                        name={effectGroupId}
+                        value="allow"
+                        checked={selectedEffect === "allow"}
+                        disabled={isPending}
+                        onChange={() => {
+                            setSelectedEffect("allow")
+                            setDenyConfirmed(false)
+                        }}
+                    />
+                    Allow
+                </label>
+                <label>
+                    <input
+                        type="radio"
+                        name={effectGroupId}
+                        value="deny"
+                        checked={selectedEffect === "deny"}
+                        disabled={isPending}
+                        onChange={() => {
+                            setSelectedEffect("deny")
+                            setDenyConfirmed(false)
+                        }}
+                    />
+                    Deny
+                </label>
+            </fieldset>
+
+            {selectedEffect === "deny" && (
+                <label className="access-role-editor__confirm-text">
+                    <input
+                        type="checkbox"
+                        checked={denyConfirmed}
+                        disabled={isPending}
+                        onChange={(event) => setDenyConfirmed(event.currentTarget.checked)}
+                    />
+                    I understand this explicitly denies this capability for {memberDisplayName}, even
+                    if another role or grant would otherwise allow it.
+                </label>
             )}
 
             <label htmlFor={capabilitySelectId}>Permission</label>
@@ -260,6 +285,7 @@ export function AddResourceGrant({
                         setSelectedCapability({
                             targetType: selectedTargetType,
                             resourceId: selectedResourceId,
+                            effect: selectedEffect,
                             code: event.currentTarget.value,
                         })
                     }}
@@ -271,19 +297,11 @@ export function AddResourceGrant({
                     ))}
                 </select>
             ) : (
-                <p>Every available permission is already granted for this resource.</p>
+                <p>Every available permission is already granted for this resource and effect.</p>
             )}
 
             <div className="access-role-editor__actions">
-                <button
-                    type="submit"
-                    disabled={
-                        isPending ||
-                        selectedResourceId === "" ||
-                        selectedCapabilityCode === ""
-                    }
-                    aria-busy={isPending}
-                >
+                <button type="submit" disabled={isPending || !canSubmit} aria-busy={isPending}>
                     {isPending ? "Adding…" : "Add"}
                 </button>
 
@@ -302,9 +320,7 @@ export function AddResourceGrant({
             <p
                 id={statusId}
                 className={
-                    status.kind === "denied" ||
-                    status.kind === "conflict" ||
-                    status.kind === "error"
+                    status.kind === "denied" || status.kind === "conflict" || status.kind === "error"
                         ? "access-role-editor__status access-role-editor__status--error"
                         : "access-role-editor__status"
                 }

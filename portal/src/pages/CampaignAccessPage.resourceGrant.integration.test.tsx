@@ -499,3 +499,50 @@ describe("CampaignAccessPage resource-grant cross-operation announcement lifecyc
         ).not.toBeInTheDocument()
     })
 })
+
+describe("CampaignAccessPage add-resource-grant deny effect", () => {
+    it("requires the explicit confirmation checkbox before a deny grant can be submitted", async () => {
+        let submittedBody: Record<string, unknown> | null = null
+
+        const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const url = typeof input === "string" ? input : input.toString()
+            const method = init?.method ?? "GET"
+
+            if (method === "GET" && url.includes("/access-overview")) {
+                return Promise.resolve(jsonResponse(emptyOverview))
+            }
+
+            if (method === "POST" && url.includes("/resource-grants") && !url.includes("/revoke")) {
+                submittedBody = JSON.parse(init?.body as string) as Record<string, unknown>
+                return Promise.resolve(jsonResponse({ resource_grant_id: GRANT_ID }, 201))
+            }
+
+            return Promise.reject(new Error(`unexpected fetch in test: ${method} ${url}`))
+        })
+
+        const { container } = renderAtCampaign(fetchMock)
+
+        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Add direct resource access" }))
+        fireEvent.click(screen.getByRole("radio", { name: "Deny" }))
+
+        // The submit button must remain unusable until the confirmation
+        // checkbox is explicitly checked -- a click here must never reach
+        // the network.
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+        expect(submittedBody).toBeNull()
+
+        fireEvent.click(
+            screen.getByRole("checkbox", {
+                name: /I understand this explicitly denies this capability/,
+            }),
+        )
+        fireEvent.click(screen.getByRole("button", { name: "Add" }))
+
+        await waitFor(() => {
+            expect(persistentAnnouncement(container)).toHaveTextContent("Resource denial added.")
+        })
+        expect(submittedBody).toMatchObject({ effect: "deny", character_id: CHARACTER_ID })
+    })
+})

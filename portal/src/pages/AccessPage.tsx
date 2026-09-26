@@ -319,12 +319,6 @@ function AccessGroupCard({
             display_name: member.display_name,
         }))
 
-    const characterCapabilities = grantableResourceCapabilities
-        .filter((capability) => capability.target_type === "character")
-        .map((capability) => ({
-            code: capability.code,
-            display_name: capability.display_name,
-        }))
 
     return (
         <details className="access-member-card">
@@ -444,7 +438,7 @@ function AccessGroupCard({
                             accessGroupId={group.access_group_id}
                             groupName={group.name}
                             assignableCharacters={assignableCharacters}
-                            grantableCapabilityCodes={characterCapabilities}
+                            grantableCapabilities={grantableResourceCapabilities}
                             existingGrants={group.grants}
                             onChanged={onChanged}
                             onMutationStart={onMutationStart}

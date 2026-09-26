@@ -1,10 +1,4 @@
-import {
-    afterEach,
-    describe,
-    expect,
-    it,
-    vi,
-} from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { addResourceGrant } from "./addResourceGrant"
 
 afterEach(() => {
@@ -16,13 +10,10 @@ describe("addResourceGrant", () => {
         const controller = new AbortController()
 
         const fetchMock = vi.fn().mockResolvedValue(
-            new Response(
-                JSON.stringify({ resource_grant_id: "new-grant" }),
-                {
-                    status: 201,
-                    headers: { "Content-Type": "application/json" },
-                },
-            ),
+            new Response(JSON.stringify({ resource_grant_id: "new-grant" }), {
+                status: 201,
+                headers: { "Content-Type": "application/json" },
+            }),
         )
         vi.stubGlobal("fetch", fetchMock)
 
@@ -30,8 +21,9 @@ describe("addResourceGrant", () => {
             addResourceGrant(
                 "campaign/a b",
                 "membership/1",
-                "character-2",
+                { field: "character_id", id: "character-2" },
                 "character.view_full",
+                "allow",
                 "fixture-csrf-token",
                 "fixture-idempotency-key",
                 controller.signal,
@@ -62,17 +54,43 @@ describe("addResourceGrant", () => {
         )
     })
 
-    it("throws a typed error for a non-disclosing forbidden/not-found response", async () => {
-        vi.stubGlobal(
-            "fetch",
-            vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
+    it("sends the target under whichever column the caller names, and the deny effect", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ resource_grant_id: "new-grant" }), {
+                status: 201,
+                headers: { "Content-Type": "application/json" },
+            }),
         )
+        vi.stubGlobal("fetch", fetchMock)
+
+        await addResourceGrant(
+            "campaign-a",
+            "membership-a",
+            { field: "quest_id", id: "quest-1" },
+            "campaign.view",
+            "deny",
+            "fixture-csrf-token",
+            "fixture-idempotency-key",
+        )
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(JSON.parse(init.body as string)).toEqual({
+            capability_code: "campaign.view",
+            effect: "deny",
+            grantee_campaign_membership_id: "membership-a",
+            quest_id: "quest-1",
+        })
+    })
+
+    it("throws a typed error for a non-disclosing forbidden/not-found response", async () => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })))
 
         const request = addResourceGrant(
             "campaign-a",
             "membership-a",
-            "character-a",
+            { field: "character_id", id: "character-a" },
             "character.view_full",
+            "allow",
             "fixture-csrf-token",
             "fixture-idempotency-key",
         )
@@ -84,16 +102,14 @@ describe("addResourceGrant", () => {
     })
 
     it("throws a typed error for a conflicting duplicate/ineligible target", async () => {
-        vi.stubGlobal(
-            "fetch",
-            vi.fn().mockResolvedValue(new Response(null, { status: 409 })),
-        )
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })))
 
         const request = addResourceGrant(
             "campaign-a",
             "membership-a",
-            "character-a",
+            { field: "character_id", id: "character-a" },
             "character.view_full",
+            "allow",
             "fixture-csrf-token",
             "fixture-idempotency-key",
         )
@@ -122,8 +138,9 @@ describe("addResourceGrant", () => {
         const request = addResourceGrant(
             "campaign-a",
             "membership-a",
-            "character-a",
+            { field: "character_id", id: "character-a" },
             "character.view_full",
+            "allow",
             "fixture-csrf-token",
             "fixture-idempotency-key",
             controller.signal,

@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import {
-    AddResourceGrantRequestError,
-    addResourceGrant,
-} from "../api/addResourceGrant"
+import { AddResourceGrantRequestError, addResourceGrant } from "../api/addResourceGrant"
 import { useSession } from "../context/SessionContext"
+import type { ResourceGrantEffect, ResourceGrantTarget } from "../types/resourceGrantTarget"
 
 export type AddResourceGrantStatus =
     | { kind: "idle" }
@@ -17,8 +15,9 @@ export interface UseAddResourceGrantResult {
     status: AddResourceGrantStatus
     submit: (
         campaignMembershipId: string,
-        characterId: string,
+        target: ResourceGrantTarget,
         capabilityCode: string,
+        effect: ResourceGrantEffect,
     ) => void
     reset: () => void
 }
@@ -30,8 +29,9 @@ interface Snapshot {
 
 interface IdempotencyReservation {
     campaignMembershipId: string
-    characterId: string
+    target: ResourceGrantTarget
     capabilityCode: string
+    effect: ResourceGrantEffect
     key: string
 }
 
@@ -67,39 +67,37 @@ export function useAddResourceGrant(
     const resolveIdempotencyKey = useCallback(
         (
             campaignMembershipId: string,
-            characterId: string,
+            target: ResourceGrantTarget,
             capabilityCode: string,
+            effect: ResourceGrantEffect,
         ): string => {
             const reserved = idempotencyRef.current
             if (
                 reserved !== null &&
                 reserved.campaignMembershipId === campaignMembershipId &&
-                reserved.characterId === characterId &&
-                reserved.capabilityCode === capabilityCode
+                reserved.target.field === target.field &&
+                reserved.target.id === target.id &&
+                reserved.capabilityCode === capabilityCode &&
+                reserved.effect === effect
             ) {
                 return reserved.key
             }
 
             const key = globalThis.crypto.randomUUID()
-            idempotencyRef.current = {
-                campaignMembershipId,
-                characterId,
-                capabilityCode,
-                key,
-            }
+            idempotencyRef.current = { campaignMembershipId, target, capabilityCode, effect, key }
             return key
         },
         [],
     )
 
-    const status =
-        snapshot.campaignId === campaignId ? snapshot.status : idleStatus
+    const status = snapshot.campaignId === campaignId ? snapshot.status : idleStatus
 
     const submit = useCallback(
         (
             campaignMembershipId: string,
-            characterId: string,
+            target: ResourceGrantTarget,
             capabilityCode: string,
+            effect: ResourceGrantEffect,
         ) => {
             if (status.kind === "pending") {
                 return
@@ -112,21 +110,20 @@ export function useAddResourceGrant(
             const csrfToken = sessionState.bootstrap.csrf_token
             const idempotencyKey = resolveIdempotencyKey(
                 campaignMembershipId,
-                characterId,
+                target,
                 capabilityCode,
+                effect,
             )
             const controller = new AbortController()
             controllerRef.current = controller
-            setSnapshot({
-                campaignId: requestCampaignId,
-                status: { kind: "pending" },
-            })
+            setSnapshot({ campaignId: requestCampaignId, status: { kind: "pending" } })
 
             void addResourceGrant(
                 requestCampaignId,
                 campaignMembershipId,
-                characterId,
+                target,
                 capabilityCode,
+                effect,
                 csrfToken,
                 idempotencyKey,
                 controller.signal,
@@ -137,10 +134,7 @@ export function useAddResourceGrant(
                     }
 
                     idempotencyRef.current = null
-                    setSnapshot({
-                        campaignId: requestCampaignId,
-                        status: { kind: "success" },
-                    })
+                    setSnapshot({ campaignId: requestCampaignId, status: { kind: "success" } })
                     onSuccess()
                     // A new grant can affect the caller's own effective
                     // access (self-grant) — never manufacture the updated
@@ -155,18 +149,12 @@ export function useAddResourceGrant(
 
                     if (cause instanceof AddResourceGrantRequestError) {
                         if (cause.status === 401) {
-                            setSnapshot({
-                                campaignId: requestCampaignId,
-                                status: idleStatus,
-                            })
+                            setSnapshot({ campaignId: requestCampaignId, status: idleStatus })
                             reload()
                             return
                         }
                         if (cause.status === 403 || cause.status === 404) {
-                            setSnapshot({
-                                campaignId: requestCampaignId,
-                                status: { kind: "denied" },
-                            })
+                            setSnapshot({ campaignId: requestCampaignId, status: { kind: "denied" } })
                             return
                         }
                         if (cause.status === 409 || cause.status === 400) {
@@ -178,10 +166,7 @@ export function useAddResourceGrant(
                         }
                     }
 
-                    setSnapshot({
-                        campaignId: requestCampaignId,
-                        status: { kind: "error" },
-                    })
+                    setSnapshot({ campaignId: requestCampaignId, status: { kind: "error" } })
                 })
         },
         [status.kind, sessionState, campaignId, onSuccess, reload, resolveIdempotencyKey],
