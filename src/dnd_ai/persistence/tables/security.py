@@ -78,7 +78,18 @@ users = Table(
         Text(),
         comment="Nullable: service-linked or imported accounts may have no address.",
     ),
-    Column("display_name", Text(), nullable=False),
+    Column(
+        "display_name",
+        Text(),
+        nullable=False,
+        comment=(
+            "1-100 characters (ck_users_display_name_length, migration 107). "
+            "Untrusted input as of that revision: dnd_ai.commands.local_auth."
+            "_register_invited_local_account_impl lets an invited registrant "
+            "choose this value directly, so it is a free-text label, not a "
+            "verified identity -- see that command's own docstring."
+        ),
+    ),
     Column(
         "lifecycle_status_id",
         UUID(),
@@ -292,6 +303,81 @@ Index(
     "ix_campaign_invitations_accepted_by_user_id",
     campaign_invitations.c.accepted_by_user_id,
     postgresql_where=campaign_invitations.c.accepted_by_user_id.isnot(None),
+)
+
+invitation_onboarding_sessions = Table(
+    "invitation_onboarding_sessions",
+    metadata,
+    _uuid_pk("invitation_onboarding_session_id"),
+    Column(
+        "onboarding_token_hash",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of the value the onboarding cookie carries "
+            "(dnd_ai.domain.credentials.hash_opaque_secret). The raw value never "
+            "reaches this column, this table, or any log line."
+        ),
+    ),
+    Column(
+        "campaign_invitation_id",
+        UUID(),
+        ForeignKey("security.campaign_invitations.campaign_invitation_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "csrf_token",
+        Text(),
+        nullable=False,
+        comment=(
+            "Server-generated double-submit secret for register/cancel, stored in "
+            "the clear -- alone grants nothing, mirroring security.browser_sessions."
+            "csrf_token."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column(
+        "expires_at",
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment=(
+            "min(now() + 20 minutes, the referenced invitation's own expires_at) at "
+            "the time this row was created; never extended afterward."
+        ),
+    ),
+    Column("consumed_at", TIMESTAMP(timezone=True)),
+    Column(
+        "consumed_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        comment=(
+            "The account complete_invitation_onboarding bound this session to, set "
+            "atomically with consumed_at. ON DELETE RESTRICT: no command in this "
+            "codebase ever deletes a security.users row, mirroring security."
+            "campaign_creation_reservations.created_campaign_id's identical reasoning."
+        ),
+    ),
+    Column("cancelled_at", TIMESTAMP(timezone=True)),
+    Column("created_ip", Text()),
+    UniqueConstraint("onboarding_token_hash", name="ux_ios_token_hash"),
+    schema="security",
+    comment=(
+        "Pre-authentication scratch state for the single-link campaign-invitation "
+        "onboarding flow (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §6.2/§8.2). Only "
+        "a hash of the onboarding token is stored, and only a reference to the "
+        "invitation being onboarded for -- never the raw invitation token itself. "
+        "See dnd_ai.commands.invitation_onboarding, this table's only writer."
+    ),
+)
+
+Index("ix_ios_campaign_invitation_id", invitation_onboarding_sessions.c.campaign_invitation_id)
+Index(
+    "ix_ios_live",
+    invitation_onboarding_sessions.c.expires_at,
+    postgresql_where=(
+        invitation_onboarding_sessions.c.consumed_at.is_(None)
+        & invitation_onboarding_sessions.c.cancelled_at.is_(None)
+    ),
 )
 
 # ---------------------------------------------------------------------------
