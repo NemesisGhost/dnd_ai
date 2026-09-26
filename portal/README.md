@@ -13,12 +13,15 @@ wired to live campaign-scoped API endpoints, each behind a shared
 automated suite (`npm test`, `npm run lint`, `npm run build`) and a live
 multi-role browser pass have both passed — see
 [Phase 13C/13D verification](#phase-13c13d-verification) below. **13E (GM
-access tools) is in progress**: increment 13E-A replaced the Access
-screen's placeholder with a live, read-only campaign access overview (see
-below); every 13E mutation workflow (account/role/relationship/grant
-changes, invitations, preview-as-user) remains undelivered. 13F (Foundry
-connections/device UI), 13G (Phase 12 surfaces), and 13H (E2E coverage and
-production packaging) have not started.
+access tools) is in progress**: 13E-A delivered the live campaign access
+overview, and 13E-B now includes role and membership management, character
+relationships, character-targeted grants, access groups, audit history, and
+manual-token campaign invitations. The next planned invitation checkpoint
+adds a single-link sign-in/registration/acceptance workflow; it is specified
+below but is not implemented yet. Platform account lifecycle management,
+preview-as-user, and the remaining non-character grant surfaces also remain.
+13F (Foundry connections/device UI), 13G (Phase 12 surfaces), and 13H (E2E
+coverage and production packaging) have not started.
 
 The portal currently includes:
 
@@ -46,10 +49,15 @@ The portal currently includes:
   views) and authorized party, with search and keyset pagination.
 - A visibly disabled Ask feature while the server manifest disables it.
 - Light/dark theme switching.
-- A read-only Access screen (13E-A) showing the active campaign's current
-  members, roles, character relationships, and explicit resource grants —
-  see [Access overview (13E-A)](#access-overview-13e-a) below. No
-  access-management mutations exist yet.
+- A live Access screen showing current members, roles, character
+  relationships, direct resource grants, access groups, pending invitations,
+  and audit history. Delivered mutations include member and role management,
+  character relationships, character-targeted grants, access-group
+  management, and invitation issue/revoke. See
+  [Access management (13E)](#access-management-13e) below.
+- An authenticated campaign-invitation acceptance page with manual token
+  entry. Single-link onboarding and invitation-authorized registration are
+  planned but not implemented.
 - A placeholder page for the later Ask increment (Phase 12-gated).
 - Automated tests covering routing, session and perspective behavior, and
   each screen's loading, empty, denied, and error states.
@@ -159,6 +167,13 @@ Public routes:
 - `/`
 - `/login`
 
+Planned public onboarding route (not implemented yet):
+
+- `/campaign-invitations/accept#token=<one-time-token>` — the token will be
+  removed from the URL immediately and exchanged for a short-lived,
+  server-side onboarding session. Until that checkpoint is delivered,
+  `/campaign-invitations/accept` remains an authenticated manual-entry page.
+
 Authenticated campaign selection:
 
 - `/campaigns`
@@ -174,8 +189,8 @@ Authenticated campaign routes:
 - `/app/:campaignId/sessions/:sessionId`
 - `/app/:campaignId/knowledge`
 - `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
-- `/app/:campaignId/access` — live, read-only campaign access overview
-  (13E-A; see [Access overview (13E-A)](#access-overview-13e-a) below)
+- `/app/:campaignId/access` — live campaign access-management surface
+  (13E-A/13E-B; see [Access management (13E)](#access-management-13e) below)
 
 Every route above except `ask` is a live, API-backed screen. Campaign IDs
 from URLs are matched against the current bootstrap's
@@ -188,7 +203,8 @@ responsible for authorizing every resource request.
 ## Source organization
 
 - `src/api`: Typed fetch clients, one module per backend contract (session,
-  world, quests, sessions, knowledge, characters, campaign summary, login).
+  world, quests, sessions, knowledge, characters, campaign summary, login,
+  access management, audit history, and invitations).
 - `src/components`: Interface components, including the `*Boundary`
   components (e.g. `WorldEntitiesBoundary`, `KnowledgeItemsBoundary`,
   `CampaignQuestsBoundary`) that turn a hook's fetch state into consistent
@@ -199,7 +215,8 @@ responsible for authorizing every resource request.
   login, and perspective behavior.
 - `src/layouts`: Authentication/session boundaries and campaign layouts.
 - `src/pages`: Route-level screens (Home, World, Characters, Quests,
-  Sessions, Knowledge, Login) and placeholders.
+  Sessions, Knowledge, Access, invitation acceptance, Login) and
+  placeholders.
 - `src/themes`: Light/dark theme context, provider, and selector.
 - `src/test`: Shared test initialization.
 - `src/types`: TypeScript representations of backend contracts.
@@ -230,11 +247,30 @@ not store Foundry device credentials.
 Backend endpoint availability does not mean that every account-management
 or authentication workflow has a completed portal screen.
 
+The implemented invitation page accepts a token from a password-style input
+and holds it in React memory only. It never places the token in a URL or
+browser storage. The planned single-link workflow is a deliberate, narrowly
+bounded extension: the one-time token will appear only in a URL fragment,
+will be removed immediately with `history.replaceState`, and will be
+exchanged in a JSON request body for an opaque, short-lived, `HttpOnly`
+onboarding cookie. It must never appear in a path, query string, request log,
+cookie value, local/session storage, IndexedDB, audit record, or later read
+response.
+
+Account creation from that future route will be invitation-authorized. The
+portal will not expose unrestricted public registration. A valid onboarding
+session will allow a player either to sign in to an existing account or to
+create and activate their own local account, after which the invitation is
+accepted for that authenticated account. Acceptance creates or reactivates a
+campaign membership only; it does not assign roles or restore historical
+relationships, grants, or access-group membership.
+
 ## Phase 13C/13D verification
 
-Automated checks (all screens, run from `portal/`):
+Automated checks for the latest reviewed invitation checkpoint (run from
+`portal/`):
 
-- `npm test` — 369 tests passed across 65 test files.
+- `npm test` — 1,034 tests passed across 160 test files.
 - `npm run lint` passed.
 - `npm run build` passed.
 
@@ -269,9 +305,9 @@ perspectives:
   results.
 - A simulated request failure shows the error state and a working retry.
 
-## Access overview (13E-A)
+## Access management (13E)
 
-`/app/:campaignId/access` is a live, read-only screen backed by
+`/app/:campaignId/access` began as the 13E-A read-only screen backed by
 `GET /campaigns/{campaignId}/access-overview` (server-side capability
 `access.manage` — the same capability that already gates the Access nav
 item's visibility). It shows, per currently active campaign member: their
@@ -281,10 +317,33 @@ human-readable labels. Identifiers in the response DTO (membership,
 character, role, and grant IDs) exist only for record identity — the page
 never renders them as visible text, only as React keys.
 
-Out of scope for this increment, deferred to a later Phase 13E increment:
-every mutation (no account/role/relationship/grant changes, invitations,
-or preview-as-user), access-group-targeted grants, and platform-wide
-account lifecycle status.
+13E-B extends that screen with server-authorized controls for:
+
+- adding and ending campaign memberships;
+- adding, changing, and revoking role assignments;
+- adding, changing, and revoking character relationships;
+- adding and revoking character-targeted direct resource grants;
+- creating, updating, deactivating, and reactivating access groups;
+- adding multiple campaign members to a group in one atomic operation and
+  removing individual group members;
+- adding and revoking character-targeted group grants;
+- reading campaign audit history; and
+- issuing, listing, and revoking pending campaign invitations.
+
+The current invitation-acceptance page requires the player to authenticate
+and paste the token manually. The next planned checkpoint replaces the GM's
+copyable token with a copyable single link while keeping manual entry as a
+fallback. Opening the link will establish a short-lived onboarding session,
+offer **Sign in** or invitation-authorized **Create account**, and accept the
+invitation after authentication. The accepted membership still receives no
+role or other access automatically.
+
+Still deferred: the single-link onboarding implementation, broader
+platform-administrator account lifecycle screens, preview-as-user,
+membership reactivation outside invitation acceptance, non-character grant
+search/presentation, explicit deny-grant creation, Foundry administration,
+and Phase 12 AI features. The authoritative endpoint and security details
+are maintained in `docs/PHASE13E_ACCESS_CONTRACT.md`.
 
 ## Learning checkpoints
 
