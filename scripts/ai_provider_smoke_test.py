@@ -83,6 +83,7 @@ _RAW_RESPONSE_PREVIEW_CHARS = 200
 @dataclass
 class _Fixture:
     world_id: uuid.UUID
+    ownership_scope_id: uuid.UUID
     timeline_id: uuid.UUID
     world_time_id: uuid.UUID
     ruleset_id: uuid.UUID
@@ -324,6 +325,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
 
     return _Fixture(
         world_id=world_id,
+        ownership_scope_id=ownership_scope_id,
         timeline_id=timeline_id,
         world_time_id=world_time_id,
         ruleset_id=ruleset_id,
@@ -345,7 +347,13 @@ def _cleanup_fixture(engine: Engine, fixture: _Fixture) -> None:
     pattern tests/database/test_ai_npc.py's own committed-fixture cleanup
     already established. The throwaway ruleset (and its ruleset_version/
     species/world_rulesets rows) is not world_id-rooted, so it is deleted
-    explicitly."""
+    explicitly. `core.worlds.ownership_scope_id` is `ON DELETE RESTRICT`
+    (ADR 0014) — deleting the world never cascades to the disposable
+    `security.ownership_scopes` row `_create_fixture` created for it, so
+    that row is deleted explicitly too, after the world (which references
+    it) is gone. It has zero memberships by construction (`_create_fixture`
+    never adds one — this fixture has no `security.users` row to own it),
+    so no `security.ownership_scope_memberships` row needs cleanup first."""
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL session_replication_role = replica"))
         connection.execute(
@@ -353,6 +361,10 @@ def _cleanup_fixture(engine: Engine, fixture: _Fixture) -> None:
         )
         connection.execute(
             text("DELETE FROM core.worlds WHERE world_id = :w"), {"w": fixture.world_id}
+        )
+        connection.execute(
+            text("DELETE FROM security.ownership_scopes WHERE ownership_scope_id = :s"),
+            {"s": fixture.ownership_scope_id},
         )
         connection.execute(
             text("DELETE FROM rules.rulesets WHERE ruleset_id = :r"), {"r": fixture.ruleset_id}
