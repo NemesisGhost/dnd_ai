@@ -986,9 +986,16 @@ class LastActivePlatformAdministratorError(SafeMessageError):
 
     safe_status_code = 409
     safe_error_code = "last_active_platform_administrator"
+    # D-10 correction: the previous wording ("Activate another
+    # administrator account first") named a remedy no application path can
+    # perform — no command anywhere promotes an existing account to
+    # platform administrator over HTTP (see scripts/
+    # grant_platform_administrator.py, the only path that can). Restated to
+    # describe the invariant without implying an in-app fix.
     safe_message = (
         "This is the platform's only active administrator account and cannot be disabled. "
-        "Activate another administrator account first."
+        "Promoting a second administrator requires direct database access — see the "
+        "platform administrator recovery runbook."
     )
 
 
@@ -1018,6 +1025,92 @@ def _count_active_platform_administrators(connection: Connection) -> int:
     ).scalar()
     assert isinstance(value, int)
     return value
+
+
+class PlatformAccountNotFoundError(SafeMessageError):
+    """Raised by `grant_platform_administrator` when `login_name` does not
+    resolve to a currently-active local account. Disclosing here is safe:
+    the only caller is `scripts/grant_platform_administrator.py`, run by an
+    operator who already has direct database access — the same "never
+    reachable over HTTP" posture `AlreadyBootstrappedError`'s own docstring
+    establishes for the identical reasoning."""
+
+    safe_status_code = 404
+    safe_error_code = "account_not_found"
+    safe_message = "No active local account was found for that login name."
+
+
+@dataclass(frozen=True)
+class GrantPlatformAdministratorResult:
+    user_id: uuid.UUID
+    login_name: str
+    already_administrator: bool
+
+
+def grant_platform_administrator(
+    engine: Engine, *, login_name: str
+) -> GrantPlatformAdministratorResult:
+    """Out-of-band promotion (D-10) — the only path in this codebase that
+    ever sets `is_platform_administrator = true` on an *existing* account
+    (`bootstrap_initial_admin` above is the only other writer, and only for
+    the platform's very first account ever). Deliberately **no API route
+    and no portal control call this** — see `scripts/
+    grant_platform_administrator.py`'s own docstring for the full "trusted
+    infrastructure, never over HTTP" reasoning, the same boundary
+    `security.timeline_bootstrap_grants` already establishes for its own
+    analogous entitlement.
+
+    Resolves `login_name` by normalized `security.external_identities.
+    subject` (issuer `LOCAL_AUTH_ISSUER`, `revoked_at IS NULL`) against a
+    currently-`active` account — never a raw `user_id`, which is easy to
+    mistype into the wrong account at a shell prompt. Acquires `_PLATFORM_
+    ADMINISTRATOR_LIFECYCLE_LOCK_KEY`'s advisory lock for the whole
+    transaction, the identical key `_set_local_account_lifecycle_status_
+    impl`'s disable path already serializes on, so this can never race a
+    concurrent disable that is mid-way through counting active
+    administrators. Idempotent: promoting an already-administrator account
+    is a documented no-op (`already_administrator=True`), not an error."""
+    with engine.begin() as connection:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": _PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY},
+        )
+        normalized_login_name = normalize_login_name(login_name)
+        row = (
+            connection.execute(
+                text("""
+                    SELECT u.user_id, u.is_platform_administrator
+                    FROM security.users u
+                    JOIN security.external_identities ei ON ei.user_id = u.user_id
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE ei.issuer = :issuer AND ei.subject = :subject
+                      AND ei.revoked_at IS NULL AND ls.code = 'active'
+                    FOR UPDATE OF u
+                """),
+                {"issuer": LOCAL_AUTH_ISSUER, "subject": normalized_login_name},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise PlatformAccountNotFoundError(
+                f"login name {normalized_login_name!r} does not resolve to an active local account"
+            )
+        user_id = row["user_id"]
+        already_administrator = bool(row["is_platform_administrator"])
+        if not already_administrator:
+            connection.execute(
+                text(
+                    "UPDATE security.users SET is_platform_administrator = true "
+                    "WHERE user_id = :user_id"
+                ),
+                {"user_id": user_id},
+            )
+        return GrantPlatformAdministratorResult(
+            user_id=user_id,
+            login_name=normalized_login_name,
+            already_administrator=already_administrator,
+        )
 
 
 def _set_local_account_lifecycle_status_impl(
@@ -1297,7 +1390,9 @@ __all__ = [
     "LoginNameAlreadyTakenError",
     "LoginNameFormatError",
     "NotPlatformAdministratorError",
+    "GrantPlatformAdministratorResult",
     "PasswordResetNotAcceptableError",
+    "PlatformAccountNotFoundError",
     "RegisterInvitedLocalAccountResult",
     "ResetPasswordResult",
     "_activate_local_account_impl",
@@ -1314,6 +1409,7 @@ __all__ = [
     "change_password",
     "create_browser_session",
     "create_local_account",
+    "grant_platform_administrator",
     "issue_password_reset_token",
     "list_browser_sessions",
     "normalize_login_name",
