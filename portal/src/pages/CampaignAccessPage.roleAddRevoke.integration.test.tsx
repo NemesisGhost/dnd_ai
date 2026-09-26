@@ -130,6 +130,12 @@ describe("CampaignAccessPage add-role success announcement", () => {
                 const url = requestUrl(input)
                 const method = init?.method ?? "GET"
 
+                if (method === "GET" && url.includes("/audit-history")) {
+                    return Promise.resolve(
+                        jsonResponse({ items: [], next_cursor: null }),
+                    )
+                }
+
                 if (method === "GET" && url.includes("/access-overview")) {
                     overviewCallCount += 1
                     if (overviewCallCount === 2) {
@@ -157,7 +163,7 @@ describe("CampaignAccessPage add-role success announcement", () => {
         )
         vi.stubGlobal("fetch", fetchMock)
 
-        renderAtCampaign()
+        const { container } = renderAtCampaign()
 
         expect(
             await screen.findByRole("heading", { name: "Access" }),
@@ -174,7 +180,7 @@ describe("CampaignAccessPage add-role success announcement", () => {
             ).toBeInTheDocument()
         })
 
-        expect(screen.getByRole("status")).toHaveTextContent(
+        expect(persistentAnnouncement(container)).toHaveTextContent(
             "Role added.",
         )
 
@@ -187,7 +193,7 @@ describe("CampaignAccessPage add-role success announcement", () => {
                 screen.getByRole("heading", { name: "Access" }),
             ).toBeInTheDocument()
         })
-        expect(screen.getByRole("status")).toHaveTextContent(
+        expect(persistentAnnouncement(container)).toHaveTextContent(
             "Role added.",
         )
     })
@@ -205,6 +211,12 @@ describe("CampaignAccessPage revoke-role success announcement", () => {
             (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
                 const url = requestUrl(input)
                 const method = init?.method ?? "GET"
+
+                if (method === "GET" && url.includes("/audit-history")) {
+                    return Promise.resolve(
+                        jsonResponse({ items: [], next_cursor: null }),
+                    )
+                }
 
                 if (method === "GET" && url.includes("/access-overview")) {
                     overviewCallCount += 1
@@ -235,7 +247,7 @@ describe("CampaignAccessPage revoke-role success announcement", () => {
         )
         vi.stubGlobal("fetch", fetchMock)
 
-        renderAtCampaign()
+        const { container } = renderAtCampaign()
 
         expect(
             await screen.findByRole("heading", { name: "Access" }),
@@ -254,7 +266,7 @@ describe("CampaignAccessPage revoke-role success announcement", () => {
             ).toBeInTheDocument()
         })
 
-        expect(screen.getByRole("status")).toHaveTextContent(
+        expect(persistentAnnouncement(container)).toHaveTextContent(
             "Role removed.",
         )
 
@@ -267,7 +279,7 @@ describe("CampaignAccessPage revoke-role success announcement", () => {
                 screen.getByRole("heading", { name: "Access" }),
             ).toBeInTheDocument()
         })
-        expect(screen.getByRole("status")).toHaveTextContent(
+        expect(persistentAnnouncement(container)).toHaveTextContent(
             "Role removed.",
         )
     })
@@ -294,6 +306,12 @@ describe("CampaignAccessPage cross-operation announcement lifecycle", () => {
             (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
                 const url = requestUrl(input)
                 const method = init?.method ?? "GET"
+
+                if (method === "GET" && url.includes("/audit-history")) {
+                    return Promise.resolve(
+                        jsonResponse({ items: [], next_cursor: null }),
+                    )
+                }
 
                 if (method === "GET" && url.includes("/access-overview")) {
                     return Promise.resolve(jsonResponse(baseOverview()))

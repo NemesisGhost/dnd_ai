@@ -129,6 +129,12 @@ function makeFetchMock() {
                 typeof input === "string" ? input : input.toString()
             const method = init?.method ?? "GET"
 
+            if (method === "GET" && url.includes("/audit-history")) {
+                return Promise.resolve(
+                    jsonResponse({ items: [], next_cursor: null }),
+                )
+            }
+
             if (method === "GET" && url.includes("/access-overview")) {
                 const campaignId = campaignIdFromOverviewUrl(url)
 
@@ -218,14 +224,14 @@ describe("CampaignAccessPage role-change success announcement", () => {
                 await screen.findByRole("heading", { name: "Access" }),
             ).toBeInTheDocument()
             expect(
-                screen.getByText("Aria the GM"),
+                screen.getAllByText("Aria the GM")[0],
             ).toBeInTheDocument()
 
             // Open the editor and choose a different role.
             fireEvent.click(
                 screen.getByRole("button", { name: "Change role" }),
             )
-            fireEvent.change(screen.getByRole("combobox"), {
+            fireEvent.change(screen.getByLabelText(/Change .*role in/i), {
                 target: { value: CURATOR_ROLE_ID },
             })
 
@@ -240,7 +246,7 @@ describe("CampaignAccessPage role-change success announcement", () => {
                 ).toBeInTheDocument()
             })
             expect(
-                screen.queryByRole("combobox"),
+                screen.queryByLabelText(/Change .*role in/i),
             ).not.toBeInTheDocument()
             expect(
                 screen.queryByRole("button", { name: "Save" }),
@@ -265,7 +271,7 @@ describe("CampaignAccessPage role-change success announcement", () => {
             // paragraph) has just been unmounted, and while the overview
             // refresh is still pending.
             expect(
-                screen.getByRole("status"),
+                document.querySelector(".campaign-access-page__announcement"),
             ).toHaveTextContent("Role updated.")
 
             // 7. The existing session-bootstrap reload behavior is
@@ -284,13 +290,13 @@ describe("CampaignAccessPage role-change success announcement", () => {
                 ).toBeInTheDocument()
             })
             expect(
-                screen.getByText("Aria the GM"),
+                screen.getAllByText("Aria the GM")[0],
             ).toBeInTheDocument()
 
             // The announcement is still present after the refresh
             // completes, for the same campaign.
             expect(
-                screen.getByRole("status"),
+                document.querySelector(".campaign-access-page__announcement"),
             ).toHaveTextContent("Role updated.")
 
             // 5. Navigating to a different campaign must never display or
@@ -301,11 +307,11 @@ describe("CampaignAccessPage role-change success announcement", () => {
 
             await waitFor(() => {
                 expect(
-                    screen.getByText("Bram of Campaign B"),
+                    screen.getAllByText("Bram of Campaign B")[0],
                 ).toBeInTheDocument()
             })
             expect(
-                screen.getByRole("status"),
+                document.querySelector(".campaign-access-page__announcement"),
             ).toHaveTextContent("")
             expect(
                 screen.queryByText("Role updated."),

@@ -119,6 +119,29 @@ describe("AuditHistory", () => {
         )
     })
 
+    it("offers a category label for every category the API can return, including access groups", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(jsonResponse(pageWith([]))),
+        )
+
+        render(<AuditHistory campaignId="campaign-a" />)
+
+        const categorySelect = screen.getByLabelText(
+            "Category",
+        ) as HTMLSelectElement
+        expect(
+            within(categorySelect).getByRole("option", {
+                name: "Access group",
+            }),
+        ).toBeInTheDocument()
+        expect(
+            within(categorySelect).getByRole("option", {
+                name: "Access group membership",
+            }),
+        ).toBeInTheDocument()
+    })
+
     it("has no page-level h1 (safe to embed under an existing page heading)", async () => {
         vi.stubGlobal(
             "fetch",
@@ -298,6 +321,97 @@ describe("AuditHistory", () => {
 
         const secondCallUrl = fetchMock.mock.calls[1]?.[0] as string
         expect(secondCallUrl).toContain("category=role")
+    })
+
+    it("does not offer the actor filter when no actors are supplied", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(jsonResponse(pageWith([]))),
+        )
+
+        render(<AuditHistory campaignId="campaign-a" />)
+
+        expect(screen.queryByLabelText("Actor")).not.toBeInTheDocument()
+    })
+
+    it("re-requests with the selected actor when filters are applied via the form", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(jsonResponse(pageWith([])))
+        vi.stubGlobal("fetch", fetchMock)
+
+        render(
+            <AuditHistory
+                campaignId="campaign-a"
+                actors={[
+                    { user_id: "user-a", display_name: "GM Alex" },
+                    { user_id: "user-b", display_name: "Player Sam" },
+                ]}
+            />,
+        )
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(1)
+        })
+
+        const actorSelect = screen.getByLabelText(
+            "Actor",
+        ) as HTMLSelectElement
+        expect(
+            within(actorSelect).getByRole("option", { name: "GM Alex" }),
+        ).toBeInTheDocument()
+        expect(
+            within(actorSelect).getByRole("option", { name: "Player Sam" }),
+        ).toBeInTheDocument()
+
+        fireEvent.change(actorSelect, {
+            target: { value: "user-b" },
+        })
+
+        fireEvent.click(
+            screen.getByRole("button", {
+                name: /apply filters/i,
+            }),
+        )
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2)
+        })
+
+        const secondCallUrl = fetchMock.mock.calls[1]?.[0] as string
+        expect(secondCallUrl).toContain("actor_user_id=user-b")
+    })
+
+    it("resets the cursor when the actor filter changes", async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(jsonResponse(pageWith([roleChangeItem], "cursor-1")))
+        vi.stubGlobal("fetch", fetchMock)
+
+        render(
+            <AuditHistory
+                campaignId="campaign-a"
+                actors={[{ user_id: "user-a", display_name: "GM Alex" }]}
+            />,
+        )
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(1)
+        })
+
+        fireEvent.change(screen.getByLabelText("Actor"), {
+            target: { value: "user-a" },
+        })
+        fireEvent.click(
+            screen.getByRole("button", { name: /apply filters/i }),
+        )
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(2)
+        })
+
+        const secondCallUrl = fetchMock.mock.calls[1]?.[0] as string
+        expect(secondCallUrl).not.toContain("cursor=")
     })
 
     it("clearing filters resets the request to no filters", async () => {

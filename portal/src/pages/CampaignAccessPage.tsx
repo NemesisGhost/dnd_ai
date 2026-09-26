@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useParams } from "react-router"
 import { AccessOverviewBoundary } from "../components/AccessOverviewBoundary"
+import { AuditHistory } from "../components/AuditHistory"
 import { AccessPage } from "./AccessPage"
 import PlaceholderPage from "./PlaceholderPage"
 
@@ -122,16 +123,25 @@ export function CampaignAccessPage() {
 
             <AccessOverviewBoundary campaignId={activeCampaignId}>
                 {(overview, retry) => (
-                    <AccessPage
-                        campaignId={activeCampaignId}
-                        overview={overview}
-                        onChanged={(message) =>
-                            handleRoleChanged(retry, message)
-                        }
-                        onMutationStart={handleMutationStart}
-                        issuedInvitationToken={activeIssuedInvitationToken}
-                        onIssuedInvitationTokenChange={handleIssuedInvitationTokenChange}
-                    />
+                    <>
+                        <AccessPage
+                            campaignId={activeCampaignId}
+                            overview={overview}
+                            onChanged={(message) =>
+                                handleRoleChanged(retry, message)
+                            }
+                            onMutationStart={handleMutationStart}
+                            issuedInvitationToken={activeIssuedInvitationToken}
+                            onIssuedInvitationTokenChange={handleIssuedInvitationTokenChange}
+                        />
+                        <AuditHistory
+                            campaignId={activeCampaignId}
+                            actors={overview.members.map((member) => ({
+                                user_id: member.user_id,
+                                display_name: member.display_name,
+                            }))}
+                        />
+                    </>
                 )}
             </AccessOverviewBoundary>
         </>

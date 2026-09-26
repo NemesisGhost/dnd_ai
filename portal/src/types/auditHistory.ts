@@ -11,6 +11,8 @@ export type AuditHistoryCategory =
     | "resource_grant"
     | "invitation"
     | "campaign"
+    | "access_group"
+    | "access_group_membership"
 
 export const AUDIT_HISTORY_CATEGORIES: AuditHistoryCategory[] = [
     "membership",
@@ -19,6 +21,8 @@ export const AUDIT_HISTORY_CATEGORIES: AuditHistoryCategory[] = [
     "resource_grant",
     "invitation",
     "campaign",
+    "access_group",
+    "access_group_membership",
 ]
 
 export type AuditActorType = "user" | "service" | "unknown"
