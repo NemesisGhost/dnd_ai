@@ -360,5 +360,10 @@ The Phase 13A implementation was intentionally divided into small checkpoints:
 9. Add focused tests for meaningful route and navigation behavior.
 10. Document the development workflow and validate the completed foundation.
 
-The production UI is owner-authored. AI assistance may be used for teaching,
-explanation, review, and debugging.
+Portal authorship changes at increment 13E (`docs/PLAN.md` §2.9). Increments
+13A through 13D are owner-authored, with AI assistance limited to teaching,
+explanation, review, and debugging. From 13E onward the portal is Claude
+Code-authored by owner decision, and the owner manually validates every
+increment against a real local PostgreSQL 18 server before it is closed out.
+Backend authorization remains authoritative in both cases: portal code may
+hide or disable a control for presentation only.

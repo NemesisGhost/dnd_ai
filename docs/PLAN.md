@@ -167,9 +167,16 @@ The React portal never receives or stores passwords after login or durable beare
 
 Foundry uses a separate hybrid pairing model: non-secret account-binding metadata may follow a Foundry user through a user-scoped setting, but every browser/device receives its own long-lived client-scoped credential and holds short-lived API access tokens in memory only. Foundry credentials are issued and validated by D&D AI, independently of portal authentication.
 
-### 2.9 Phase 13 UI code is owner-authored
+### 2.9 Phase 13 UI authorship
 
-The project owner will write the production React UI rather than delegate its implementation to a generative-AI coding agent. Generative AI may be used as a tutor, explainer, reviewer, or debugging partner when requested, but not as the primary author of screens or bulk UI code. Phase 13 is therefore divided into small, demonstrable increments that introduce React and TypeScript concepts from a beginner perspective and leave the owner able to explain and maintain each change.
+**Increments 13A through 13D were owner-authored.** The project owner wrote the production React UI rather than delegating its implementation to a generative-AI coding agent, using generative AI only as a tutor, explainer, reviewer, or debugging partner. Phase 13 was therefore divided into small, demonstrable increments that introduce React and TypeScript concepts from a beginner perspective and leave the owner able to explain and maintain each change.
+
+**Increment 13E onward is Claude Code-authored, by owner decision, to shorten delivery time.** The small-increment structure, the runnable-checkpoint discipline, and the prohibitions on a large generated scaffold and an unrestricted content-management platform all still apply — the change is who writes the code, not how the work is bounded. Two conditions hold for every AI-authored increment:
+
+- **The owner manually validates each increment before it is closed out.** Automated suites are necessary but never sufficient; an increment is not complete until the owner has exercised it by hand against a real local PostgreSQL 18 server and recorded the result in that increment's verification evidence.
+- **Backend authorization remains the only authorization.** AI-authored portal code may hide or disable a control for presentation, but every capability decision stays server-side and server-authoritative (§5 of `CLAUDE.md`), and each hidden control needs a test proving the API still refuses an unauthorized caller.
+
+Earlier increments are not retroactively reattributed: 13A–13D remain owner-authored work.
 
 ---
 
@@ -1400,7 +1407,7 @@ The MVP includes:
 - GM tools for canon browsing, preparation, visibility preview, user/account activation, password-reset initiation, campaign invitations, role assignment, user-character relationships, resource grants, Foundry connection/device management, and audit history
 - Phase 15 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
 
-The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience. UI implementation is intentionally owner-authored in small learning increments; automated generation of the portal is outside the Phase 13 workflow.
+The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience. UI implementation proceeds in small, individually runnable increments; authorship changes at 13E (§2.9 — owner-authored through 13D, Claude Code-authored from 13E, with owner manual validation before each closeout). A large generated scaffold or an unrestricted content-management platform remains outside the Phase 13 workflow either way.
 
 ### 23.7 Audience-aware summaries, questions, and feature boundaries
 
@@ -1944,7 +1951,7 @@ Checkpoint update: 13E-B's invitation-management slice is now delivered alongsid
 
 The web portal becomes the primary out-of-session interface over the Phase 10 API. Phase 13 may start before Phases 11 and 12 close, but it must respect both boundaries: begin with UI-only work that avoids Phase 11R's active backend files, and keep Phase 12-dependent surfaces disabled until the corresponding server features are verified and enabled. Before authentication or Foundry-management backend work begins, integrate the latest Phase 11 branch/main changes and resolve overlaps deliberately, especially around `auth.py`, `config.py`, `app.py`, security tables/migrations, and the integration routes.
 
-The project owner writes the portal code, learning React and TypeScript through small checkpoints. GenAI assistance is limited to teaching, explaining, reviewing, and debugging at the owner's direction. Each increment should be runnable and understandable before the next begins; avoid a large generated scaffold or an unrestricted content-management platform.
+Portal authorship changes at 13E — see §2.9. The owner wrote 13A–13D personally, learning React and TypeScript through small checkpoints with GenAI limited to teaching, explaining, reviewing, and debugging. From 13E onward the portal is Claude Code-authored by owner decision, with the owner manually validating every increment before closeout. Either way, each increment must be runnable and reviewable before the next begins; avoid a large generated scaffold or an unrestricted content-management platform.
 
 Implement in this order:
 
@@ -1961,7 +1968,7 @@ Implement in this order:
 
 Deliver:
 
-- a responsive, owner-authored React/TypeScript/Vite portal hosted as static assets and authenticated through FastAPI local login and server-side browser sessions
+- a responsive React/TypeScript/Vite portal hosted as static assets and authenticated through FastAPI local login and server-side browser sessions (owner-authored through 13D, Claude Code-authored from 13E — §2.9)
 - account activation, login, logout, password change/reset, invitation acceptance, campaign selection, and visible campaign/timeline/role/character perspective
 - personalized Home dashboard with recap, current situation, active quests, recent discoveries, relevant NPCs/factions, reminders, and Ask entry point
 - filtered World, Characters, Quests, Sessions, and Knowledge views
