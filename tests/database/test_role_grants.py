@@ -224,6 +224,9 @@ MANAGED_TABLES = [
     ("security", "foundry_pairing_codes"),
     ("security", "foundry_devices"),
     ("security", "foundry_access_tokens"),
+    # Phase 13E-B checkpoint 8a — single-link campaign-invitation onboarding
+    # (migration 107)
+    ("security", "invitation_onboarding_sessions"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

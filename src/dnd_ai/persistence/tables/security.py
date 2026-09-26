@@ -379,6 +379,11 @@ Index(
         & invitation_onboarding_sessions.c.cancelled_at.is_(None)
     ),
 )
+Index(
+    "ix_ios_consumed_by_user_id",
+    invitation_onboarding_sessions.c.consumed_by_user_id,
+    postgresql_where=invitation_onboarding_sessions.c.consumed_by_user_id.is_not(None),
+)
 
 # ---------------------------------------------------------------------------
 # Roles and capabilities (revision 080)
