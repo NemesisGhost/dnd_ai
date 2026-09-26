@@ -138,6 +138,49 @@ def make_ownership_scope(connection: Connection, name: str = "Test Ownership Sco
     return value
 
 
+def make_ownership_scope_membership(
+    connection: Connection,
+    ownership_scope_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    role_code: str = "owner",
+    status_code: str = "active",
+    ended: bool = False,
+) -> uuid.UUID:
+    """A raw `security.ownership_scope_memberships` row — bypasses `dnd_ai.
+    commands.ownership`'s authorization/retention checks entirely, for
+    tests exercising the database-level guards themselves (docs/
+    DATABASE_CONVENTIONS.md §32.3's "testing database enforcement"
+    exception), mirroring `make_campaign_membership`'s identical shape and
+    `+ interval '1 microsecond'` same-frozen-transaction workaround."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.ownership_scope_memberships
+                (ownership_scope_id, user_id, ownership_scope_role_id, membership_status_id,
+                 joined_at, ended_at)
+            VALUES (
+                :scope, :user,
+                (SELECT ownership_scope_role_id FROM security.ownership_scope_roles
+                 WHERE code = :role),
+                (SELECT membership_status_id FROM security.membership_statuses
+                 WHERE code = :status),
+                now(),
+                CASE WHEN :ended THEN now() + interval '1 microsecond' ELSE NULL END
+            )
+            RETURNING ownership_scope_membership_id
+        """),
+        {
+            "scope": ownership_scope_id,
+            "user": user_id,
+            "role": role_code,
+            "status": status_code,
+            "ended": ended,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_world(
     connection: Connection,
     slug: str = "test-world",

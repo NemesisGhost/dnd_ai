@@ -638,20 +638,43 @@ def is_world_administrator(
     silently treated as the owner of every world). A caller that also needs
     campaign-scoped capabilities resolves them separately via
     `resolve_access_context` — the two checks are never combined into one
-    query, so neither can accidentally satisfy the other."""
+    query, so neither can accidentally satisfy the other.
+
+    Requires, in addition to an open (`ended_at IS NULL`) membership row:
+    the scope's own `lifecycle_status_id` to be the active `core.
+    lifecycle_statuses` row (an archived ownership scope authorizes
+    nothing, mirroring `security.campaign_has_access_manager()`'s
+    identical active-only gate for campaigns), and both the membership's
+    `membership_statuses` row and its `ownership_scope_roles` row to have
+    `is_active` set (an inactive lookup row does not authorize even when
+    its `code` still reads `'active'`/matches — the same rule `security.
+    campaign_has_access_manager()` applies to `membership_statuses.
+    is_active`/`capabilities.is_active`). Every one of these is required
+    explicitly rather than silently assumed, so a lookup row deactivated
+    for unrelated reasons cannot leave a stale membership authorizing
+    world administration."""
     value = connection.execute(
         text("""
             SELECT EXISTS (
                 SELECT 1
                 FROM core.worlds w
+                JOIN security.ownership_scopes os
+                    ON os.ownership_scope_id = w.ownership_scope_id
+                JOIN core.lifecycle_statuses scope_ls
+                    ON scope_ls.lifecycle_status_id = os.lifecycle_status_id
                 JOIN security.ownership_scope_memberships osm
                     ON osm.ownership_scope_id = w.ownership_scope_id
                 JOIN security.membership_statuses ms
                     ON ms.membership_status_id = osm.membership_status_id
+                JOIN security.ownership_scope_roles r
+                    ON r.ownership_scope_role_id = osm.ownership_scope_role_id
                 WHERE w.world_id = :world_id
                   AND osm.user_id = :user_id
                   AND osm.ended_at IS NULL
+                  AND scope_ls.code = 'active'
                   AND ms.code = 'active'
+                  AND ms.is_active
+                  AND r.is_active
             )
         """),
         {"world_id": world_id, "user_id": user_id},

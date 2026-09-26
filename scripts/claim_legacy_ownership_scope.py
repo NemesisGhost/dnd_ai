@@ -11,11 +11,18 @@ naturally, whoever `scripts/bootstrap_admin.py` created as the platform's
 first administrator, though this script does not require that; any
 existing `security.users` row may be named.
 
-A no-op (refuses) if the legacy scope already has an active `owner` —
-running this twice, or on a database that has none of the migration's
-default-named legacy scope (e.g. a fresh install where every world was
-created directly against its own scope), fails safely rather than adding a
-second owner silently or guessing which scope was meant.
+Delegates the actual claim to `dnd_ai.commands.ownership.
+claim_unclaimed_ownership_scope`, which refuses unconditionally once the
+target scope has even one membership row of any status (active, revoked,
+or otherwise) — running this twice, or on a database that has none of the
+migration's default-named legacy scope (e.g. a fresh install where every
+world was created directly against its own scope), fails safely rather
+than adding a second owner silently or guessing which scope was meant.
+That command is a narrow, unauthorized bootstrap path used *only* for a
+scope nobody has ever administered — it is not available for, and cannot
+be reused against, a scope that already has an owner (ordinary membership
+changes go through `add_ownership_scope_member`/`remove_ownership_scope_
+member`, which require an already-authorized owner to call).
 
 Usage:
   uv run python scripts/claim_legacy_ownership_scope.py --user-id <uuid>
@@ -34,10 +41,12 @@ import uuid
 
 from sqlalchemy import create_engine, text
 
-from dnd_ai.commands.ownership import add_ownership_scope_member
+from dnd_ai.commands.ownership import (
+    AlreadyClaimedOwnershipScopeError,
+    claim_unclaimed_ownership_scope,
+)
 
 _LEGACY_OWNERSHIP_SCOPE_NAME = "Legacy Self-Hosted Worlds (unclaimed)"
-_OWNER_ROLE_CODE = "owner"
 
 
 def _database_url() -> str:
@@ -71,33 +80,19 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
 
-            active_owner_count = connection.execute(
-                text("""
-                    SELECT count(*)
-                    FROM security.ownership_scope_memberships osm
-                    JOIN security.ownership_scope_roles r
-                        ON r.ownership_scope_role_id = osm.ownership_scope_role_id
-                    WHERE osm.ownership_scope_id = :scope
-                      AND osm.ended_at IS NULL
-                      AND r.code = :owner_role
-                """),
-                {"scope": ownership_scope_id, "owner_role": _OWNER_ROLE_CODE},
-            ).scalar()
-            if active_owner_count:
+            try:
+                result = claim_unclaimed_ownership_scope(
+                    connection,
+                    ownership_scope_id=ownership_scope_id,
+                    user_id=args.user_id,
+                )
+            except AlreadyClaimedOwnershipScopeError as exc:
                 print(
-                    f"Ownership scope {ownership_scope_id} already has an active owner — "
-                    "refusing to add another via this one-time claim script.",
+                    f"Ownership scope {ownership_scope_id} already has membership history — "
+                    f"refusing to claim it via this one-time bootstrap script ({exc}).",
                     file=sys.stderr,
                 )
                 return 1
-
-            result = add_ownership_scope_member(
-                connection,
-                ownership_scope_id=ownership_scope_id,
-                user_id=args.user_id,
-                role_code=_OWNER_ROLE_CODE,
-                actor_user_id=args.user_id,
-            )
     finally:
         engine.dispose()
 
