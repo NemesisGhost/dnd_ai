@@ -54,6 +54,10 @@ from dnd_ai.domain.passwords import (
 
 from ._shared import lookup_id
 from .foundry_pairing import revoke_all_foundry_connections
+from .invitation_onboarding import (
+    _lock_and_validate_onboarding_session,
+    accept_locked_onboarding_invitation,
+)
 
 _ACTIVATION_TOKEN_TTL = timedelta(hours=48)
 _PASSWORD_RESET_TOKEN_TTL = timedelta(hours=2)
@@ -102,11 +106,26 @@ _LOGIN_NAME_MIN_LENGTH = 3
 _LOGIN_NAME_MAX_LENGTH = 64
 _LOGIN_NAME_ALLOWED_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 
+# D-11: reserved login names, compared after normalize_login_name — applies
+# to every path that creates a login name (invited registration via
+# _register_invited_local_account_impl, administrator-created accounts via
+# _create_local_account_impl, and bootstrap_initial_admin alike), since all
+# three funnel through this one function. Checkpoint 8b's invited
+# self-registration is what first makes login-name choice untrusted input;
+# before that, only a platform administrator ever chose one. Rejected via
+# the existing LoginNameFormatError, so this discloses nothing about
+# whether a name is merely reserved vs. actually taken.
+_RESERVED_LOGIN_NAMES = frozenset(
+    {"admin", "administrator", "root", "system", "gm", "dnd_ai", "support"}
+)
+
 
 def _validate_login_name_format(login_name: str) -> None:
     if not (_LOGIN_NAME_MIN_LENGTH <= len(login_name) <= _LOGIN_NAME_MAX_LENGTH):
         raise LoginNameFormatError()
     if any(ch not in _LOGIN_NAME_ALLOWED_CHARS for ch in login_name):
+        raise LoginNameFormatError()
+    if login_name in _RESERVED_LOGIN_NAMES:
         raise LoginNameFormatError()
 
 
@@ -1182,6 +1201,86 @@ def _admin_revoke_all_browser_sessions_impl(
     return AdminRevokeAllSessionsResult(user_id=target_user_id, revoked_count=result.rowcount)
 
 
+@dataclass(frozen=True)
+class RegisterInvitedLocalAccountResult:
+    user_id: uuid.UUID
+    login_name: str
+    campaign_id: uuid.UUID
+    campaign_membership_id: uuid.UUID
+    campaign_display_name: str
+    session: CreatedBrowserSession
+
+
+def _register_invited_local_account_impl(
+    connection: Connection,
+    *,
+    onboarding_token: str,
+    login_name: str,
+    display_name: str,
+    raw_password: str,
+    created_ip: str | None = None,
+    user_agent: str | None = None,
+) -> RegisterInvitedLocalAccountResult:
+    """The single-link onboarding "no account yet" path
+    (`PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §6.2/§8.2's `POST
+    .../onboarding/register`): composes this module's own account-creation
+    and activation primitives with `dnd_ai.commands.invitation_onboarding`'s
+    session lock/consumption, all in the caller's own request-scoped
+    transaction, so a policy rejection or a duplicate login name rolls
+    everything back together — no orphan `security.users` row, no orphan
+    onboarding consumption (P-5).
+
+    Locks the onboarding session (and, transitively, its invitation) first,
+    before creating anything — `invitation_onboarding_sessions` ->
+    `campaign_invitations` -> `campaign_memberships` -> `users`, this
+    module's own docstring's lock order — so a concurrent revoke or a
+    competing acceptance of the same invitation is observed before this
+    function commits to creating an account for it.
+
+    This POST is itself the explicit, human-initiated action that both
+    creates the account and accepts the invitation (`PHASE13E_REMAINING_
+    IMPLEMENTATION_PLAN.md` §7.1 S-1): a brand-new registrant has no
+    separate "confirm" step to click, because submitting this form already
+    named the campaign it is joining (the caller's own prior `GET
+    .../status` call already returned `campaign_display_name` for the page
+    to display before this submission).
+
+    Reuses `_activate_local_account_impl` on the activation token this
+    function's own `_create_user_with_activation_token` call just minted —
+    the identical "compose the existing single-use-token consumption
+    primitive rather than re-deriving Argon2id hashing, `external_
+    identities` claiming, and the `LoginNameAlreadyTakenError` race check"
+    shape `PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §6.2 documents."""
+    session = _lock_and_validate_onboarding_session(connection, onboarding_token=onboarding_token)
+
+    validate_password_policy(raw_password)
+    issued = _create_user_with_activation_token(
+        connection,
+        login_name=login_name,
+        display_name=display_name,
+        email=None,
+        created_by_user_id=None,
+        is_platform_administrator_flag=False,
+    )
+    _activate_local_account_impl(
+        connection, raw_activation_token=issued.raw_token, raw_password=raw_password
+    )
+    accept_result = accept_locked_onboarding_invitation(
+        connection, session=session, accepting_user_id=issued.user_id
+    )
+    browser_session = create_browser_session(
+        connection, user_id=issued.user_id, created_ip=created_ip, user_agent=user_agent
+    )
+    return RegisterInvitedLocalAccountResult(
+        user_id=issued.user_id,
+        login_name=issued.login_name,
+        campaign_id=accept_result.campaign_id,
+        campaign_membership_id=accept_result.campaign_membership_id,
+        campaign_display_name=session.campaign_display_name,
+        session=browser_session,
+    )
+
+
 __all__ = [
     "AccountLifecycleResult",
     "ActivateLocalAccountResult",
@@ -1199,6 +1298,7 @@ __all__ = [
     "LoginNameFormatError",
     "NotPlatformAdministratorError",
     "PasswordResetNotAcceptableError",
+    "RegisterInvitedLocalAccountResult",
     "ResetPasswordResult",
     "_activate_local_account_impl",
     "_admin_revoke_all_browser_sessions_impl",
@@ -1206,6 +1306,7 @@ __all__ = [
     "_disable_local_account_impl",
     "_issue_password_reset_token_impl",
     "_reactivate_local_account_impl",
+    "_register_invited_local_account_impl",
     "_reset_password_with_token_impl",
     "activate_local_account",
     "authenticate_local_user",
