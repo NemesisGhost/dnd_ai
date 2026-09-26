@@ -23,6 +23,8 @@ import { AdminAccountsPage } from "./pages/AdminAccountsPage"
 import { AdminAccountsNavLink } from "./components/AdminAccountsNavLink"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
+import { AccountPage } from "./pages/AccountPage"
+import { AccountNavLink } from "./components/AccountNavLink"
 
 function App() {
   return (
@@ -35,6 +37,7 @@ function App() {
         <p className="app-header__title">
           D&amp;D AI Portal
         </p>
+        <AccountNavLink />
         <AdminAccountsNavLink />
         <ThemeSelector />
         <LogoutButton />
@@ -91,6 +94,15 @@ function App() {
               {(bootstrap) => (
                 <AdminAccountsPage bootstrap={bootstrap} />
               )}
+            </AuthenticatedSessionBoundary>
+          }
+        />
+
+        <Route
+          path="/account"
+          element={
+            <AuthenticatedSessionBoundary>
+              {() => <AccountPage />}
             </AuthenticatedSessionBoundary>
           }
         />
