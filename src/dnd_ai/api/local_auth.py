@@ -69,9 +69,9 @@ owner. See `login_endpoint`'s own docstring for the exact flow.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
@@ -95,6 +95,7 @@ from dnd_ai.commands.local_auth import (
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
+from dnd_ai.queries.accounts import ACCOUNT_LIST_KEYSET, list_platform_accounts
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from .audit import record_change_log
@@ -104,6 +105,7 @@ from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
 from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
+from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
 
 router = APIRouter(tags=["local_auth"])
 
@@ -525,6 +527,7 @@ class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
+    is_platform_administrator: bool
     selected_campaign_id: uuid.UUID | None
     campaigns: list[CampaignBootstrapResponse]
     features: SessionFeaturesResponse
@@ -572,6 +575,7 @@ def session_bootstrap_endpoint(
         user=SessionUserResponse(user_id=bootstrap.user_id, display_name=bootstrap.display_name),
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
+        is_platform_administrator=bootstrap.is_platform_administrator,
         selected_campaign_id=bootstrap.selected_campaign_id,
         campaigns=[
             CampaignBootstrapResponse(
@@ -702,6 +706,85 @@ def revoke_session_endpoint(
         event_id=None,
     )
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Platform-account directory (Phase 13E checkpoint 9; D-2)
+# ---------------------------------------------------------------------------
+
+
+class PlatformAccountResponse(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    login_name: str | None
+    lifecycle_status_code: str
+    is_platform_administrator: bool
+    has_local_credential: bool
+    has_outstanding_activation: bool
+    last_login_at: str | None
+    active_session_count: int
+
+
+class PlatformAccountListResponse(BaseModel):
+    items: list[PlatformAccountResponse]
+    next_cursor: str | None
+
+
+@router.get("/admin/accounts", response_model=PlatformAccountListResponse, status_code=200)
+def list_platform_accounts_endpoint(
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
+    connection: Annotated[Connection, Depends(get_connection)],
+    q: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query()] = None,
+) -> PlatformAccountListResponse:
+    """`list_platform_accounts` itself checks `admin_user_id` is a platform
+    administrator (`NotPlatformAdministratorError`, a `DomainAuthorizationError`
+    — fixed non-disclosing 404) inside the same transaction — see that
+    query's own docstring for why the check lives there rather than a
+    duplicate API-layer dependency. A campaign owner holding `access.manage`
+    gets the identical response; this directory grants nothing on its own
+    (D-2)."""
+    keyset = decode_typed_cursor(cursor, keyset=ACCOUNT_LIST_KEYSET, fields=("str", "uuid"))
+    after_name = cast(str, keyset[0]) if keyset is not None else None
+    after_user_id = cast(uuid.UUID, keyset[1]) if keyset is not None else None
+
+    accounts = list_platform_accounts(
+        connection,
+        requesting_user_id=admin_user_id,
+        query=q,
+        status_code=status,
+        limit=limit,
+        after_name=after_name,
+        after_user_id=after_user_id,
+    )
+
+    page = build_page(
+        accounts,
+        limit=limit,
+        keyset=ACCOUNT_LIST_KEYSET,
+        cursor_key=lambda account: [account.display_name.lower(), account.user_id],
+    )
+    return PlatformAccountListResponse(
+        items=[
+            PlatformAccountResponse(
+                user_id=account.user_id,
+                display_name=account.display_name,
+                login_name=account.login_name,
+                lifecycle_status_code=account.lifecycle_status_code,
+                is_platform_administrator=account.is_platform_administrator,
+                has_local_credential=account.has_local_credential,
+                has_outstanding_activation=account.has_outstanding_activation,
+                last_login_at=account.last_login_at.isoformat()
+                if account.last_login_at is not None
+                else None,
+                active_session_count=account.active_session_count,
+            )
+            for account in page.items
+        ],
+        next_cursor=page.next_cursor,
+    )
 
 
 # ---------------------------------------------------------------------------
