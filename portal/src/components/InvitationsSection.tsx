@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react"
 import { useCampaignInvitations } from "../hooks/useCampaignInvitations"
 import { useCreateCampaignInvitation } from "../hooks/useCreateCampaignInvitation"
 import { useRevokeCampaignInvitation } from "../hooks/useRevokeCampaignInvitation"
+import { buildInvitationOnboardingLink } from "../utils/invitationLink"
 import type { PendingCampaignInvitation } from "../types/campaignInvitations"
 
 interface InvitationsSectionProps {
@@ -176,9 +177,11 @@ export function InvitationsSection({
     const emailInputId = useId()
     const createStatusId = useId()
     const copyStatusId = useId()
+    const copyLinkStatusId = useId()
     const { state, retry } = useCampaignInvitations(campaignId)
     const [invitedEmail, setInvitedEmail] = useState("")
     const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">("idle")
+    const [copyLinkStatus, setCopyLinkStatus] = useState<"idle" | "success" | "error">("idle")
 
     const { status: createStatus, submit, reset } = useCreateCampaignInvitation(
         campaignId,
@@ -190,6 +193,7 @@ export function InvitationsSection({
                 onIssuedTokenChange(null)
             }
             setCopyStatus("idle")
+            setCopyLinkStatus("idle")
             retry()
         },
     )
@@ -205,6 +209,18 @@ export function InvitationsSection({
             setCopyStatus("success")
         } catch {
             setCopyStatus("error")
+        }
+    }
+
+    async function handleCopyLink(): Promise<void> {
+        if (issuedToken === null) {
+            return
+        }
+        try {
+            await navigator.clipboard.writeText(buildInvitationOnboardingLink(issuedToken))
+            setCopyLinkStatus("success")
+        } catch {
+            setCopyLinkStatus("error")
         }
     }
 
@@ -227,6 +243,7 @@ export function InvitationsSection({
                     }
                     onIssuedTokenChange(null)
                     setCopyStatus("idle")
+                    setCopyLinkStatus("idle")
                     onMutationStart()
                     submit(invitedEmail.trim() === "" ? null : invitedEmail.trim())
                 }}
@@ -287,6 +304,7 @@ export function InvitationsSection({
                             onClick={() => {
                                 onIssuedTokenChange(null)
                                 setCopyStatus("idle")
+                                setCopyLinkStatus("idle")
                             }}
                         >
                             Dismiss token
@@ -298,6 +316,36 @@ export function InvitationsSection({
                             : copyStatus === "success"
                               ? "Token copied."
                               : "The token could not be copied. Copy it manually."}
+                    </p>
+
+                    <h3 id="issued-link-heading">Or share a single sign-in link</h3>
+                    <p>
+                        Anyone who opens this link can sign in or create an account and join the
+                        campaign — treat it like a password until it is accepted, revoked, or
+                        expired. Revoke a pending invitation above if it should no longer be usable.
+                    </p>
+                    <input
+                        type="text"
+                        value={buildInvitationOnboardingLink(issuedToken)}
+                        readOnly
+                        aria-label="Invitation link"
+                    />
+                    <div className="access-role-editor__actions">
+                        <button type="button" onClick={() => void handleCopyLink()}>
+                            Copy link
+                        </button>
+                    </div>
+                    <p
+                        id={copyLinkStatusId}
+                        className="access-role-editor__status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        {copyLinkStatus === "idle"
+                            ? ""
+                            : copyLinkStatus === "success"
+                              ? "Link copied."
+                              : "The link could not be copied. Copy it manually."}
                     </p>
                 </section>
             )}

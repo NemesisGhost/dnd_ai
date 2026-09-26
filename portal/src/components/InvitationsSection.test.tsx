@@ -181,6 +181,31 @@ describe("InvitationsSection", () => {
         expect(screen.queryByDisplayValue("raw-token-2")).not.toBeInTheDocument()
     })
 
+    it("shows a shareable single-link built from window.location.origin, and clears it with the token", async () => {
+        const clipboardWriteText = vi.fn().mockResolvedValue(undefined)
+        vi.stubGlobal("navigator", { clipboard: { writeText: clipboardWriteText } })
+
+        renderSection()
+
+        await act(async () => {
+            createSuccessRef.current?.({
+                campaign_invitation_id: "invitation-2",
+                token: "raw-token-2",
+            })
+        })
+
+        const expectedLink = `${window.location.origin}/campaign-invitations/accept#token=raw-token-2`
+        expect(screen.getByDisplayValue(expectedLink)).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole("button", { name: "Copy link" }))
+        await waitFor(() => {
+            expect(clipboardWriteText).toHaveBeenCalledWith(expectedLink)
+        })
+
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss token" }))
+        expect(screen.queryByDisplayValue(expectedLink)).not.toBeInTheDocument()
+    })
+
     it("shows lost-response guidance instead of a fresh success when the token is unavailable on replay", async () => {
         const onChanged = vi.fn()
 
