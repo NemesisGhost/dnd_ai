@@ -1,12 +1,14 @@
 # Campaign audit-history read API (Phase 13E-B audit-history workstream)
 
-Independent foundation for a future Access-page "Audit history" panel.
-Read-only — no new command, no new mutation, no new capability. This
-document records the discovered `audit.change_log` contract and the exact
-endpoint this workstream adds. It does not change, and is not a substitute
-for, [docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which
+Backs the Access page's "Audit history" panel (`AuditHistory.tsx`, embedded
+in `CampaignAccessPage.tsx` — checkpoint 14 wired it in; earlier checkpoints
+built the component fully tested but not yet rendered anywhere). Read-only —
+no new command, no new mutation, no new capability. This document records
+the discovered `audit.change_log` contract and the exact endpoint this
+workstream adds. It does not change, and is not a substitute for,
+[docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which
 remains the authoritative record of the Access-page mutation/read contract
-this endpoint is designed to sit alongside, once a later PR wires it in).
+this endpoint sits alongside).
 
 ## 1. Discovered data model
 

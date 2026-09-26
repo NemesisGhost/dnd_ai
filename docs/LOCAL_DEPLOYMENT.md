@@ -46,6 +46,7 @@ Do not expose Uvicorn or PostgreSQL directly. Route all inbound HTTP/HTTPS throu
 - Rate-limit login attempts and costly AI endpoints at the proxy and/or application boundary without trusting client-supplied identity headers.
 - Terminate HTTPS at the proxy, automate certificate issuance and renewal, and alert on renewal failure.
 - Do not log tokens, passwords, secret content, or unauthorized resource details.
+- The single-link campaign-invitation onboarding flow (Phase 13E) constructs its shareable `/campaign-invitations/accept#token=...` URL from the portal's own already-loaded origin — never from an untrusted forwarded host — so a remote player's generated link resolves correctly only when the portal and API are actually reachable at the same public origin this deployment topology already requires (`https://world.<domain>/` for React, `.../api/*` for FastAPI). No separate configuration key exists for this; it falls out of the same-origin proxy setup above.
 
 ## Operations
 

@@ -103,10 +103,10 @@ States:
 
 - Sign in (local username/password against `POST /auth/login`).
 - Account activation from an administrator-issued invitation link (`POST /auth/activate` — sets the account's first password; no temporary password is ever assigned or displayed).
-- Accept campaign invitation.
+- Accept campaign invitation, either through the manual authenticated-acceptance form or through single-link onboarding (Phase 13E checkpoints 8a-8d): opening a shareable `/campaign-invitations/accept#token=<one-time-token>` link begins a short-lived server-side onboarding session, then offers **sign in** (an existing account) or **create account** (invitation-authorized registration — the only public account-creation path in this codebase) before automatically accepting the invitation. The completion screen names the campaign by its audience-safe display name and explains that a GM may still need to assign a role, character relationship, resource grant, or access-group membership before campaign content becomes available — see `docs/PHASE13E_ACCESS_CONTRACT.md` §3n for the full delivered contract.
 - First-time profile confirmation.
 - No active campaign membership.
-- Expired, revoked, or invalid invitation/activation/reset token.
+- Expired, revoked, invalid, or already-consumed invitation/onboarding/activation/reset token/session — every case collapses to one generic unavailable response, never a distinguishable cause.
 - Password reset (self-initiated request plus administrator-issued reset — `POST /auth/password-reset`), and an account-disabled state distinct from a wrong-credential state (both still return the same non-disclosing sign-in error, per §12).
 
 The portal does not expose campaign names or invitation details until the invitation token is validated. After login, the session-bootstrap response (`GET /auth/session`) is what the application uses to resolve the authenticated user and evaluate campaign membership — never an external identity mapping.
@@ -349,15 +349,12 @@ Authorized GMs can:
 
 ### 6.3 Preview as user
 
-The GM selects:
+**Delivered as a bounded pair (Phase 13E, owner decision D-1), not the full mode this section originally specified.** A full-portal projection of an arbitrary member's perspective over every read screen (Option A — the GM selecting target user, campaign/timeline, role/viewing purpose, character perspective, and effective time, then having the *entire* interface re-issue queries as that user) was not built: it is a materially larger surface than 13E's other checkpoints, and is deferred to whichever future phase actually needs it rather than attempted piecemeal. Phase 13E instead ships two independent pieces that together answer the two concrete questions this mode exists for:
 
-- target user;
-- campaign and timeline;
-- role/viewing purpose;
-- character perspective;
-- effective time.
+- **"What can this person do?"** — the effective-access explanation (§6.4's own entry below; `GET /campaigns/{campaign_id}/members/{campaign_membership_id}/effective-access`): every capability a selected member currently holds, with the role/relationship/grant sources behind each, plus any active `deny`.
+- **"What does this specific quest/knowledge item look like to them?"** — a per-resource audience preview (`GET .../preview/quests/{quest_id}` and `.../preview/knowledge/{knowledge_item_id}`): the exact response that member's own request would return for one named quest or knowledge item, in a labelled panel on the Access page. Never a mode flag, never a route change, never anything that could be mistaken for impersonation — closing the panel or changing either selection clears the rendered result immediately.
 
-The portal then issues normal authorized preview queries and clearly marks the entire interface as preview mode. Preview does not impersonate the user for writes. Any attempted mutation exits preview or requires an explicit GM action in GM mode.
+Neither piece ever authorizes a request *as* the selected member, creates a second session, or accepts a mutation. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3q/§3r for the full delivered contract, including why the actor/subject separation this required is enforced at the type level, not merely by convention.
 
 ### 6.4 Access management
 
@@ -596,7 +593,7 @@ Defer until demonstrated need:
 - Search, counts, links, errors, relationships, and Ask responses do not reveal inaccessible resources.
 - Revoking a role, character relationship, group membership, or grant removes access on the next request and invalidates affected cached summaries.
 - A player can request recaps, quest status, world details, character knowledge, and cited rules answers.
-- A GM can request a preparation brief and preview the portal as a selected user/character perspective.
+- A GM can request a preparation brief. **Partially met** — "preview the portal as a selected user/character perspective" is delivered only as the bounded §6.3 pair (an effective-access explanation plus a per-resource quest/knowledge audience preview), never a full-portal projection; see §6.3 and `docs/PHASE13E_ACCESS_CONTRACT.md` §3q/§3r for the delivered scope and D-1's reasoning for not building the rest.
 - A GM can manage memberships, roles, user-character relationships, and resource grants with an audit trail.
 - Authorized import reviewers can resolve matches and approve or reject proposals without bypassing application commands.
 - All critical flows are keyboard-accessible, theme-compatible, and usable at phone, tablet, and desktop widths.
