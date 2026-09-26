@@ -1815,6 +1815,28 @@
   font-size: 0.8rem;
 }
 
+/* Effective-access explanation (checkpoint 13): one disclosure per member
+   row, mirroring .access-member-card's own <details>-style toggle
+   language, but without a persistent border/background — this is a
+   secondary, read-only affordance nested inside an already-expanded
+   member card, not a top-level card of its own. */
+.effective-access-panel {
+  margin: 0.5rem 0;
+}
+
+.effective-access-panel__capabilities,
+.effective-access-panel__sources,
+.effective-access-panel__denials {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.effective-access-panel__denials-heading {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
 /* Role-change control (Phase 13E-B checkpoint 1): one per active role
    assignment, inline with its list item — never a single control per
    member, so a multi-role membership's other assignments stay visually

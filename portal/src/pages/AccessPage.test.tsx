@@ -535,6 +535,7 @@ describe("AccessPage", () => {
             "Add direct resource access",
             "Revoke access",
             "Create access group",
+            "Explain access",
         ])
         buttonNames.forEach((name) => {
             expect(allowedNames.has(name ?? "")).toBe(true)

@@ -9,6 +9,7 @@ import { CharacterRelationshipEditor } from "../components/CharacterRelationship
 import { CreateAccessGroup } from "../components/CreateAccessGroup"
 import { DeactivateAccessGroup } from "../components/DeactivateAccessGroup"
 import { EditAccessGroup } from "../components/EditAccessGroup"
+import { EffectiveAccessPanel } from "../components/EffectiveAccessPanel"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
 import { ReactivateAccessGroup } from "../components/ReactivateAccessGroup"
 import { RemoveAccessGroupMember } from "../components/RemoveAccessGroupMember"
@@ -254,6 +255,12 @@ function MemberAccessCard({
                         onMutationStart={onMutationStart}
                     />
                 </section>
+
+                <EffectiveAccessPanel
+                    campaignId={campaignId}
+                    campaignMembershipId={member.campaign_membership_id}
+                    memberDisplayName={member.display_name}
+                />
 
                 <p className="access-member-card__joined">
                     Joined {formatTimestamp(member.joined_at)}
