@@ -2,38 +2,47 @@
 
 ## Vision
 
-The D&D AI World Platform is a persistent world simulation engine designed to power tabletop role-playing campaigns using AI-assisted world management.
+The D&D AI World Platform is a **self-hostable, rules-aware campaign intelligence and GenAI assistance platform for human Game Masters and their players.**
 
-Rather than treating each campaign as an isolated data set, the platform manages persistent game worlds that can support:
+Its promise: **help human Game Masters prepare and run richer games, while helping players remember the campaign, understand their characters, collaborate, and make informed decisions.**
 
-- Multiple simultaneous campaigns
-- Shared or branching timelines
-- Persistent NPCs, locations, organizations, quests, and history
-- AI-assisted GM workflows
-- AI-controlled or AI-assisted NPC portrayal
-- FoundryVTT and Discord integration
-- Retrieval-Augmented Generation (RAG)
-- Long-term structured memory
-- Future support for additional tabletop rulesets
+The platform is built around a PostgreSQL-backed world model with branching timelines, shared campaign state, durable historical events, and rules-aware entity definitions. The human GM stays authoritative — AI proposes, the database decides.
+
+For the full product vision, GM/player value propositions, and the built-vs-planned breakdown of every capability described below, see **[docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md)**. For delivery status and phase-by-phase scope, see **[docs/PLAN.md](docs/PLAN.md)** and **[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)**.
+
+### Who it's for
+
+A human Game Master running a campaign (D&D 5e 2024 initially, other rulesets later) who wants help preparing sessions, keeping continuity, and portraying NPCs — and that GM's players, who want to stay oriented in the campaign between sessions and understand their characters.
+
+### The GM value proposition
+
+Import session notes, review what the AI believes changed, prepare the next session from approved campaign state, and use GenAI to portray NPCs and rule on noncombat actions — without the AI ever silently rewriting canon. The GM always makes the final call.
+
+### The player value proposition
+
+Stay connected to the campaign between sessions: character-filtered recaps, campaign knowledge scoped to what your character actually knows, personal notes and theories, rules-aware character advancement, and (in the future) private party collaboration the GM cannot see through supported tools.
+
+### Three core aspects
+
+Listed in overall product-importance order (see [docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md) for why the *build* order differs):
+
+1. **GenAI GM assistance and NPC roleplay** — what attracts users
+2. **Session-note import and campaign intelligence** — what distinguishes the platform
+3. **Rules-aware character, creature, and encounter management** — what makes its recommendations trustworthy
+
+### What this is not
+
+Not an autonomous replacement for a human GM, not a full virtual-tabletop replacement, not a native audio-transcription service, not a commercial rulebook marketplace or a D&D Beyond clone, and not a system where AI can silently rewrite canon. It may integrate with VTTs, transcription providers, and rulebooks — the canonical campaign database in PostgreSQL remains the single source of truth.
+
+### Current status
+
+Self-hosting via Docker Compose ([ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md)) is the current, and only, supported deployment posture. A hosted/managed option may be possible later; no subscription, billing, or paid-hosting functionality exists today. The core database/domain model, the API vertical slice, a Foundry v13 adapter, an early AI/NPC integration, and a growing React portal (GM access management, audit history) are implemented; session-note import, structured campaign intelligence, the GenAI preparation copilot, NPC portrayal profiles, the character-aware player advisor, and player-private collaboration are documented direction, not yet built. See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the dated, verification-backed breakdown.
+
+### How this differs from adjacent products
+
+Unlike an autonomous "AI Dungeon Master" product, the human GM remains in control of every canonical change. Unlike a campaign wiki, state is structured, temporal, and knowledge-scoped rather than free-text pages. Unlike a VTT assistant, this is not tied to one virtual tabletop and aims to be the shared backend multiple clients (Foundry, a web portal, bots) talk to. Unlike a character-sheet service, character management exists to make AI recommendations mechanically trustworthy, not as a standalone product.
 
 The initial rules implementation targets Dungeons & Dragons 5e (2024), but the platform is intended to remain ruleset-aware rather than tightly coupled to one game system.
-
----
-
-## Product Overview
-
-The D&D AI World Platform is a persistent-world simulation engine for tabletop role-playing campaigns. It is built around a PostgreSQL-backed world model with branching timelines, shared campaign state, durable historical events, and rules-aware entity definitions.
-
-The system is designed to support:
-
-- persistent worlds that outlive any single campaign
-- multiple campaigns sharing the same timeline or branching into alternate histories
-- NPCs, organizations, locations, quests, and inventory as first-class entities
-- event-driven state changes with causal history
-- AI-assisted GM tooling without allowing AI to own canon directly
-- self-hosted deployment via Docker Compose rather than direct database writes from clients
-
-The final product is a rules-aware world platform, not a one-off database or prototype toolchain.
 
 ---
 
@@ -143,7 +152,7 @@ Examples:
 
 A persistent setting containing entities, calendars, ruleset configuration, history, and timelines.
 
-A world is not owned by a campaign.
+A world is not owned by a campaign. It is owned by exactly one **ownership scope** — a neutral, non-billing boundary that groups the humans who administer a set of worlds (see [docs/adr/0014-world-ownership-scope.md](docs/adr/0014-world-ownership-scope.md)). Owning a world does not by itself grant campaign membership, a campaign role, or character-perspective knowledge — those remain separate, campaign-scoped concerns.
 
 ### Timeline
 
@@ -854,6 +863,7 @@ Note that a freshly deployed database is an **empty PostgreSQL instance** until 
 
 ## Documentation
 
+- [docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md) — product vision, GM/player value propositions, and built/partial/planned/deferred capability status
 - [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) — dated implementation,
   verification, and graded-issue snapshot
 
@@ -882,7 +892,7 @@ Note that a freshly deployed database is an **empty PostgreSQL instance** until 
 
 ### Decision records
 
-- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0012 defines the current self-hosted deployment and verification policy; ADRs 0008 and 0011 preserve superseded deployment decisions; ADR 0009 records database ownership and ADR 0010 fictional-time interval representation.
+- [docs/adr/](docs/adr/) — one file per architectural decision. ADR 0012 defines the current self-hosted deployment and verification policy; ADRs 0008 and 0011 preserve superseded deployment decisions; ADR 0009 records database ownership and ADR 0010 fictional-time interval representation; ADR 0014 records the world-ownership-scope model.
 
 ---
 
