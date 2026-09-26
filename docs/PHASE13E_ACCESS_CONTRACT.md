@@ -518,7 +518,7 @@ only** this checkpoint.
 - **No change endpoint:** unlike a character relationship's single-dimension type change, a resource grant's meaningful fields (target, capability, effect, temporal/timeline scope) could each independently change, with no single unambiguous "this is what changed" audit story — revoking the old grant and creating a new one (both already hardened, audited, and idempotent) is the deliberate replacement for a generic edit form; see `dnd_ai.commands.access_grants`' own module docstring.
 - **Membership-ending integration (checkpoint 5, extended by correction):** `end_campaign_membership` revokes every currently active `security.resource_grants` row whose `grantee_campaign_membership_id` is the ending membership, in the same transaction that closes it — the identical silent-reactivation gap checkpoint 4 closed for character relationships. It also now closes (`removed_at = now()`, never deletes) the ending membership's own currently open `security.access_group_memberships` rows — the *membership's link* to each access group it belonged to — so a group's own resource grants stop applying to a departed member too, without touching the group's grant row or any other member's link to it. This closes a real gap the first cut of this checkpoint missed: `resolve_access_context`'s group-membership subquery only ever considers a currently open `access_group_memberships` row, and `_activate_or_create_membership` reactivates the *same* `campaign_membership_id` row in place on a later invitation acceptance — without this correction, a departed member's stale group membership (and every grant made to that group) would silently regain effect the moment they rejoined. Covered by `tests/database/test_api_membership_lifecycle.py::test_ending_a_membership_also_revokes_its_resource_grants`/`::test_ending_a_membership_also_closes_its_access_group_memberships` and `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship` (extended checkpoint 5 to also cover the resource-grant half through a real reactivation) and the new `::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_access_group_membership` (checkpoint-5 correction — the full access-group scenario: initial effect, closure on end, non-reactivation on a reopened membership, and restoration only via an explicit new `access_group_memberships` insert).
 - **Read-side parity (checkpoint 5):** `dnd_ai.domain.access.resolve_access_context` and `get_campaign_access_overview` both now exclude a resource grant whose own target is not currently active — the same "currently true" generalization applied to the mutation side above, so a target deactivated *after* a grant was created stops being authorization-effective (and stops appearing on the overview) on the very next request, not just at creation time.
-- **Portal scope this checkpoint (deliberate, not full coverage):** the portal's "Add direct resource access" control only offers **character** as a selectable resource type — the one target kind with an existing safe display-name/search contract (`dnd_ai.queries.access_overview.list_assignable_campaign_characters`, already built for §3g). The other five target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) have no safe, campaign-scoped display/search contract of their own yet (resolving one for each is a materially larger surface — five unrelated resource kinds — than this checkpoint's own scope), so they are omitted from the portal rather than presented with a raw id; a grant to any of them remains fully supported by the backend (all six target kinds are hardened identically) and, if one already exists (created directly, or by a future increment), still appears on the overview with its `target_type` label and no display name, exactly as before. Access-group-targeted grants are likewise omitted from the portal this checkpoint — "Do not implement access-group grants" was this checkpoint's own explicit instruction; the backend continues to support them unchanged. `grantable_resource_capabilities` (§3) is shaped generally (one row per valid `(capability, target_type)` pairing) specifically so a future checkpoint that adds a safe contract for another target kind needs no change to that endpoint, only a portal change.
+- **Portal scope, checkpoint 5 (superseded by checkpoint 12 — see §3o):** at checkpoint 5, the portal's "Add direct resource access" control offered only **character** as a selectable resource type, reasoning that the other five target kinds had no safe, campaign-scoped display/search contract of their own yet. **That reasoning is stale as of Phase 13D**, which delivered exactly those five contracts (world search, knowledge browse, quest list, session list) before this checkpoint's own portal work began — §3o documents what checkpoint 12 built on top of them. `grantable_resource_capabilities` (§3) was shaped generally (one row per valid `(capability, target_type)` pairing) specifically so this later checkpoint needed no change to that endpoint, only a portal change.
 - **Server delegation policy answers this checkpoint's own open question:** an access manager may delegate any capability in the fixed catalog for the target's kind, **not** only capabilities they personally currently hold — see the delegation-policy bullet above for the precedent this follows and the reasoning.
 
 ## 3l. `POST /campaigns/{campaign_id}/access-groups` and friends (new, checkpoint 6)
@@ -691,6 +691,73 @@ rate limiting; cancellation; stale-token suppression; and absence of the raw
 token from persistence, logs, audit, URLs after cleanup, browser storage, and
 later responses.
 
+## 3o. Resource-grant target kinds, group grants, and the `deny` effect (checkpoint 12)
+
+Closes §3k's checkpoint-5 portal-scope limitation, which had gone stale:
+Phase 13D delivered an audience-safe, campaign-scoped display/search
+contract for every one of the six resource-grant target kinds before this
+checkpoint's own work began, so the "no safe contract yet" reasoning no
+longer applied. No new backend read endpoint was added — this checkpoint
+is entirely: one backend correctness fix, and portal reuse of contracts
+that already existed.
+
+- **The CTI column trap (backend fix, P-8).** `character.characters`,
+  `narrative.quests`, `narrative.events`, and `knowledge.knowledge_items`
+  all key their primary key off `core.entities(entity_id)` via class-table
+  inheritance (migrations 073/057/041) — so one UUID can satisfy several of
+  `security.resource_grants`' six mutually exclusive target columns at
+  once, and `ck_resource_grants_exactly_one_target` cannot tell which
+  column the caller meant. The read side always keys off one specific
+  column (`dnd_ai.api.world_explorer`'s own `resource_grant_targets(cap,
+  "event_id")` call reads `event_id`, never `entity_id`), so a grant
+  written to `entity_id` for one of these four kinds was a **silent
+  authorization no-op** — it never authorized anything, while still
+  displaying as an active grant on the access overview. `dnd_ai.commands.
+  access_grants.create_resource_grant` now rejects an `entity_id` target
+  whose resolved `core.entities.entity_type_id` belongs to
+  `character`/`npc`/`player_character`/`event`/`quest`/`knowledge_item`,
+  folded into the existing non-disclosing `TargetNotInCampaignWorldError`
+  — a caller cannot distinguish this from "wrong world" or "not active." A
+  genuine `location`/`organization`/`religion`/`item` `entity_id` target is
+  unaffected. Covered by `tests/database/test_resource_grant_target_column.py`.
+- **Portal: every target kind, both grantee kinds.** `ResourceTargetSelector`
+  (new shared component) switches over target kind and reuses four existing
+  read hooks, each fired only for the currently selected kind (never all
+  four at once, to avoid populating one dropdown with four requests):
+
+  | Kind | Read contract reused | Filter applied |
+  |---|---|---|
+  | `character` | the overview's own `assignable_characters` | unchanged |
+  | `entity` | `GET /campaigns/{id}/world/search` | `category ∈ {location, organization, religion, item}` |
+  | `event` | `GET /campaigns/{id}/world/search` | `category = event` |
+  | `knowledge_item` | `GET /campaigns/{id}/knowledge?view=known` (no character/party — the canonical/ground-truth projection, reachable for a baseline GM) | — |
+  | `quest` | `GET /campaigns/{id}/quests` | — |
+  | `session` | `GET /campaigns/{id}/sessions` | — |
+
+  The selector is shared verbatim by `AddResourceGrant` (membership
+  grantee) and `AddGroupResourceGrant` (access-group grantee) — no new
+  backend endpoint for the group case either, matching §3l's own note that
+  group-owned grants reuse the member-grant routes unchanged. No new
+  resource-directory endpoint was created for any kind: every selector
+  reuses an existing `campaign.view`-gated, audience-filtered contract, so
+  nothing inaccessible to the actor is ever offered, and the selector is
+  hidden (presentation only) when `campaign.view` is absent from the
+  campaign's own bootstrap capabilities — the backend remains the sole
+  authority regardless.
+- **Portal: the `deny` effect.** Both Add-grant forms now offer an
+  Allow/Deny radio; choosing Deny requires an explicit confirmation
+  checkbox ("I understand this explicitly denies this capability…") before
+  the submit button is enabled — a caller cannot create a deny grant by
+  selection alone. Presentation of an existing deny grant (the "Remove
+  denial" wording) already existed from §3k's own correction; only
+  creation was missing before this checkpoint.
+- **What is still not in the portal.** A resource-directory/search endpoint
+  spanning multiple kinds at once — deliberately never built, per
+  `UI_DESIGN.md` §9's non-disclosure rules ("a purpose-built 'grantable
+  resources' directory would risk disclosing resources the actor cannot
+  see"). Bulk grant management (grant the same capability to many
+  resources at once) — out of scope, not requested.
+
 ## 4. Principal/boundary summary
 
 - **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
@@ -714,8 +781,8 @@ No backend read/write contract exists yet for:
 - The single-link onboarding/start/status/registration/completion contracts
   specified in §3n. Checkpoint 7's manual authenticated acceptance remains
   the only deployable acceptance flow until these contracts are implemented.
-- A UI for the remaining mutation endpoints in §2: account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation, and access-group-targeted resource grants of a non-character target kind (see §3k's own "Portal scope this checkpoint" note). **Invitation issuance/list/revocation plus self-service invitation acceptance (§3m), changing an existing member's role assignment (§3a, checkpoint 1), adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2), adding an existing account as a member/ending an existing membership (§3d/§3e/§3f, checkpoint 3), adding/changing/revoking a member's character relationship (§3g/§3h/§3i/§3j, the character-relationship-management checkpoint), adding/revoking a member's character-targeted direct resource grant (§3k, checkpoint 5), and the complete access-group lifecycle/membership/character-target-grant management (§3l, checkpoint 6) are now wired** — the exceptions to this list.
-- A UI for the other five resource-grant target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) and for a resource-grant `deny` effect — see §3k's own "Portal scope this checkpoint" note for why (no safe display/search contract yet for the five target kinds; no portal need yet for an explicit deny). The backend command itself is hardened identically for all six target kinds and both effects, for both grantee kinds.
+- ~~A UI for the remaining mutation endpoints in §2: account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation~~ — **account creation/activation/reset/disable/reactivate/revoke-sessions delivered by checkpoints 9–11b** (`/admin/accounts`, `/auth/activate`, `/auth/password-reset`, `/account`). Membership reactivation outside invitation acceptance remains intentionally absent — §3e's own design: a departed member is re-added as a new membership row, never reactivated in place; only invitation acceptance reactivates a closed membership.
+- ~~A UI for the other five resource-grant target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) and for a resource-grant `deny` effect~~ — **delivered by checkpoint 12, §3o**: every target kind and both effects, for both grantee kinds, via the shared `ResourceTargetSelector`.
 
 None of the above is implemented yet, except as noted. 13E-A was read-only;
 13E-B checkpoints 1-7 together add the role, membership,
