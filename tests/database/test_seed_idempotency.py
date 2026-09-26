@@ -64,6 +64,7 @@ SEEDED_LOOKUPS = [
     ("security", "membership_statuses", "membership_status_id"),
     ("security", "character_relationship_types", "character_relationship_type_id"),
     ("security", "capabilities", "capability_id"),
+    ("security", "ownership_scope_roles", "ownership_scope_role_id"),
 ]
 
 

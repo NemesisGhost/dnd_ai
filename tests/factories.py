@@ -119,19 +119,45 @@ def subclass_id_for_class(connection: Connection, class_id: uuid.UUID, code: str
     return value
 
 
-def make_world(
-    connection: Connection, slug: str = "test-world", *, name: str = "Test World"
-) -> uuid.UUID:
+def make_ownership_scope(connection: Connection, name: str = "Test Ownership Scope") -> uuid.UUID:
+    """A bare `security.ownership_scopes` row with no memberships (ADR 0014).
+    Sufficient for tests that only need `core.worlds.ownership_scope_id` to
+    resolve to *some* scope — tests exercising ownership behavior itself use
+    `dnd_ai.commands.ownership.create_ownership_scope` instead, the same way
+    this module's own docstring asks production commands to be preferred
+    once they exist."""
     value = connection.execute(
         text("""
-            INSERT INTO core.worlds (name, slug, lifecycle_status_id)
-            VALUES (:name, :slug, :status)
+            INSERT INTO security.ownership_scopes (name, lifecycle_status_id)
+            VALUES (:name, :status)
+            RETURNING ownership_scope_id
+        """),
+        {"name": name, "status": status_id(connection, "lifecycle_statuses", "active")},
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_world(
+    connection: Connection,
+    slug: str = "test-world",
+    *,
+    name: str = "Test World",
+    ownership_scope_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    if ownership_scope_id is None:
+        ownership_scope_id = make_ownership_scope(connection)
+    value = connection.execute(
+        text("""
+            INSERT INTO core.worlds (name, slug, lifecycle_status_id, ownership_scope_id)
+            VALUES (:name, :slug, :status, :ownership_scope_id)
             RETURNING world_id
         """),
         {
             "name": name,
             "slug": slug,
             "status": status_id(connection, "lifecycle_statuses", "active"),
+            "ownership_scope_id": ownership_scope_id,
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

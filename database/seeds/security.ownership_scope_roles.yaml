@@ -1,0 +1,12 @@
+# Role a security.ownership_scope_memberships row holds within its scope.
+# See docs/architecture/DATABASE_MODEL.md §19.9, ADR 0014.
+
+- code: owner
+  display_name: Owner
+  sort_order: 10
+  is_active: true
+
+- code: member
+  display_name: Member
+  sort_order: 20
+  is_active: true

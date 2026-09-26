@@ -1332,3 +1332,120 @@ Index(
     browser_sessions.c.idle_expires_at,
     postgresql_where=browser_sessions.c.revoked_at.is_(None),
 )
+
+# ---------------------------------------------------------------------------
+# Ownership scope — world administration, separate from campaign membership
+# (ADR 0014, docs/architecture/DATABASE_MODEL.md §19.9)
+# ---------------------------------------------------------------------------
+
+ownership_scope_roles = _lookup_table(
+    "security",
+    "ownership_scope_roles",
+    "ownership_scope_role_id",
+    "Role a security.ownership_scope_memberships row holds within its scope "
+    "— owner, member (docs/architecture/DATABASE_MODEL.md §19.9). Deliberately "
+    "not security.roles: that table's roles are campaign-scoped or system "
+    "templates for campaign authorization, an unrelated concern from world "
+    "ownership (ADR 0014).",
+)
+
+ownership_scopes = Table(
+    "ownership_scopes",
+    metadata,
+    _uuid_pk("ownership_scope_id"),
+    Column("name", Text(), nullable=False),
+    Column(
+        "lifecycle_status_id",
+        UUID(),
+        ForeignKey("core.lifecycle_statuses.lifecycle_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A neutral, non-billing boundary grouping the humans who administer a "
+        "set of worlds (ADR 0014). Every core.worlds row belongs to exactly one "
+        "ownership scope. Not a billing tenant: no plan, quota, or entitlement "
+        "column exists here, and none is implied by this table's shape — a "
+        "scope with one member behaves as a personal boundary today, and the "
+        "same shape supports a shared organization later without a schema "
+        "change. Distinct from a campaign: owning a world grants no campaign "
+        "membership, role, or character-perspective knowledge by itself "
+        "(docs/DOMAIN_MODEL.md §4.1)."
+    ),
+)
+
+Index("ix_ownership_scopes_lifecycle_status_id", ownership_scopes.c.lifecycle_status_id)
+
+ownership_scope_memberships = Table(
+    "ownership_scope_memberships",
+    metadata,
+    _uuid_pk("ownership_scope_membership_id"),
+    Column(
+        "ownership_scope_id",
+        UUID(),
+        ForeignKey("security.ownership_scopes.ownership_scope_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "ownership_scope_role_id",
+        UUID(),
+        ForeignKey("security.ownership_scope_roles.ownership_scope_role_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "membership_status_id",
+        UUID(),
+        ForeignKey("security.membership_statuses.membership_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("joined_at", TIMESTAMP(timezone=True)),
+    Column("ended_at", TIMESTAMP(timezone=True)),
+    Column(
+        "ended_by_membership_id",
+        UUID(),
+        ForeignKey(
+            "security.ownership_scope_memberships.ownership_scope_membership_id",
+            ondelete="SET NULL",
+        ),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "The many-to-many association between users and ownership scopes "
+        "(ADR 0014), shaped like security.campaign_memberships: user_id is ON "
+        "DELETE RESTRICT, not CASCADE — membership history must survive a "
+        "user delete. Revoked/departed rows are closed (ended_at set), never "
+        "deleted. Reuses security.membership_statuses rather than a parallel "
+        "status vocabulary — its invited/active/suspended/revoked/departed "
+        "codes apply unchanged to this membership shape."
+    ),
+)
+
+Index(
+    "ix_ownership_scope_memberships_ownership_scope_id",
+    ownership_scope_memberships.c.ownership_scope_id,
+)
+Index("ix_ownership_scope_memberships_user_id", ownership_scope_memberships.c.user_id)
+Index(
+    "ix_ownership_scope_memberships_membership_status_id",
+    ownership_scope_memberships.c.membership_status_id,
+)
+Index(
+    "ix_ownership_scope_memberships_ended_by_membership_id",
+    ownership_scope_memberships.c.ended_by_membership_id,
+    postgresql_where=ownership_scope_memberships.c.ended_by_membership_id.isnot(None),
+)
+Index(
+    "ux_ownership_scope_memberships_open",
+    ownership_scope_memberships.c.ownership_scope_id,
+    ownership_scope_memberships.c.user_id,
+    unique=True,
+    postgresql_where=ownership_scope_memberships.c.ended_at.is_(None),
+)

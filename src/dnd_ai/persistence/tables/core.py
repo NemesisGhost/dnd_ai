@@ -98,13 +98,32 @@ worlds = Table(
             "world allows (rules.world_rulesets) — enforced by trigger."
         ),
     ),
-    UniqueConstraint("slug", name="ux_worlds_slug"),
+    # Added by the world-ownership-scope migration (ADR 0014), once
+    # security.ownership_scopes existed to point at. Replaces the old global
+    # ux_worlds_slug — see the UniqueConstraint below.
+    Column(
+        "ownership_scope_id",
+        UUID(),
+        ForeignKey("security.ownership_scopes.ownership_scope_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment=(
+            "The ownership scope administering this world (ADR 0014, "
+            "docs/architecture/DATABASE_MODEL.md §19.9) — independent of campaign "
+            "membership, campaign roles, and security.users.is_platform_administrator. "
+            "ON DELETE RESTRICT: an ownership scope with worlds still attached cannot "
+            "be removed."
+        ),
+    ),
+    UniqueConstraint("ownership_scope_id", "slug", name="ux_worlds_ownership_scope_id_slug"),
     schema="core",
     comment=(
         "A persistent fictional setting. Owns entity definitions, calendars, and "
-        "timelines; outlives any individual campaign."
+        "timelines; outlives any individual campaign. Slugs are unique within a "
+        "world's ownership scope, not globally (ADR 0014)."
     ),
 )
+
+Index("ix_worlds_ownership_scope_id", worlds.c.ownership_scope_id)
 
 entity_types = Table(
     "entity_types",
