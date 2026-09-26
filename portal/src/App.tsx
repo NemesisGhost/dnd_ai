@@ -21,6 +21,8 @@ import { CampaignAccessPage } from "./pages/CampaignAccessPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
 import { AdminAccountsNavLink } from "./components/AdminAccountsNavLink"
+import { ActivateAccountPage } from "./pages/ActivateAccountPage"
+import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 
 function App() {
   return (
@@ -70,6 +72,16 @@ function App() {
         <Route
           path="/campaign-invitations/accept"
           element={<AcceptCampaignInvitationPage />}
+        />
+
+        <Route
+          path="/auth/activate"
+          element={<ActivateAccountPage />}
+        />
+
+        <Route
+          path="/auth/password-reset"
+          element={<ResetPasswordPage />}
         />
 
         <Route
