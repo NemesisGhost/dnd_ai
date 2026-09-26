@@ -1438,6 +1438,10 @@ Index(
     ownership_scope_memberships.c.membership_status_id,
 )
 Index(
+    "ix_ownership_scope_memberships_ownership_scope_role_id",
+    ownership_scope_memberships.c.ownership_scope_role_id,
+)
+Index(
     "ix_ownership_scope_memberships_ended_by_membership_id",
     ownership_scope_memberships.c.ended_by_membership_id,
     postgresql_where=ownership_scope_memberships.c.ended_by_membership_id.isnot(None),

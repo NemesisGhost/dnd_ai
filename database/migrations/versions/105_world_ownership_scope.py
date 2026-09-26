@@ -237,6 +237,10 @@ def upgrade() -> None:
         "ON security.ownership_scope_memberships (membership_status_id);"
     )
     op.execute(
+        "CREATE INDEX ix_ownership_scope_memberships_ownership_scope_role_id "
+        "ON security.ownership_scope_memberships (ownership_scope_role_id);"
+    )
+    op.execute(
         "CREATE INDEX ix_ownership_scope_memberships_ended_by_membership_id "
         "ON security.ownership_scope_memberships (ended_by_membership_id) "
         "WHERE ended_by_membership_id IS NOT NULL;"

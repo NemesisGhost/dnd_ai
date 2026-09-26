@@ -224,6 +224,10 @@ MANAGED_TABLES = [
     ("security", "foundry_pairing_codes"),
     ("security", "foundry_devices"),
     ("security", "foundry_access_tokens"),
+    # World ownership scope (migration 105_world_ownership_scope, ADR 0014)
+    ("security", "ownership_scope_roles"),
+    ("security", "ownership_scopes"),
+    ("security", "ownership_scope_memberships"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is
