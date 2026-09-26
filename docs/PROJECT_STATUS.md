@@ -13,7 +13,7 @@ full 2026-09-14 platform review.
 
 | Area | Current state | Next closure gate |
 |---|---|---|
-| Database and domain model (Phases 0-9) | Complete through migration `105_world_ownership_scope` (head; ADR 0014) — 106 revision files as of this review, since the chain includes one interstitial non-numeric revision id | Continue regression verification with every schema change |
+| Database and domain model (Phases 0-9) | Complete through migration `107_world_ownership_scope` (head; ADR 0014) — 108 revision files as of this review, since the chain includes one interstitial non-numeric revision id | Continue regression verification with every schema change |
 | Core FastAPI/API slice (Phase 10) | Complete | Preserve authentication, authorization, audit, idempotency, and non-disclosure boundaries |
 | Foundry MVP (Phase 11) | Pairing, per-device credentials, scoped access, synchronization, module, and automated coverage are implemented | Run and record the documented live Foundry v13 acceptance exercise |
 | AI/NPC MVP (Phase 12) | Schema, reference corpus, provider abstraction, NPC turn/proposals, and audience-aware synthesis are implemented | Run a real-provider smoke test and create `PHASE12_VERIFICATION.md` |
@@ -29,7 +29,7 @@ browser and operational packaging surfaces.
 ## Repository inventory
 
 - Python 3.12+ FastAPI application with command, query, domain, API, and persistence layers.
-- PostgreSQL 18 schema managed by Alembic, with 106 revision files and structured seed data.
+- PostgreSQL 18 schema managed by Alembic, with 108 revision files and structured seed data.
 - React 19/TypeScript/Vite portal with 65 test files and 369 tests in the observed local run (not rerun in this update — no portal files changed).
 - Foundry VTT v13 adapter implemented as dependency-free native ES modules.
 - Docker/Compose self-hosted database, migration, and API topology; optional Terraform for AWS RDS development.

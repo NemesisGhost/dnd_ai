@@ -1,9 +1,15 @@
 """World ownership scope: security.ownership_scopes, .ownership_scope_roles,
 .ownership_scope_memberships, and core.worlds.ownership_scope_id.
 
-Revision ID: 105_world_ownership_scope
-Revises: 104_audit_history_indexes
+Revision ID: 107_world_ownership_scope
+Revises: 106_access_group_desc_length
 Create Date: 2026-09-25 09:00:00.000000
+
+Renumbered from 105 to 107 (originally created before merging main, which
+independently added 105_access_group_status/106_access_group_desc_length
+on the same 104 parent) — chained after both rather than adding a
+separate alembic merge-heads revision, since this revision had not yet
+been merged into main and could still be freely retargeted.
 
 Purpose:
     `core.worlds` has never had an owner, creator, or administrator column
@@ -91,8 +97,8 @@ from alembic import op
 from dnd_ai.persistence.seeds import apply_seed
 
 # revision identifiers, used by Alembic.
-revision = "105_world_ownership_scope"
-down_revision = "104_audit_history_indexes"
+revision = "107_world_ownership_scope"
+down_revision = "106_access_group_desc_length"
 branch_labels = None
 depends_on = None
 

@@ -329,7 +329,7 @@ Required fields include:
 - description
 - default calendar
 - default ruleset
-- ownership scope (added by the world-ownership-scope migration, `105_world_ownership_scope` — see below)
+- ownership scope (added by the world-ownership-scope migration, `107_world_ownership_scope` — see below)
 - lifecycle status
 - created and updated timestamps
 
@@ -2019,7 +2019,7 @@ Exit criteria:
 
 **Required authoring prerequisite (must land before import promotion depends on it):**
 
-- create world (now has its ownership-scope foundation — `105_world_ownership_scope`, ADR 0014 — but no command itself yet)
+- create world (now has its ownership-scope foundation — `107_world_ownership_scope`, ADR 0014 — but no command itself yet)
 - create timeline
 - create entity
 - create character

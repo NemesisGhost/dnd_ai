@@ -149,7 +149,7 @@ def make_world(
     when omitted, matching `core.worlds.ownership_scope_id` being `NOT
     NULL` at head — but some tests (e.g. tests/database/
     test_downgrade_deferred_trigger_ordering.py) deliberately pin their
-    connection at a revision *before* `105_world_ownership_scope` added
+    connection at a revision *before* `107_world_ownership_scope` added
     that column at all, the same way `make_timeline`'s `branch_event_id`
     predates revision 058. This checks for the column's existence rather
     than assuming it, so this one helper keeps working unchanged for a

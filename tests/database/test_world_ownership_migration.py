@@ -1,5 +1,5 @@
 """Single-step upgrade/downgrade/re-upgrade coverage for revision
-`105_world_ownership_scope` (ADR 0014).
+`107_world_ownership_scope` (ADR 0014).
 
 The critical property this migration must get right against a *populated*
 database: a world created before this revision ran must not have its
@@ -34,8 +34,8 @@ pytestmark = pytest.mark.database
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = REPO_ROOT / "database" / "alembic.ini"
 
-_PREVIOUS_REVISION = "104_audit_history_indexes"
-_THIS_REVISION = "105_world_ownership_scope"
+_PREVIOUS_REVISION = "106_access_group_desc_length"
+_THIS_REVISION = "107_world_ownership_scope"
 _LEGACY_OWNERSHIP_SCOPE_NAME = "Legacy Self-Hosted Worlds (unclaimed)"
 
 # Matches tests/conftest.py's _MIGRATION_SUBPROCESS_TIMEOUT_SECONDS.

@@ -1,5 +1,5 @@
 """One-time operator action: claim the legacy ownership scope the
-world-ownership-scope migration (`105_world_ownership_scope`) created for
+world-ownership-scope migration (`107_world_ownership_scope`) created for
 pre-existing worlds (ADR 0014, docs/architecture/DATABASE_MODEL.md §19.9).
 
 That migration cannot safely guess which human should own worlds that
