@@ -329,10 +329,13 @@ Required fields include:
 - description
 - default calendar
 - default ruleset
+- ownership scope (added by the world-ownership-scope migration, `105_world_ownership_scope` — see below)
 - lifecycle status
 - created and updated timestamps
 
 `default_ruleset_id` remains part of the target world model but is not added until Phase 4 creates `rules.rulesets`; Phase 3 must not introduce it as an unconstrained UUID.
+
+**World ownership scope (delivered, ahead of Phase 15 — Platform Review finding).** `core.worlds.ownership_scope_id` is a `NOT NULL` foreign key to `security.ownership_scopes` (ADR 0014, `docs/architecture/DATABASE_MODEL.md` §19.9), administratively distinct from campaign membership. World slugs are unique per ownership scope, not globally. `dnd_ai.commands.ownership` provides `create_ownership_scope`/`add_ownership_scope_member`/`remove_ownership_scope_member` — the minimal command layer to establish and maintain valid ownership. **Not delivered by this work**: a `create_world` command (worlds are still created only by migration/dev-data/test raw insert — see the "missing authoring prerequisite" note under Phase 15 below), any API route or portal surface for managing ownership, and a transfer-between-scopes command. See `docs/PRODUCT_DIRECTION.md` §9 and ADR 0014 for the full design and deliberate exclusions.
 
 ### 5.2 Timelines
 
@@ -1268,6 +1271,8 @@ When reliable causal history cannot be reconstructed, use an explicitly identifi
 
 Phase 14 starts with a small campaign packet containing one world-building document, one quest description, and one set of session notes. One input format is sufficient initially. AI-assisted and deterministic extraction are both allowed, but all extracted content remains untrusted until validation and approval. A general PDF, DOCX, spreadsheet, transcript, or OCR framework is outside the initial scope.
 
+**Scope guardrails (`docs/PRODUCT_DIRECTION.md` §12).** Native audio transcription stays explicitly out of scope indefinitely — the import API accepts text or externally generated transcripts only; adding a transcription provider is a later, separately justified integration (§Phase 15 exit criteria do not depend on it). Full commercial-rulebook ingestion (as opposed to openly licensed or GM/player-owned material) is gated behind legal and licensing review before any public or commercial deployment; nothing in this phase authorizes bulk-uploading a purchased rulebook. PostgreSQL full-text search remains the retrieval baseline for both this import pipeline and the Phase 12 reference corpus — embeddings/RAG are not scheduled by this phase merely because a proposal document mentions them; a real consumer and a dedicated ADR would be required first.
+
 ---
 
 ## 23. Identity, authorization, and web-portal implementation
@@ -2008,7 +2013,22 @@ Exit criteria:
 
 ### Phase 15: World and campaign-data import
 
-**Status: Not started.** Implemented dependencies: canonical domain commands and audit infrastructure. Remaining: retained source ingestion, staged proposals, matching/review workflows, idempotent promotion, and portal review surfaces below.
+**Status: Not started; blocked on a missing authoring-command prerequisite (Platform Review finding, corrected here).** Audit infrastructure is implemented (Phase 13E-B). Canonical domain commands are **not** implemented for most of what a world/campaign-data import needs to create or transition — `core.worlds` in particular has no `create_world` command at all today; every world in this codebase is created by a migration, the dev-data script, or a test factory issuing a raw insert (confirmed by repo-wide search). This phase's own framing already required "complete application-command coverage for every proposal type... the importer cannot bypass a missing command" — the correction here is making that gap explicit rather than implicitly assuming it was already closed.
+
+**Required authoring prerequisite (must land before import promotion depends on it):**
+
+- create world (now has its ownership-scope foundation — `105_world_ownership_scope`, ADR 0014 — but no command itself yet)
+- create timeline
+- create entity
+- create character
+- create NPC
+- create location
+- create quest
+- canon lifecycle transitions (draft → proposed → approved → canon → superseded/rejected, per `docs/ENTITY_LIFECYCLE.md`)
+- archive and restore
+- timeline branch creation
+
+None of these commands are implemented today except where an existing phase already delivered a narrower one (e.g. `create_campaign`, Phase 10). This authoring surface is its own scheduled increment, ordered before Phase 15's import-promotion work begins — an importer's "invoke application commands" exit criterion (below) cannot be met for entity/character/NPC/location/quest proposals until the corresponding create/transition command exists.
 
 World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
 

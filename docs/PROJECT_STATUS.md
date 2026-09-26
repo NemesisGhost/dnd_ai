@@ -1,23 +1,26 @@
 # Project status
 
-Last reviewed: **2026-09-14** at commit `518c079`.
+Last reviewed: **2026-09-26** at commit on branch `phase14/product-direction-and-world-ownership` (product-direction documentation and world-ownership-scope foundation; see [PRODUCT_DIRECTION.md](PRODUCT_DIRECTION.md) and [ADR 0014](adr/0014-world-ownership-scope.md)).
 
 This is the concise current-state companion to [PLAN.md](PLAN.md), which remains
 the delivery-status source of truth. Phase verification files are historical
 evidence; they are not a claim that the present working tree has been fully
-reverified.
+reverified. This update corrects stale migration-count and 13E status claims
+below against evidence collected on the current branch; it does not rerun the
+full 2026-09-14 platform review.
 
 ## Current delivery state
 
 | Area | Current state | Next closure gate |
 |---|---|---|
-| Database and domain model (Phases 0-9) | Complete through migration `103_login_failure_audit_action`, plus the 2026-08 schema-comment reconciliation revision | Continue regression verification with every schema change |
+| Database and domain model (Phases 0-9) | Complete through migration `105_world_ownership_scope` (head; ADR 0014) — 106 revision files as of this review, since the chain includes one interstitial non-numeric revision id | Continue regression verification with every schema change |
 | Core FastAPI/API slice (Phase 10) | Complete | Preserve authentication, authorization, audit, idempotency, and non-disclosure boundaries |
 | Foundry MVP (Phase 11) | Pairing, per-device credentials, scoped access, synchronization, module, and automated coverage are implemented | Run and record the documented live Foundry v13 acceptance exercise |
 | AI/NPC MVP (Phase 12) | Schema, reference corpus, provider abstraction, NPC turn/proposals, and audience-aware synthesis are implemented | Run a real-provider smoke test and create `PHASE12_VERIFICATION.md` |
-| Web portal (Phase 13) | **13A-13D complete** (13D closed complete with explicit limitations: reviewed commit `5bd6fd5efac64b07e5d452687ffaa010b2583a6b`, CI run `35148055021`, 603 portal tests, 147 focused backend tests; its accepted limitations carry forward rather than being re-litigated). **13E (GM access tools) is in progress**: increment 13E-A delivered a live, read-only campaign access overview (`GET /campaigns/{campaign_id}/access-overview`, capability `access.manage`) replacing the Access screen's placeholder — current members, roles, character relationships, and explicit membership-targeted resource grants, all read-only. No 13E mutation workflow (account/role/relationship/grant changes, invitations, preview-as-user) exists yet — see PLAN.md §13 | Remaining 13E mutation increments, 13F Foundry device UI, 13G AI surfaces, and 13H E2E/production packaging |
+| Web portal (Phase 13) | **13A-13D complete** (13D closed complete with explicit limitations: reviewed commit `5bd6fd5efac64b07e5d452687ffaa010b2583a6b`, CI run `35148055021`, 603 portal tests, 147 focused backend tests; its accepted limitations carry forward rather than being re-litigated). **13E (GM access tools) is in progress**: 13E-A delivered a live, read-only campaign access overview (`GET /campaigns/{campaign_id}/access-overview`, capability `access.manage`). **13E-B delivered a read-only audit-history API and portal foundation** (`dnd_ai.queries.audit_history`/`dnd_ai.api.audit_history`, campaign-scoped, curated command-name allowlist — see that module's own docstring for its documented scope limits). No 13E mutation workflow (account/role/relationship/grant changes, invitations, preview-as-user) exists yet — see PLAN.md §13 | Remaining 13E mutation increments, 13F Foundry device UI, 13G AI surfaces, and 13H E2E/production packaging |
 | Local production deployment (Phase 14) | PostgreSQL, one-off migrations, and a single-worker API are available in Compose | Package the portal and worker, add reverse proxy/TLS, secrets/monitoring, backup/restore, and rollback evidence |
-| Controlled import (Phase 15) | Not started | Complete the staged review and command-backed promotion workflow |
+| World ownership foundation (ahead of Phase 15) | **Delivered**: `security.ownership_scopes`/`.ownership_scope_roles`/`.ownership_scope_memberships`, `core.worlds.ownership_scope_id`, and the minimal `dnd_ai.commands.ownership` command layer (ADR 0014). **Not delivered**: `create_world` and the rest of the missing authoring-command surface (PLAN.md §15), any API/UI surface for ownership | Schedule the full authoring-command surface PLAN.md §15 now lists explicitly |
+| Controlled import (Phase 15) | Not started; blocked on the authoring-command prerequisite above | Complete the staged review and command-backed promotion workflow, after the authoring commands exist |
 
 The project is a capable pre-release platform, not a production-complete
 application. The backend/domain surface is considerably further along than the
@@ -26,11 +29,11 @@ browser and operational packaging surfaces.
 ## Repository inventory
 
 - Python 3.12+ FastAPI application with command, query, domain, API, and persistence layers.
-- PostgreSQL 18 schema managed by Alembic, with 104 revision files and structured seed data.
-- React 19/TypeScript/Vite portal with 65 test files and 369 tests in the observed local run.
+- PostgreSQL 18 schema managed by Alembic, with 106 revision files and structured seed data.
+- React 19/TypeScript/Vite portal with 65 test files and 369 tests in the observed local run (not rerun in this update — no portal files changed).
 - Foundry VTT v13 adapter implemented as dependency-free native ES modules.
 - Docker/Compose self-hosted database, migration, and API topology; optional Terraform for AWS RDS development.
-- 2,416 statically discoverable Python test functions; parameterization makes executed totals larger.
+- 2,625 statically discoverable Python test functions (`grep -rc '^def test_\|^    def test_' tests/`, re-counted for this review; up from 2,416 on 2026-09-14) — parameterization makes executed totals larger (4,345 collected via `pytest --collect-only`).
 
 ## Verification observed in this review
 
