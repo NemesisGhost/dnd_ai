@@ -141,6 +141,8 @@ A world owns:
 
 A world does not directly contain mutable campaign state. Mutable state belongs to timelines.
 
+**World ownership is administrative, not gameplay authorization.** A world belongs to exactly one **ownership scope** (`security.ownership_scopes`; ADR 0014, `docs/architecture/DATABASE_MODEL.md` §19.9) — the boundary of humans who may administer that world (rename it, retire it, eventually create/reconfigure things within it). This is deliberately independent of every campaign-level concept in §5 and §23: holding a campaign's `campaign_owner` or `gm` role does not make a user a world owner, and being a world owner does not grant campaign membership, a campaign role, or any character-perspective knowledge (§15). A `security.users.is_platform_administrator` flag (§23.1) is likewise never treated as implicit ownership of every world — it is a separate, platform-account-scoped primitive. World ownership exists to answer "who may administer this world," never "who may play in it" or "what does this user's character know."
+
 ### 4.2 Entity
 
 An **Entity** is the universal identity record for a significant world object.
@@ -1579,3 +1581,14 @@ The following are recognized but will receive dedicated design later:
 - cross-world travel
 
 These areas must extend the existing entity, relationship, event, state, and knowledge foundations rather than creating incompatible parallel models.
+
+### 27.1 Deferred authorization and AI-context concepts (`docs/PRODUCT_DIRECTION.md`)
+
+Recognized as future architecture, not modeled by any table today:
+
+- **Owner-private collaboration.** A future authorization path letting players hold discussion threads, notes, and theories a campaign's GM-role users cannot reach through supported APIs, search, exports, or AI tools — distinct from every existing visibility mechanism in §15 and §23, none of which currently support excluding a campaign's own GM. The honest limit: this can only ever be an application-authorization boundary, never protection from whoever administers the underlying database in a self-hosted deployment.
+- **Player theory**, a fifth category alongside canonical fact (§4.6), entity knowledge (§15.3), and belief — an explicitly unconfirmed interpretation a player or character forms, distinguishable from both objective canon and a character's held belief. No table represents this distinction today; §15's knowledge model would need to gain it without collapsing it into an existing belief/confidence field.
+- **Purpose-specific AI context.** Every AI context request (§19.3-19.4) eventually declaring a fixed purpose (GM preparation, NPC portrayal, player advisor, campaign Q&A, session import, party planning) that constrains which knowledge/visibility rules apply during context assembly — narrower than today's single generic context-request shape.
+- **Permission inheritance for imported and derived artifacts.** A future import's access restrictions (§21) propagating automatically to everything derived from it — extracted text, embeddings, summaries, citations — unless the owner explicitly creates a narrower shared artifact. Not modeled by §21 today.
+
+See `docs/PRODUCT_DIRECTION.md` §11 for the product rationale; none of these are scheduled in `docs/PLAN.md` yet.

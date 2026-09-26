@@ -151,14 +151,15 @@ Key columns:
 
 - `world_id UUID PK`
 - `name TEXT`
-- `slug TEXT`
+- `slug TEXT` — unique within the world's ownership scope (`ux_worlds_ownership_scope_id_slug`), not globally
+- `ownership_scope_id UUID FK NOT NULL` — added by the world-ownership-scope migration (ADR 0014); see §19.9
 - `default_calendar_id UUID NULL`
 - `default_ruleset_id UUID FK NULL` — added in Phase 4
 - `lifecycle_status_id UUID FK`
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
 
-A world owns entity definitions, calendars, timelines, and world-specific configuration.
+A world owns entity definitions, calendars, timelines, and world-specific configuration. It is administratively owned by exactly one ownership scope (§19.9), a boundary distinct from campaign membership: owning a world grants no campaign role and no character-perspective knowledge by itself.
 
 ### 5.2 `core.entity_types`
 
@@ -1204,6 +1205,21 @@ Key columns:
 - `issued_at TIMESTAMPTZ`, `expires_at TIMESTAMPTZ`, `revoked_at TIMESTAMPTZ NULL`, `last_used_at TIMESTAMPTZ NULL`
 
 No pruning/archival job for any of the four tables above, matching `security.idempotent_requests`'/migration 099's identical "disposable operational state, not audit history" precedent.
+
+#### 19.9 Ownership scope and world administration
+
+**Status: schema and command layer built (ADR 0014); no API/UI, no `create_world` command yet.** Administers `core.worlds` at a boundary distinct from every other authorization concept in this section — campaign membership (§19.2), roles/capabilities (§19.3), and `security.users.is_platform_administrator` (§19.1) all remain unchanged and none of them implies ownership-scope membership or vice versa.
+
+- `security.ownership_scopes` — a first-class entity: `ownership_scope_id UUID PK`, `name TEXT`, `lifecycle_status_id UUID FK` (reuses `core.lifecycle_statuses`), timestamps. No "personal"/"organization" type column — a scope with one member behaves as a personal boundary, the same shape supports a shared organization later.
+- `security.ownership_scope_roles` — lookup table, seeded `owner`/`member` (§11 shape).
+- `security.ownership_scope_memberships` — many-to-many between `security.users` and `security.ownership_scopes`, shaped like `security.campaign_memberships`: `ownership_scope_membership_id UUID PK`, `ownership_scope_id UUID FK`, `user_id UUID FK`, `ownership_scope_role_id UUID FK`, `membership_status_id UUID FK` (reuses `security.membership_statuses` — no parallel status vocabulary), `joined_at`, `ended_at NULL`, `ended_by_membership_id UUID FK NULL` (self-referencing), timestamps. At most one open row per `(ownership_scope_id, user_id)`; closed, never deleted.
+- `core.worlds.ownership_scope_id UUID FK NOT NULL` — every world belongs to exactly one ownership scope (§5.1). `ux_worlds_slug` (global) is replaced by `ux_worlds_ownership_scope_id_slug` on `(ownership_scope_id, slug)`.
+
+**Command layer** (`dnd_ai.commands.ownership`): `create_ownership_scope` (creates the scope and its creator's `owner` membership atomically), `add_ownership_scope_member`, `remove_ownership_scope_member` (enforces the final-active-owner invariant via a scope-scoped `pg_advisory_xact_lock`, mirroring `is_platform_administrator`'s last-admin lock in §19.1 rather than `security.campaign_has_access_manager()`'s heavier deferred-constraint-trigger machinery — justified in ADR 0014 by the absence of any non-command write path to this schema yet). Each command writes its own `audit.change_log` row directly (world_id left `NULL` — an ownership scope may span multiple worlds) rather than through an API route, since no route exists yet; see ADR 0014 and `dnd_ai.commands.ownership`'s module docstring.
+
+**Deliberately not built**: a `create_world` command (§9 of `docs/PRODUCT_DIRECTION.md` — the broader missing-authoring-surface gap this narrow slice does not close), any API route or portal surface, a transfer-between-scopes command, and any row-level-security policy (the schema is shaped so one could key off `ownership_scope_id` later, but none exists now).
+
+**Existing-data migration.** Cannot safely guess a human owner for pre-existing worlds. Creates one legacy `security.ownership_scopes` row with **zero memberships**, backfills every existing `core.worlds.ownership_scope_id` onto it, and requires an operator to explicitly claim it via `scripts/claim_legacy_ownership_scope.py` (calls `add_ownership_scope_member`) after upgrading — documented in `docs/LOCAL_DEPLOYMENT.md`, not silently resolved.
 
 ## 20. Import staging
 

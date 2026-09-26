@@ -507,6 +507,8 @@ Required controls:
 - reverse-proxy and/or application rate limiting for login and expensive AI endpoints
 - no direct public access to PostgreSQL or Uvicorn
 
+**World administration is resolved independently of campaign access.** Whether a user may administer a world (rename it, retire it) is answered by the ownership-scope model (`docs/architecture/DATABASE_MODEL.md` §19.9, ADR 0014) — a `core.worlds.ownership_scope_id` lookup into `security.ownership_scope_memberships` — never by that user's campaign roles on campaigns whose timelines belong to that world, and never by `is_platform_administrator` alone. No command in this codebase today conflates the two; a future `create_world`-style command must resolve ownership-scope membership as its own, separate authorization check rather than reusing `dnd_ai.domain.access.resolve_access_context` (which is campaign-scoped by construction).
+
 ## 19. Observability
 
 Every request and background job should carry:
