@@ -23,7 +23,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.api.access import resolve_party_perspective
 from dnd_ai.api.world_explorer import resolve_world_character_visibility
 from dnd_ai.commands.local_auth import authenticate_local_user, create_browser_session
-from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.access import is_world_administrator, resolve_access_context
 from dnd_ai.domain.passwords import PasswordPolicyError, hash_password
 from dnd_ai.queries.access_overview import get_campaign_access_overview
 from dnd_ai.queries.bootstrap import CampaignBootstrapView, get_session_bootstrap
@@ -52,12 +52,14 @@ from tests.factories import (
     make_campaign,
     make_entity,
     make_event,
+    make_ownership_scope,
     make_platform_administrator,
     make_session,
     make_timeline,
     make_user,
     make_world,
     make_world_time,
+    status_id,
 )
 
 # `_run()` now provisions the Phase 13E-A dev accounts too and requires a
@@ -2173,3 +2175,112 @@ def test_phase13e_script_output_never_contains_the_dev_password(
 
     combined_output = "\n".join(summary.lines + summary.report + summary.access_report)
     assert _TEST_DEV_PASSWORD not in combined_output
+
+
+# ---------------------------------------------------------------------------
+# _get_or_create_world: reusing a fixture the world-ownership-scope
+# migration relocated, rather than creating a duplicate (ADR 0014
+# correction — see this script's own _LEGACY_OWNERSHIP_SCOPE_NAME comment).
+# ---------------------------------------------------------------------------
+
+
+def test_get_or_create_world_recovers_the_legacy_scope_fixture_without_duplicating(
+    db_connection: Connection,
+) -> None:
+    """Simulates exactly the bug this fix corrects: a phase13c-dev-world
+    that existed before core.worlds.ownership_scope_id did, backfilled by
+    migration 107_world_ownership_scope onto its legacy scope. Calling
+    `_get_or_create_world` must recognize and reuse that world — preserving
+    its world_id (and therefore every timeline/campaign already hanging
+    off it) — rather than creating a second, disconnected fixture."""
+    active_status_id = status_id(db_connection, "lifecycle_statuses", "active")
+    legacy_scope_id = db_connection.execute(
+        text(
+            "INSERT INTO security.ownership_scopes (name, lifecycle_status_id) "
+            "VALUES (:name, :status) RETURNING ownership_scope_id"
+        ),
+        {
+            "name": setup_phase13c_dev_data._LEGACY_OWNERSHIP_SCOPE_NAME,
+            "status": active_status_id,
+        },
+    ).scalar_one()
+    original_world_id = db_connection.execute(
+        text(
+            "INSERT INTO core.worlds (name, slug, lifecycle_status_id, ownership_scope_id) "
+            "VALUES ('Phase13C Dev World', :slug, :status, :scope) RETURNING world_id"
+        ),
+        {
+            "slug": setup_phase13c_dev_data._WORLD_SLUG,
+            "status": active_status_id,
+            "scope": legacy_scope_id,
+        },
+    ).scalar_one()
+    original_timeline_id = make_timeline(db_connection, original_world_id, is_primary=True)
+
+    summary = setup_phase13c_dev_data._Summary()
+    owner_user_id = make_user(db_connection, "Recovered Fixture Owner")
+
+    recovered_world_id = setup_phase13c_dev_data._get_or_create_world(
+        db_connection, summary, owner_user_id=owner_user_id
+    )
+    assert recovered_world_id == original_world_id
+
+    # The legacy scope had zero memberships (the real post-migration
+    # state) — it must now be explicitly claimed for owner_user_id, not
+    # left unowned.
+    assert (
+        is_world_administrator(db_connection, world_id=original_world_id, user_id=owner_user_id)
+        is True
+    )
+
+    # Calling it again must be idempotent: same world, no re-claim error,
+    # and still exactly one world at this slug.
+    recovered_again = setup_phase13c_dev_data._get_or_create_world(
+        db_connection, summary, owner_user_id=owner_user_id
+    )
+    assert recovered_again == original_world_id
+
+    world_count = db_connection.execute(
+        text("SELECT count(*) FROM core.worlds WHERE slug = :slug"),
+        {"slug": setup_phase13c_dev_data._WORLD_SLUG},
+    ).scalar_one()
+    assert world_count == 1
+
+    # The original timeline is still exactly where it was — nothing about
+    # recovering the world touched or duplicated it.
+    timeline_world = db_connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"),
+        {"t": original_timeline_id},
+    ).scalar_one()
+    assert timeline_world == original_world_id
+
+
+def test_get_or_create_world_ignores_an_unrelated_same_slug_world_in_another_scope(
+    db_connection: Connection,
+) -> None:
+    """A same-slug world in some other, unrelated ownership scope (not the
+    one named exactly `_DEV_OWNERSHIP_SCOPE_NAME`/`_LEGACY_OWNERSHIP_
+    SCOPE_NAME`) must never be selected — ADR 0014 makes slugs unique only
+    per scope, so this is a legitimate, unrelated world this script must
+    leave alone, creating its own dev-scope world instead."""
+    unrelated_scope_id = make_ownership_scope(db_connection, "Some Unrelated Owner's Scope")
+    unrelated_world_id = make_world(
+        db_connection,
+        setup_phase13c_dev_data._WORLD_SLUG,
+        ownership_scope_id=unrelated_scope_id,
+    )
+
+    summary = setup_phase13c_dev_data._Summary()
+    owner_user_id = make_user(db_connection, "Dev Fixture Owner")
+
+    created_world_id = setup_phase13c_dev_data._get_or_create_world(
+        db_connection, summary, owner_user_id=owner_user_id
+    )
+
+    assert created_world_id != unrelated_world_id
+
+    world_count = db_connection.execute(
+        text("SELECT count(*) FROM core.worlds WHERE slug = :slug"),
+        {"slug": setup_phase13c_dev_data._WORLD_SLUG},
+    ).scalar_one()
+    assert world_count == 2

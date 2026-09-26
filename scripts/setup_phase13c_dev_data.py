@@ -1741,6 +1741,39 @@ def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
 
 _DEV_OWNERSHIP_SCOPE_NAME = "Phase 13C Dev Data"
 
+# Matches scripts/claim_legacy_ownership_scope.py's own constant — the one
+# scope name 107_world_ownership_scope's populated-upgrade backfill ever
+# writes. Checked *by name*, not "any scope with a same-slug world", so a
+# pre-105-migration run of this script (which raw-inserted its world with
+# no ownership scope at all, back when core.worlds had no such column) is
+# recognized specifically, rather than this script grabbing an arbitrary
+# unrelated same-slug world that happens to belong to some other scope.
+_LEGACY_OWNERSHIP_SCOPE_NAME = "Legacy Self-Hosted Worlds (unclaimed)"
+
+
+def _find_world_in_named_scope(
+    connection: Connection, *, scope_name: str, slug: str
+) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Returns `(world_id, ownership_scope_id)` for a world with `slug` that
+    already lives in the ownership scope named exactly `scope_name`, or
+    `None` if either the scope or that world in it doesn't exist."""
+    row = (
+        connection.execute(
+            text("""
+                SELECT w.world_id, w.ownership_scope_id
+                FROM core.worlds w
+                JOIN security.ownership_scopes os ON os.ownership_scope_id = w.ownership_scope_id
+                WHERE os.name = :scope_name AND w.slug = :slug
+            """),
+            {"scope_name": scope_name, "slug": slug},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return row["world_id"], row["ownership_scope_id"]
+
 
 def _get_or_create_dev_ownership_scope(
     connection: Connection, summary: _Summary, *, owner_user_id: uuid.UUID
@@ -1771,10 +1804,58 @@ def _get_or_create_dev_ownership_scope(
 def _get_or_create_world(
     connection: Connection, summary: _Summary, *, owner_user_id: uuid.UUID
 ) -> uuid.UUID:
+    # 1. Does the fixture already exist under the migration's own legacy
+    #    scope? (a run of this script that predates the ownership-scope
+    #    migration, whose one pre-existing world 107_world_ownership_scope
+    #    backfilled there — see this module's own _LEGACY_OWNERSHIP_SCOPE_
+    #    NAME comment.) Checked first and read-only, before touching this
+    #    script's own dev scope at all, so the ordinary case below (no
+    #    legacy scope by that name exists) logs exactly the same lines in
+    #    exactly the same order as before this fix. Reuse it in place —
+    #    same world_id, same timelines, same campaigns — rather than
+    #    creating a duplicate. If the legacy scope has never been claimed,
+    #    claim it for owner_user_id through the same sanctioned bootstrap
+    #    path scripts/claim_legacy_ownership_scope.py uses, so ownership is
+    #    explicit rather than left unowned; if it already has an owner
+    #    (someone else already claimed it), this script has no authority
+    #    to add itself and does not try to — that would need a real
+    #    transfer feature, which this fix does not build.
+    legacy_match = _find_world_in_named_scope(
+        connection, scope_name=_LEGACY_OWNERSHIP_SCOPE_NAME, slug=_WORLD_SLUG
+    )
+    if legacy_match is not None:
+        world_id, legacy_scope_id = legacy_match
+        summary.add(
+            created=False,
+            label=f"world {_WORLD_NAME!r} (recovered from legacy ownership scope)",
+            record_id=world_id,
+        )
+        existing_membership_count = connection.execute(
+            text(
+                "SELECT count(*) FROM security.ownership_scope_memberships "
+                "WHERE ownership_scope_id = :scope"
+            ),
+            {"scope": legacy_scope_id},
+        ).scalar()
+        if not existing_membership_count:
+            from dnd_ai.commands.ownership import claim_unclaimed_ownership_scope
+
+            claim_result = claim_unclaimed_ownership_scope(
+                connection, ownership_scope_id=legacy_scope_id, user_id=owner_user_id
+            )
+            summary.add(
+                created=True,
+                label="legacy ownership scope claimed for dev fixture",
+                record_id=claim_result.ownership_scope_membership_id,
+            )
+        return world_id
+
+    # 2. Resolve (creating if needed) this script's own dev ownership scope,
+    #    then check or create the world within it — unchanged from before
+    #    this fix.
     ownership_scope_id = _get_or_create_dev_ownership_scope(
         connection, summary, owner_user_id=owner_user_id
     )
-
     existing = connection.execute(
         text("SELECT world_id FROM core.worlds WHERE ownership_scope_id = :scope AND slug = :slug"),
         {"scope": ownership_scope_id, "slug": _WORLD_SLUG},
@@ -1787,7 +1868,7 @@ def _get_or_create_world(
     active_status = lookup_id(
         connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
     )
-    world_id = connection.execute(
+    new_world_id = connection.execute(
         text("""
             INSERT INTO core.worlds (name, slug, description, lifecycle_status_id, ownership_scope_id)
             VALUES (:name, :slug, :description, :status, :ownership_scope_id)
@@ -1801,9 +1882,9 @@ def _get_or_create_world(
             "ownership_scope_id": ownership_scope_id,
         },
     ).scalar()
-    assert isinstance(world_id, uuid.UUID)
-    summary.add(created=True, label=f"world {_WORLD_NAME!r}", record_id=world_id)
-    return world_id
+    assert isinstance(new_world_id, uuid.UUID)
+    summary.add(created=True, label=f"world {_WORLD_NAME!r}", record_id=new_world_id)
+    return new_world_id
 
 
 def _get_ruleset(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
