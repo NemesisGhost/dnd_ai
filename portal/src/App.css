@@ -1928,6 +1928,22 @@
   color: var(--color-danger);
 }
 
+/* Platform-administrator indicator (CP 10) — shown only on the rows that
+   are one, per D-10: "indicate, do not tabulate." No dedicated table
+   column exists for this, so the badge carries its own accessible text
+   rather than relying on colour alone. */
+.access-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-accent);
+  color: var(--color-text);
+}
+
 /* Batch access-group membership picker. Each eligible campaign member is
    an ordinary checkbox so selecting several members does not depend on
    platform-specific multi-select keyboard gestures. */

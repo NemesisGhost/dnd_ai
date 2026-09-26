@@ -19,6 +19,8 @@ import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
+import { AdminAccountsPage } from "./pages/AdminAccountsPage"
+import { AdminAccountsNavLink } from "./components/AdminAccountsNavLink"
 
 function App() {
   return (
@@ -31,6 +33,7 @@ function App() {
         <p className="app-header__title">
           D&amp;D AI Portal
         </p>
+        <AdminAccountsNavLink />
         <ThemeSelector />
         <LogoutButton />
       </header>
@@ -67,6 +70,17 @@ function App() {
         <Route
           path="/campaign-invitations/accept"
           element={<AcceptCampaignInvitationPage />}
+        />
+
+        <Route
+          path="/admin/accounts"
+          element={
+            <AuthenticatedSessionBoundary>
+              {(bootstrap) => (
+                <AdminAccountsPage bootstrap={bootstrap} />
+              )}
+            </AuthenticatedSessionBoundary>
+          }
         />
 
         <Route
