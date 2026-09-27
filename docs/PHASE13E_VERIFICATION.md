@@ -185,6 +185,76 @@ Per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md),
 this containerized-PostgreSQL-18 CI run is the merge gate; no AWS-dev
 verification path applies to Phase 13E or later work.
 
+## Post-checkpoint-16 manual-acceptance fixes
+
+A manual-acceptance pass over the delivered surface, taken independently of
+this file's own automated coverage, found three defects/gaps worth closing
+before treating Phase 13E as genuinely done:
+
+1. **Logged-out invitation-link continuation hung indefinitely.** A visitor
+   opening a valid `/campaign-invitations/accept#token=...` link while
+   logged out got stuck on "Checking the invitation link." forever. Root
+   cause: `useBeginInvitationOnboarding` fired its request from inside an
+   imperative `submit()` call while a separate effect owned that request's
+   `AbortController` unmount cleanup — React 18 StrictMode's mount →
+   cleanup → mount replay of the tree's first commit (`npm run dev`; the
+   exact conditions of local manual testing, though stripped from
+   production builds) let the phantom cleanup permanently abort the one
+   real request with nothing left to resubmit it. Fixed by driving the
+   `fetch` from an effect keyed on a `pending` state value instead, so the
+   effect that creates the controller and the one that aborts it are always
+   the same invocation. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3n's
+   "Manual-acceptance fix" note for the full account, and
+   `useBeginInvitationOnboarding.test.tsx`'s StrictMode regression test.
+   Two secondary gaps closed alongside it: a transient `start` failure
+   (rate-limited/generic error) now offers **Try again** against the
+   already-captured token instead of a dead end, and successful sign-in/
+   registration/confirmation now reloads the session bootstrap before
+   offering "Go to campaigns," so the new membership is present the first
+   time that link is followed.
+2. **Audit history was a panel embedded in the main Access-management
+   screen**, fetched every time a GM opened that screen regardless of
+   whether they cared about history. Split into its own route,
+   `/app/:campaignId/access/audit`, with a shared `AccessTabNav` on both it
+   and `/app/:campaignId/access` — see `docs/AUDIT_HISTORY_API.md`'s
+   updated intro. `AuditHistory` now owns its route's single `<h1>` instead
+   of the `<h2>` it used while embedded.
+3. **"Preview as a member" was confined to the Access page**, even though
+   the backend's per-resource preview contract (checkpoint 15, §3r) is
+   exactly what a GM most wants while looking at a specific quest or
+   knowledge item. `AudiencePreviewSection` now places the same control on
+   the Quest/Knowledge collection and detail pages — see
+   `docs/PHASE13E_ACCESS_CONTRACT.md` §3r's "Placement" note. Fixing this
+   surfaced a real, independent bug: the presentation-only gate for showing
+   the control at all checked `campaign.view` (a capability nearly every
+   member holds) instead of `access.manage` (the capability the backend
+   actually requires) — `utils/canPreviewAudience.ts` now centralizes the
+   correct check for all five placements.
+
+Verification for this pass, run to completion (not merely spot-checked):
+
+| Command | Result |
+|---|---|
+| `npm test` (portal) | 1,228 passed, 213 files |
+| `npm run lint` (portal) | clean |
+| `npm run build` (portal) | clean (`tsc -b && vite build`) |
+| `uv run pytest tests/ -q` (full backend suite: unit, database, scenario) | 4,575 passed |
+| `uv run ruff format --check .` | 427 files already formatted |
+| `uv run ruff check .` | all checks passed |
+| `uv run mypy src` | no issues found in 123 source files |
+| `uv run alembic -c alembic.ini check` (run from `database/`) | no new upgrade operations detected |
+| `git diff --check origin/main...HEAD` | clean |
+
+No Python source changed by this pass — the three fixes (item 1's
+StrictMode hang, item 2's audit-history route split, item 3's preview
+placements) are entirely portal-side; the backend full-suite run above is
+a regression check, not evidence of a backend change. `git diff --check`
+initially flagged two pre-existing files from earlier commits on this
+branch (`src/dnd_ai/api/auth.py`, `tests/database/test_role_grants.py`) —
+both a `core.autocrlf=true` artifact, not real trailing whitespace,
+resolved the same way `.gitattributes` already resolves it for
+`test_api_campaigns.py`: `whitespace=cr-at-eol`.
+
 ## Recurring obligations ([§24.1](PLAN.md#241-phase-exit-review))
 
 | Obligation | Result |
