@@ -295,7 +295,13 @@ def _validate_category(category: str | None) -> tuple[str, ...]:
     return _COMMANDS_BY_CATEGORY[category]
 
 
-_QUERY = """
+# Shared by `_QUERY` (the paginated list) and `_ACTORS_QUERY` (the bounded
+# actor facet, item 3 of the audit-actor-contract fix): both need the exact
+# same campaign-scoping join-by-record_id resolution this CTE performs, and
+# duplicating it would let the two drift out of sync — an actor could then
+# appear in the filter dropdown for a category/command this module doesn't
+# actually surface in the list itself, or vice versa.
+_SCOPED_CTE = """
     WITH scoped AS (
         SELECT
             cl.change_log_id, cl.command_name, cl.recorded_at,
@@ -426,6 +432,11 @@ _QUERY = """
             ON cm.campaign_membership_id = agm.campaign_membership_id
         WHERE cl.command_name = ANY(CAST(:access_group_membership_commands AS text[]))
     )
+"""
+
+_QUERY = (
+    _SCOPED_CTE
+    + """
     SELECT
         s.change_log_id, s.command_name, s.recorded_at, s.previous_status, s.new_status,
         s.actor_user_id, actor.display_name AS actor_display_name, s.actor_service,
@@ -491,6 +502,27 @@ _QUERY = """
     ORDER BY s.recorded_at DESC, s.change_log_id DESC
     LIMIT :limit_plus_one
 """
+)
+
+# Item 3 of the audit-actor-contract fix: a bounded facet of "which users
+# have ever acted in this campaign's audit history," scoped identically to
+# `_QUERY` (same `scoped` CTE, same `resolved_campaign_id` filter) but
+# unfiltered by category/time/actor — a filter-population facet always
+# lists every option, never just the ones the current filter selection
+# would also match. The JOIN (not LEFT JOIN) to `security.users` is
+# deliberate: it drops service-actor and unknown-actor rows on its own,
+# since only a real, resolvable `security.users` row can appear in this
+# actor-select filter at all.
+_ACTORS_QUERY = (
+    _SCOPED_CTE
+    + """
+    SELECT DISTINCT s.actor_user_id, actor.display_name AS actor_display_name
+    FROM scoped s
+    JOIN security.users actor ON actor.user_id = s.actor_user_id
+    WHERE s.resolved_campaign_id = :campaign_id
+    ORDER BY actor.display_name, s.actor_user_id
+"""
+)
 
 
 def _change_summary(row: dict[str, object], *, command_name: str) -> str | None:
@@ -692,3 +724,50 @@ def list_campaign_audit_history(
             )
         )
     return tuple(items)
+
+
+@dataclass(frozen=True)
+class AuditActor:
+    user_id: uuid.UUID
+    display_name: str
+
+
+def list_campaign_audit_actors(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+) -> tuple[AuditActor, ...]:
+    """Every distinct user who has ever acted as `actor_user_id` in
+    `campaign_id`'s own audit history — the actor-select filter's option
+    list (item 3 of the audit-actor-contract fix). Scoped by the identical
+    `resolved_campaign_id` join-by-record_id resolution `list_campaign_
+    audit_history` uses, so this can never name an actor from a different
+    campaign, or one whose only appearance is in a category/command this
+    module doesn't surface at all. Returns an empty tuple for a campaign
+    with no audit history yet — not an error, and not an existence signal
+    either way (the caller has already proven campaign access via
+    `require_campaign_capability` before this function ever runs, matching
+    `list_campaign_audit_history`'s own non-disclosure contract)."""
+    rows = connection.execute(
+        text(_ACTORS_QUERY),
+        {
+            "campaign_id": campaign_id,
+            "membership_commands": list(_MEMBERSHIP_TABLE_COMMANDS),
+            "role_commands": list(_ROLE_TABLE_COMMANDS),
+            "relationship_commands": list(_RELATIONSHIP_TABLE_COMMANDS),
+            "grant_commands": list(_GRANT_TABLE_COMMANDS),
+            "invitation_commands": list(_INVITATION_TABLE_COMMANDS),
+            "campaign_commands": list(_CAMPAIGN_TABLE_COMMANDS),
+            "access_group_commands": list(_ACCESS_GROUP_TABLE_COMMANDS),
+            "access_group_membership_commands": list(_ACCESS_GROUP_MEMBERSHIP_TABLE_COMMANDS),
+        },
+    ).mappings()
+
+    actors: list[AuditActor] = []
+    for row in rows:
+        actor_user_id = row["actor_user_id"]
+        assert isinstance(actor_user_id, uuid.UUID)
+        display_name = row["actor_display_name"]
+        assert isinstance(display_name, str)
+        actors.append(AuditActor(user_id=actor_user_id, display_name=display_name))
+    return tuple(actors)

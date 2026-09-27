@@ -61,3 +61,17 @@ export const EMPTY_AUDIT_HISTORY_FILTERS: AuditHistoryFilters = {
     occurredFrom: null,
     occurredTo: null,
 }
+
+// Mirrors dnd_ai.api.audit_history.AuditActorResponse — the bounded actor
+// facet backing the filter above (`GET .../audit-history/actors`,
+// audit-actor-contract fix). Deliberately just these two fields: the
+// actor-select filter never needs anything else, and the endpoint itself
+// never returns anything else.
+export interface AuditActor {
+    user_id: string
+    display_name: string
+}
+
+export interface AuditActorListResponse {
+    actors: AuditActor[]
+}

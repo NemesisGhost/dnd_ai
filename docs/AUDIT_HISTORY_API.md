@@ -15,6 +15,17 @@ workstream adds. It does not change, and is not a substitute for,
 remains the authoritative record of the Access-page mutation/read contract
 this endpoint sits alongside).
 
+**Audit-actor-contract fix.** The actor-select filter's option list no
+longer comes from `GET .../access-overview` (which the audit route would
+otherwise need to fetch in full — memberships, roles, relationships,
+grants, access groups — merely to populate one filter). `GET .../audit-
+history/actors` (§6a below) is a second, narrower endpoint added
+alongside the list endpoint: same `access.manage` authorization, same
+campaign-scoping join-by-`record_id` resolution, `user_id`/`display_name`
+only. `AuditHistory.tsx` always renders regardless of that facet's own
+status — a failed or still-loading actor fetch simply omits the filter,
+never blocks or errors the page itself.
+
 ## 1. Discovered data model
 
 - **Table:** `audit.change_log` (revision `007_audit_change_log`;
@@ -252,6 +263,46 @@ invented here.
   `access.manage`-gated route in this codebase.
 - `422` — a malformed `category`/`actor_user_id`/datetime query parameter,
   or a malformed/wrong-endpoint pagination cursor.
+
+## 4a. Actor facet (audit-actor-contract fix)
+
+`GET /campaigns/{campaign_id}/audit-history/actors`
+
+The actor-select filter's own option list — added so the audit route
+never needs the complete `GET .../access-overview` response merely to
+populate this one filter. Same capability, same non-disclosing 404/403
+split, same campaign-scoping join-by-`record_id` resolution `dnd_ai.
+queries.audit_history.list_campaign_audit_history` uses (`dnd_ai.queries.
+audit_history.list_campaign_audit_actors`, sharing that module's `scoped`
+CTE) — an actor can never leak from a different campaign on a shared
+timeline, and can never name a category/command this module doesn't
+otherwise surface in the list itself.
+
+**Capability:** `access.manage`, identical to §4 above. No query
+parameters — this is a bounded facet, not a filtered/paginated list; it
+always returns every distinct human actor this campaign's own audit
+history has ever recorded, regardless of the current filter selection (the
+same "always lists every option" contract `access-overview`'s own
+`assignable_roles`/`assignable_characters` already follow).
+
+**Response `200`:**
+
+```json
+{
+  "actors": [
+    { "user_id": "3fa2...", "display_name": "GM Alex" }
+  ]
+}
+```
+
+Only `user_id`/`display_name` — never email, login name, or any other
+account field. A service-attributed event (`audit.change_log.actor_
+service` set, `actor_user_id` NULL) never appears here; this facet is
+human-actor-only, matching what an actor **filter** can meaningfully
+select by.
+
+**Status codes:** identical to §4 — `200` (including `{"actors": []}` for
+a campaign with no audit history yet), `403`, `404`.
 
 ## 5. Ordering and pagination
 

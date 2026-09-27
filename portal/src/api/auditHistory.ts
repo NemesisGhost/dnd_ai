@@ -1,4 +1,6 @@
 import type {
+    AuditActor,
+    AuditActorListResponse,
     AuditHistoryFilters,
     AuditHistoryPage,
 } from "../types/auditHistory"
@@ -106,4 +108,31 @@ export async function fetchAuditHistory(
     }
 
     return (await response.json()) as AuditHistoryPage
+}
+
+// Audit-actor-contract fix: the actor-select filter's option list, sourced
+// from this bounded, identically-authorized facet (`GET .../audit-history/
+// actors`) rather than the complete `GET .../access-overview` response
+// (memberships, roles, relationships, grants, access groups) the audit
+// route no longer needs at all.
+export async function fetchAuditActors(
+    campaignId: string,
+    signal?: AbortSignal,
+): Promise<AuditActor[]> {
+    const encodedCampaignId = encodeURIComponent(campaignId)
+
+    const response = await fetch(`/api/campaigns/${encodedCampaignId}/audit-history/actors`, {
+        method: "GET",
+        headers: {
+            Accept: "application/json",
+        },
+        cache: "no-store",
+        signal,
+    })
+
+    if (!response.ok) {
+        throw new AuditHistoryRequestError(response.status)
+    }
+
+    return ((await response.json()) as AuditActorListResponse).actors
 }

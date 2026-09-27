@@ -29,14 +29,17 @@ export interface AuditHistoryProps {
      */
     campaignId: string
     /**
-     * The actor filter's own option list (checkpoint 14) — sourced from
-     * the caller's already-audience-safe campaign membership list (`dnd_ai.
-     * queries.access_overview.get_campaign_access_overview`'s own `members`
-     * array, never a new account-directory query of this component's own:
-     * §4's security invariant, "the actor list is sourced from the
-     * overview's already-audience-safe member list, never from a new
-     * account query"). Defaults to `[]` — the actor filter is simply not
-     * offered when the caller has no member list in hand yet.
+     * The actor filter's own option list (checkpoint 14; re-sourced by
+     * the audit-actor-contract fix). Originally sourced from the caller's
+     * `GET .../access-overview` `members` array; now sourced from the
+     * bounded, identically `access.manage`-authorized `GET .../audit-
+     * history/actors` facet instead (`useAuditActors`), so opening this
+     * route no longer needs the complete access-overview response
+     * (memberships, roles, relationships, grants, access groups) merely
+     * to populate this one filter. Either way, never a new account-
+     * directory query of this component's own. Defaults to `[]` — the
+     * actor filter is simply not offered when the caller has no actor
+     * list in hand yet (loading, unavailable, or errored).
      */
     actors?: AuditActorOption[]
 }

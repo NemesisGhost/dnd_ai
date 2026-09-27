@@ -40,6 +40,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.audit import record_change_log
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -1027,3 +1028,135 @@ def test_a_renamed_character_target_shows_its_current_name(
         body = client.get(_url(f.campaign_id, category="character_relationship", limit=100)).json()
     matching = [i for i in body["items"] if i["target_label"] == "Renamed Character (current)"]
     assert len(matching) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Actor facet (`GET /campaigns/{campaign_id}/audit-history/actors`) — the
+# audit-actor-contract fix: the audit route's actor-select filter no longer
+# depends on the complete `GET .../access-overview` response, just this
+# bounded, identically-authorized facet.
+# ---------------------------------------------------------------------------
+
+
+def _actors_url(campaign_id: uuid.UUID) -> str:
+    return f"/campaigns/{campaign_id}/audit-history/actors"
+
+
+def test_actors_non_member_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 404
+
+
+def test_actors_member_without_access_manage_gets_forbidden(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 403
+
+
+def test_actors_an_unknown_campaign_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_actors_url(uuid.uuid4()))
+    assert response.status_code == 404
+
+
+def test_actors_a_caller_whose_membership_has_ended_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Current-state checked: `f.departing_user_id` once held a real
+    membership in this campaign (and still appears *inside* its audit
+    history, as the target of an `end_campaign_membership` event) but that
+    membership is now closed. Authorization is resolved fresh from current
+    state, never from the historical record, so this caller gets the
+    identical non-disclosing 404 an outright non-member gets — the same
+    "current-state checked" contract `require_campaign_capability` already
+    enforces for the main history endpoint, proven here for the actor
+    facet too."""
+    with client_factory(f.departing_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 404
+
+
+def test_actors_a_foundry_access_principal_gets_forbidden(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Neither this endpoint nor its `/audit-history` sibling opts into
+    `allow_foundry_access` — both inherit `require_campaign_capability`'s
+    default-deny for a paired Foundry connection unchanged. The retired
+    `FOUNDRY_SYSTEM_AUTH_METHOD` ("machine") credential cannot reach any
+    authenticated route at all — rejected earlier, in `get_authenticated_
+    user_id` itself (see that function's own docstring) — so there is no
+    live code path to construct that principal against this route either;
+    this is the one Foundry/machine principal type that can still reach
+    `require_campaign_capability` at all."""
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    principal = AuthenticatedPrincipal(
+        user_id=f.admin_user_id,
+        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.world_id,
+        campaign_id=f.campaign_id,
+        foundry_connection_id=uuid.uuid4(),
+        foundry_device_id=uuid.uuid4(),
+        # A real, broad scope -- irrelevant to this test either way, since
+        # require_campaign_capability rejects a non-opted-in route's
+        # FOUNDRY_ACCESS_AUTH_METHOD caller before it ever checks scope.
+        foundry_scopes=frozenset({"encounter_read"}),
+    )
+    app.dependency_overrides[get_authenticated_user_id] = lambda: principal
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 403
+
+
+def test_actors_returns_the_distinct_human_actors_for_this_campaign_only(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 200
+    body = response.json()
+    actors = {(a["user_id"], a["display_name"]) for a in body["actors"]}
+    assert actors == {
+        (str(f.admin_user_id), "Audit History Admin A"),
+        (str(f.accepted_user_id), "Audit History Accepted Member"),
+        (str(f.onboarded_user_id), "Audit History Onboarded Member"),
+    }
+    # The service-attributed ("test.audit_history_fixture_service") event
+    # has no actor_user_id at all and must never surface here — this
+    # facet's contract is user_id/display_name only, matching item 4 of
+    # the audit-actor-contract fix.
+    assert not any(
+        a["display_name"] == "test.audit_history_fixture_service" for a in body["actors"]
+    )
+    # Campaign B's own actor (a different campaign, same shared timeline —
+    # the exact leak this module's campaign_id resolution exists to
+    # prevent) must never appear in Campaign A's own actor list.
+    assert str(f.other_admin_user_id) not in {a["user_id"] for a in body["actors"]}
+
+
+def test_actors_are_scoped_per_campaign_not_leaked_across_a_shared_timeline(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.other_admin_user_id) as client:
+        response = client.get(_actors_url(f.other_campaign_id))
+    assert response.status_code == 200
+    body = response.json()
+    actors = {(a["user_id"], a["display_name"]) for a in body["actors"]}
+    assert actors == {(str(f.other_admin_user_id), "Audit History Admin B")}
+
+
+def test_actors_an_empty_campaign_returns_an_empty_list_not_an_error(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.empty_admin_user_id) as client:
+        response = client.get(_actors_url(f.empty_campaign_id))
+    assert response.status_code == 200
+    assert response.json() == {"actors": []}

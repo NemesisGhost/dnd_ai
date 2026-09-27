@@ -390,12 +390,13 @@ never renders them as visible text, only as React keys.
   `access.manage` capability before fetching the campaign's member list.
 
 Reading campaign audit history, filterable by category and by actor
-(sourced from the overview's own member list, never a new account query),
-is a sibling route rather than a panel on this same screen —
-`/app/:campaignId/access/audit`, with its own tab (`AccessTabNav`) shared
-with the management route above. Opening one tab never fetches the other's
-data, and reloading the audit URL directly works the same as navigating to
-it.
+(the actor list sourced from its own bounded, identically-authorized
+facet, `GET .../audit-history/actors` — never the complete access-overview
+response, and never a new account-directory query), is a sibling route
+rather than a panel on this same screen — `/app/:campaignId/access/audit`,
+with its own tab (`AccessTabNav`) shared with the management route above.
+Opening one tab never fetches the other's data, and reloading the audit
+URL directly works the same as navigating to it.
 
 The GM's copyable single-link invitation
 (`/campaign-invitations/accept#token=<one-time-token>`) is the primary
