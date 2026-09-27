@@ -158,14 +158,41 @@ gap (`tables/__init__.py`) alone, confirming the first two were genuinely
 fixed rather than merely reordered. The third (after all three fixes) is
 the result reported above.
 
+## CI status on the final head
+
+Pushed as `phase13e/phase13e-b` and opened as
+[PR #62](https://github.com/NemesisGhost/dnd_ai/pull/62). That push's own
+CI run first caught one genuine gap this file's local commands had missed:
+`ruff format --check .` run against the *whole* repository (rather than the
+targeted per-file checks used throughout this checkpoint sequence) found
+one file — `src/dnd_ai/commands/access_grants.py`, from checkpoint 12's own
+P-8 fix — not reformatted to match. Fixed in a follow-up commit
+(`style: reformat access_grants.py's entity-type-code check`, no behavior
+change) and re-pushed. That commit's own CI run — queried directly against
+the GitHub Actions API rather than assumed — is green on all six jobs, at
+commit `30fcec5`:
+
+| Job | Result |
+|---|---|
+| Lint and Type Check | success (25s) |
+| Migrations and Tests (PostgreSQL 18) | success (9m28s) |
+| Portal tests, lint, and build | success (2m26s) |
+| Application image and compose smoke test | success (53s) |
+| Named volume survives container recreation | success (41s) |
+| Foundry module tests and packaging | success (10s) |
+
+Per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md),
+this containerized-PostgreSQL-18 CI run is the merge gate; no AWS-dev
+verification path applies to Phase 13E or later work.
+
 ## Recurring obligations ([§24.1](PLAN.md#241-phase-exit-review))
 
 | Obligation | Result |
 |---|---|
 | Constraint tests | `security.invitation_onboarding_sessions`' own CHECK constraints (`ck_ios_expires_after_created` and equivalents) already had positive and negative coverage from checkpoint 8a; this closing pass added no new constraint, only the missing index and the two completeness-test entries above. |
 | Downgrade | `108_ios_consumed_by_index`'s `downgrade()` drops the index; not exercised by a dedicated round-trip test in this pass (an index-only migration, matching `104_audit_history_indexes`'s own identical scope), but `alembic downgrade -1` was run manually against the local database and confirmed to remove `ix_ios_consumed_by_user_id` cleanly, followed by `alembic upgrade head` to restore it before the final full-suite run. |
-| Local/CI agreement | Not yet confirmed against a real CI run — this branch has not been pushed for a CI run as of this checkpoint closing. Every command above was run locally against PostgreSQL 18, matching what CI's own "Migrations and Tests (PostgreSQL 18)" job runs, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md). |
-| CI green | **Not yet recorded.** Unlike Phase 10's verification file, this checkpoint closes without a queried GitHub Actions result — record the actual run id and job statuses here once this branch is pushed and CI completes, per this document's own "no document claims anything the code does not do" exit criterion. Treat this file as provisionally closed on local evidence alone until that entry is added. |
+| Local/CI agreement | Confirmed: local `pytest tests/database tests/unit -q` (4,480 passed) and local `ruff`/`mypy` agree with CI's own "Lint and Type Check"/"Migrations and Tests (PostgreSQL 18)" jobs for the same commit — both green. |
+| CI green | See "CI status on the final head" above — all six jobs green at `30fcec5`. |
 
 ## Manual validation
 
@@ -182,9 +209,9 @@ each of the three accounts) is deferred to a future pass, per that
 section's own note — the automated byte-identical test already proves the
 property a manual pass would otherwise exist to confirm.
 
-Phase 13E is closed on local evidence per [§24.0](PLAN.md#240-verification-policy):
+Phase 13E is closed per [§24.0](PLAN.md#240-verification-policy)/[§24.1](PLAN.md#241-phase-exit-review):
 every checkpoint's own security invariant is traceable to a named test
-above, the three gaps the full-suite run exposed are fixed and re-verified,
-and every document this checkpoint touched now matches the delivered code.
-CI confirmation on the final head remains an open item, recorded honestly
-above rather than assumed.
+above, the three schema gaps and the one formatting gap the full-suite/CI
+runs exposed are fixed and re-verified, every document this checkpoint
+touched now matches the delivered code, and CI on the final head
+(`30fcec5`, PR #62) is green across all six jobs.
