@@ -1,9 +1,14 @@
 # Campaign audit-history read API (Phase 13E-B audit-history workstream)
 
-Backs the Access page's "Audit history" panel (`AuditHistory.tsx`, embedded
-in `CampaignAccessPage.tsx` — checkpoint 14 wired it in; earlier checkpoints
-built the component fully tested but not yet rendered anywhere). Read-only —
-no new command, no new mutation, no new capability. This document records
+Backs the Access section's "Audit history" tab (`AuditHistory.tsx`, its own
+page at `CampaignAccessAuditPage.tsx` — checkpoint 14 first wired the
+component in, embedded directly in `CampaignAccessPage.tsx`; a
+manual-acceptance fix afterward split it into its own route, `/app/
+:campaignId/access/audit`, alongside the management route `/app/
+:campaignId/access`, so opening either tab never fetches the other's data
+and a direct reload of the audit URL works. `AccessTabNav` renders the two
+tabs on both routes). Read-only — no new command, no new mutation, no new
+capability. This document records
 the discovered `audit.change_log` contract and the exact endpoint this
 workstream adds. It does not change, and is not a substitute for,
 [docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which

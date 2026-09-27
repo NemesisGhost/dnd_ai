@@ -20,9 +20,12 @@ a character relationship — see §3g/§3h/§3i/§3j), and 13E-B checkpoint 5
 membership; revoke an existing resource grant — see §3k), checkpoint 6
 (campaign access-group management — see §3l), and checkpoint 7
 (invitation issuance/list/revocation plus manual authenticated acceptance —
-see §3m) are delivered.** Checkpoint 8's single-link invitation onboarding
-workflow is specified in §3n but is **not implemented yet**. Everything else
-below marked "reserved for a later increment"
+see §3m), checkpoints 8a-8d (single-link invitation onboarding — see §3n),
+checkpoints 9-11b (platform account lifecycle UI — see §3p), checkpoint 12
+(resource-grant target kinds, group grants, and the `deny` effect — see
+§3o), checkpoint 13 (effective-access explanation — see §3q), and
+checkpoint 15 (per-resource audience preview — see §3r) are delivered.**
+Everything else below marked "reserved for a later increment"
 is existing backend capability with no portal UI yet, or (where noted) a
 backend contract that does not exist at all yet.
 
@@ -686,9 +689,21 @@ approved later.
   directly to completion after showing the audience-safe campaign name and
   which signed-in account will join. It must not silently switch accounts.
 - If no authenticated session exists, the player is offered **Sign in** and
-  **Create account**. Both flows preserve the onboarding cookie, not the raw
-  token. Refresh after fragment cleanup resumes from the server-side
-  onboarding record while it remains valid.
+  **Create account**, rendered inline on `/campaign-invitations/accept`
+  itself rather than a redirect to `/login` — so the captured onboarding
+  state is never lost to a route change. Both flows preserve the onboarding
+  cookie, not the raw token. Refresh after fragment cleanup resumes from the
+  server-side onboarding record while it remains valid. Successful sign-in,
+  registration, or confirmation reloads the session bootstrap before
+  offering the "Go to campaigns" link, so the newly joined campaign is
+  present the first time that link is followed rather than only after a
+  later, unrelated reload.
+- A transient `start` failure (rate-limited or a generic request error)
+  offers **Try again**, resubmitting the same token this component already
+  captured from the fragment — never re-reading the URL, which was already
+  cleared. `denied` (this session is not allowed to accept invitations at
+  all) and `unavailable` (token already consumed/expired/revoked) are
+  deliberately not retryable: retrying cannot change either outcome.
 - Foundry and machine principals cannot begin, register through, or complete
   this workflow.
 - Invalid, expired, revoked, already-consumed-by-another-user, or missing
@@ -710,6 +725,26 @@ token from persistence, logs, audit, URLs after cleanup, browser storage,
 and later responses. The invitation onboarding category also appears in the
 campaign audit history (checkpoint 14) — see `docs/AUDIT_HISTORY_API.md` §2
 for the full label-resolution contract.
+
+**Manual-acceptance fix (post-checkpoint-8d):** a logged-out visitor opening
+a valid link could get stuck indefinitely on "Checking the invitation
+link." — never wrong, never insecure, just never resolving. Root cause:
+`useBeginInvitationOnboarding` fired its one real network request from
+inside an imperative `submit()` call, while a *separate* effect owned that
+request's `AbortController` unmount cleanup. React 18 StrictMode's
+mount → cleanup → mount replay of a component's first commit (`npm run
+dev`; stripped from production builds, but exactly what local manual
+testing runs against) let the phantom cleanup abort the one live request
+with nothing left to resubmit it, since the page's own ref latch correctly
+prevents a second `submit()` call. Fixed by moving the `fetch` itself into
+a `useEffect` keyed on a `pending` state value that `submit()` only sets —
+so the effect that creates the `AbortController` and the effect that
+cleans it up are always the same invocation, and a StrictMode replay
+creates-then-aborts-then-recreates a fresh, live request rather than
+leaking an aborted one. Covered by `useBeginInvitationOnboarding.test.tsx`
+mounting the real hook under `<StrictMode>` with a mount-effect-driven
+`submit()` (mirroring the page's own pattern) and a controllable, never-
+auto-resolving mock request.
 
 ## 3o. Resource-grant target kinds, group grants, and the `deny` effect (checkpoint 12)
 
@@ -903,15 +938,43 @@ proves the preview response is byte-identical to what the subject's own
 authenticated request returns for the same resource and query parameters
 (the anti-lying test), for both a GM subject and a player subject.
 
-Portal: `AudiencePreviewPanel` on the Access page — pick a member (from the
-overview's own member list), pick a quest or knowledge item (reusing
-checkpoint 12's `ResourceTargetSelector`), see the rendered result in a
-container labelled with both. Changing either selection, or closing the
-panel, remounts (never merely re-renders) the fetching component, so a
-previous selection's content is gone the instant a different one is made.
-Absent (presentation only) for an actor whose own campaign membership lacks
-`campaign.view` — the server's `access.manage` gate is what actually
-authorizes every request regardless.
+Portal: `AudiencePreviewPanel` — pick a member (from the overview's own
+member list), pick a quest or knowledge item (reusing checkpoint 12's
+`ResourceTargetSelector`), see the rendered result in a container labelled
+with both. Changing either selection, or closing the panel, remounts (never
+merely re-renders) the fetching component, so a previous selection's
+content is gone the instant a different one is made. Presentation-only
+gate (the server's `access.manage` check on the campaign, `require_
+campaign_capability`, is what actually authorizes every request regardless)
+— the frontend hides the control from a session whose own campaign
+membership lacks `access.manage` (`utils/canPreviewAudience.ts`, shared by
+every placement below; corrected post-checkpoint-15 from an earlier,
+overly-permissive `campaign.view` check that every ordinary member also
+carries).
+
+**Placement (post-checkpoint-15 manual-acceptance fix):** the panel is no
+longer confined to the Access page. `AudiencePreviewSection` wraps it for
+four additional pages, each gating and fetching the member list
+independently (a player visiting any of them never triggers the
+campaign-access-overview request the panel's member list needs):
+- **Quest collection** (`QuestsPage`) and **Knowledge collection**
+  (`KnowledgePage`): the resource-type selector is locked to that page's
+  own type (`fixedResourceType`), but the resource itself is still picked
+  from `ResourceTargetSelector` — there is no collection-level preview
+  endpoint, only the same per-resource one §3r already describes.
+- **Quest detail** (`QuestDetailPage`) and **Knowledge detail**
+  (`KnowledgeDetailPage`): both the resource type and the specific resource
+  are locked to the one already on screen (`fixedResource`), so only a
+  member picker is shown — these routes ARE the single-resource detail
+  projection §3r's endpoints already return, so no separate resource
+  picker is needed or offered.
+
+No other page gets the control: no route in this codebase has a backend
+contract that can project a *collection* through a member's perspective
+(only single-quest/single-knowledge-item detail), so no page simulates that
+locally. Campaign navigation always remounts the section (keyed by
+`campaignId`), clearing any selected member/resource from a previous
+campaign rather than carrying it forward.
 
 ## 4. Principal/boundary summary
 
@@ -919,11 +982,11 @@ authorizes every request regardless.
 - **Platform-administrator:** `/admin/accounts*` (`dnd_ai.api.local_auth`) — gated on `security.users.is_platform_administrator`, checked *inside* the command (a non-platform-administrator caller gets a fixed, non-disclosing 404, not 403). Entirely separate from any campaign's `access.manage` — a campaign owner is not automatically a platform administrator, and vice versa.
 - **Campaign-scoped:** every `access.manage`-gated route in §2, plus the new overview read — authorization is per-campaign, resolved fresh per request via `dnd_ai.domain.access.resolve_access_context`.
 - **Self-service:** routes that act only on the caller's own account/own invitation with no special capability (`/auth/login`, `/auth/logout`, `/auth/change-password`, `/auth/sessions` list/delete-own, `/auth/activate`, `/auth/password-reset`, `POST /campaign-invitations/accept`).
-- **Planned invitation onboarding (not implemented):** §3n will add a
-  narrowly unauthenticated landing/start boundary plus invitation-authorized
-  registration. Possession of a valid onboarding invitation authorizes only
-  creation of that player's own local account and membership in the named
-  campaign; it never grants platform-administrator or campaign capabilities.
+- **Invitation onboarding (delivered, §3n):** a narrowly unauthenticated
+  landing/start boundary plus invitation-authorized registration.
+  Possession of a valid onboarding invitation authorizes only creation of
+  that player's own local account and membership in the named campaign; it
+  never grants platform-administrator or campaign capabilities.
 - **Foundry/machine boundary:** a `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated principal may reach a campaign-scoped route only when that route explicitly opts in via `require_campaign_capability(..., allow_foundry_access=True, foundry_scope=...)`. **None** of the access-management routes in §2, §3l's access-group routes, nor the access-overview read, opt in — a paired Foundry device or its adapter credential cannot list, create, or revoke any membership, role, relationship, grant, or access group, and cannot read the overview either. The retired `FOUNDRY_SYSTEM_AUTH_METHOD` cannot reach any authenticated route at all (rejected earlier, in `get_authenticated_user_id` itself).
 - **`POST /campaigns` (its own category):** callable by any human principal, but real authorization is inside `dnd_ai.commands.campaigns.create_campaign` (pre-existing `access.manage` in another campaign attached to the same timeline, plus a positively issued `security.timeline_bootstrap_grants` row) — not a generic "any authenticated human may create any campaign" self-service contract.
 

@@ -212,6 +212,9 @@ Authenticated campaign routes:
 - `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
 - `/app/:campaignId/access` — live campaign access-management surface
   (13E-A/13E-B; see [Access management (13E)](#access-management-13e) below)
+- `/app/:campaignId/access/audit` — the same Access section's audit-history
+  tab, its own route so a direct reload works and neither tab fetches the
+  other's data
 
 Every route above except `ask` is a live, API-backed screen. Campaign IDs
 from URLs are matched against the current bootstrap's
@@ -369,8 +372,6 @@ never renders them as visible text, only as React keys.
   removing individual group members;
 - adding and revoking a group-owned resource grant of any target kind and
   effect, identically to a direct grant;
-- reading campaign audit history, filterable by category and by actor
-  (sourced from the overview's own member list, never a new account query);
 - issuing, listing, and revoking pending campaign invitations, with a
   copyable single-link invitation (see below) alongside manual-entry;
 - explaining a selected member's effective access (`EffectiveAccessPanel`,
@@ -378,6 +379,23 @@ never renders them as visible text, only as React keys.
   relationship/grant sources, plus any active `deny`); and
 - previewing a quest or knowledge item exactly as a selected member would
   see it (`AudiencePreviewPanel`), for spoiler-checking before a session.
+  `AudiencePreviewSection` places the same control directly on the Quest
+  and Knowledge collection pages (resource type locked to the page, the
+  specific resource still picked via `ResourceTargetSelector`) and their
+  detail pages (both the type and the resource locked to what is already
+  on screen) — there is no page for previewing a whole *collection*,
+  because no backend route projects one; only the same single-quest/
+  single-knowledge-item detail endpoint `AudiencePreviewPanel` already
+  used exists. Every placement independently checks the same
+  `access.manage` capability before fetching the campaign's member list.
+
+Reading campaign audit history, filterable by category and by actor
+(sourced from the overview's own member list, never a new account query),
+is a sibling route rather than a panel on this same screen —
+`/app/:campaignId/access/audit`, with its own tab (`AccessTabNav`) shared
+with the management route above. Opening one tab never fetches the other's
+data, and reloading the audit URL directly works the same as navigating to
+it.
 
 The GM's copyable single-link invitation
 (`/campaign-invitations/accept#token=<one-time-token>`) is the primary
