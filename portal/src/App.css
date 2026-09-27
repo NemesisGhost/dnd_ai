@@ -1981,6 +1981,61 @@
   color: var(--color-danger);
 }
 
+/* AudiencePreviewPanel (Phase 13E-B checkpoint 15, spacing fix): the
+   member/resource-type/resource fields had no styling at all and rendered
+   as a single cramped run of labels and selects. Each field gets its own
+   row (label above control, like .knowledge-page__field above) with real
+   gaps between rows and before the rendered result. */
+.audience-preview-panel {
+  margin-top: 1rem;
+}
+
+.audience-preview-panel__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  max-width: 28rem;
+  margin: 0.75rem 0 0;
+}
+
+.audience-preview-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.audience-preview-panel__field label {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.audience-preview-panel__field select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  font: inherit;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.audience-preview-panel__field select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.audience-preview-panel__fixed-resource {
+  margin: 0;
+}
+
+.audience-preview-panel__target {
+  margin: 1rem 0 0.5rem;
+}
+
+.audience-preview-panel__result {
+  margin-top: 0.5rem;
+}
+
 /* Platform-administrator indicator (CP 10) — shown only on the rows that
    are one, per D-10: "indicate, do not tabulate." No dedicated table
    column exists for this, so the badge carries its own accessible text

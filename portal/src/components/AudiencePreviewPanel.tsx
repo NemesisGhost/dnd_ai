@@ -169,65 +169,69 @@ export function AudiencePreviewPanel({
                 <section aria-labelledby={headingId}>
                     <h4 id={headingId}>Preview as a member</h4>
 
-                    <label htmlFor={memberSelectId}>Member</label>
-                    <select
-                        id={memberSelectId}
-                        value={selectedMembershipId}
-                        onChange={(event) => {
-                            setSelectedMembershipId(event.currentTarget.value)
-                        }}
-                    >
-                        <option value="">Select a member</option>
-                        {members.map((member) => (
-                            <option
-                                key={member.campaign_membership_id}
-                                value={member.campaign_membership_id}
-                            >
-                                {member.display_name}
-                            </option>
-                        ))}
-                    </select>
-
-                    {fixedResourceType === undefined && (
-                        <>
-                            <label htmlFor={resourceTypeSelectId}>Resource type</label>
+                    <div className="audience-preview-panel__form">
+                        <div className="audience-preview-panel__field">
+                            <label htmlFor={memberSelectId}>Member</label>
                             <select
-                                id={resourceTypeSelectId}
-                                value={selectedResourceType}
+                                id={memberSelectId}
+                                value={selectedMembershipId}
                                 onChange={(event) => {
-                                    setSelectedResourceType(
-                                        event.currentTarget.value as AudiencePreviewResourceType,
-                                    )
-                                    setPickedResource(null)
+                                    setSelectedMembershipId(event.currentTarget.value)
                                 }}
                             >
-                                <option value="quest">Quest</option>
-                                <option value="knowledge_item">Knowledge item</option>
+                                <option value="">Select a member</option>
+                                {members.map((member) => (
+                                    <option
+                                        key={member.campaign_membership_id}
+                                        value={member.campaign_membership_id}
+                                    >
+                                        {member.display_name}
+                                    </option>
+                                ))}
                             </select>
-                        </>
-                    )}
+                        </div>
 
-                    {fixedResource === undefined ? (
-                        <>
-                            <label id={resourceLabelId}>
-                                {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}
-                            </label>
-                            <ResourceTargetSelector
-                                campaignId={campaignId}
-                                targetType={selectedResourceType}
-                                assignableCharacters={[]}
-                                value={pickedResource?.id ?? ""}
-                                disabled={false}
-                                labelId={resourceLabelId}
-                                onChange={setPickedResource}
-                            />
-                        </>
-                    ) : (
-                        <p className="audience-preview-panel__fixed-resource">
-                            {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}:{" "}
-                            <strong>{fixedResource.display_name}</strong>
-                        </p>
-                    )}
+                        {fixedResourceType === undefined && (
+                            <div className="audience-preview-panel__field">
+                                <label htmlFor={resourceTypeSelectId}>Resource type</label>
+                                <select
+                                    id={resourceTypeSelectId}
+                                    value={selectedResourceType}
+                                    onChange={(event) => {
+                                        setSelectedResourceType(
+                                            event.currentTarget.value as AudiencePreviewResourceType,
+                                        )
+                                        setPickedResource(null)
+                                    }}
+                                >
+                                    <option value="quest">Quest</option>
+                                    <option value="knowledge_item">Knowledge item</option>
+                                </select>
+                            </div>
+                        )}
+
+                        {fixedResource === undefined ? (
+                            <div className="audience-preview-panel__field">
+                                <label id={resourceLabelId}>
+                                    {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}
+                                </label>
+                                <ResourceTargetSelector
+                                    campaignId={campaignId}
+                                    targetType={selectedResourceType}
+                                    assignableCharacters={[]}
+                                    value={pickedResource?.id ?? ""}
+                                    disabled={false}
+                                    labelId={resourceLabelId}
+                                    onChange={setPickedResource}
+                                />
+                            </div>
+                        ) : (
+                            <p className="audience-preview-panel__fixed-resource">
+                                {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}:{" "}
+                                <strong>{fixedResource.display_name}</strong>
+                            </p>
+                        )}
+                    </div>
 
                     {canPreview && (
                         <div aria-live="polite">
