@@ -54,6 +54,11 @@ export function AcceptCampaignInvitationPage() {
     // usable during render without touching a ref there (refs may only
     // be read inside effects/handlers, never during render).
     const [hadHashToken] = useState(() => window.location.hash.startsWith(_HASH_TOKEN_PREFIX))
+    // Kept only in memory, for the life of this component, so a transient
+    // failure (network drop, rate limit) can offer a "Try again" that
+    // resubmits the same captured token without ever writing it back to
+    // the URL, storage, or PostgreSQL.
+    const capturedTokenRef = useRef<string | null>(null)
 
     const begin = useBeginInvitationOnboarding()
     const onboardingStatus = useInvitationOnboardingStatus()
@@ -70,6 +75,9 @@ export function AcceptCampaignInvitationPage() {
     const manualAccept = useAcceptCampaignInvitation((result) => {
         setManualAcceptedResult(result)
         setManualToken("")
+        // The new membership won't show up on /campaigns until the
+        // session bootstrap that page reads is refetched.
+        reload()
     })
 
     useEffect(() => {
@@ -83,6 +91,7 @@ export function AcceptCampaignInvitationPage() {
         hashConsumedRef.current = true
         const invitationToken = decodeURIComponent(hash.slice(_HASH_TOKEN_PREFIX.length))
         window.history.replaceState(null, "", window.location.pathname + window.location.search)
+        capturedTokenRef.current = invitationToken
         begin.submit(invitationToken)
         // Intentionally run-once: hashConsumedRef, not the dependency
         // array, is what makes this idempotent (see the ref's own comment
@@ -160,6 +169,11 @@ export function AcceptCampaignInvitationPage() {
         begin.status.kind === "rate_limited" ||
         begin.status.kind === "error"
     ) {
+        // Rate limiting and generic errors are recoverable — retry
+        // resubmits the token this component already captured in memory
+        // (never re-read from the URL, which was cleared long ago).
+        // "denied" is not a transient condition, so it gets no retry.
+        const canRetry = begin.status.kind === "rate_limited" || begin.status.kind === "error"
         return (
             <main className="app-main">
                 <section
@@ -170,8 +184,23 @@ export function AcceptCampaignInvitationPage() {
                     <p>
                         {begin.status.kind === "rate_limited"
                             ? "Too many attempts. Wait a while and try again."
-                            : "Something went wrong opening this link. Try again."}
+                            : begin.status.kind === "denied"
+                              ? "You are not allowed to accept invitations from this session."
+                              : "Something went wrong opening this link. Try again."}
                     </p>
+                    {canRetry && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const token = capturedTokenRef.current
+                                if (token !== null) {
+                                    begin.submit(token)
+                                }
+                            }}
+                        >
+                            Try again
+                        </button>
+                    )}
                 </section>
             </main>
         )
@@ -319,6 +348,9 @@ export function AcceptCampaignInvitationPage() {
                     signedInDisplayName={data.signed_in_display_name}
                     onCompleted={(result: CompleteInvitationOnboardingResponse) => {
                         setCompletedCampaignName(result.campaign_display_name)
+                        // Same reasoning as the manual-accept path above:
+                        // refresh the bootstrap the campaigns list reads.
+                        reload()
                     }}
                     onNeedsStatusRefresh={onboardingStatus.retry}
                 />
@@ -346,6 +378,7 @@ export function AcceptCampaignInvitationPage() {
                             onboardingCsrfToken={data.onboarding_csrf_token}
                             onRegistered={(result: RegisterInvitedAccountResponse) => {
                                 setCompletedCampaignName(result.campaign_display_name)
+                                reload()
                             }}
                         />
                     </div>

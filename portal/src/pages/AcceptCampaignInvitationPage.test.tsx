@@ -198,6 +198,36 @@ describe("AcceptCampaignInvitationPage — hash-driven onboarding", () => {
         ).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument()
     })
+
+    it("offers retry on a recoverable begin error and resubmits the originally captured token", () => {
+        window.history.replaceState(null, "", "/campaign-invitations/accept#token=raw-token")
+        beginHookRef.current = { status: { kind: "error" } }
+
+        renderPage({ status: "unauthenticated" })
+        beginSubmitMock.mockClear()
+
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+
+        expect(beginSubmitMock).toHaveBeenCalledWith("raw-token")
+        expect(beginSubmitMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("offers retry on a rate-limited begin response", () => {
+        window.history.replaceState(null, "", "/campaign-invitations/accept#token=raw-token")
+        beginHookRef.current = { status: { kind: "rate_limited" } }
+
+        renderPage({ status: "unauthenticated" })
+
+        expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
+    })
+
+    it("does not offer retry when the session is denied", () => {
+        beginHookRef.current = { status: { kind: "denied" } }
+
+        renderPage({ status: "unauthenticated" })
+
+        expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument()
+    })
 })
 
 describe("AcceptCampaignInvitationPage — sign-in/register and confirm", () => {
@@ -251,6 +281,27 @@ describe("AcceptCampaignInvitationPage — sign-in/register and confirm", () => 
         )
     })
 
+    it("reloads the authoritative session bootstrap once registration succeeds", () => {
+        statusHookRef.current = {
+            state: {
+                status: "success",
+                data: {
+                    campaign_display_name: "Fixture Campaign",
+                    invitation_expires_at: "2026-10-01T00:00:00Z",
+                    onboarding_expires_at: "2026-09-25T00:20:00Z",
+                    onboarding_csrf_token: "onboarding-csrf",
+                    next_action: "sign_in_or_register",
+                    signed_in_display_name: null,
+                },
+            },
+        }
+
+        renderPage({ status: "unauthenticated" })
+        fireEvent.click(screen.getByText("fake-register-success"))
+
+        expect(reloadMock).toHaveBeenCalledTimes(1)
+    })
+
     it("renders the confirm panel naming the signed-in account", () => {
         statusHookRef.current = {
             state: {
@@ -292,5 +343,58 @@ describe("AcceptCampaignInvitationPage — sign-in/register and confirm", () => 
         expect(
             screen.getByRole("heading", { name: "You joined Fixture Campaign" }),
         ).toBeInTheDocument()
+    })
+
+    it("reloads the authoritative session bootstrap once confirm succeeds", () => {
+        statusHookRef.current = {
+            state: {
+                status: "success",
+                data: {
+                    campaign_display_name: "Fixture Campaign",
+                    invitation_expires_at: "2026-10-01T00:00:00Z",
+                    onboarding_expires_at: "2026-09-25T00:20:00Z",
+                    onboarding_csrf_token: "onboarding-csrf",
+                    next_action: "confirm",
+                    signed_in_display_name: "Existing User",
+                },
+            },
+        }
+
+        renderPage({ status: "authenticated", bootstrap: sessionBootstrapFixture })
+        fireEvent.click(screen.getByText("fake-confirm-success"))
+
+        expect(reloadMock).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe("AcceptCampaignInvitationPage — token never reaches browser storage", () => {
+    it("leaves localStorage and sessionStorage empty after the full hash-driven flow", () => {
+        window.history.replaceState(null, "", "/campaign-invitations/accept#token=raw-token")
+        beginHookRef.current = {
+            status: {
+                kind: "success",
+                result: { onboarding_csrf_token: "onboarding-csrf" },
+            } as BeginInvitationOnboardingStatus,
+        }
+        statusHookRef.current = {
+            state: {
+                status: "success",
+                data: {
+                    campaign_display_name: "Fixture Campaign",
+                    invitation_expires_at: "2026-10-01T00:00:00Z",
+                    onboarding_expires_at: "2026-09-25T00:20:00Z",
+                    onboarding_csrf_token: "onboarding-csrf",
+                    next_action: "sign_in_or_register",
+                    signed_in_display_name: null,
+                },
+            },
+        }
+
+        renderPage({ status: "unauthenticated" })
+        fireEvent.click(screen.getByText("fake-register-success"))
+
+        expect(window.location.hash).toBe("")
+        expect(window.localStorage.length).toBe(0)
+        expect(window.sessionStorage.length).toBe(0)
     })
 })
