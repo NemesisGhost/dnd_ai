@@ -9,11 +9,22 @@ import {
     it,
     vi,
 } from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeView } from "../types/knowledge"
 import { KnowledgePage } from "./KnowledgePage"
 
+const { accessOverviewStateRef } = vi.hoisted(() => ({
+    accessOverviewStateRef: { current: { status: "loading" } as Record<string, unknown> },
+}))
+
+vi.mock("../hooks/useAccessOverview", () => ({
+    useAccessOverview: () => ({ state: accessOverviewStateRef.current, retry: vi.fn() }),
+}))
+
 interface RenderOverrides {
+    campaignId?: string
     view?: KnowledgeView
     query?: string
     partyId?: string | null
@@ -37,6 +48,7 @@ const authorizedParties: AuthorizedParty[] = [
 
 function renderPage(overrides: RenderOverrides = {}) {
     const props = {
+        campaignId: "test-campaign",
         view: "known" as KnowledgeView,
         query: "",
         partyId: null,
@@ -246,6 +258,7 @@ describe("KnowledgePage", () => {
     it("keeps the search input mounted and focused when its children change", () => {
         const { rerender } = render(
             <KnowledgePage
+                campaignId="test-campaign"
                 view="known"
                 query=""
                 partyId={null}
@@ -268,6 +281,7 @@ describe("KnowledgePage", () => {
 
         rerender(
             <KnowledgePage
+                campaignId="test-campaign"
                 view="known"
                 query="g"
                 partyId={null}
@@ -289,5 +303,69 @@ describe("KnowledgePage", () => {
         expect(
             screen.getByText("Knowledge results go here."),
         ).toBeInTheDocument()
+    })
+})
+
+describe("KnowledgePage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
+    it("shows 'Preview as member' to a GM/admin campaign membership", () => {
+        accessOverviewStateRef.current = {
+            status: "success",
+            overview: {
+                members: [
+                    {
+                        campaign_membership_id: "membership-a",
+                        display_name: "Player One",
+                        user_id: "user-1",
+                    },
+                ],
+                assignable_roles: [],
+                assignable_characters: [],
+                assignable_relationship_types: [],
+                grantable_resource_capabilities: [],
+                access_groups: [],
+            },
+        }
+
+        render(
+            <SessionContext.Provider
+                value={{
+                    state: {
+                        status: "authenticated",
+                        bootstrap: {
+                            ...sessionBootstrapFixture,
+                            campaigns: sessionBootstrapFixture.campaigns.map((campaign) => ({
+                                ...campaign,
+                                campaign_id: "test-campaign",
+                                capabilities: ["access.manage"],
+                            })),
+                        },
+                    },
+                    reload: vi.fn(),
+                }}
+            >
+                <KnowledgePage
+                    campaignId="test-campaign"
+                    view="known"
+                    query=""
+                    partyId={null}
+                    parties={authorizedParties}
+                    onViewChange={vi.fn()}
+                    onQueryChange={vi.fn()}
+                    onPartyChange={vi.fn()}
+                >
+                    <p>Knowledge results go here.</p>
+                </KnowledgePage>
+            </SessionContext.Provider>,
+        )
+
+        expect(screen.getByRole("button", { name: "Preview as member" })).toBeInTheDocument()
+    })
+
+    it("does not show 'Preview as member' without access.manage", () => {
+        renderPage()
+
+        expect(
+            screen.queryByRole("button", { name: "Preview as member" }),
+        ).not.toBeInTheDocument()
     })
 })

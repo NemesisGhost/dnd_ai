@@ -126,4 +126,54 @@ describe("AudiencePreviewPanel", () => {
         fireEvent.click(screen.getByRole("button", { name: "Hide audience preview" }))
         expect(resultContainer()).toBeNull()
     })
+
+    it("hides the resource-type selector and locks it when fixedResourceType is set", () => {
+        render(
+            <AudiencePreviewPanel
+                campaignId="campaign-1"
+                members={members}
+                fixedResourceType="quest"
+            />,
+        )
+
+        fireEvent.click(screen.getByRole("button", { name: "Preview as member" }))
+
+        expect(screen.queryByLabelText("Resource type")).not.toBeInTheDocument()
+    })
+
+    it("hides the resource picker and previews the fixed resource once a member is selected", () => {
+        audiencePreviewStateRef.current = {
+            status: "success",
+            result: {
+                resourceType: "knowledge_item",
+                knowledgeItem: {
+                    statement: "The Glass Ossuary lies beneath the Rootspire.",
+                    truth_status_code: null,
+                    confidence: null,
+                },
+            },
+        }
+
+        render(
+            <AudiencePreviewPanel
+                campaignId="campaign-1"
+                members={members}
+                fixedResourceType="knowledge_item"
+                fixedResource={{ id: "knowledge-1", display_name: "The Glass Ossuary" }}
+            />,
+        )
+
+        fireEvent.click(screen.getByRole("button", { name: "Preview as member" }))
+
+        expect(screen.queryByLabelText("Knowledge item")).not.toBeInTheDocument()
+        expect(screen.getByText("The Glass Ossuary")).toBeInTheDocument()
+
+        fireEvent.change(screen.getByLabelText("Member"), {
+            target: { value: "membership-a" },
+        })
+
+        expect(
+            screen.getByText("The Glass Ossuary lies beneath the Rootspire."),
+        ).toBeInTheDocument()
+    })
 })

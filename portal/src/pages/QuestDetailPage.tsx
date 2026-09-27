@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
 import type {
@@ -9,6 +10,7 @@ import type {
 import { humanizeCode } from "../utils/humanize"
 
 interface QuestDetailPageProps {
+    campaignId: string
     quest: QuestDetail
 }
 
@@ -88,6 +90,7 @@ function StagePanel({ stage }: { stage: QuestStage }) {
 }
 
 export function QuestDetailPage({
+    campaignId,
     quest,
 }: QuestDetailPageProps) {
     const stages = quest.stages
@@ -107,6 +110,12 @@ export function QuestDetailPage({
                     ? humanizeCode(quest.status_code)
                     : "No status recorded"}
             </p>
+
+            <AudiencePreviewSection
+                campaignId={campaignId}
+                resourceType="quest"
+                fixedResource={{ id: quest.quest_id, display_name: quest.name }}
+            />
 
             <section aria-labelledby="quest-stages-heading">
                 <h2 id="quest-stages-heading">Stages and Objectives</h2>

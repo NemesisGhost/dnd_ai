@@ -40,9 +40,13 @@ vi.mock("../hooks/useKnowledgeItems", () => ({
     useKnowledgeItems: vi.fn(),
 }))
 
-vi.mock("../context/SessionContext", () => ({
-    useSession: vi.fn(),
-}))
+vi.mock("../context/SessionContext", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../context/SessionContext")>()
+    return {
+        ...actual,
+        useSession: vi.fn(),
+    }
+})
 
 const useKnowledgeItemsMock =
     vi.mocked(useKnowledgeItems)

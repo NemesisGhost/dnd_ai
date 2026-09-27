@@ -1,4 +1,5 @@
 import { useId, useState } from "react"
+import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { CardGrid } from "../components/CardGrid"
 import { QuestCard } from "../components/QuestCard"
 import type { CampaignQuestListItem } from "../types/quest"
@@ -26,6 +27,8 @@ export function QuestsPage({
     return (
         <section aria-labelledby="quests-heading">
             <h1 id="quests-heading">Quests</h1>
+
+            <AudiencePreviewSection campaignId={campaignId} resourceType="quest" />
 
             {quests.length > 0 ? (
                 <>

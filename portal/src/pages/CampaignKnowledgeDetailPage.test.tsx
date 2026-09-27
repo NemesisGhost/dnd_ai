@@ -22,9 +22,13 @@ vi.mock("../api/knowledge", async (importOriginal) => {
 // useCallback-memoized reload — an unstable mock identity here would make
 // useKnowledgeDetail's effect (which depends on reload) re-fire on every
 // render for reasons unrelated to what these tests are exercising.
-vi.mock("../context/SessionContext", () => ({
-    useSession: () => ({ reload: reloadMock }),
-}))
+vi.mock("../context/SessionContext", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../context/SessionContext")>()
+    return {
+        ...actual,
+        useSession: () => ({ reload: reloadMock }),
+    }
+})
 
 const itemFixture: KnowledgeDetail = {
     knowledge_item_id: "knowledge-a",

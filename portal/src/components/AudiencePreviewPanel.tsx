@@ -103,6 +103,19 @@ function AudiencePreviewContent({
 interface AudiencePreviewPanelProps {
     campaignId: string
     members: AudiencePreviewMember[]
+    /**
+     * Locks the resource-type selector to a single value and hides it —
+     * used on the Quest/Knowledge collection pages, where the page's own
+     * context already determines which resource type is relevant.
+     */
+    fixedResourceType?: AudiencePreviewResourceType
+    /**
+     * Locks the resource picker to a single, already-known resource and
+     * hides `ResourceTargetSelector` entirely — used on the Quest/Knowledge
+     * *detail* pages, where the resource being previewed is simply the one
+     * already on screen. Implies `fixedResourceType`.
+     */
+    fixedResource?: ResourceOption
 }
 
 // The spoiler-checking half of D-1's "preview as a selected member" answer
@@ -114,17 +127,27 @@ interface AudiencePreviewPanelProps {
 // Closing the panel, or changing either selection, clears the rendered
 // result immediately — AudiencePreviewContent above is remounted (never
 // merely re-rendered) for every distinct (member, resource) combination.
-export function AudiencePreviewPanel({ campaignId, members }: AudiencePreviewPanelProps) {
+export function AudiencePreviewPanel({
+    campaignId,
+    members,
+    fixedResourceType,
+    fixedResource,
+}: AudiencePreviewPanelProps) {
     const [isOpen, setIsOpen] = useState(false)
     const [selectedMembershipId, setSelectedMembershipId] = useState("")
-    const [selectedResourceType, setSelectedResourceType] =
-        useState<AudiencePreviewResourceType>("quest")
-    const [selectedResource, setSelectedResource] = useState<ResourceOption | null>(null)
+    const [selectedResourceType, setSelectedResourceType] = useState<AudiencePreviewResourceType>(
+        fixedResourceType ?? "quest",
+    )
+    const [pickedResource, setPickedResource] = useState<ResourceOption | null>(null)
 
     const headingId = useId()
     const memberSelectId = useId()
     const resourceTypeSelectId = useId()
     const resourceLabelId = useId()
+
+    // A detail page hands us the resource it already knows about; a
+    // collection page lets the GM pick one via ResourceTargetSelector.
+    const selectedResource = fixedResource ?? pickedResource
 
     const selectedMember = members.find(
         (member) => member.campaign_membership_id === selectedMembershipId,
@@ -165,33 +188,46 @@ export function AudiencePreviewPanel({ campaignId, members }: AudiencePreviewPan
                         ))}
                     </select>
 
-                    <label htmlFor={resourceTypeSelectId}>Resource type</label>
-                    <select
-                        id={resourceTypeSelectId}
-                        value={selectedResourceType}
-                        onChange={(event) => {
-                            setSelectedResourceType(
-                                event.currentTarget.value as AudiencePreviewResourceType,
-                            )
-                            setSelectedResource(null)
-                        }}
-                    >
-                        <option value="quest">Quest</option>
-                        <option value="knowledge_item">Knowledge item</option>
-                    </select>
+                    {fixedResourceType === undefined && (
+                        <>
+                            <label htmlFor={resourceTypeSelectId}>Resource type</label>
+                            <select
+                                id={resourceTypeSelectId}
+                                value={selectedResourceType}
+                                onChange={(event) => {
+                                    setSelectedResourceType(
+                                        event.currentTarget.value as AudiencePreviewResourceType,
+                                    )
+                                    setPickedResource(null)
+                                }}
+                            >
+                                <option value="quest">Quest</option>
+                                <option value="knowledge_item">Knowledge item</option>
+                            </select>
+                        </>
+                    )}
 
-                    <label id={resourceLabelId}>
-                        {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}
-                    </label>
-                    <ResourceTargetSelector
-                        campaignId={campaignId}
-                        targetType={selectedResourceType}
-                        assignableCharacters={[]}
-                        value={selectedResource?.id ?? ""}
-                        disabled={false}
-                        labelId={resourceLabelId}
-                        onChange={setSelectedResource}
-                    />
+                    {fixedResource === undefined ? (
+                        <>
+                            <label id={resourceLabelId}>
+                                {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}
+                            </label>
+                            <ResourceTargetSelector
+                                campaignId={campaignId}
+                                targetType={selectedResourceType}
+                                assignableCharacters={[]}
+                                value={pickedResource?.id ?? ""}
+                                disabled={false}
+                                labelId={resourceLabelId}
+                                onChange={setPickedResource}
+                            />
+                        </>
+                    ) : (
+                        <p className="audience-preview-panel__fixed-resource">
+                            {selectedResourceType === "quest" ? "Quest" : "Knowledge item"}:{" "}
+                            <strong>{fixedResource.display_name}</strong>
+                        </p>
+                    )}
 
                     {canPreview && (
                         <div aria-live="polite">

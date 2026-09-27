@@ -38,7 +38,7 @@ export function CampaignQuestDetailPage() {
             characterId={characterId}
         >
             {(quest) => (
-                <QuestDetailPage quest={quest} />
+                <QuestDetailPage campaignId={campaignId} quest={quest} />
             )}
         </QuestDetailBoundary>
     )

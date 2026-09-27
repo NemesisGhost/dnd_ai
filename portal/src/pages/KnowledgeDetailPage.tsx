@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
 import type { KnowledgeDetail } from "../types/knowledge"
@@ -34,6 +35,12 @@ export function KnowledgeDetailPage({
                 {humanizeCode(item.knowledge_type_code)}
             </p>
             <h1 id="knowledge-detail-heading">{item.statement}</h1>
+
+            <AudiencePreviewSection
+                campaignId={campaignId}
+                resourceType="knowledge_item"
+                fixedResource={{ id: item.knowledge_item_id, display_name: item.statement }}
+            />
 
             <div className="world-detail__panel-grid">
                 <DetailPanel title="Awareness and Confidence">

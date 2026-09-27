@@ -12,11 +12,22 @@ import {
     describe,
     expect,
     it,
+    vi,
 } from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type {
     CampaignQuestListItem,
 } from "../types/quest"
 import { QuestsPage } from "./QuestsPage"
+
+const { accessOverviewStateRef } = vi.hoisted(() => ({
+    accessOverviewStateRef: { current: { status: "loading" } as Record<string, unknown> },
+}))
+
+vi.mock("../hooks/useAccessOverview", () => ({
+    useAccessOverview: () => ({ state: accessOverviewStateRef.current, retry: vi.fn() }),
+}))
 
 const quests = [
     {
@@ -168,5 +179,65 @@ describe("QuestsPage", () => {
             "Zeta Quest",
             "Alpha Quest",
         ])
+    })
+})
+
+describe("QuestsPage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
+    it("shows 'Preview as member' to a GM/admin campaign membership", () => {
+        accessOverviewStateRef.current = {
+            status: "success",
+            overview: {
+                members: [
+                    {
+                        campaign_membership_id: "membership-a",
+                        display_name: "Player One",
+                        user_id: "user-1",
+                    },
+                ],
+                assignable_roles: [],
+                assignable_characters: [],
+                assignable_relationship_types: [],
+                grantable_resource_capabilities: [],
+                access_groups: [],
+            },
+        }
+
+        render(
+            <SessionContext.Provider
+                value={{
+                    state: {
+                        status: "authenticated",
+                        bootstrap: {
+                            ...sessionBootstrapFixture,
+                            campaigns: sessionBootstrapFixture.campaigns.map((campaign) => ({
+                                ...campaign,
+                                campaign_id: "test-campaign",
+                                capabilities: ["access.manage"],
+                            })),
+                        },
+                    },
+                    reload: vi.fn(),
+                }}
+            >
+                <MemoryRouter initialEntries={["/app/test-campaign/quests"]}>
+                    <Routes>
+                        <Route
+                            path="/app/:campaignId/quests"
+                            element={<QuestsPage campaignId="test-campaign" quests={quests} />}
+                        />
+                    </Routes>
+                </MemoryRouter>
+            </SessionContext.Provider>,
+        )
+
+        expect(screen.getByRole("button", { name: "Preview as member" })).toBeInTheDocument()
+    })
+
+    it("does not show 'Preview as member' without access.manage", () => {
+        renderQuestsPage(quests)
+
+        expect(
+            screen.queryByRole("button", { name: "Preview as member" }),
+        ).not.toBeInTheDocument()
     })
 })
