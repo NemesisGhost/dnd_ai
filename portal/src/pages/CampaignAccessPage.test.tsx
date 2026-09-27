@@ -112,4 +112,25 @@ describe("CampaignAccessPage", () => {
             boundaryPropsSpy,
         ).not.toHaveBeenCalled()
     })
+
+    it("renders the Access tab nav with 'Access management' current and never fetches audit history", () => {
+        const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"))
+        vi.stubGlobal("fetch", fetchSpy)
+
+        renderPage()
+
+        expect(
+            screen.getByRole("link", { name: "Access management" }),
+        ).toHaveAttribute("aria-current", "page")
+        expect(
+            screen.getByRole("link", { name: "Audit history" }),
+        ).not.toHaveAttribute("aria-current")
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).includes("/audit-history"),
+            ),
+        ).toBe(false)
+
+        vi.unstubAllGlobals()
+    })
 })

@@ -1,9 +1,10 @@
 import { useState } from "react"
 import { useParams } from "react-router"
 import { AccessOverviewBoundary } from "../components/AccessOverviewBoundary"
+import { AccessTabNav } from "../components/AccessTabNav"
 import { AudiencePreviewPanel } from "../components/AudiencePreviewPanel"
-import { AuditHistory } from "../components/AuditHistory"
 import { useSession } from "../context/SessionContext"
+import { canPreviewAudience as canPreviewAudienceFor } from "../utils/canPreviewAudience"
 import { AccessPage } from "./AccessPage"
 import PlaceholderPage from "./PlaceholderPage"
 
@@ -76,19 +77,7 @@ export function CampaignAccessPage() {
             ? issuedInvitationToken.token
             : null
 
-    // Presentation only, never authorization: dnd_ai.api.preview's own
-    // require_campaign_capability(access.manage) is unaffected by this —
-    // it is the server, not this check, that actually authorizes every
-    // preview request. This just avoids showing a control that would only
-    // ever 404 for an actor whose own campaign membership never carries
-    // campaign.view at all (checkpoint 15's own "presentation only,
-    // backend still authoritative" test requirement).
-    const canPreviewAudience =
-        sessionState.status === "authenticated" &&
-        (sessionState.bootstrap.campaigns.find(
-            (campaign) => campaign.campaign_id === activeCampaignId,
-        )?.capabilities.includes("campaign.view") ??
-            false)
+    const canPreviewAudience = canPreviewAudienceFor(sessionState, activeCampaignId)
 
     function handleRoleChanged(
         retry: () => void,
@@ -131,6 +120,8 @@ export function CampaignAccessPage() {
 
     return (
         <>
+            <AccessTabNav campaignId={activeCampaignId} />
+
             <p
                 className="campaign-access-page__announcement"
                 role="status"
@@ -154,6 +145,7 @@ export function CampaignAccessPage() {
                         />
                         {canPreviewAudience && (
                             <AudiencePreviewPanel
+                                key={activeCampaignId}
                                 campaignId={activeCampaignId}
                                 members={overview.members.map((member) => ({
                                     campaign_membership_id: member.campaign_membership_id,
@@ -161,13 +153,6 @@ export function CampaignAccessPage() {
                                 }))}
                             />
                         )}
-                        <AuditHistory
-                            campaignId={activeCampaignId}
-                            actors={overview.members.map((member) => ({
-                                user_id: member.user_id,
-                                display_name: member.display_name,
-                            }))}
-                        />
                     </>
                 )}
             </AccessOverviewBoundary>

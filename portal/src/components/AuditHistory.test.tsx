@@ -142,7 +142,7 @@ describe("AuditHistory", () => {
         ).toBeInTheDocument()
     })
 
-    it("has no page-level h1 (safe to embed under an existing page heading)", async () => {
+    it("owns its route's single page-level h1", async () => {
         vi.stubGlobal(
             "fetch",
             vi.fn().mockResolvedValue(
@@ -154,12 +154,12 @@ describe("AuditHistory", () => {
 
         await waitFor(() => {
             expect(
-                screen.getByRole("heading", { level: 2 }),
+                screen.getByRole("heading", { level: 1 }),
             ).toHaveTextContent("Audit history")
         })
 
         expect(
-            screen.queryByRole("heading", { level: 1 }),
+            screen.queryByRole("heading", { level: 2 }),
         ).not.toBeInTheDocument()
     })
 

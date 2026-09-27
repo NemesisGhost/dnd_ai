@@ -1707,6 +1707,37 @@
   border-radius: 0.25rem;
 }
 
+/* Access section tab nav (Phase 13E-B manual-acceptance fix): local to
+   /app/:campaignId/access and /access/audit, distinct from the sidebar's
+   own top-level "Access" link in .app-navigation__link above. */
+.access-tab-nav__list {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0 0 1rem;
+  list-style: none;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.access-tab-nav__link {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.access-tab-nav__link:hover,
+.access-tab-nav__link:focus-visible {
+  color: var(--color-text);
+}
+
+.access-tab-nav__link--active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent, currentColor);
+  font-weight: 600;
+}
+
 /* Persistent, campaign-scoped role-change announcement (Phase 13E-B):
    mounted above the overview boundary for the whole life of the Access
    page so a role-change success is still observable while the boundary

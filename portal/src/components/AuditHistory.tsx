@@ -23,11 +23,9 @@ export interface AuditHistoryProps {
      * underlying hook (`useAuditHistory`) never shows a previous
      * campaign's rows, even briefly, while the new request is in flight.
      *
-     * Embedded into `CampaignAccessPage.tsx` with
-     * `<AuditHistory campaignId={campaignId} actors={actors} />`; this
-     * component renders no page-level `<h1>` of its own (it uses an `<h2>`
-     * section heading), so it is safe to embed under an existing page
-     * heading.
+     * Rendered by `CampaignAccessAuditPage.tsx` at its own
+     * `/app/:campaignId/access/audit` route — this component owns that
+     * route's single page-level `<h1>`.
      */
     campaignId: string
     /**
@@ -262,7 +260,7 @@ export function AuditHistory({ campaignId, actors = [] }: AuditHistoryProps) {
 
     return (
         <section aria-labelledby={headingId}>
-            <h2 id={headingId}>Audit history</h2>
+            <h1 id={headingId}>Audit history</h1>
 
             {filtersForm}
 
