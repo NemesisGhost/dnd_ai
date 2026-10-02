@@ -64,7 +64,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
 
                 {state.status === "success" && (
                     <>
-                        <table>
+                        <table className="admin-accounts__table">
                             <caption>Platform accounts</caption>
                             <thead>
                                 <tr>
@@ -72,7 +72,9 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                     <th scope="col">Login name</th>
                                     <th scope="col">Status</th>
                                     <th scope="col">Last login</th>
-                                    <th scope="col">Active sessions</th>
+                                    <th scope="col" className="admin-accounts__numeric">
+                                        Active sessions
+                                    </th>
                                     <th scope="col">Actions</th>
                                 </tr>
                             </thead>
@@ -80,13 +82,14 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                 {state.items.map((account) => (
                                     <tr key={account.user_id}>
                                         <td>
-                                            {account.display_name}
+                                            <span className="admin-accounts__name">
+                                                {account.display_name}
+                                            </span>
                                             {account.is_platform_administrator && (
                                                 <span
-                                                    className="access-badge"
+                                                    className="access-badge admin-accounts__admin-badge"
                                                     aria-label="Platform administrator"
                                                 >
-                                                    {" "}
                                                     Platform administrator
                                                 </span>
                                             )}
@@ -94,9 +97,21 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                         <td>
                                             {account.login_name ?? "(pending activation)"}
                                         </td>
-                                        <td>{account.lifecycle_status_code}</td>
+                                        <td>
+                                            <span
+                                                className={
+                                                    account.lifecycle_status_code === "active"
+                                                        ? "admin-accounts__status admin-accounts__status--active"
+                                                        : "admin-accounts__status"
+                                                }
+                                            >
+                                                {account.lifecycle_status_code}
+                                            </span>
+                                        </td>
                                         <td>{formatTimestamp(account.last_login_at)}</td>
-                                        <td>{account.active_session_count}</td>
+                                        <td className="admin-accounts__numeric">
+                                            {account.active_session_count}
+                                        </td>
                                         <td>
                                             <AccountLifecycleActions account={account} onChanged={retry} />
                                         </td>

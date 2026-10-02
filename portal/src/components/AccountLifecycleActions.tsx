@@ -57,7 +57,7 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
     }
 
     return (
-        <div className="access-role-editor__actions">
+        <div className="access-role-editor__actions account-actions">
             <button
                 type="button"
                 disabled={anyPending}
@@ -71,6 +71,7 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
                     <>
                         <button
                             type="button"
+                            className="account-actions__danger"
                             disabled={anyPending}
                             onClick={() => submitDisable(account.user_id)}
                         >
@@ -81,7 +82,12 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
                         </button>
                     </>
                 ) : (
-                    <button type="button" disabled={anyPending} onClick={() => setConfirmingDisable(true)}>
+                    <button
+                        type="button"
+                        className="account-actions__danger"
+                        disabled={anyPending}
+                        onClick={() => setConfirmingDisable(true)}
+                    >
                         Disable
                     </button>
                 )
