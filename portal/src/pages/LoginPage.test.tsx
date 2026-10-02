@@ -18,6 +18,7 @@ import {
 } from "vitest"
 import { useSession } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { useInvitationOnboardingStatus } from "../hooks/useInvitationOnboardingStatus"
 import { useLogin } from "../hooks/useLogin"
 import { LoginPage } from "./LoginPage"
 
@@ -28,6 +29,13 @@ vi.mock("../context/SessionContext", () => ({
 vi.mock("../hooks/useLogin", () => ({
   useLogin: vi.fn(),
 }))
+
+vi.mock("../hooks/useInvitationOnboardingStatus", () => ({
+  useInvitationOnboardingStatus: vi.fn(),
+}))
+
+const useContinuationMock = vi.mocked(useInvitationOnboardingStatus)
+const retryMock = vi.fn()
 
 const useSessionMock = vi.mocked(useSession)
 const useLoginMock = vi.mocked(useLogin)
@@ -41,6 +49,14 @@ beforeEach(() => {
 
   useSessionMock.mockReset()
   useLoginMock.mockReset()
+  useContinuationMock.mockReset()
+  retryMock.mockReset()
+
+  // Default: a signed-in user has no live invitation continuation.
+  useContinuationMock.mockReturnValue({
+    state: { status: "unavailable" },
+    retry: retryMock,
+  })
 
   useSessionMock.mockReturnValue({
     state: {
@@ -70,6 +86,13 @@ function renderLoginPage() {
           path="/campaigns"
           element={
             <h1>Campaign destination</h1>
+          }
+        />
+
+        <Route
+          path="/campaign-invitations/accept"
+          element={
+            <h1>Invitation destination</h1>
           }
         />
       </Routes>
@@ -195,5 +218,90 @@ describe("LoginPage", () => {
         name: "Sign In",
       }),
     ).not.toBeInTheDocument()
+  })
+
+  const authenticated = () => {
+    useSessionMock.mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: sessionBootstrapFixture,
+      },
+      reload: reloadMock,
+    })
+  }
+
+  it("only checks for an invitation continuation once signed in", () => {
+    renderLoginPage()
+
+    expect(useContinuationMock).toHaveBeenCalledWith({ enabled: false })
+
+    useContinuationMock.mockClear()
+    authenticated()
+    renderLoginPage()
+
+    expect(useContinuationMock).toHaveBeenCalledWith({ enabled: true })
+  })
+
+  it("resumes the invitation instead of campaign selection when a continuation is live", async () => {
+    authenticated()
+    useContinuationMock.mockReturnValue({
+      state: {
+        status: "success",
+        data: {
+          campaign_display_name: "Fixture Campaign",
+          invitation_expires_at: "2099-01-01T00:00:00Z",
+          onboarding_expires_at: "2099-01-01T00:00:00Z",
+          onboarding_csrf_token: "csrf",
+          next_action: "confirm",
+          signed_in_display_name: "Campaign Administrator",
+        },
+      },
+      retry: retryMock,
+    })
+
+    renderLoginPage()
+
+    expect(
+      await screen.findByRole("heading", { name: "Invitation destination" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Campaign destination" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("waits for the continuation check before choosing a destination", () => {
+    authenticated()
+    useContinuationMock.mockReturnValue({
+      state: { status: "loading" },
+      retry: retryMock,
+    })
+
+    renderLoginPage()
+
+    expect(screen.getByText("Checking for a pending invitation.")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Campaign destination" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not silently drop a possible invitation when the check fails", () => {
+    authenticated()
+    useContinuationMock.mockReturnValue({
+      state: { status: "error", error: new Error("boom") },
+      retry: retryMock,
+    })
+
+    renderLoginPage()
+
+    expect(screen.getByText("We could not check for a pending invitation.")).toBeInTheDocument()
+    expect(screen.queryByText("boom")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    expect(retryMock).toHaveBeenCalledOnce()
+
+    expect(screen.getByRole("link", { name: "Continue to campaigns" })).toHaveAttribute(
+      "href",
+      "/campaigns",
+    )
   })
 })

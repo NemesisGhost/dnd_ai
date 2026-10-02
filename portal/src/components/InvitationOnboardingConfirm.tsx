@@ -33,6 +33,10 @@ export function InvitationOnboardingConfirm({
     const statusId = useId()
 
     const isSubmitting = status.kind === "pending"
+    // Right after a sign-in the session bootstrap is still reloading; a
+    // click then would be silently ignored by the hook (it needs the
+    // session's CSRF token), so hold the button until it is ready.
+    const isSessionReady = sessionState.status === "authenticated"
 
     useEffect(() => {
         if (status.kind === "success") {
@@ -72,7 +76,7 @@ export function InvitationOnboardingConfirm({
                 <button
                     type="button"
                     className="login-button"
-                    disabled={isSubmitting || isSwitchingAccount}
+                    disabled={isSubmitting || isSwitchingAccount || !isSessionReady}
                     aria-busy={isSubmitting}
                     onClick={() => {
                         submit()

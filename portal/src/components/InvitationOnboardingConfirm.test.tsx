@@ -46,6 +46,21 @@ beforeEach(() => {
 })
 
 describe("InvitationOnboardingConfirm", () => {
+    it("holds the Join button until the session bootstrap has finished reloading", () => {
+        sessionStateRef.current = { status: "loading" } as never
+
+        render(
+            <InvitationOnboardingConfirm
+                campaignDisplayName="Fixture Campaign"
+                signedInDisplayName="Existing User"
+                onCompleted={vi.fn()}
+                onNeedsStatusRefresh={vi.fn()}
+            />,
+        )
+
+        expect(screen.getByRole("button", { name: "Join Fixture Campaign" })).toBeDisabled()
+    })
+
     it("names the campaign and the signed-in account, and never submits without a click", () => {
         render(
             <InvitationOnboardingConfirm

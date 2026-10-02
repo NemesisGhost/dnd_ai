@@ -11,6 +11,16 @@ export type InvitationOnboardingStatusState =
     | { status: "unavailable" }
     | { status: "error"; error: unknown }
 
+export interface UseInvitationOnboardingStatusOptions {
+    // When false, no request is made and `state` stays "loading". A caller
+    // that is itself about to *create* the onboarding cookie (the invitation
+    // page, which begins a session from the link fragment) must hold this
+    // false until that cookie exists: a status read fired before it is
+    // guaranteed to 404, and the resulting stale "unavailable" snapshot is
+    // indistinguishable from a genuinely dead continuation.
+    enabled?: boolean
+}
+
 export interface UseInvitationOnboardingStatusResult {
     state: InvitationOnboardingStatusState
     retry: () => void
@@ -29,7 +39,9 @@ const initialState: InvitationOnboardingStatusState = { status: "loading" }
 // session resolves to "unavailable", rendered as a calm terminal state by
 // the page, never an error with a retry button -- see R-2 of
 // PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §7.3).
-export function useInvitationOnboardingStatus(): UseInvitationOnboardingStatusResult {
+export function useInvitationOnboardingStatus({
+    enabled = true,
+}: UseInvitationOnboardingStatusOptions = {}): UseInvitationOnboardingStatusResult {
     const [requestVersion, setRequestVersion] = useState(0)
     const [snapshot, setSnapshot] = useState<Snapshot>(() => ({
         requestVersion: 0,
@@ -40,9 +52,14 @@ export function useInvitationOnboardingStatus(): UseInvitationOnboardingStatusRe
         setRequestVersion((currentVersion) => currentVersion + 1)
     }, [])
 
-    const state = snapshot.requestVersion === requestVersion ? snapshot.state : initialState
+    const state =
+        enabled && snapshot.requestVersion === requestVersion ? snapshot.state : initialState
 
     useEffect(() => {
+        if (!enabled) {
+            return
+        }
+
         const controller = new AbortController()
 
         void fetchInvitationOnboardingStatus(controller.signal)
@@ -69,7 +86,7 @@ export function useInvitationOnboardingStatus(): UseInvitationOnboardingStatusRe
         return () => {
             controller.abort()
         }
-    }, [requestVersion])
+    }, [requestVersion, enabled])
 
     return { state, retry }
 }

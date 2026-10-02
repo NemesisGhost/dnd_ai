@@ -38,6 +38,33 @@ describe("useInvitationOnboardingStatus", () => {
         })
     })
 
+    it("makes no request while disabled, then reads once enabled", async () => {
+        fetchInvitationOnboardingStatusMock.mockReset()
+        fetchInvitationOnboardingStatusMock.mockResolvedValue({
+            campaign_display_name: "Fixture Campaign",
+            invitation_expires_at: "2026-10-01T00:00:00Z",
+            onboarding_expires_at: "2026-09-25T00:20:00Z",
+            onboarding_csrf_token: "csrf",
+            next_action: "sign_in_or_register",
+            signed_in_display_name: null,
+        })
+
+        const { result, rerender } = renderHook(
+            ({ enabled }) => useInvitationOnboardingStatus({ enabled }),
+            { initialProps: { enabled: false } },
+        )
+
+        expect(result.current.state).toEqual({ status: "loading" })
+        expect(fetchInvitationOnboardingStatusMock).not.toHaveBeenCalled()
+
+        rerender({ enabled: true })
+
+        await waitFor(() => {
+            expect(result.current.state.status).toBe("success")
+        })
+        expect(fetchInvitationOnboardingStatusMock).toHaveBeenCalledTimes(1)
+    })
+
     it("maps a 404 to unavailable, not an error", async () => {
         fetchInvitationOnboardingStatusMock.mockRejectedValue(
             new InvitationOnboardingRequestError(404, "not available"),

@@ -4,10 +4,16 @@ import {
 import type {
     SyntheticEvent,
 } from "react"
-import { Navigate } from "react-router"
+import { Link, Navigate } from "react-router"
 import { useSession } from "../context/SessionContext"
+import { useInvitationOnboardingStatus } from "../hooks/useInvitationOnboardingStatus"
 import { useLogin } from "../hooks/useLogin"
 import PlaceholderPage from "./PlaceholderPage"
+
+// Fixed internal destinations -- never derived from the URL, a query
+// parameter, or history state, so Login can never be made an open redirect.
+const ORDINARY_LOGIN_DESTINATION = "/campaigns"
+const INVITATION_CONTINUATION_DESTINATION = "/campaign-invitations/accept"
 
 export function LoginPage() {
     const {
@@ -19,6 +25,14 @@ export function LoginPage() {
         state: loginState,
         submit,
     } = useLogin()
+
+    // Once signed in, ask the server whether this browser still holds a live
+    // invitation-onboarding continuation (its opaque cookie is HttpOnly, so
+    // only the server can say). Yes: resume the invitation workflow instead
+    // of the ordinary destination. No: the ordinary destination, unchanged.
+    const invitationContinuation = useInvitationOnboardingStatus({
+        enabled: sessionState.status === "authenticated",
+    })
 
     const [loginName, setLoginName] = useState("")
     const [password, setPassword] = useState("")
@@ -54,7 +68,58 @@ export function LoginPage() {
     }
 
     if (sessionState.status === "authenticated") {
-        return <Navigate to="/campaigns" replace />
+        if (invitationContinuation.state.status === "loading") {
+            return (
+                <PlaceholderPage
+                    title="Signing you in"
+                    description="Checking for a pending invitation."
+                />
+            )
+        }
+
+        if (invitationContinuation.state.status === "success") {
+            return <Navigate to={INVITATION_CONTINUATION_DESTINATION} replace />
+        }
+
+        if (invitationContinuation.state.status === "error") {
+            // Cannot tell whether an invitation is waiting; say so rather
+            // than silently dropping it by following the ordinary route.
+            return (
+                <section
+                    className="login-page"
+                    aria-labelledby="continuation-error-heading"
+                >
+                    <div className="login-container">
+                        <div className="login-box">
+                            <h1
+                                id="continuation-error-heading"
+                                className="login-title"
+                            >
+                                Signed in
+                            </h1>
+
+                            <p className="login-subtitle">
+                                We could not check for a pending invitation.
+                            </p>
+
+                            <button
+                                type="button"
+                                className="login-button"
+                                onClick={invitationContinuation.retry}
+                            >
+                                Try again
+                            </button>
+
+                            <p>
+                                <Link to={ORDINARY_LOGIN_DESTINATION}>Continue to campaigns</Link>
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )
+        }
+
+        return <Navigate to={ORDINARY_LOGIN_DESTINATION} replace />
     }
 
     if (sessionState.status === "error") {

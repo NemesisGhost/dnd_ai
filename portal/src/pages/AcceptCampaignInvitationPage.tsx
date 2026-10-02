@@ -6,6 +6,7 @@ import { InvitationOnboardingSignIn } from "../components/InvitationOnboardingSi
 import { useSession } from "../context/SessionContext"
 import { useAcceptCampaignInvitation } from "../hooks/useAcceptCampaignInvitation"
 import { useBeginInvitationOnboarding } from "../hooks/useBeginInvitationOnboarding"
+import { useCancelInvitationOnboarding } from "../hooks/useCancelInvitationOnboarding"
 import { useInvitationOnboardingStatus } from "../hooks/useInvitationOnboardingStatus"
 import PlaceholderPage from "./PlaceholderPage"
 import type { AcceptCampaignInvitationResponse } from "../types/campaignInvitations"
@@ -61,9 +62,23 @@ export function AcceptCampaignInvitationPage() {
     const capturedTokenRef = useRef<string | null>(null)
 
     const begin = useBeginInvitationOnboarding()
-    const onboardingStatus = useInvitationOnboardingStatus()
+    // Held back until a link-driven begin has actually set the onboarding
+    // cookie. A status read fired at mount would race the begin request,
+    // 404 (no cookie yet), and leave a stale "unavailable" snapshot that
+    // the one render between begin succeeding and a refetch would act on --
+    // for a logged-out visitor, a <Navigate to="/login"> that abandons the
+    // page (and with it the invitation) before the page ever shows Sign in.
+    // With no fragment (a refresh, or a return from Login) the cookie
+    // already exists, so the read starts immediately.
+    const onboardingStatus = useInvitationOnboardingStatus({
+        enabled: !hadHashToken || begin.status.kind === "success",
+    })
 
     const [completedCampaignName, setCompletedCampaignName] = useState<string | null>(null)
+    const [cancelled, setCancelled] = useState(false)
+    const cancel = useCancelInvitationOnboarding(() => {
+        setCancelled(true)
+    })
 
     // Manual-token fallback, retained unchanged from the pre-checkpoint-8
     // page (docs/PLAN.md §13E) — reachable when there is no onboarding
@@ -101,13 +116,6 @@ export function AcceptCampaignInvitationPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    useEffect(() => {
-        if (begin.status.kind === "success") {
-            onboardingStatus.retry()
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [begin.status])
-
     // Derived, not stored: gates rendering while a hash-driven begin
     // request is still in flight, without a redundant setState in either
     // effect above.
@@ -123,6 +131,23 @@ export function AcceptCampaignInvitationPage() {
                     <p>
                         A GM may still need to assign a role or additional access before every
                         campaign page is available.
+                    </p>
+                    <p>
+                        <Link to="/campaigns">Go to campaigns</Link>
+                    </p>
+                </section>
+            </main>
+        )
+    }
+
+    if (cancelled) {
+        return (
+            <main className="app-main">
+                <section className="placeholder-page" aria-labelledby="onboarding-cancelled-heading">
+                    <h1 id="onboarding-cancelled-heading">Invitation not accepted</h1>
+                    <p>
+                        You did not join the campaign, and this invitation link has been closed. Ask
+                        the person who invited you for a new link if you change your mind.
                     </p>
                     <p>
                         <Link to="/campaigns">Go to campaigns</Link>
@@ -340,6 +365,26 @@ export function AcceptCampaignInvitationPage() {
 
     const data = onboardingStatus.state.data
 
+    const notNowControl = (
+        <div className="access-role-editor__actions">
+            <button
+                type="button"
+                disabled={cancel.status.kind === "pending"}
+                onClick={() => {
+                    cancel.submit(data.onboarding_csrf_token)
+                }}
+            >
+                {cancel.status.kind === "pending" ? "Closing…" : "Not now"}
+            </button>
+            <p className="login-error" role="status" aria-live="polite">
+                {cancel.status.kind === "unavailable" &&
+                    "This invitation is no longer available. It may have expired, been revoked, or already been used."}
+                {(cancel.status.kind === "error" || cancel.status.kind === "denied") &&
+                    "The invitation could not be closed. Try again."}
+            </p>
+        </div>
+    )
+
     if (data.next_action === "confirm" && data.signed_in_display_name !== null) {
         return (
             <main className="app-main">
@@ -354,6 +399,7 @@ export function AcceptCampaignInvitationPage() {
                     }}
                     onNeedsStatusRefresh={onboardingStatus.retry}
                 />
+                {notNowControl}
             </main>
         )
     }
@@ -382,6 +428,8 @@ export function AcceptCampaignInvitationPage() {
                             }}
                         />
                     </div>
+
+                    {notNowControl}
                 </div>
             </section>
         </main>

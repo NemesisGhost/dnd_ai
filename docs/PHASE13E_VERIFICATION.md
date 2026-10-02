@@ -255,6 +255,10 @@ both a `core.autocrlf=true` artifact, not real trailing whitespace,
 resolved the same way `.gitattributes` already resolves it for
 `test_api_campaigns.py`: `whitespace=cr-at-eol`.
 
+## Post-login invitation continuation fix
+
+Root cause and behavior: [PHASE13E_ACCESS_CONTRACT.md §3n](PHASE13E_ACCESS_CONTRACT.md). Verified on the local dev stack with headless Edge (Playwright, fresh browser contexts) against the real API and PostgreSQL: logged-out open stays on the invitation page; inline sign-in and sign-in via `/login` (including a failed attempt first) both return to the confirm step without accepting; accept is a single request creating a membership with no roles, reflected in `/auth/session`; wrong-account switch and **Not now** leave the invitation unconsumed; create-account; normal login still lands on `/campaigns`; revocation while on Login and at confirm; Back/Forward; no invitation token in URL, history state, local/session storage, IndexedDB, cookies, console, or non-`start` request bodies. Not yet exercised: a human-driven pass in a headed browser, and CI.
+
 ## Recurring obligations ([§24.1](PLAN.md#241-phase-exit-review))
 
 | Obligation | Result |

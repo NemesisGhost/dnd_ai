@@ -698,6 +698,30 @@ approved later.
   offering the "Go to campaigns" link, so the newly joined campaign is
   present the first time that link is followed rather than only after a
   later, unrelated reload.
+- **Login destination selection.** `/login` has exactly two fixed internal
+  destinations after a successful sign-in, chosen by asking the server (the
+  onboarding cookie is `HttpOnly`, so only the server can say) whether this
+  browser still holds a live onboarding continuation: a live one resumes the
+  invitation at `/campaign-invitations/accept` (the confirm step — signing in
+  never joins by itself); none sends the user to `/campaigns`, exactly as
+  before. Neither destination is read from the URL, a query parameter, or
+  history state, so Login cannot be used as an open redirect. If that check
+  itself fails, Login says so and offers **Try again** or **Continue to
+  campaigns** rather than silently dropping a possibly live invitation. A
+  failed login leaves the continuation untouched; a later successful retry
+  still resumes it.
+- **Wrong account and cancellation.** The confirm step always names the
+  signed-in account (safe display name only) and keeps the Join button
+  disabled until the session bootstrap has finished reloading. **Use a
+  different account** signs the current account out and returns, in place, to
+  Sign in / Create account on the same continuation. **Not now** (shown on
+  both the sign-in and confirm states) calls the existing `cancel` endpoint:
+  it clears the onboarding cookie and closes the onboarding session but never
+  accepts the invitation, which remains pending for the GM to revoke or
+  re-share. A continuation that expires or is revoked while the user is on
+  Login or at the confirm step ends in the generic "no longer available"
+  state (or the ordinary `/campaigns` destination from Login) with no
+  membership change.
 - A transient `start` failure (rate-limited or a generic request error)
   offers **Try again**, resubmitting the same token this component already
   captured from the fragment — never re-reading the URL, which was already
@@ -745,6 +769,32 @@ leaking an aborted one. Covered by `useBeginInvitationOnboarding.test.tsx`
 mounting the real hook under `<StrictMode>` with a mount-effect-driven
 `submit()` (mirroring the page's own pattern) and a controllable, never-
 auto-resolving mock request.
+
+**Post-login continuation fix:** a logged-out visitor opening a valid link
+could be bounced to `/login` and, after signing in, land on `/campaigns` with
+the invitation never accepted or explained. Root cause: on mount the page
+fired the onboarding **status** read concurrently with the **start** request
+that creates the onboarding cookie. The status read raced ahead of the
+cookie, returned `404`, and left a stale "unavailable" snapshot; `start`
+then succeeded, and the one render before the page's status refetch took
+effect saw "unavailable" + "unauthenticated" and ran the page's
+`<Navigate to="/login">` for a visitor with no continuation — unmounting the
+page (and with it the invitation flow) while the valid cookie sat unused
+server-side. Fixed by gating the status read on the begin request
+(`useInvitationOnboardingStatus({ enabled })`: held off until `start` has
+succeeded when the page opened with a fragment, immediate otherwise), by
+having Login resume a live continuation (above), and by giving the user a
+**Not now** exit. No backend behavior changed: the continuation is still the
+same short-lived, single-use opaque `HttpOnly` onboarding cookie backed by
+`security.invitation_onboarding_sessions`; the raw invitation token still
+appears only in the one-time fragment (removed before any await) and the
+`start` request body. Covered by `App.invitationContinuation.integration.test.tsx`,
+which mounts the real `<App />` under the real `RouteSessionProvider` and
+router with only `fetch` faked by a small stateful server — including a gated
+`start` that reproduces the original race, Strict Mode, failed-then-successful
+login, Back/Forward, wrong-account switching, cancellation, registration,
+expiry/revocation, double submission, unmount abort, and the absence of the
+raw token from the URL, history state, and browser storage.
 
 ## 3o. Resource-grant target kinds, group grants, and the `deny` effect (checkpoint 12)
 
