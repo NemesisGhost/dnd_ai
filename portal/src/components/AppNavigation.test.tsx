@@ -50,7 +50,7 @@ describe("AppNavigation", () => {
         )
 
         const expectedDestinations = [
-            ["Home", "/app/campaign-a/home"],
+            ["Campaign Home", "/app/campaign-a/home"],
             ["World", "/app/campaign-a/world"],
             [
                 "Characters",
@@ -213,7 +213,7 @@ describe("AppNavigation", () => {
             within(navigation).getByRole(
                 "link",
                 {
-                    name: "Home",
+                    name: "Campaign Home",
                 },
             ),
         ).toBeInTheDocument()

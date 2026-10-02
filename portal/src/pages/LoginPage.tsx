@@ -4,12 +4,15 @@ import {
 import type {
     SyntheticEvent,
 } from "react"
-import { Navigate } from "react-router"
+import { Navigate, useLocation } from "react-router"
 import { useSession } from "../context/SessionContext"
 import { useLogin } from "../hooks/useLogin"
+import { resolvePostLoginDestination } from "../utils/postLoginDestination"
 import PlaceholderPage from "./PlaceholderPage"
 
 export function LoginPage() {
+    const location = useLocation()
+
     const {
         state: sessionState,
         reload,
@@ -54,7 +57,12 @@ export function LoginPage() {
     }
 
     if (sessionState.status === "authenticated") {
-        return <Navigate to="/campaigns" replace />
+        return (
+            <Navigate
+                to={resolvePostLoginDestination(location.state)}
+                replace
+            />
+        )
     }
 
     if (sessionState.status === "error") {

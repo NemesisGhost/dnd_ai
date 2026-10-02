@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import type { ComponentProps } from "react"
+import { MemoryRouter } from "react-router"
 import {
   beforeEach,
   describe,
@@ -61,7 +62,14 @@ function renderPanel(
     ...overrides,
   }
 
-  return { props, ...render(<CampaignContextPanel {...props} />) }
+  return {
+    props,
+    ...render(
+      <MemoryRouter>
+        <CampaignContextPanel {...props} />
+      </MemoryRouter>,
+    ),
+  }
 }
 
 beforeEach(() => {
@@ -199,10 +207,12 @@ describe("CampaignContextPanel", () => {
     expect(screen.queryByText("Species")).not.toBeInTheDocument()
 
     rerender(
-      <CampaignContextPanel
-        {...props}
-        selectedCharacterId="character-a"
-      />,
+      <MemoryRouter>
+        <CampaignContextPanel
+          {...props}
+          selectedCharacterId="character-a"
+        />
+      </MemoryRouter>,
     )
     expect(screen.getByText("Species")).toBeInTheDocument()
     expect(useCharacterMock).toHaveBeenCalledWith(
@@ -221,12 +231,12 @@ describe("CampaignContextPanel", () => {
     expect(summary.closest("details")).toHaveAttribute("open")
   })
 
-  it("has no campaign-selection link and never shows raw ids", () => {
+  it("has a Browse all campaigns link to /campaigns and never shows raw ids", () => {
     renderPanel({ selectedCharacterId: "character-a" })
 
     expect(
-      screen.queryByRole("link", { name: "Change campaign" }),
-    ).not.toBeInTheDocument()
+      screen.getByRole("link", { name: "Browse all campaigns" }),
+    ).toHaveAttribute("href", "/campaigns")
     expect(
       screen.queryByText("campaign-secret-id"),
     ).not.toBeInTheDocument()

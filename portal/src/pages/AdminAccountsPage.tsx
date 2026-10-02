@@ -1,6 +1,7 @@
 import { AccountLifecycleActions } from "../components/AccountLifecycleActions"
 import { CreateAccountPanel } from "../components/CreateAccountPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
+import { NotFoundPage } from "./NotFoundPage"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 interface AdminAccountsPageProps {
@@ -26,14 +27,7 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
     const { state, query, setQuery, retry, loadMore } = usePlatformAccounts()
 
     if (!bootstrap.is_platform_administrator) {
-        return (
-            <main className="app-main">
-                <section className="placeholder-page" aria-labelledby="admin-accounts-denied-heading">
-                    <h1 id="admin-accounts-denied-heading">Not found</h1>
-                    <p>This page is not available.</p>
-                </section>
-            </main>
-        )
+        return <NotFoundPage />
     }
 
     return (

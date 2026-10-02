@@ -33,7 +33,7 @@ interface AppNavigationProps {
 }
 
 const navigationItems: NavigationItem[] = [
-  { path: 'home', label: 'Home', icon: House },
+  { path: 'home', label: 'Campaign Home', icon: House },
   { path: 'world', label: 'World', icon: Globe2 },
   { path: 'characters', label: 'Characters', icon: Users },
   { path: 'quests', label: 'Quests', icon: ScrollText },
@@ -122,7 +122,7 @@ export function AppNavigation({
         )}
 
         <span>
-          {mobileOpen ? "Close" : "Menu"}
+          {mobileOpen ? "Close" : "Campaign menu"}
         </span>
       </button>
       {mobileOpen && (

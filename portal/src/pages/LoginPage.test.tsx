@@ -67,9 +67,9 @@ function renderLoginPage() {
         />
 
         <Route
-          path="/campaigns"
+          path="/home"
           element={
-            <h1>Campaign destination</h1>
+            <h1>Home destination</h1>
           }
         />
       </Routes>
@@ -173,7 +173,7 @@ describe("LoginPage", () => {
     expect(reloadMock).toHaveBeenCalledOnce()
   })
 
-  it("redirects an authenticated user to campaign selection", async () => {
+  it("redirects an authenticated user with no continuation to the home landing page", async () => {
     useSessionMock.mockReturnValue({
       state: {
         status: "authenticated",
@@ -186,7 +186,7 @@ describe("LoginPage", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Campaign destination",
+        name: "Home destination",
       }),
     ).toBeInTheDocument()
 
@@ -195,5 +195,72 @@ describe("LoginPage", () => {
         name: "Sign In",
       }),
     ).not.toBeInTheDocument()
+  })
+
+  it("redirects an authenticated user to a valid continuation destination", async () => {
+    useSessionMock.mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: sessionBootstrapFixture,
+      },
+      reload: reloadMock,
+    })
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/login",
+            state: { from: "/app/mundivita/quests?x=1" },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/app/:campaignId/quests"
+            element={<h1>Quests destination</h1>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Quests destination",
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("falls back to /home for an invalid continuation destination", async () => {
+    useSessionMock.mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: sessionBootstrapFixture,
+      },
+      reload: reloadMock,
+    })
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/login",
+            state: { from: "https://evil.example/" },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/home" element={<h1>Home destination</h1>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Home destination",
+      }),
+    ).toBeInTheDocument()
   })
 })
