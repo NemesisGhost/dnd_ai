@@ -1390,11 +1390,11 @@ Portal connection management shows each user's paired devices and, for authorize
 
 ### 23.6 Web-portal experience
 
-The portal provides a shared authenticated shell with campaign, timeline, viewing role, and optional character perspective always visible. Initial navigation covers Home, World, Characters, Quests, Sessions, Knowledge, Ask, GM Tools, and Access Management when permitted.
+The approved navigation target is a persistent authenticated global shell with Home, Campaigns, and a profile/account menu, independent of campaign selection. Within a selected campaign, a separate context/navigation area shows campaign, timeline, viewing role, and optional character perspective, with Campaign Home, World, Characters, Quests, Sessions, Knowledge, Access when authorized, and Ask under its existing feature-readiness rules. This is target design, not an implementation or delivery-status update; see [UI_DESIGN.md §4](UI_DESIGN.md#4-information-architecture).
 
 The portal uses React, TypeScript, and Vite under `portal/`. During development Vite runs at `http://localhost:5173` and proxies `/api` and `/auth` to FastAPI at `http://localhost:8000`, preserving the same-origin browser contract. Production serves the built portal and `/api/*` from the same `world` origin. The portal uses ordinary same-origin login/session endpoints and does not install a browser OIDC library such as `oidc-client-ts`.
 
-The initial route structure is `/login`, `/campaigns`, and `/app/:campaignId/{home,world,characters,quests,sessions,knowledge,ask}`. GM and access-management destinations appear only when the session bootstrap reports the required capabilities. Route visibility improves usability but never replaces server authorization.
+The approved target replaces `/` with a replacement redirect to `/login` and makes `/home` the ordinary authenticated login destination. Global routes include `/home`, `/campaigns`, `/account`, and platform-authorized `/platform/accounts`; campaign routes retain `/app/:campaignId/{home,world,characters,quests,sessions,knowledge,access}` and existing detail routes. Invitation onboarding and public activation/reset routes remain under their existing contracts; Ask remains feature-gated. [UI_DESIGN.md §4.2-§4.6](UI_DESIGN.md#42-root-authentication-and-deep-links) records the complete target and its differences from current routing. Platform eligibility currently comes from the server-provided `is_platform_administrator` signal, separately from campaign capabilities; this design does not change that authorization contract. Route visibility improves usability but never replaces direct-route and server authorization.
 
 The MVP includes:
 
