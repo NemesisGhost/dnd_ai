@@ -7,6 +7,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { ThemeProvider } from "../themes/ThemeProvider"
 import { CampaignSessionBoundary } from "./CampaignSessionBoundary"
 import { AuthenticatedAppLayout } from "./AuthenticatedAppLayout"
 import { useSession } from "../context/SessionContext"
@@ -51,13 +52,15 @@ beforeEach(() => {
 function renderAt(pathname: string) {
   return render(
     <MemoryRouter initialEntries={[pathname]}>
-      <Routes>
-        <Route element={<AuthenticatedAppLayout />}>
-          <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
-            <Route path="home" element={<h1>Campaign home</h1>} />
+      <ThemeProvider>
+        <Routes>
+          <Route element={<AuthenticatedAppLayout />}>
+            <Route path="/app/:campaignId" element={<CampaignSessionBoundary />}>
+              <Route path="home" element={<h1>Campaign home</h1>} />
+            </Route>
           </Route>
-        </Route>
-      </Routes>
+        </Routes>
+      </ThemeProvider>
     </MemoryRouter>,
   )
 }

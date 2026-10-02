@@ -12,6 +12,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { useSession } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { ThemeProvider } from "../themes/ThemeProvider"
 import { AuthenticatedAppLayout } from "./AuthenticatedAppLayout"
 import { useAuthenticatedSession } from "./useAuthenticatedSession"
 
@@ -41,14 +42,16 @@ function LoginLocationProbe() {
 function renderLayout(initialPath = "/home") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="/login" element={<LoginLocationProbe />} />
+      <ThemeProvider>
+        <Routes>
+          <Route path="/login" element={<LoginLocationProbe />} />
 
-        <Route element={<AuthenticatedAppLayout />}>
-          <Route path="/home" element={<ProtectedProbe />} />
-          <Route path="/app/:campaignId/quests" element={<ProtectedProbe />} />
-        </Route>
-      </Routes>
+          <Route element={<AuthenticatedAppLayout />}>
+            <Route path="/home" element={<ProtectedProbe />} />
+            <Route path="/app/:campaignId/quests" element={<ProtectedProbe />} />
+          </Route>
+        </Routes>
+      </ThemeProvider>
     </MemoryRouter>,
   )
 }
@@ -153,8 +156,12 @@ describe("AuthenticatedAppLayout", () => {
       }),
     ).toBeInTheDocument()
 
+    // The profile menu's Log out action is collapsed behind the disclosure
+    // button by default, so it's not in the accessibility tree yet.
     expect(
-      screen.getByRole("button", { name: "Log out" }),
+      screen.getByRole("button", {
+        name: "Account menu for Campaign Administrator",
+      }),
     ).toBeInTheDocument()
   })
 })

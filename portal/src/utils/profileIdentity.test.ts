@@ -13,11 +13,11 @@ describe("deriveInitials", () => {
     expect(deriveInitials(input)).toBe(expected)
   })
 
-  it("does not split a combined grapheme cluster (emoji family)", () => {
+  it("filters out a word with no letter or number, including an emoji cluster", () => {
+    // The family emoji has no \p{L}/\p{N} codepoint, so §4.2's word filter
+    // drops it entirely, leaving "Smith" as the only (single) word.
     const familyEmoji = "👨‍👩‍👧‍👦"
-    expect(deriveInitials(`${familyEmoji} Smith`)).toBe(
-      `${familyEmoji.toLocaleUpperCase()}S`,
-    )
+    expect(deriveInitials(`${familyEmoji} Smith`)).toBe("S")
   })
 
   it("returns at most two graphemes for many words", () => {

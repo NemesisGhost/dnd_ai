@@ -859,8 +859,16 @@ describe("portal routing", () => {
   ])(
     "logs out from %s to the login form, never back to /home (redirect-loop guard)",
     async (_description, path) => {
+      // Logging out from a campaign route changes RouteSessionProvider's
+      // scope key (campaign:<id> -> outside-campaign), which remounts
+      // SessionProvider and therefore this mocked hook. Track the
+      // authenticated flag outside React state so a fresh mount still
+      // reflects the already-completed logout, the way a real remount's
+      // fresh GET /auth/session would.
+      let authenticated = true
+
       useSessionBootstrapMock.mockImplementation(() => {
-        const [authenticated, setAuthenticated] = useState(true)
+        const [, forceRender] = useState(0)
 
         return {
           state: authenticated
@@ -869,7 +877,10 @@ describe("portal routing", () => {
                 bootstrap: sessionBootstrapFixture,
               }
             : { status: "unauthenticated" as const },
-          reload: () => setAuthenticated(false),
+          reload: () => {
+            authenticated = false
+            forceRender((count) => count + 1)
+          },
         }
       })
 
