@@ -17,6 +17,20 @@ import type {
 
 const _HASH_TOKEN_PREFIX = "#token="
 
+// The decoded token from a "#token=..." fragment, or null when the value is
+// empty or not valid percent-encoding. Never throws.
+function decodeFragmentToken(hash: string): string | null {
+    if (!hash.startsWith(_HASH_TOKEN_PREFIX)) {
+        return null
+    }
+    try {
+        const decoded = decodeURIComponent(hash.slice(_HASH_TOKEN_PREFIX.length))
+        return decoded === "" ? null : decoded
+    } catch {
+        return null
+    }
+}
+
 function manualStatusMessage(kind: "pending" | "denied" | "unacceptable" | "error"): string {
     switch (kind) {
         case "pending":
@@ -76,6 +90,15 @@ export function AcceptCampaignInvitationPage() {
 
     const [completedCampaignName, setCompletedCampaignName] = useState<string | null>(null)
     const [cancelled, setCancelled] = useState(false)
+    // True when the fragment's percent-encoding cannot be decoded (or the
+    // token is empty): rendered as the same generic unavailable state as an
+    // invalid invitation, and no start request is ever sent for it. Derived
+    // once, purely, from the same snapshot as hadHashToken.
+    const [malformedFragment] = useState(
+        () =>
+            window.location.hash.startsWith(_HASH_TOKEN_PREFIX) &&
+            decodeFragmentToken(window.location.hash) === null,
+    )
     const cancel = useCancelInvitationOnboarding(() => {
         setCancelled(true)
     })
@@ -104,8 +127,13 @@ export function AcceptCampaignInvitationPage() {
             return
         }
         hashConsumedRef.current = true
-        const invitationToken = decodeURIComponent(hash.slice(_HASH_TOKEN_PREFIX.length))
+        // Strip the fragment from the current history entry before anything
+        // that can throw, so a malformed value is never left in the URL.
         window.history.replaceState(null, "", window.location.pathname + window.location.search)
+        const invitationToken = decodeFragmentToken(hash)
+        if (invitationToken === null) {
+            return
+        }
         capturedTokenRef.current = invitationToken
         begin.submit(invitationToken)
         // Intentionally run-once: hashConsumedRef, not the dependency
@@ -120,7 +148,9 @@ export function AcceptCampaignInvitationPage() {
     // request is still in flight, without a redundant setState in either
     // effect above.
     const hasPendingHashBegin =
-        hadHashToken && (begin.status.kind === "idle" || begin.status.kind === "pending")
+        hadHashToken &&
+        !malformedFragment &&
+        (begin.status.kind === "idle" || begin.status.kind === "pending")
 
     if (completedCampaignName !== null) {
         return (
@@ -231,7 +261,7 @@ export function AcceptCampaignInvitationPage() {
         )
     }
 
-    if (begin.status.kind === "unavailable") {
+    if (malformedFragment || begin.status.kind === "unavailable") {
         // R-2: a calm terminal state, not an error with a retry button —
         // the link's own token has already been consumed by this attempt
         // and cannot become valid again by retrying.

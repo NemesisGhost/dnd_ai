@@ -55,9 +55,9 @@ register_invited_account_endpoint`) is **not** added, and never can be
 through this module's join-by-record_id design: its audit row names the
 `security.users` row it creates, and a user account is not scoped to one
 campaign at all — there is no exact `campaign_id` to resolve it against.
-Registering a new account remains visible in this campaign's history only
-indirectly, once the same person's `invitation_onboarding.complete` event
-fires immediately afterward.
+The same request's `invitation_onboarding.register_accept` row, written in
+the same transaction, names the `campaign_memberships` row it accepted and
+is what this history shows (as "Invitation accepted (new account)").
 
 **Safe presentation only.** This module never *returns* `audit.change_log
 .changed_fields` (arbitrary JSONB), `reason`, `correlation_id`,
@@ -144,9 +144,14 @@ _MEMBERSHIP_TABLE_COMMANDS: tuple[str, ...] = (
     # through this same branch. invitation_onboarding.register's own row
     # (table_name='users', record_id=user_id) has no campaign to resolve
     # at all — a security.users row is not scoped to one campaign — and is
-    # therefore deliberately never added to this module's allowlist; see
-    # the module docstring's "Scope" paragraph, above.
+    # therefore deliberately never added to this module's allowlist; the
+    # same request's invitation_onboarding.register_accept row (below)
+    # names the accepted membership and is what this history shows.
     "invitation_onboarding.complete",
+    # The campaign-resolvable half of an invited registration (the
+    # membership it accepted); the sibling invitation_onboarding.register
+    # row names a security.users row and stays out of the allowlist.
+    "invitation_onboarding.register_accept",
 )
 _ROLE_TABLE_COMMANDS: tuple[str, ...] = (
     "assign_membership_role",
@@ -206,6 +211,7 @@ _COMMANDS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
         "accept_campaign_invitation",
         "revoke_campaign_invitation",
         "invitation_onboarding.complete",
+        "invitation_onboarding.register_accept",
     ),
     "campaign": _CAMPAIGN_TABLE_COMMANDS,
     "access_group": _ACCESS_GROUP_TABLE_COMMANDS,
@@ -241,6 +247,7 @@ _ACTION_LABEL_BY_COMMAND: dict[str, str] = {
     "accept_campaign_invitation": "Invitation accepted",
     "revoke_campaign_invitation": "Invitation revoked",
     "invitation_onboarding.complete": "Invitation onboarding completed",
+    "invitation_onboarding.register_accept": "Invitation accepted (new account)",
     "create_campaign": "Campaign created",
     "create_access_group": "Access group created",
     "update_access_group": "Access group updated",

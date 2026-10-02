@@ -185,6 +185,59 @@ def test_register_flow_creates_account_and_signs_in(
         ).scalar_one()
         assert membership_count == 1
 
+        # Exactly one campaign-resolvable audit row for the accepted
+        # membership (plus the pre-existing users-creation row), written in
+        # the same transaction, carrying no secret material.
+        accept_rows = verify.execute(
+            text(
+                "SELECT cl.table_name, cl.record_id, cl.changed_fields, "
+                "m.campaign_id "
+                "FROM audit.change_log cl "
+                "JOIN security.campaign_memberships m ON m.campaign_membership_id = cl.record_id "
+                "WHERE cl.command_name = 'invitation_onboarding.register_accept' "
+                "AND m.campaign_id = :c"
+            ),
+            {"c": f.campaign_id},
+        ).all()
+        assert len(accept_rows) == 1
+        assert accept_rows[0].table_name == "campaign_memberships"
+        serialized = repr(tuple(accept_rows[0]))
+        for secret in (raw_token, "correct-onboarding-password-15", begun["onboarding_csrf_token"]):
+            assert secret not in serialized
+
+
+def test_register_failure_writes_no_acceptance_audit_row(
+    browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with postgres_engine.begin() as connection:
+        raw_token = f.invite(connection)
+    with browser_client_factory() as client:
+        begun = _start(client, raw_token)
+        response = client.post(
+            _REGISTER_URL,
+            json={
+                "login_name": f"onb.weak.{uuid.uuid4().hex[:10]}",
+                "display_name": "Weak Password",
+                "password": "short",
+            },
+            headers={
+                "Origin": _DEV_ORIGIN,
+                "X-Onboarding-CSRF-Token": begun["onboarding_csrf_token"],
+            },
+        )
+    assert response.status_code >= 400
+    with postgres_engine.connect() as verify:
+        count = verify.execute(
+            text(
+                "SELECT count(*) FROM audit.change_log cl "
+                "JOIN security.campaign_memberships m ON m.campaign_membership_id = cl.record_id "
+                "WHERE cl.command_name = 'invitation_onboarding.register_accept' "
+                "AND m.campaign_id = :c"
+            ),
+            {"c": f.campaign_id},
+        ).scalar_one()
+    assert count == 0
+
 
 def test_complete_flow_for_an_already_signed_in_visitor(
     browser_client_factory: Callable[[], TestClient], f: Fixture, postgres_engine: Engine

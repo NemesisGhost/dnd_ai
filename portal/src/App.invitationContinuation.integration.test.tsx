@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { StrictMode, useEffect } from "react"
 import { MemoryRouter, useNavigate } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -372,7 +372,7 @@ describe("invitation continuation across Login", () => {
         expectNoTokenAnywhere()
     })
 
-    it("returns to the invitation (not /campaigns) when Login succeeds with a live continuation, surviving a failed attempt", async () => {
+    it("offers an explicit Resume choice (never auto-redirecting) after Login with a live continuation, surviving a failed attempt", async () => {
         openInvitationLink()
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
 
@@ -384,10 +384,15 @@ describe("invitation continuation across Login", () => {
 
         await signInOnLoginPage("existing", PASSWORD)
 
-        expect(await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })).toBeInTheDocument()
+        // Signing in alone neither redirects nor accepts: the user chooses.
+        expect(await screen.findByRole("link", { name: "Resume invitation" })).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Continue to campaigns" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: "Campaigns" })).not.toBeInTheDocument()
+        expect(server.completeCount).toBe(0)
+
+        fireEvent.click(screen.getByRole("link", { name: "Resume invitation" }))
+        expect(await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })).toBeInTheDocument()
         expect(screen.getByText("Existing User")).toBeInTheDocument()
-        // Never accepted merely by logging in.
         expect(server.completeCount).toBe(0)
 
         const join = screen.getByRole("button", { name: `Join ${CAMPAIGN_NAME}` })
@@ -407,11 +412,13 @@ describe("invitation continuation across Login", () => {
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
         navigateExternally("/login")
         await signInOnLoginPage("existing", PASSWORD)
+        fireEvent.click(await screen.findByRole("link", { name: "Resume invitation" }))
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })
 
         navigateExternally(-1)
-        // The authenticated /login entry bounces straight back to the
-        // still-live invitation; nothing was accepted by navigating.
+        // Resume replaced the /login entry, so Back lands on the invitation
+        // entry, which resumes from the still-live continuation; nothing was
+        // accepted by navigating.
         expect(await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })).toBeInTheDocument()
         expect(server.completeCount).toBe(0)
         expect(server.onboardingLive).toBe(true)
@@ -426,6 +433,55 @@ describe("invitation continuation across Login", () => {
         expect(await screen.findByRole("heading", { name: "Campaigns" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
         expect(server.completeCount).toBe(0)
+    })
+
+    it("does not let an abandoned live continuation hijack a later ordinary login", async () => {
+        // Abandoned flow: the continuation cookie is still live, but the user
+        // now opens /login directly (a fresh page load, no fragment).
+        openInvitationLink()
+        await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
+        cleanup()
+        expect(server.onboardingLive).toBe(true)
+
+        openPlainLogin()
+        await signInOnLoginPage("existing", PASSWORD)
+
+        // Explicit server-confirmed choice, no automatic diversion.
+        expect(await screen.findByRole("link", { name: "Resume invitation" })).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole("link", { name: "Continue to campaigns" }))
+        expect(await screen.findByRole("heading", { name: "Campaigns" })).toBeInTheDocument()
+        expect(server.completeCount).toBe(0)
+        expect(server.members.size).toBe(0)
+    })
+
+    it("sanitizes a malformed percent-encoded fragment and fails generically without a start request", async () => {
+        window.history.replaceState(null, "", "/campaign-invitations/accept#token=%E0%A4%A")
+        const thrown: unknown[] = []
+        const onError = (event: ErrorEvent) => {
+            thrown.push(event.error)
+        }
+        window.addEventListener("error", onError)
+        render(
+            <ThemeProvider>
+                <MemoryRouter initialEntries={["/campaign-invitations/accept"]}>
+                    <RouteSessionProvider>
+                        <App />
+                    </RouteSessionProvider>
+                </MemoryRouter>
+            </ThemeProvider>,
+        )
+
+        expect(
+            await screen.findByRole("heading", { name: "This invitation is no longer available" }),
+        ).toBeInTheDocument()
+        window.removeEventListener("error", onError)
+        expect(thrown).toEqual([])
+        expect(window.location.hash).toBe("")
+        expect(window.location.href).not.toContain("%E0")
+        expect(JSON.stringify(window.history.state)).not.toContain("%E0")
+        expect(server.count("POST", "/api/campaign-invitations/onboarding/start")).toBe(0)
+        expect(server.count("GET", "/api/campaign-invitations/onboarding/status")).toBe(0)
     })
 
     it("falls back to /campaigns when the continuation expired while on Login, and never accepts", async () => {

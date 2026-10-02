@@ -100,6 +100,14 @@ def test_resolve_target_invitation_onboarding_complete_uses_target_user() -> Non
     assert (label, target_type) == ("Player Sam", "account")
 
 
+def test_resolve_target_invited_registration_acceptance_uses_target_user() -> None:
+    label, target_type = _resolve_target(
+        {"target_user_id": "u1", "target_user_display_name": "New Registrant"},
+        command_name="invitation_onboarding.register_accept",
+    )
+    assert (label, target_type) == ("New Registrant", "account")
+
+
 def test_resolve_target_relationship_command_uses_target_character() -> None:
     label, target_type = _resolve_target(
         {"target_character_id": "c1", "target_character_name": "Elenwe"},

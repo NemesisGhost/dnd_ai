@@ -613,7 +613,7 @@ Five routes, all in `src/dnd_ai/api/invitation_onboarding.py`:
   `dnd_ai.commands.invitation_onboarding.begin_invitation_onboarding` takes
   no lock), creates a `security.invitation_onboarding_sessions` row, and sets
   a random opaque onboarding cookie (`HttpOnly`, `Secure` in production,
-  `SameSite=Lax`, host-only, path scoped to the onboarding/auth routes only).
+  `SameSite=Lax`, host-only, `Path=/`, `Max-Age` equal to the remaining onboarding lifetime — the `__Host-` prefix used in production requires `Path=/`, so the cookie is *not* path-scoped to the onboarding routes; see `dnd_ai.api.cookies`).
   The raw invitation token is never stored — only its hash, matching every
   other opaque-secret table in this codebase. Returns the campaign display
   name, invitation/onboarding expiry, the onboarding CSRF token, and the
@@ -634,7 +634,15 @@ Five routes, all in `src/dnd_ai/api/invitation_onboarding.py`:
   local account (Argon2id, the existing minimum-length/common-password/
   audit/generic-error policies), a browser session, and — via
   `accept_locked_onboarding_invitation` (shared with `accept_campaign_
-  invitation`) — the campaign membership, atomically in one transaction.
+  invitation`) — the campaign membership, atomically in one transaction. The
+  same transaction writes two `audit.change_log` rows: the existing
+  `invitation_onboarding.register` row (names the new `security.users` row;
+  not campaign-resolvable) and an `invitation_onboarding.register_accept`
+  row naming the accepted `security.campaign_memberships` row, which the
+  campaign audit history shows as "Invitation accepted (new account)" under
+  the `invitation` category. Neither row carries a token, token hash,
+  password, email, or onboarding CSRF value, and a failed or replayed
+  registration writes neither.
 - **`POST /campaign-invitations/onboarding/complete`** (an ordinary
   authenticated human session, session CSRF via `require_human_user_id`):
   binds the already-authenticated caller to the still-open invitation and
@@ -644,11 +652,17 @@ Five routes, all in `src/dnd_ai/api/invitation_onboarding.py`:
   `require_allowed_origin`): clears the onboarding cookie and marks the
   session cancelled; safe to call at any point, including after a token that
   never resolved to a valid session.
-- **Cancellation/expiry:** cancellation, successful completion, invitation
-  revocation, invitation expiry, onboarding expiry, and terminal failure all
-  clear or expire the onboarding cookie and render the onboarding record
-  unusable. The onboarding session's own expiry is `min(now() + 20 minutes,
-  the invitation's own expires_at)` — never extends the invitation's expiry.
+- **Cancellation/expiry, and when the cookie is actually cleared.** The server
+  sends an explicit cookie deletion only on a *successful* `register`,
+  `complete`, or `cancel`. Every other end state — invitation revocation,
+  invitation expiry, onboarding-session expiry, a consumed or cancelled
+  session, and any rejected request (generic `404`, or `403` for a wrong
+  CSRF value) — leaves the browser cookie in place to expire on its own
+  `Max-Age`; it is already unusable server-side, and every later read of it
+  returns the same generic unavailable response. A `start` for an unavailable
+  invitation sets no cookie at all. The onboarding session's own expiry is
+  `min(now() + 20 minutes, the invitation's own expires_at)` — never extends
+  the invitation's expiry.
 - **No role assignment:** completion creates or reactivates membership only.
   It does not assign roles or restore historical roles, relationships, direct
   grants, or access-group membership — a GM still configures those
@@ -698,18 +712,24 @@ approved later.
   offering the "Go to campaigns" link, so the newly joined campaign is
   present the first time that link is followed rather than only after a
   later, unrelated reload.
-- **Login destination selection.** `/login` has exactly two fixed internal
-  destinations after a successful sign-in, chosen by asking the server (the
+- **Login destination selection.** Sign-in for an invitation happens inline
+  on `/campaign-invitations/accept`. `/login` has exactly two fixed internal
+  destinations after a successful sign-in, and asks the server (the
   onboarding cookie is `HttpOnly`, so only the server can say) whether this
-  browser still holds a live onboarding continuation: a live one resumes the
-  invitation at `/campaign-invitations/accept` (the confirm step — signing in
-  never joins by itself); none sends the user to `/campaigns`, exactly as
-  before. Neither destination is read from the URL, a query parameter, or
-  history state, so Login cannot be used as an open redirect. If that check
-  itself fails, Login says so and offers **Try again** or **Continue to
-  campaigns** rather than silently dropping a possibly live invitation. A
-  failed login leaves the continuation untouched; a later successful retry
-  still resumes it.
+  browser still holds a live onboarding continuation. None: `/campaigns`,
+  exactly as before. A live one **never auto-redirects**: a cookie left by
+  an abandoned flow cannot be told apart from current intent (no return URL
+  or stored flag is trusted, and the raw token is never persisted), so Login
+  shows the campaign name and an explicit **Resume invitation** (to the
+  confirm step at `/campaign-invitations/accept`) / **Continue to campaigns**
+  choice. Signing in never accepts by itself; acceptance always needs the
+  explicit confirm click (or, for a new account, the register submit).
+  Neither destination is read from the URL, a query parameter, or history
+  state, so Login cannot be used as an open redirect. If the check itself
+  fails, Login says so and offers **Try again** or **Continue to campaigns**
+  rather than silently dropping a possibly live invitation. A failed login
+  leaves the continuation untouched; a later successful retry reaches the
+  same choice.
 - **Wrong account and cancellation.** The confirm step always names the
   signed-in account (safe display name only) and keeps the Join button
   disabled until the session bootstrap has finished reloading. **Use a
@@ -722,6 +742,10 @@ approved later.
   Login or at the confirm step ends in the generic "no longer available"
   state (or the ordinary `/campaigns` destination from Login) with no
   membership change.
+- **Malformed fragment.** The fragment is removed from the current history
+  entry before anything that can throw. A value that is empty or not valid
+  percent-encoding renders the same generic "no longer available" state as
+  an invalid invitation, with no `start` request and no retry.
 - A transient `start` failure (rate-limited or a generic request error)
   offers **Try again**, resubmitting the same token this component already
   captured from the fragment — never re-reading the URL, which was already
@@ -783,8 +807,10 @@ page (and with it the invitation flow) while the valid cookie sat unused
 server-side. Fixed by gating the status read on the begin request
 (`useInvitationOnboardingStatus({ enabled })`: held off until `start` has
 succeeded when the page opened with a fragment, immediate otherwise), by
-having Login resume a live continuation (above), and by giving the user a
-**Not now** exit. No backend behavior changed: the continuation is still the
+having Login offer an explicit Resume / Continue choice for a live
+continuation (above, never an automatic redirect), and by giving the user a
+**Not now** exit. (A later review round added the malformed-fragment handling and
+the invited-registration audit row described above.) Backend behavior was unchanged by the original fix: the continuation is still the
 same short-lived, single-use opaque `HttpOnly` onboarding cookie backed by
 `security.invitation_onboarding_sessions`; the raw invitation token still
 appears only in the one-time fragment (removed before any await) and the

@@ -84,6 +84,10 @@ router = APIRouter(tags=["invitation_onboarding"])
 
 _BEGIN_COMMAND_NAME = "invitation_onboarding.begin"
 _REGISTER_COMMAND_NAME = "invitation_onboarding.register"
+# The campaign-resolvable half of an invited registration: the membership the
+# same transaction accepted. Distinct from _REGISTER_COMMAND_NAME, whose row
+# names the new security.users row (no campaign to resolve against).
+_REGISTER_ACCEPT_COMMAND_NAME = "invitation_onboarding.register_accept"
 _COMPLETE_COMMAND_NAME = "invitation_onboarding.complete"
 _CANCEL_COMMAND_NAME = "invitation_onboarding.cancel"
 
@@ -307,6 +311,23 @@ def register_invited_account_endpoint(
         actor_user_id=result.user_id,
         correlation_id=correlation_id,
         command_name=_REGISTER_COMMAND_NAME,
+        event_id=None,
+    )
+    # Same request-scoped transaction as the account creation and the
+    # invitation acceptance, so a rollback drops all three together and a
+    # replay (onboarding session already consumed -> 404) can never write a
+    # second one. No token, token hash, email, password, or CSRF value.
+    record_change_log(
+        connection,
+        change_action_code="updated",
+        schema_name="security",
+        table_name="campaign_memberships",
+        record_id=result.campaign_membership_id,
+        entity_id=None,
+        world_id=None,
+        actor_user_id=result.user_id,
+        correlation_id=correlation_id,
+        command_name=_REGISTER_ACCEPT_COMMAND_NAME,
         event_id=None,
     )
 

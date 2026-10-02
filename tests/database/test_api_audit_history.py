@@ -399,6 +399,22 @@ class Fixture:
             actor_user_id=self.onboarded_user_id,
         )
 
+        # 14b. invited registration: the register endpoint's campaign-
+        # resolvable row names the membership the same transaction
+        # accepted (the sibling invitation_onboarding.register row names a
+        # users row and is intentionally not in this history).
+        self.registered_user_id = make_user(connection, "Audit History Registered Member")
+        registered_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.registered_user_id
+        )
+        _record(
+            command="invitation_onboarding.register_accept",
+            action="updated",
+            table="campaign_memberships",
+            record_id=registered_membership_id,
+            actor_user_id=self.registered_user_id,
+        )
+
         # 15. create a *deny* resource grant (checkpoint 14: change_summary
         # must mark a deny grant distinctly from an ordinary allow one).
         denied_grant_id = make_resource_grant(
@@ -667,8 +683,8 @@ def test_authorized_admin_reads_the_full_curated_history(
     assert response.status_code == 200
     body = response.json()
     assert body["next_cursor"] is None
-    # 17 events recorded for campaign A (16 numbered + 1 ghost-actor event).
-    assert len(body["items"]) == 17
+    # 18 events recorded for campaign A (17 numbered + 1 ghost-actor event).
+    assert len(body["items"]) == 18
     categories = {item["category"] for item in body["items"]}
     assert categories == {
         "membership",
@@ -695,6 +711,24 @@ def test_invitation_onboarding_completion_appears_under_the_invitation_category(
     assert item["category"] == "invitation"
     assert item["actor_label"] == "Audit History Onboarded Member"
     assert item["target_label"] == "Audit History Onboarded Member"
+    assert item["target_type"] == "account"
+
+
+def test_invited_registration_acceptance_appears_under_the_invitation_category(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    matching = [
+        item
+        for item in response.json()["items"]
+        if item["action_label"] == "Invitation accepted (new account)"
+    ]
+    assert len(matching) == 1
+    item = matching[0]
+    assert item["category"] == "invitation"
+    assert item["actor_label"] == "Audit History Registered Member"
+    assert item["target_label"] == "Audit History Registered Member"
     assert item["target_type"] == "account"
 
 
@@ -745,9 +779,9 @@ def test_pagination_is_stable_across_the_timestamp_tie(
         page2 = client.get(_url(f.campaign_id, limit=5, cursor=page1["next_cursor"])).json()
         assert len(page2["items"]) == 5
 
-        page3 = client.get(_url(f.campaign_id, limit=7, cursor=page2["next_cursor"])).json()
+        page3 = client.get(_url(f.campaign_id, limit=8, cursor=page2["next_cursor"])).json()
         assert page3["next_cursor"] is None
-        assert len(page3["items"]) == 7  # 17 total - 5 - 5
+        assert len(page3["items"]) == 8  # 18 total - 5 - 5
 
     all_ids = [i["change_log_id"] for i in page1["items"] + page2["items"] + page3["items"]]
     assert len(all_ids) == len(set(all_ids)), "pagination must never repeat a row"
@@ -842,7 +876,7 @@ def test_campaign_a_never_sees_campaign_b_history(
         response = client.get(_url(f.campaign_id, limit=100))
     body = response.json()
     change_log_ids = {item["change_log_id"] for item in body["items"]}
-    assert len(change_log_ids) == 17
+    assert len(change_log_ids) == 18
     # Every change_log_id here must have been produced for campaign A —
     # cross-checked structurally by re-querying campaign B and confirming
     # no overlap in ids at all.
@@ -1128,6 +1162,7 @@ def test_actors_returns_the_distinct_human_actors_for_this_campaign_only(
         (str(f.admin_user_id), "Audit History Admin A"),
         (str(f.accepted_user_id), "Audit History Accepted Member"),
         (str(f.onboarded_user_id), "Audit History Onboarded Member"),
+        (str(f.registered_user_id), "Audit History Registered Member"),
     }
     # The service-attributed ("test.audit_history_fixture_service") event
     # has no actor_user_id at all and must never surface here — this

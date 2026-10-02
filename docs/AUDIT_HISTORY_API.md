@@ -96,7 +96,7 @@ never blocks or errors the page itself.
 | `role` | `assign_membership_role`, `revoke_membership_role`, `change_membership_role` | `security.membership_roles` |
 | `character_relationship` | `grant_character_relationship`, `change_character_relationship`, `revoke_character_relationship` | `security.membership_character_relationships` |
 | `resource_grant` | `create_resource_grant`, `revoke_resource_grant` | `security.resource_grants` |
-| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation`, `invitation_onboarding.complete` | `security.campaign_invitations` for the first/third; `security.campaign_memberships` for `accept_campaign_invitation`/`invitation_onboarding.complete` (see below) |
+| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation`, `invitation_onboarding.complete`, `invitation_onboarding.register_accept` | `security.campaign_invitations` for the first/third; `security.campaign_memberships` for `accept_campaign_invitation`/`invitation_onboarding.complete`/`invitation_onboarding.register_accept` (see below) |
 | `campaign` | `create_campaign` | `campaign.campaigns` |
 | `access_group` | `create_access_group`, `update_access_group`, `deactivate_access_group`, `reactivate_access_group` | `security.access_groups` |
 | `access_group_membership` | `add_access_group_member`, `remove_access_group_member` | `security.access_group_memberships` |
@@ -134,10 +134,14 @@ onboarding.register_invited_account_endpoint`) is **not** in this
 allowlist, and never can be through this module's join-by-`record_id`
 design: its own audit row names the `security.users` row it creates, and a
 user account is not scoped to one campaign at all — there is no exact
-`campaign_id` to resolve it against. Registering a new account remains
-visible in this campaign's history only indirectly, once the same person's
-`invitation_onboarding.complete` event fires immediately afterward — see §6
-for the full limitation.
+`campaign_id` to resolve it against. The same endpoint writes a second row
+in the same transaction, `invitation_onboarding.register_accept`, naming the
+`security.campaign_memberships` row the registration accepted; that row *is*
+in the `invitation` category, resolved through the membership branch, and is
+labelled "Invitation accepted (new account)" (actor and target are the new
+account). Registration is an atomic create-account-and-accept, so there is no
+separate `invitation_onboarding.complete` event for it. A failed or replayed
+registration writes neither row.
 
 ## 3. Safe-presentation allowlist (server-generated projection)
 
@@ -329,14 +333,14 @@ Phase 13D precedent) — a page reports only whether a `next_cursor` exists.
   `campaign_id` at all (they are world/entity-scoped, shared across
   sibling campaigns on the same timeline) — and is explicitly out of scope
   for this foundation.
-- **`invitation_onboarding.register` is not covered (checkpoint 14).** Its
-  audit row names the `security.users` row it creates, not any campaign-
-  scoped row — a user account is not owned by one campaign, so there is no
-  exact `campaign_id` for this module's join-by-`record_id` design to
-  resolve it against, unlike `invitation_onboarding.complete` (added this
-  checkpoint), whose row names the `campaign_memberships` row it activates.
-  A GM sees the completion event but not the registration that immediately
-  preceded it.
+- **`invitation_onboarding.register` itself is not covered.** Its audit row
+  names the `security.users` row it creates, not any campaign-scoped row — a
+  user account is not owned by one campaign, so there is no exact
+  `campaign_id` for this module's join-by-`record_id` design to resolve it
+  against. The campaign-visible record of an invited registration is the
+  separate `invitation_onboarding.register_accept` row (the accepted
+  membership), so a GM sees the acceptance but not the account-creation
+  detail.
 - **Actor/target name fidelity.** Every label (actor, account/character
   target, role/relationship-type/capability display name) is resolved
   against that record's **current** row — this schema keeps no

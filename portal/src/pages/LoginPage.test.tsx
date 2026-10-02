@@ -242,7 +242,7 @@ describe("LoginPage", () => {
     expect(useContinuationMock).toHaveBeenCalledWith({ enabled: true })
   })
 
-  it("resumes the invitation instead of campaign selection when a continuation is live", async () => {
+  it("offers an explicit Resume / Continue choice instead of auto-redirecting when a continuation is live", () => {
     authenticated()
     useContinuationMock.mockReturnValue({
       state: {
@@ -261,9 +261,18 @@ describe("LoginPage", () => {
 
     renderLoginPage()
 
+    expect(screen.getByText(/invitation to Fixture Campaign/)).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Resume invitation" })).toHaveAttribute(
+      "href",
+      "/campaign-invitations/accept",
+    )
+    expect(screen.getByRole("link", { name: "Continue to campaigns" })).toHaveAttribute(
+      "href",
+      "/campaigns",
+    )
     expect(
-      await screen.findByRole("heading", { name: "Invitation destination" }),
-    ).toBeInTheDocument()
+      screen.queryByRole("heading", { name: "Invitation destination" }),
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("heading", { name: "Campaign destination" }),
     ).not.toBeInTheDocument()

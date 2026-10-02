@@ -28,8 +28,13 @@ export function LoginPage() {
 
     // Once signed in, ask the server whether this browser still holds a live
     // invitation-onboarding continuation (its opaque cookie is HttpOnly, so
-    // only the server can say). Yes: resume the invitation workflow instead
-    // of the ordinary destination. No: the ordinary destination, unchanged.
+    // only the server can say). A live cookie may be left over from an
+    // abandoned flow, and nothing on this page can prove the user is
+    // *currently* in that flow (no return URL or stored flag is trusted), so
+    // it never auto-redirects: the user is offered an explicit choice
+    // between resuming the invitation (which only reaches its confirm step)
+    // and the ordinary destination. No continuation: the ordinary
+    // destination, unchanged.
     const invitationContinuation = useInvitationOnboardingStatus({
         enabled: sessionState.status === "authenticated",
     })
@@ -78,7 +83,45 @@ export function LoginPage() {
         }
 
         if (invitationContinuation.state.status === "success") {
-            return <Navigate to={INVITATION_CONTINUATION_DESTINATION} replace />
+            return (
+                <section
+                    className="login-page"
+                    aria-labelledby="continuation-choice-heading"
+                >
+                    <div className="login-container">
+                        <div className="login-box">
+                            <h1
+                                id="continuation-choice-heading"
+                                className="login-title"
+                            >
+                                Signed in
+                            </h1>
+
+                            <p className="login-subtitle">
+                                You have an invitation to{" "}
+                                {invitationContinuation.state.data.campaign_display_name} in
+                                progress. Signing in has not accepted it.
+                            </p>
+
+                            <p>
+                                <Link
+                                    className="login-button"
+                                    to={INVITATION_CONTINUATION_DESTINATION}
+                                    replace
+                                >
+                                    Resume invitation
+                                </Link>
+                            </p>
+
+                            <p>
+                                <Link to={ORDINARY_LOGIN_DESTINATION} replace>
+                                    Continue to campaigns
+                                </Link>
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )
         }
 
         if (invitationContinuation.state.status === "error") {
