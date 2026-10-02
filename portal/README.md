@@ -171,9 +171,20 @@ Do not commit local database credentials or authentication secrets.
 
 ## Routes
 
-Public routes:
+The navigation redesign (`docs/UI_DESIGN.md` §4-§5, `docs/PLAN.md` §23.6) is
+implemented. `/` always redirects to `/login`; an authenticated visitor is
+then redirected again, from `/login`, to `/home` (or to a validated
+continuation destination carried in router history state — never the URL —
+when the visitor was redirected here from a protected route). Logging out
+navigates explicitly to `/login` with no continuation state, so a different
+user signing in next always lands on `/home`. Unknown routes always show a
+not-found page; they never redirect to `/login`.
 
-- `/`
+Public routes (`PublicLayout`: identity chrome plus the theme selector;
+Home/Campaigns/the profile menu additionally appear here for a visitor who
+is, unusually, already authenticated):
+
+- `/` — redirects to `/login`.
 - `/login`
 - `/campaign-invitations/accept` — manual authenticated-acceptance form, and
   (Phase 13E checkpoints 8a-8d) the single-link onboarding landing page:
@@ -184,20 +195,31 @@ Public routes:
 - `/auth/activate` and `/auth/password-reset` (Phase 13E checkpoint 11) —
   extract a one-time token from the URL fragment the same way, immediately
   clear it from browser history, and submit it in a JSON body.
+- Any unmatched path — a shared, non-disclosing not-found page.
 
-Authenticated campaign selection:
+Authenticated global routes (`AuthenticatedAppLayout`: the single session
+gate for every route below, with persistent Home/Campaigns navigation and
+the profile menu — see `src/layouts/AuthenticatedAppLayout.tsx`):
 
-- `/campaigns`
-
-Authenticated, non-campaign-scoped routes (Phase 13E checkpoints 9-11b):
-
-- `/admin/accounts` — platform-account administration, gated on
-  `SessionBootstrap.is_platform_administrator` (never a campaign-scoped
-  `access.manage` grant).
+- `/home` — the landing page: a welcome line, the bootstrap's default
+  campaign (if any), up to six of the signed-in account's campaigns, a link
+  to the full campaign browser, an empty state with a Browse-campaigns and
+  an accept-invitation link when there are none, and an Account section
+  (Your account, and Platform accounts for a platform administrator).
+- `/campaigns` — the full campaign browser (unchanged from Phase 13C).
 - `/account` — self-service password change and own-session management, for
   any authenticated account.
+- `/platform/accounts` — platform-account administration, gated on
+  `SessionBootstrap.is_platform_administrator` (never a campaign-scoped
+  `access.manage` grant). A non-administrator sees the same not-found page
+  as an unknown route and triggers no account-list request.
+- `/admin/accounts` — kept as a redirect to `/platform/accounts` for
+  existing bookmarks; the backend endpoint itself is still
+  `/api/admin/accounts*`.
 
-Authenticated campaign routes:
+Authenticated campaign routes (nested under `/app/:campaignId`, gated by the
+same global session boundary plus `CampaignLayout`'s own authorized-campaign
+lookup):
 
 - `/app/:campaignId/home`
 - `/app/:campaignId/world`
@@ -234,16 +256,21 @@ responsible for authorizing every resource request.
 - `src/components`: Interface components, including the `*Boundary`
   components (e.g. `WorldEntitiesBoundary`, `KnowledgeItemsBoundary`,
   `CampaignQuestsBoundary`) that turn a hook's fetch state into consistent
-  loading/empty/denied/error/refreshing UI for each screen.
+  loading/empty/denied/error/refreshing UI for each screen, plus the shared
+  header chrome (`PortalHeader`, `PortalFooter`, `GlobalNavigation`,
+  `ProfileMenu`, `ProfileAvatar`).
 - `src/context`: Session and character-perspective contexts/providers.
 - `src/fixtures`: Test-only fixture data; never used outside tests.
 - `src/hooks`: Data-fetching hooks backing each boundary, plus session,
-  login, and perspective behavior.
-- `src/layouts`: Authentication/session boundaries and campaign layouts.
-- `src/pages`: Route-level screens (Home, World, Characters, Quests,
-  Sessions, Knowledge, Access, invitation acceptance/onboarding, Login,
-  admin accounts, self-service account, account activation, password
-  reset) and placeholders.
+  login, logout, and perspective behavior.
+- `src/layouts`: `PublicLayout` and `AuthenticatedAppLayout` (the shared
+  header/footer shells and the single authenticated-session gate), plus
+  `CampaignSessionBoundary`/`CampaignLayout`.
+- `src/pages`: Route-level screens (the `/home` landing page, World,
+  Characters, Quests, Sessions, Knowledge, Access, invitation
+  acceptance/onboarding, Login, admin accounts, self-service account,
+  account activation, password reset) and placeholders, including the
+  shared `NotFoundPage`.
 - `src/themes`: Light/dark theme context, provider, and selector.
 - `src/test`: Shared test initialization.
 - `src/types`: TypeScript representations of backend contracts.
@@ -271,6 +298,18 @@ grant. A null selection does not grant campaign-wide access.
 Foundry device authentication remains a separate boundary. The portal does
 not store Foundry device credentials.
 
+A successful login lands on `/home`, or on a continuation destination
+carried in router history state (set only when a protected route redirected
+here) once that destination passes a same-origin, allowlisted-path check
+(`src/utils/postLoginDestination.ts`). Logging out calls `POST /auth/logout`,
+reloads session state, and then explicitly navigates to `/login` with no
+continuation state in the same synchronous step, so a later sign-in by a
+different person never lands back on the signed-out person's page. Revoking
+the current browser session from `/account` is the one case where the same
+person is returned to `/account` after signing back in, because that
+redirect goes through the ordinary protected-route continuation path rather
+than the explicit logout navigation.
+
 Backend endpoint availability does not mean that every account-management
 or authentication workflow has a completed portal screen.
 
@@ -292,6 +331,38 @@ activate their own local account, after which the invitation is accepted
 for that authenticated account. Acceptance creates or reactivates a
 campaign membership only; it does not assign roles or restore historical
 relationships, grants, or access-group membership.
+
+## Navigation redesign verification
+
+The automated suite (`npm test`, `npm run lint`, `npm run build`) covers the
+root/login/logout redirects, the `/home` landing page, the profile menu's
+disclosure semantics and keyboard/focus behavior, `/platform/accounts`
+(including the no-request guarantee for a non-administrator), campaign
+switching always entering Campaign Home, and deep-link continuation.
+
+The following manual browser and assistive-technology checks (navigation
+plan §7.3) have not yet been run against a real local stack and remain
+outstanding:
+
+1. Sign-in as a non-administrator and as a platform administrator; confirm
+   the landing page and profile-menu contents, and Platform Accounts'
+   presence/absence.
+2. Deep link while signed out, sign in, and confirm arrival at the original
+   destination; confirm `/login` while already signed in reaches `/home`;
+   confirm Back after logout never shows protected content.
+3. The invitation single-link flow still reaches "Go to campaigns" without
+   interruption from the ordinary login-landing rule.
+4. Keyboard-only use of the header and profile menu in every theme.
+5. Screen reader (NVDA + Firefox or Chrome on Windows) announcements of the
+   Global/Campaign landmarks, the profile button's name and expanded state,
+   the Administration group, and the logout error alert.
+6. Responsive layout at 320px/390px/768px/1024px/≥1280px and 200% zoom, with
+   no horizontal page scroll.
+7. A campaign switch from a quest detail with a character perspective
+   selected lands on Campaign Home with the header staying visible during
+   the reload.
+8. A zero-campaign account's landing empty state and invitation entry
+   point.
 
 ## Phase 13E verification
 
@@ -407,8 +478,9 @@ invitation-authorized **Create account**, and accepts the invitation
 automatically after authentication. The accepted membership still receives
 no role or other access automatically — a GM configures that separately.
 
-Platform-account administration (`/admin/accounts`: create, issue a
-password-reset link, disable, reactivate, revoke all sessions) and
+Platform-account administration (`/platform/accounts`, with `/admin/accounts`
+kept as a redirect for existing bookmarks: create, issue a password-reset
+link, disable, reactivate, revoke all sessions) and
 self-service account management (`/account`: change own password, list and
 revoke own browser sessions) are separate, non-campaign-scoped pages — see
 [Routes](#routes) above.
