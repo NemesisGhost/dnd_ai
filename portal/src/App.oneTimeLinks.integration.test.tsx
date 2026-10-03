@@ -18,6 +18,7 @@ const PASSWORD = "correct horse battery staple"
 let calls: { method: string; path: string; body: string | null }[]
 let activateStatus: number
 let linkValid: boolean
+let resetLinkValid: boolean
 
 function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const path = String(input)
@@ -26,6 +27,9 @@ function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     calls.push({ method, path, body })
     if (method === "POST" && path === "/api/auth/activation-status") {
         return Promise.resolve(new Response(JSON.stringify({ valid: linkValid }), { status: 200 }))
+    }
+    if (method === "POST" && path === "/api/auth/password-reset-status") {
+        return Promise.resolve(new Response(JSON.stringify({ valid: resetLinkValid }), { status: 200 }))
     }
     if (method === "POST" && (path === "/api/auth/activate" || path === "/api/auth/password-reset")) {
         return Promise.resolve(
@@ -60,6 +64,7 @@ beforeEach(() => {
     calls = []
     activateStatus = 200
     linkValid = true
+    resetLinkValid = true
     vi.stubGlobal("fetch", vi.fn(fakeFetch))
     window.localStorage.clear()
     window.sessionStorage.clear()
@@ -144,9 +149,11 @@ describe("generated one-time links", () => {
     it("leaves the reset and login routes unaffected by the activation check", async () => {
         mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
         expect(posts("/api/auth/activation-status")).toHaveLength(0)
+        await screen.findByLabelText("New passphrase")
         cleanup()
         mountAtLink(`${window.location.origin}/login`)
         expect(posts("/api/auth/activation-status")).toHaveLength(0)
+        expect(posts("/api/auth/password-reset-status")).toHaveLength(1)
     })
 
     it.each(["/activate", "/reset-password"])("%s with a malformed fragment is generic and silent", (path) => {
@@ -157,10 +164,57 @@ describe("generated one-time links", () => {
         expect(calls.filter((c) => c.method === "POST")).toHaveLength(0)
     })
 
-    it("password-reset link renders the React page and sanitizes the URL", () => {
+    it("password-reset link renders the React page and sanitizes the URL", async () => {
         mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
         expect(window.location.hash).toBe("")
         expect(window.location.pathname).toBe("/reset-password")
+        await screen.findByLabelText("New passphrase")
+    })
+
+    it("password-reset link checks first, sanitizes the URL, then resets with one POST", async () => {
+        const { container } = mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN), true)
+
+        expect(window.location.hash).toBe("")
+        expect(window.location.href).not.toContain(RAW_TOKEN)
+        expect(screen.getByText("Checking the password-reset link…")).toBeInTheDocument()
+        expect(screen.queryByLabelText("New passphrase")).not.toBeInTheDocument()
+
+        fireEvent.change(await screen.findByLabelText("New passphrase"), { target: { value: PASSWORD } })
+        fireEvent.change(screen.getByLabelText("Confirm passphrase"), { target: { value: PASSWORD } })
+        expect(container.textContent).not.toContain(RAW_TOKEN)
+        const button = screen.getByRole("button", { name: "Reset password" })
+        fireEvent.click(button)
+        fireEvent.click(button)
+
+        await screen.findByRole("heading", { name: "Password reset" })
+        const status = posts("/api/auth/password-reset-status")
+        expect(status.length).toBeGreaterThanOrEqual(1)
+        expect(status.every((c) => JSON.parse(c.body ?? "{}").token === RAW_TOKEN)).toBe(true)
+        const sent = posts("/api/auth/password-reset")
+        expect(sent).toHaveLength(1)
+        expect(JSON.parse(sent[0].body ?? "{}")).toEqual({ token: RAW_TOKEN, new_password: PASSWORD })
+        expect(screen.getByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/login")
+        expect(JSON.stringify({ ...window.localStorage, ...window.sessionStorage })).not.toContain(RAW_TOKEN)
+    })
+
+    it("an unusable reset link never shows password fields and never posts a reset", async () => {
+        resetLinkValid = false
+        mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
+        expect(await screen.findByText(/no longer available/)).toBeInTheDocument()
+        expect(screen.queryByLabelText("New passphrase")).not.toBeInTheDocument()
+        expect(posts("/api/auth/password-reset")).toHaveLength(0)
+        expect(posts("/api/auth/password-reset-status")).toHaveLength(1)
+    })
+
+    it("a reset token that goes bad after a valid check ends generically at final submit", async () => {
+        activateStatus = 404
+        mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
+        fireEvent.change(await screen.findByLabelText("New passphrase"), { target: { value: PASSWORD } })
+        fireEvent.change(screen.getByLabelText("Confirm passphrase"), { target: { value: PASSWORD } })
+        fireEvent.click(screen.getByRole("button", { name: "Reset password" }))
+        expect(await screen.findByRole("alert")).toHaveTextContent(/no longer available/)
+        expect(posts("/api/auth/password-reset")).toHaveLength(1)
+        expect(screen.queryByRole("heading", { name: "Password reset" })).not.toBeInTheDocument()
     })
 })

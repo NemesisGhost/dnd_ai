@@ -1,6 +1,7 @@
-import { useId, useState } from "react"
+import { useCallback, useId, useState } from "react"
 import { Link } from "react-router"
 import { PasswordField } from "../components/PasswordField"
+import { usePasswordResetLinkCheck } from "../hooks/usePasswordResetLinkCheck"
 import { useResetPassword } from "../hooks/useResetPassword"
 import type { ResetPasswordStatus } from "../hooks/useResetPassword"
 import { captureFragmentToken } from "../utils/fragmentToken"
@@ -25,7 +26,9 @@ function statusMessage(
 // Public route: same fragment-read discipline as ActivateAccountPage — no
 // server-side continuation exists for this token either
 // (dnd_ai.api.local_auth's single-shot POST /auth/password-reset; browser page: /reset-password), so it lives
-// in this component's own state for the life of the form only.
+// in the gate's own state for the life of the page only. The token is checked
+// with a read-only, advisory request before any password field is rendered;
+// POST /auth/password-reset remains authoritative and repeats every check.
 export function ResetPasswordPage() {
     const { status, submit, reset } = useResetPassword()
 
@@ -47,12 +50,12 @@ export function ResetPasswordPage() {
         )
     }
 
-    return <ResetForm status={status} submit={submit} reset={reset} />
+    return <ResetLinkGate status={status} submit={submit} reset={reset} />
 }
 
-// Owns the raw token and both password values, so they are discarded when
-// the page swaps to the success view (this component unmounts).
-function ResetForm({
+// Owns the raw token, so it is discarded when the page swaps to the success
+// view (this component unmounts).
+function ResetLinkGate({
     status,
     submit,
     reset,
@@ -63,13 +66,22 @@ function ResetForm({
 }) {
     // Lazy initializer, not an effect: StrictMode's second call sees an already
     // sanitized URL, and React keeps the first call's result.
-    const [token] = useState<string | null>(captureFragmentToken)
-    const [newPassword, setNewPassword] = useState("")
-    const [confirmation, setConfirmation] = useState("")
-    const passwordFieldId = useId()
-    const confirmFieldId = useId()
-    const mismatchId = useId()
+    const [token, setToken] = useState<string | null>(captureFragmentToken)
+    // Drop the raw token as soon as it is known to be unusable.
+    const dropToken = useCallback(() => setToken(null), [])
+    const { status: check, retry } = usePasswordResetLinkCheck(token, dropToken)
 
+    if (check === "invalid") {
+        return (
+            <main className="app-main">
+                <section className="placeholder-page" aria-labelledby="reset-unavailable-heading">
+                    <h1 id="reset-unavailable-heading">This password-reset link is not valid</h1>
+                    <p>{statusMessage("unavailable")}</p>
+                    <p>Ask an administrator for a new password-reset link.</p>
+                </section>
+            </main>
+        )
+    }
 
     if (token === null) {
         return (
@@ -81,6 +93,58 @@ function ResetForm({
             </main>
         )
     }
+
+    if (check === "checking") {
+        return (
+            <main className="app-main">
+                <section className="placeholder-page" aria-labelledby="reset-checking-heading">
+                    <h1 id="reset-checking-heading">Reset your password</h1>
+                    <p role="status">Checking the password-reset link…</p>
+                </section>
+            </main>
+        )
+    }
+
+    if (check === "error" || check === "rate_limited") {
+        return (
+            <main className="app-main">
+                <section className="placeholder-page" aria-labelledby="reset-check-error-heading">
+                    <h1 id="reset-check-error-heading">Reset your password</h1>
+                    <p role="alert">
+                        {check === "rate_limited"
+                            ? "Too many checks. Wait a moment, then try again."
+                            : "The password-reset link could not be checked."}
+                    </p>
+                    <p>This does not mean the link is invalid.</p>
+                    <button type="button" className="login-button" onClick={retry}>
+                        Try again
+                    </button>
+                </section>
+            </main>
+        )
+    }
+
+    return <ResetForm token={token} status={status} submit={submit} reset={reset} />
+}
+
+// Owns both password values, so they are discarded when the page leaves the
+// ready state (this component unmounts).
+function ResetForm({
+    token,
+    status,
+    submit,
+    reset,
+}: {
+    token: string
+    status: Exclude<ResetPasswordStatus, { kind: "success" }>
+    submit: ReturnType<typeof useResetPassword>["submit"]
+    reset: () => void
+}) {
+    const [newPassword, setNewPassword] = useState("")
+    const [confirmation, setConfirmation] = useState("")
+    const passwordFieldId = useId()
+    const confirmFieldId = useId()
+    const mismatchId = useId()
 
     const isSubmitting = status.kind === "pending"
     const mismatch = confirmation !== "" && confirmation !== newPassword

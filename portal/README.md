@@ -197,6 +197,18 @@ Public routes:
   repeats every check (including a row-locked account-lifecycle recheck), and a
   link that went bad in between — a final `404`, or the `409` login-name
   conflict — ends in the same generic state, while other failures stay retryable. The token and passphrase live only in component memory.
+  `/reset-password` follows the same lifecycle with the read-only,
+  non-consuming `POST /auth/password-reset-status`: it shows **Checking the
+  password-reset link…**, and the new-passphrase form renders only after
+  `{"valid": true}`. Every unusable link (unknown, malformed, expired,
+  consumed, account not `active` or without a credential) gets the same
+  generic unavailable state with no password fields. A recoverable failure
+  (network, timeout, 408, 5xx) shows **The password-reset link could not be
+  checked.** with **Try again**, and a `429` shows a wait message with
+  **Try again**; neither is presented as an invalid link. The check is
+  advisory: `POST /auth/password-reset` revalidates under a row lock,
+  atomically consumes the token, and a final `404` ends in the same generic
+  state.
 
 Authenticated campaign selection:
 
