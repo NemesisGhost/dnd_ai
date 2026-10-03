@@ -713,6 +713,52 @@ a.app-header__title:focus-visible {
   white-space: normal;
 }
 
+/* Narrow drawer: collapsed state survives a resize from desktop, but the
+   drawer scrolls (overflow-y: auto also clips x), so an absolute flyout
+   would sit outside it. Keep the drawer at its full width with labels
+   shown and the Access submenu inline. */
+@media (max-width: 40rem) {
+  .app-navigation--collapsed {
+    width: min(18rem, 85vw);
+  }
+
+  .app-navigation--collapsed .app-navigation__link,
+  .app-navigation--collapsed .app-navigation__toggle {
+    gap: 0.75rem;
+    justify-content: flex-start;
+  }
+
+  .app-navigation--collapsed .app-navigation__label,
+  .app-navigation--collapsed .app-navigation__sublink .app-navigation__label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .app-navigation--collapsed .app-navigation__chevron {
+    display: block;
+  }
+
+  .app-navigation--collapsed .app-navigation__access-group {
+    position: static;
+  }
+
+  .app-navigation--collapsed .app-navigation__submenu {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0.25rem 0 0.25rem 2rem;
+    background: none;
+    border: 0;
+    box-shadow: none;
+  }
+}
+
 .app-navigation__mobile-toggle,
 .app-navigation__backdrop {
   display: none;
