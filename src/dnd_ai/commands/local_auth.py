@@ -394,6 +394,38 @@ def _activation_login_name_claimed(connection: Connection, *, login_name: str) -
     )
 
 
+def _activation_account_is_active(
+    connection: Connection, *, user_id: uuid.UUID, lock: bool
+) -> bool:
+    """Whether the token's account currently has the `active` lifecycle
+    status. Final activation passes `lock=True` (`FOR SHARE OF u`) so a
+    concurrent disable, which takes `FOR UPDATE` on the same row, either
+    commits first (and is observed here, after the wait) or waits until
+    this transaction ends; the advisory pre-check passes `lock=False`.
+
+    Lock order, final activation: token row (`FOR UPDATE`) -> `security.
+    users` row (`FOR SHARE`). Disable/reactivate
+    (`_set_local_account_lifecycle_status_impl`): platform-administrator
+    advisory lock (disable only) -> `security.users` row (`FOR UPDATE`),
+    and they never touch activation-token rows. The only shared resource is
+    the users row, always taken last, so no inverse order exists and the
+    two cannot deadlock. Activation never takes the advisory lock: it cannot
+    reduce the active-administrator count it protects."""
+    row = connection.execute(
+        text(
+            """
+            SELECT ls.code
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user_id
+            """
+            + (" FOR SHARE OF u" if lock else "")
+        ),
+        {"user_id": user_id},
+    ).scalar()
+    return bool(row == _ACTIVE_LIFECYCLE_STATUS_CODE)
+
+
 def is_activation_token_currently_usable(
     connection: Connection, *, raw_activation_token: str
 ) -> bool:
@@ -407,6 +439,8 @@ def is_activation_token_currently_usable(
         connection, token_hash=hash_opaque_secret(raw_activation_token), lock=False
     )
     if token_row is None:
+        return False
+    if not _activation_account_is_active(connection, user_id=token_row["user_id"], lock=False):
         return False
     return not _activation_login_name_claimed(connection, login_name=token_row["login_name"])
 
@@ -433,6 +467,11 @@ def _activate_local_account_impl(
 
     user_id = token_row["user_id"]
     login_name = token_row["login_name"]
+
+    # Indistinguishable from any other unusable token: a disabled account must
+    # not be told apart from an unknown, consumed, or expired link.
+    if not _activation_account_is_active(connection, user_id=user_id, lock=True):
+        raise ActivationNotAcceptableError(f"activation token hash {token_hash} is not consumable")
 
     if _activation_login_name_claimed(connection, login_name=login_name):
         raise LoginNameAlreadyTakenError()

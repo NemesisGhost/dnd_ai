@@ -191,11 +191,12 @@ Public routes:
   non-consuming `POST /auth/activation-status` and shows **Checking
   activation link…**; the **Set passphrase** form renders only after
   `{"valid": true}`. Every unusable link (unknown, malformed, expired,
-  consumed, login name since claimed) gets the same generic message with no
+  consumed, account no longer `active`, login name since claimed) gets the same generic message with no
   password fields; a network/timeout/408/429/5xx failure shows **Retry**
   instead. The result is advisory and may be stale: `POST /auth/activate`
-  repeats every check, and a link that went bad in between ends in the same
-  generic state. The token and passphrase live only in component memory.
+  repeats every check (including a row-locked account-lifecycle recheck), and a
+  link that went bad in between — a final `404`, or the `409` login-name
+  conflict — ends in the same generic state, while other failures stay retryable. The token and passphrase live only in component memory.
 
 Authenticated campaign selection:
 

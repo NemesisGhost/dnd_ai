@@ -308,6 +308,38 @@ describe("ActivateAccountPage activation", () => {
         expect(callsTo(STATUS_ENDPOINT)).toHaveLength(1)
     })
 
+    it("treats a final 409 login-name conflict after a valid check as the same generic terminal state", async () => {
+        activateImpl = () => json({ error: { code: "login_name_taken", message: "That login name was claimed" } }, 409)
+        open("#token=raw-token")
+        const { container } = renderPage()
+        await ready()
+        fill(PASSWORD, PASSWORD)
+        fireEvent.click(screen.getByRole("button", { name: BUTTON }))
+
+        expect(await screen.findByText(INVALID_MESSAGE)).toBeInTheDocument()
+        expect(screen.getByRole("heading", { level: 1, name: INVALID_HEADING })).toBeInTheDocument()
+        expect(container.querySelector("input")).toBeNull()
+        expect(screen.queryByRole("button", { name: BUTTON })).not.toBeInTheDocument()
+        expect(container.innerHTML).not.toContain(PASSWORD)
+        expect(container.innerHTML).not.toContain("raw-token")
+        expect(container.textContent).not.toContain("login name")
+        await act(async () => {})
+        expect(callsTo(ENDPOINT)).toHaveLength(1)
+        expect(callsTo(STATUS_ENDPOINT)).toHaveLength(1)
+    })
+
+    it.each([500, 502, 429])("keeps a final %s retryable, not terminal", async (status) => {
+        activateImpl = () => json({}, status)
+        open("#token=raw-token")
+        renderPage()
+        await ready()
+        fill(PASSWORD, PASSWORD)
+        fireEvent.click(screen.getByRole("button", { name: BUTTON }))
+        await screen.findByRole("alert")
+        expect(screen.queryByText(INVALID_MESSAGE)).not.toBeInTheDocument()
+        expect(screen.getByLabelText(LABEL)).toHaveValue(PASSWORD)
+    })
+
     it("keeps the token in memory so a recoverable final error can be retried", async () => {
         activateImpl = () => json({}, 500)
         open("#token=raw-token")

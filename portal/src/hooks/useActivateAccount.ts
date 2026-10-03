@@ -57,7 +57,10 @@ export function useActivateAccount(onUnavailable?: () => void): UseActivateAccou
                             setStatus({ kind: "policy_violation" })
                             return
                         }
-                        if (cause.status === 404) {
+                        // 404: unusable token. 409: the login name was claimed by
+                        // another account (login_name_taken) -- the link can never
+                        // succeed, so both are terminal and indistinguishable.
+                        if (cause.status === 404 || cause.status === 409) {
                             onUnavailable?.()
                             setStatus({ kind: "unavailable" })
                             return
