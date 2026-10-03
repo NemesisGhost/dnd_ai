@@ -63,6 +63,7 @@ character-relationship, resource-grant, or invitation state.
 | `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
+| `/auth/password-reset-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only, non-consuming advisory check (`{"valid": bool}`), own rate-limit bucket; uses the same token loader and target eligibility (active account with a local credential) as the final reset; no row lock, audit row, or idempotency key; every unusable reason is indistinguishable | Self-service |
 | `/auth/activation-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only advisory check (`{"valid": bool}`); no principal, machine credentials ignored | Self-service |
 | `/auth/activate`, `/auth/password-reset`, `/auth/change-password`, `/auth/sessions` (list/delete own) | various | `dnd_ai.api.local_auth` | none — acts on the caller's own account | Self-service |
 

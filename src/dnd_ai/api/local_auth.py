@@ -87,6 +87,7 @@ from dnd_ai.commands.local_auth import (
     change_password,
     create_browser_session,
     is_activation_token_currently_usable,
+    is_password_reset_token_currently_usable,
     list_browser_sessions,
     normalize_login_name,
     resolve_browser_session_csrf_token,
@@ -147,7 +148,11 @@ _TOKEN_CONSUMPTION_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 _ACTIVATION_STATUS_RATE_LIMIT_MAX_ATTEMPTS = 60
 _ACTIVATION_STATUS_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
+_PASSWORD_RESET_STATUS_RATE_LIMIT_MAX_ATTEMPTS = 60
+_PASSWORD_RESET_STATUS_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+
 _activation_status_rate_limiter: RateLimiter | None = None
+_password_reset_status_rate_limiter: RateLimiter | None = None
 _login_ip_rate_limiter: RateLimiter | None = None
 _login_account_rate_limiter: RateLimiter | None = None
 _token_consumption_rate_limiter: RateLimiter | None = None
@@ -206,6 +211,19 @@ def get_activation_status_rate_limiter() -> RateLimiter:
             window=_ACTIVATION_STATUS_RATE_LIMIT_WINDOW,
         )
     return _activation_status_rate_limiter
+
+
+def get_password_reset_status_rate_limiter() -> RateLimiter:
+    """Bounds the advisory password-reset-link check per client IP, in its own
+    bucket so page loads and Try-again clicks can never exhaust the budget
+    real resets need."""
+    global _password_reset_status_rate_limiter
+    if _password_reset_status_rate_limiter is None:
+        _password_reset_status_rate_limiter = RateLimiter(
+            max_attempts=_PASSWORD_RESET_STATUS_RATE_LIMIT_MAX_ATTEMPTS,
+            window=_PASSWORD_RESET_STATUS_RATE_LIMIT_WINDOW,
+        )
+    return _password_reset_status_rate_limiter
 
 
 def get_token_consumption_rate_limiter() -> RateLimiter:
@@ -1141,6 +1159,36 @@ class ResetPasswordResponse(BaseModel):
     sessions_revoked: bool
 
 
+class PasswordResetStatusRequest(BaseModel):
+    token: str = Field(repr=False)
+
+
+class PasswordResetStatusResponse(BaseModel):
+    valid: bool
+
+
+@router.post(
+    "/auth/password-reset-status", response_model=PasswordResetStatusResponse, status_code=200
+)
+def password_reset_status_endpoint(
+    body: PasswordResetStatusRequest,
+    request: Request,
+    connection: Annotated[Connection, Depends(get_connection)],
+    rate_limiter: Annotated[RateLimiter, Depends(get_password_reset_status_rate_limiter)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
+) -> PasswordResetStatusResponse:
+    """Advisory, read-only pre-check so the portal can avoid showing a
+    passphrase form for an unusable reset link. POST (token only in the body,
+    never a URL), no row lock, no write, no audit row, no idempotency key, and
+    a bare `valid` boolean identical for every unusable reason. Never
+    authoritative: `POST /auth/password-reset` repeats every check."""
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
+        raise RateLimitedError()
+    return PasswordResetStatusResponse(
+        valid=is_password_reset_token_currently_usable(connection, raw_reset_token=body.token)
+    )
+
+
 @router.post("/auth/password-reset", response_model=ResetPasswordResponse, status_code=200)
 def reset_password_endpoint(
     body: ResetPasswordRequest,
@@ -1176,5 +1224,6 @@ __all__ = [
     "get_activation_status_rate_limiter",
     "get_login_account_rate_limiter",
     "get_login_ip_rate_limiter",
+    "get_password_reset_status_rate_limiter",
     "get_token_consumption_rate_limiter",
 ]

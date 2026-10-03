@@ -394,11 +394,9 @@ def _activation_login_name_claimed(connection: Connection, *, login_name: str) -
     )
 
 
-def _activation_account_is_active(
-    connection: Connection, *, user_id: uuid.UUID, lock: bool
-) -> bool:
+def _account_is_active(connection: Connection, *, user_id: uuid.UUID, lock: bool) -> bool:
     """Whether the token's account currently has the `active` lifecycle
-    status. Final activation passes `lock=True` (`FOR SHARE OF u`) so a
+    status (shared by activation and password reset). Final activation passes `lock=True` (`FOR SHARE OF u`) so a
     concurrent disable, which takes `FOR UPDATE` on the same row, either
     commits first (and is observed here, after the wait) or waits until
     this transaction ends; the advisory pre-check passes `lock=False`.
@@ -440,7 +438,7 @@ def is_activation_token_currently_usable(
     )
     if token_row is None:
         return False
-    if not _activation_account_is_active(connection, user_id=token_row["user_id"], lock=False):
+    if not _account_is_active(connection, user_id=token_row["user_id"], lock=False):
         return False
     return not _activation_login_name_claimed(connection, login_name=token_row["login_name"])
 
@@ -470,7 +468,7 @@ def _activate_local_account_impl(
 
     # Indistinguishable from any other unusable token: a disabled account must
     # not be told apart from an unknown, consumed, or expired link.
-    if not _activation_account_is_active(connection, user_id=user_id, lock=True):
+    if not _account_is_active(connection, user_id=user_id, lock=True):
         raise ActivationNotAcceptableError(f"activation token hash {token_hash} is not consumable")
 
     if _activation_login_name_claimed(connection, login_name=login_name):
@@ -961,6 +959,65 @@ class ResetPasswordResult:
     sessions_revoked: bool
 
 
+def _load_consumable_reset_token(
+    connection: Connection, *, token_hash: str, lock: bool
+) -> RowMapping | None:
+    """The single definition of a consumable reset token, shared by final
+    reset (`lock=True`: `FOR UPDATE`) and the advisory pre-check
+    (`lock=False`: no row lock, no write). `None` for a missing, consumed, or
+    expired token — the caller never learns which."""
+    token_row = (
+        connection.execute(
+            text(
+                """
+                SELECT password_reset_token_id, user_id, revoke_sessions, consumed_at,
+                       (expires_at <= now()) AS expired
+                FROM security.password_reset_tokens
+                WHERE token_hash = :hash
+                """
+                + (" FOR UPDATE" if lock else "")
+            ),
+            {"hash": token_hash},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+        return None
+    return token_row
+
+
+def _reset_target_is_eligible(connection: Connection, *, user_id: uuid.UUID, lock: bool) -> bool:
+    """A reset applies only to an `active` account that already has a local
+    credential to replace. Lock semantics as `_account_is_active`."""
+    if not _account_is_active(connection, user_id=user_id, lock=lock):
+        return False
+    return (
+        connection.execute(
+            text("SELECT 1 FROM security.local_credentials WHERE user_id = :user_id"),
+            {"user_id": user_id},
+        ).scalar()
+        is not None
+    )
+
+
+def is_password_reset_token_currently_usable(
+    connection: Connection, *, raw_reset_token: str
+) -> bool:
+    """Advisory, read-only, non-consuming: would `_reset_password_with_token_impl`
+    accept this token right now (ignoring only the password policy)? Takes no
+    row lock and writes nothing — the answer may be stale the instant it
+    returns, so final reset always repeats every check itself. Deliberately a
+    bare boolean: never distinguishes unknown, malformed, expired, consumed,
+    or an ineligible target account."""
+    token_row = _load_consumable_reset_token(
+        connection, token_hash=hash_opaque_secret(raw_reset_token), lock=False
+    )
+    if token_row is None:
+        return False
+    return _reset_target_is_eligible(connection, user_id=token_row["user_id"], lock=False)
+
+
 def _reset_password_with_token_impl(
     connection: Connection, *, raw_reset_token: str, new_raw_password: str
 ) -> ResetPasswordResult:
@@ -974,24 +1031,14 @@ def _reset_password_with_token_impl(
     "full sign-out" policy)."""
     validate_password_policy(new_raw_password)
     token_hash = hash_opaque_secret(raw_reset_token)
-    token_row = (
-        connection.execute(
-            text("""
-                SELECT password_reset_token_id, user_id, revoke_sessions, consumed_at,
-                       (expires_at <= now()) AS expired
-                FROM security.password_reset_tokens
-                WHERE token_hash = :hash
-                FOR UPDATE
-            """),
-            {"hash": token_hash},
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+    token_row = _load_consumable_reset_token(connection, token_hash=token_hash, lock=True)
+    # Lock order mirrors activation: token row (`FOR UPDATE`) -> users row
+    # (`FOR SHARE`), via the same eligibility check the advisory pre-check uses.
+    if token_row is None or not _reset_target_is_eligible(
+        connection, user_id=token_row["user_id"], lock=True
+    ):
         raise PasswordResetNotAcceptableError(
-            f"password reset token hash {token_hash} is not consumable "
-            f"(row={token_row is not None})"
+            f"password reset token hash {token_hash} is not consumable"
         )
     connection.execute(
         text("""
