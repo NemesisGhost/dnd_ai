@@ -4,18 +4,22 @@ import {
 import type {
     SyntheticEvent,
 } from "react"
-import { Link, Navigate } from "react-router"
+import { Link, Navigate, useLocation } from "react-router"
 import { useSession } from "../context/SessionContext"
 import { useInvitationOnboardingStatus } from "../hooks/useInvitationOnboardingStatus"
 import { useLogin } from "../hooks/useLogin"
+import { resolvePostLoginDestination } from "../utils/postLoginDestination"
 import PlaceholderPage from "./PlaceholderPage"
 
-// Fixed internal destinations -- never derived from the URL, a query
-// parameter, or history state, so Login can never be made an open redirect.
-const ORDINARY_LOGIN_DESTINATION = "/campaigns"
+// Fixed internal destination -- never derived from the URL or a query
+// parameter. The ordinary destination comes from the allowlisted
+// resolvePostLoginDestination, so Login can never be made an open redirect.
 const INVITATION_CONTINUATION_DESTINATION = "/campaign-invitations/accept"
 
 export function LoginPage() {
+    const location = useLocation()
+    const ordinaryDestination = resolvePostLoginDestination(location.state)
+
     const {
         state: sessionState,
         reload,
@@ -114,8 +118,8 @@ export function LoginPage() {
                             </p>
 
                             <p>
-                                <Link to={ORDINARY_LOGIN_DESTINATION} replace>
-                                    Continue to campaigns
+                                <Link to={ordinaryDestination} replace>
+                                    Continue
                                 </Link>
                             </p>
                         </div>
@@ -154,7 +158,7 @@ export function LoginPage() {
                             </button>
 
                             <p>
-                                <Link to={ORDINARY_LOGIN_DESTINATION}>Continue to campaigns</Link>
+                                <Link to={ordinaryDestination}>Continue</Link>
                             </p>
                         </div>
                     </div>
@@ -162,7 +166,7 @@ export function LoginPage() {
             )
         }
 
-        return <Navigate to={ORDINARY_LOGIN_DESTINATION} replace />
+        return <Navigate to={ordinaryDestination} replace />
     }
 
     if (sessionState.status === "error") {

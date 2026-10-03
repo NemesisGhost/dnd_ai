@@ -1,4 +1,5 @@
 import { useId } from "react"
+import { Link } from "react-router"
 import type { CampaignContext } from "../types/bootstrap"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
@@ -87,6 +88,13 @@ export function CampaignContextPanel({
               </option>
             ))}
           </select>
+
+          <Link
+            className="campaign-context-panel__browse"
+            to="/campaigns"
+          >
+            Browse all campaigns
+          </Link>
 
           <dl className="campaign-context-panel__detail">
             <div className="campaign-context-panel__detail-row">

@@ -65,7 +65,7 @@ describe("CampaignHomePage", () => {
         expect(
             screen.getByRole("heading", {
                 level: 1,
-                name: "Home",
+                name: "Campaign Home",
             }),
         ).toBeInTheDocument()
 

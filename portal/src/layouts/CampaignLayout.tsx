@@ -1,6 +1,6 @@
 import {
+  Link,
   Outlet,
-  useLocation,
   useNavigate,
   useParams,
 } from "react-router"
@@ -9,7 +9,6 @@ import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
-import { buildCampaignSelectionPath } from "../utils/campaignNavigation"
 
 interface CampaignLayoutProps {
   bootstrap: SessionBootstrap
@@ -18,7 +17,6 @@ interface CampaignLayoutProps {
 export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   const { campaignId } = useParams<{ campaignId: string }>()
   const navigate = useNavigate()
-  const location = useLocation()
   const { getSelectedCharacterId, selectCharacter } = usePerspective()
 
   const campaign =
@@ -33,6 +31,9 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
           title="Campaign not found"
           description="The requested campaign is unavailable or you do not have access to it."
         />
+        <p>
+          <Link to="/campaigns">Browse campaigns</Link>
+        </p>
       </main>
     )
   }
@@ -57,19 +58,14 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
       return
     }
 
-    const destination =
-      buildCampaignSelectionPath({
-        pathname: location.pathname,
-        targetCampaign,
-        askEnabled: bootstrap.features.ask,
-      })
-
     selectCharacter(
       targetCampaign.campaign_id,
       null,
     )
 
-    navigate(destination)
+    // Switching always enters the target's Campaign Home — section and
+    // detail preservation is removed (UI_DESIGN §4.5 deliberate change).
+    navigate(`/app/${targetCampaign.campaign_id}/home`)
   }
 
   return (

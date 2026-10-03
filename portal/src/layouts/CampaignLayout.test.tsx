@@ -73,7 +73,7 @@ beforeEach(() => {
 })
 
 describe("CampaignLayout campaign switching", () => {
-  it("keeps the current section and drops the detail id", () => {
+  it("enters the target Campaign Home from a detail route", () => {
     renderAt("/app/mundivita/quests/quest-7")
 
     fireEvent.change(
@@ -82,12 +82,12 @@ describe("CampaignLayout campaign switching", () => {
     )
 
     expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/secundivita/quests",
+      "/app/secundivita/home",
     )
     expect(selectCharacter).toHaveBeenCalledWith("secundivita", null)
   })
 
-  it("preserves a plain section route", () => {
+  it("enters the target Campaign Home from a section route", () => {
     renderAt("/app/mundivita/home")
 
     fireEvent.change(
@@ -151,5 +151,17 @@ describe("CampaignLayout campaign switching", () => {
     expect(
       selectCharacter,
     ).not.toHaveBeenCalled()
+  })
+
+  it("offers a non-disclosing Browse campaigns link for an unknown campaign", () => {
+    renderAt("/app/not-a-real-campaign/home")
+
+    expect(
+      screen.getByRole("heading", { name: "Campaign not found" }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", { name: "Browse campaigns" }),
+    ).toHaveAttribute("href", "/campaigns")
   })
 })

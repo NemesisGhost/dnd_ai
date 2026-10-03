@@ -30,7 +30,205 @@
 
 .app-header__title {
   margin: 0;
+  color: inherit;
   font-size: 1.5rem;
+  text-decoration: none;
+}
+
+a.app-header__title:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Global navigation (persistent Home/Campaigns, UI_DESIGN §4, §4.5) —
+   distinct from the per-campaign "Campaign" nav rendered by
+   AppNavigation. */
+.global-navigation__list {
+  display: flex;
+  gap: 1rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.global-navigation__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-chrome-text);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+
+.global-navigation__link:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.global-navigation__link:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.global-navigation__link[aria-current="page"] {
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+/* Profile menu: a disclosure (button + popup), never an ARIA menu
+   (navigation plan §4.3). */
+.profile-menu {
+  position: relative;
+}
+
+.profile-menu__button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.75rem;
+  color: var(--color-chrome-text);
+  font: inherit;
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.profile-menu__button:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.profile-menu__button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  overflow: hidden;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-chrome-text);
+  background-color: var(--color-chrome);
+  border-radius: 50%;
+}
+
+.profile-menu__avatar--image {
+  object-fit: cover;
+}
+
+.profile-menu__name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-menu__popup {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 45;
+  width: max-content;
+  min-width: 14rem;
+  padding: 0.75rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow:
+    0 4px 6px var(--color-shadow),
+    0 2px 4px var(--color-shadow);
+}
+
+.profile-menu__popup[hidden] {
+  display: none;
+}
+
+.profile-menu__identity {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.profile-menu__list {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.profile-menu__list a {
+  display: block;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.25rem;
+  color: var(--color-text);
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+
+.profile-menu__list a:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.profile-menu__list a:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__group {
+  margin-top: 0.5rem;
+}
+
+.profile-menu__section-label {
+  margin: 0.5rem 0 0.1rem;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.profile-menu__logout {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.25rem;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.profile-menu__logout:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+}
+
+.profile-menu__logout:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__logout:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.profile-menu__error {
+  margin: 0.35rem 0 0;
+  color: var(--color-danger);
+  font-size: 0.8rem;
 }
 
 .theme-selector {
@@ -65,46 +263,6 @@
   margin: 0;
   color: var(--color-chrome-muted);
   font-size: 0.75rem;
-}
-
-.logout-control {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.35rem;
-}
-
-.logout-control__button {
-  min-height: 2.25rem;
-  padding: 0.35rem 0.85rem;
-  color: var(--color-chrome-text);
-  font: inherit;
-  background-color: var(--color-chrome-secondary);
-  border: 1px solid var(--color-chrome-muted);
-  border-radius: 0.25rem;
-  cursor: pointer;
-}
-
-.logout-control__button:hover:not(:disabled) {
-  background-color: var(--color-chrome-hover);
-}
-
-.logout-control__button:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-.logout-control__button:disabled {
-  cursor: not-allowed;
-  opacity: 0.75;
-}
-
-.logout-control__error {
-  margin: 0;
-  max-width: 16rem;
-  color: var(--color-danger);
-  font-size: 0.75rem;
-  text-align: right;
 }
 
 .app-main {
@@ -166,15 +324,18 @@
     grid-column: 1;
   }
 
+  /* The campaign-navigation toggle no longer overlays the header's
+     top-right corner (it used to sit over the profile menu). It is now a
+     static, full-width row directly beneath the header. */
   .app-navigation__mobile-toggle {
-    position: absolute;
-    top: 0.65rem;
-    right: 1rem;
+    position: static;
+    justify-self: start;
     z-index: 40;
     display: flex;
     align-items: center;
     gap: 0.4rem;
     min-height: 2.75rem;
+    margin: 0.5rem 1rem 0;
     padding: 0.4rem 0.65rem;
     color: var(--color-chrome-text);
     font: inherit;
@@ -235,19 +396,55 @@
     display: none;
   }
 
+  /* Two rows instead of a full column stack: identity + profile menu on
+     row 1 (order 1/2, profile pushed to the end), Home/Campaigns + the
+     theme selector on row 2 (flex-basis: 100% starts a new line in a
+     wrapping flex row). */
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 0.75rem;
   }
 
   .app-header__title {
-    padding-right: 6rem;
+    order: 1;
+  }
+
+  .global-navigation {
+    order: 3;
+    flex-basis: 100%;
   }
 
   .theme-selector {
+    order: 4;
+    flex-basis: 100%;
     grid-template-columns: minmax(0, 1fr);
     width: 100%;
+  }
+
+  .profile-menu {
+    order: 2;
+    margin-left: auto;
+  }
+
+  /* Avatar only below 40rem — the accessible name (aria-label on the
+     button) is unchanged; only the redundant visible name is hidden. */
+  .profile-menu__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .profile-menu__popup {
+    width: min(18rem, calc(100vw - 2rem));
+    min-width: 0;
+    right: 0;
   }
 
   .theme-selector__select {
@@ -386,6 +583,60 @@
   box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
+/* Access disclosure (navigation plan): the trigger reuses
+   .app-navigation__link styling; the chevron and nested submenu are
+   additive, inline rather than a floating popup, so the rail's own
+   scroll/collapse/mobile behaviour applies to the children unchanged. */
+.app-navigation__chevron {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+
+.app-navigation__chevron--open {
+  transform: rotate(180deg);
+}
+
+.app-navigation__submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.25rem 0 0.25rem 2rem;
+  margin: 0;
+  list-style: none;
+}
+
+.app-navigation__submenu[hidden] {
+  display: none;
+}
+
+.app-navigation__sublink {
+  display: block;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+  color: var(--color-chrome-text);
+  font: inherit;
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+
+.app-navigation__sublink:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.app-navigation__sublink:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.app-navigation__sublink--active {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-chrome-active);
+  font-weight: 700;
+}
+
 /* Disabled "Ask": dashed border and reduced opacity so the unavailable
    state reads without depending on the muted colour alone. */
 .app-navigation__link--disabled {
@@ -419,6 +670,93 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+.app-navigation--collapsed .app-navigation__chevron {
+  display: none;
+}
+
+/* Collapsed rail: the Access children have no icon, so their
+   clipped labels would leave two blank links. Open the submenu as a
+   bounded flyout beside the rail with the labels shown; the group is the
+   positioning context so the flyout lines up with the Access button. */
+.app-navigation--collapsed .app-navigation__access-group {
+  position: relative;
+}
+
+.app-navigation--collapsed .app-navigation__submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 0.25rem);
+  z-index: 40;
+  width: max-content;
+  min-width: 12rem;
+  max-width: min(18rem, 60vw);
+  padding: 0.25rem;
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.25rem 0.75rem var(--color-overlay);
+}
+
+.app-navigation--collapsed .app-navigation__submenu[hidden] {
+  display: none;
+}
+
+.app-navigation--collapsed .app-navigation__sublink .app-navigation__label {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Narrow drawer: collapsed state survives a resize from desktop, but the
+   drawer scrolls (overflow-y: auto also clips x), so an absolute flyout
+   would sit outside it. Keep the drawer at its full width with labels
+   shown and the Access submenu inline. */
+@media (max-width: 40rem) {
+  .app-navigation--collapsed {
+    width: min(18rem, 85vw);
+  }
+
+  .app-navigation--collapsed .app-navigation__link,
+  .app-navigation--collapsed .app-navigation__toggle {
+    gap: 0.75rem;
+    justify-content: flex-start;
+  }
+
+  .app-navigation--collapsed .app-navigation__label,
+  .app-navigation--collapsed .app-navigation__sublink .app-navigation__label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .app-navigation--collapsed .app-navigation__chevron {
+    display: block;
+  }
+
+  .app-navigation--collapsed .app-navigation__access-group {
+    position: static;
+  }
+
+  .app-navigation--collapsed .app-navigation__submenu {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0.25rem 0 0.25rem 2rem;
+    background: none;
+    border: 0;
+    box-shadow: none;
+  }
 }
 
 .app-navigation__mobile-toggle,
@@ -1707,9 +2045,11 @@
   border-radius: 0.25rem;
 }
 
-/* Access section tab nav (Phase 13E-B manual-acceptance fix): local to
-   /app/:campaignId/access and /access/audit, distinct from the sidebar's
-   own top-level "Access" link in .app-navigation__link above. */
+/* Access section tab nav (Phase 13E-B manual-acceptance fix, extended by
+   the Access/Invitations navigation redesign): local to
+   /app/:campaignId/access, /access/invitations, and /access/audit,
+   distinct from the sidebar's own top-level Access disclosure
+   (.app-navigation__access-group above). */
 .access-tab-nav__list {
   display: flex;
   gap: 0.5rem;

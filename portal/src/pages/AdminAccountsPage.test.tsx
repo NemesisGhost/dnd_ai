@@ -35,7 +35,7 @@ describe("AdminAccountsPage", () => {
                 bootstrap={{ ...sessionBootstrapFixture, is_platform_administrator: false }}
             />,
         )
-        expect(screen.getByRole("heading", { name: "Not found" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Page not found" })).toBeInTheDocument()
         expect(screen.queryByText("create-account-panel")).not.toBeInTheDocument()
     })
 

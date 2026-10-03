@@ -327,7 +327,7 @@ describe("invitation continuation across Login", () => {
         await signInInline("existing", PASSWORD)
 
         expect(await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })).toBeInTheDocument()
-        expect(screen.getByText("Existing User")).toBeInTheDocument()
+        expect(screen.getAllByText("Existing User").length).toBeGreaterThan(0)
         // Signing in alone never joins.
         expect(server.completeCount).toBe(0)
 
@@ -386,13 +386,13 @@ describe("invitation continuation across Login", () => {
 
         // Signing in alone neither redirects nor accepts: the user chooses.
         expect(await screen.findByRole("link", { name: "Resume invitation" })).toBeInTheDocument()
-        expect(screen.getByRole("link", { name: "Continue to campaigns" })).toBeInTheDocument()
-        expect(screen.queryByRole("heading", { name: "Campaigns" })).not.toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Continue" })).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { level: 1, name: "Home" })).not.toBeInTheDocument()
         expect(server.completeCount).toBe(0)
 
         fireEvent.click(screen.getByRole("link", { name: "Resume invitation" }))
         expect(await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}?` })).toBeInTheDocument()
-        expect(screen.getByText("Existing User")).toBeInTheDocument()
+        expect(screen.getAllByText("Existing User").length).toBeGreaterThan(0)
         expect(server.completeCount).toBe(0)
 
         const join = screen.getByRole("button", { name: `Join ${CAMPAIGN_NAME}` })
@@ -425,12 +425,12 @@ describe("invitation continuation across Login", () => {
         expectNoTokenAnywhere()
     })
 
-    it("keeps the ordinary /campaigns destination for a login with no continuation", async () => {
+    it("keeps the ordinary /home destination for a login with no continuation", async () => {
         openPlainLogin()
 
         await signInOnLoginPage("existing", PASSWORD)
 
-        expect(await screen.findByRole("heading", { name: "Campaigns" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
         expect(server.completeCount).toBe(0)
     })
@@ -449,8 +449,8 @@ describe("invitation continuation across Login", () => {
         // Explicit server-confirmed choice, no automatic diversion.
         expect(await screen.findByRole("link", { name: "Resume invitation" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
-        fireEvent.click(screen.getByRole("link", { name: "Continue to campaigns" }))
-        expect(await screen.findByRole("heading", { name: "Campaigns" })).toBeInTheDocument()
+        fireEvent.click(screen.getByRole("link", { name: "Continue" }))
+        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
         expect(server.completeCount).toBe(0)
         expect(server.members.size).toBe(0)
     })
@@ -484,7 +484,7 @@ describe("invitation continuation across Login", () => {
         expect(server.count("GET", "/api/campaign-invitations/onboarding/status")).toBe(0)
     })
 
-    it("falls back to /campaigns when the continuation expired while on Login, and never accepts", async () => {
+    it("falls back to /home when the continuation expired while on Login, and never accepts", async () => {
         openInvitationLink()
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
         navigateExternally("/login")
@@ -493,7 +493,7 @@ describe("invitation continuation across Login", () => {
         server.expireInvitation()
         await signInOnLoginPage("existing", PASSWORD)
 
-        expect(await screen.findByRole("heading", { name: "Campaigns" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
         expect(server.completeCount).toBe(0)
         expect(server.members.size).toBe(0)
     })
@@ -519,7 +519,7 @@ describe("invitation continuation across Login", () => {
         openInvitationLink()
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
         await signInInline("other", PASSWORD)
-        await screen.findByText("Other User")
+        await screen.findAllByText("Other User")
 
         fireEvent.click(screen.getByRole("button", { name: "Use a different account" }))
 
@@ -530,8 +530,8 @@ describe("invitation continuation across Login", () => {
         expect(server.completeCount).toBe(0)
 
         await signInInline("existing", PASSWORD)
-        expect(await screen.findByText("Existing User")).toBeInTheDocument()
-        expect(screen.queryByText("Other User")).not.toBeInTheDocument()
+        expect(await screen.findAllByText("Existing User")).not.toHaveLength(0)
+        expect(screen.queryAllByText("Other User")).toHaveLength(0)
         expect(server.members.size).toBe(0)
     })
 

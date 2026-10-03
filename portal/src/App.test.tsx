@@ -1,6 +1,9 @@
+import { useState } from "react"
 import {
+  fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
@@ -25,6 +28,7 @@ import { useQuest } from "./hooks/useQuest"
 import { useSessionBootstrap } from "./hooks/useSessionBootstrap"
 import { useWorldEntities } from "./hooks/useWorldEntities"
 import { useKnowledgeItems } from "./hooks/useKnowledgeItems"
+import { usePlatformAccounts } from "./hooks/usePlatformAccounts"
 
 import type {
   CampaignSessionDetail,
@@ -60,6 +64,13 @@ vi.mock("./api/knowledge", async (importOriginal) => {
     fetchKnowledgeDetail: fetchKnowledgeDetailMock,
   }
 })
+
+vi.mock("./hooks/useInvitationOnboardingStatus", () => ({
+  useInvitationOnboardingStatus: () => ({
+    state: { status: "unavailable" },
+    retry: vi.fn(),
+  }),
+}))
 
 vi.mock("./hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -97,6 +108,10 @@ vi.mock("./hooks/useKnowledgeItems", () => ({
   useKnowledgeItems: vi.fn(),
 }))
 
+vi.mock("./hooks/usePlatformAccounts", () => ({
+  usePlatformAccounts: vi.fn(),
+}))
+
 const useSessionBootstrapMock = vi.mocked(
   useSessionBootstrap,
 )
@@ -131,6 +146,10 @@ const useWorldEntitiesMock = vi.mocked(
 
 const useKnowledgeItemsMock = vi.mocked(
   useKnowledgeItems,
+)
+
+const usePlatformAccountsMock = vi.mocked(
+  usePlatformAccounts,
 )
 
 const emptyCampaignSummary = {
@@ -315,6 +334,16 @@ beforeEach(() => {
     },
     retry: vi.fn(),
   })
+
+  usePlatformAccountsMock.mockReset()
+
+  usePlatformAccountsMock.mockReturnValue({
+    state: { status: "success", items: [], nextCursor: null },
+    query: "",
+    setQuery: vi.fn(),
+    retry: vi.fn(),
+    loadMore: vi.fn(),
+  })
 })
 
 function renderAppAt(path: string) {
@@ -330,6 +359,144 @@ function renderAppAt(path: string) {
 }
 
 describe("portal routing", () => {
+  it("carries a protected deep link as continuation state through to login", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "unauthenticated" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/app/mundivita/quests")
+
+    expect(
+      screen.getByRole("heading", { name: "D&D AI World" }),
+    ).toBeInTheDocument()
+  })
+
+  it("redirects / to the login form for an unauthenticated user", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "unauthenticated" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/")
+
+    expect(
+      screen.getByRole("heading", { name: "D&D AI World" }),
+    ).toBeInTheDocument()
+  })
+
+  it("redirects / to the home landing page for an authenticated user", async () => {
+    renderAppAt("/")
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Home" }),
+    ).toBeInTheDocument()
+  })
+
+  it("shows the not-found page for an unknown route, never a login redirect", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: { status: "unauthenticated" },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/nope")
+
+    expect(
+      screen.getByRole("heading", { name: "Page not found" }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.queryByRole("heading", { name: "D&D AI World" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ["/nope"],
+    ["/platform"],
+    ["/home/extra"],
+  ])(
+    "shows the not-found page for the unknown route %s when unauthenticated",
+    (path) => {
+      useSessionBootstrapMock.mockReturnValue({
+        state: { status: "unauthenticated" },
+        reload: vi.fn(),
+      })
+
+      renderAppAt(path)
+
+      expect(
+        screen.getByRole("heading", { name: "Page not found" }),
+      ).toBeInTheDocument()
+    },
+  )
+
+  it.each([
+    ["/nope"],
+    ["/platform"],
+    ["/home/extra"],
+  ])(
+    "shows the not-found page with global navigation for the unknown route %s when authenticated",
+    (path) => {
+      renderAppAt(path)
+
+      expect(
+        screen.getByRole("heading", { name: "Page not found" }),
+      ).toBeInTheDocument()
+
+      expect(
+        screen.getByRole("navigation", { name: "Global" }),
+      ).toBeInTheDocument()
+    },
+  )
+
+  it("shows the not-found page for a non-administrator on /platform/accounts and never mounts usePlatformAccounts", () => {
+    renderAppAt("/platform/accounts")
+
+    expect(
+      screen.getByRole("heading", { name: "Page not found" }),
+    ).toBeInTheDocument()
+
+    expect(usePlatformAccountsMock).not.toHaveBeenCalled()
+  })
+
+  it("shows the platform accounts table for an administrator", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: {
+          ...sessionBootstrapFixture,
+          is_platform_administrator: true,
+        },
+      },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/platform/accounts")
+
+    expect(
+      screen.getByRole("heading", { name: "Platform accounts" }),
+    ).toBeInTheDocument()
+  })
+
+  it("redirects the legacy /admin/accounts bookmark to /platform/accounts", () => {
+    useSessionBootstrapMock.mockReturnValue({
+      state: {
+        status: "authenticated",
+        bootstrap: {
+          ...sessionBootstrapFixture,
+          is_platform_administrator: true,
+        },
+      },
+      reload: vi.fn(),
+    })
+
+    renderAppAt("/admin/accounts")
+
+    expect(
+      screen.getByRole("heading", { name: "Platform accounts" }),
+    ).toBeInTheDocument()
+  })
+
   it("shows login without campaign navigation for an unauthenticated user", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: {
@@ -370,7 +537,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("link", {
-        name: "Home",
+        name: "Campaign Home",
       }),
     ).toHaveAttribute("aria-current", "page")
 
@@ -390,10 +557,10 @@ describe("portal routing", () => {
     ).not.toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
+      screen.getByRole("button", {
         name: "Access",
       }),
-    ).toBeInTheDocument()
+    ).toHaveAttribute("aria-expanded", "false")
 
     expect(
       within(
@@ -412,9 +579,37 @@ describe("portal routing", () => {
     expect(
       screen.getByRole("heading", {
         level: 1,
-        name: "Home",
+        name: "Campaign Home",
       }),
     ).toBeInTheDocument()
+  })
+
+  it("offers a Browse all campaigns link in the context panel and a path back from a campaign route", () => {
+    renderAppAt("/app/mundivita/quests")
+
+    expect(
+      screen.getByRole("link", { name: "Browse all campaigns" }),
+    ).toHaveAttribute("href", "/campaigns")
+
+    fireEvent.click(
+      screen.getByRole("link", { name: "Campaigns" }),
+    )
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Campaigns" }),
+    ).toBeInTheDocument()
+  })
+
+  it("offers a Browse campaigns link from a campaign-not-found page", () => {
+    renderAppAt("/app/not-a-real-campaign/home")
+
+    expect(
+      screen.getByRole("heading", { name: "Campaign not found" }),
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole("link", { name: "Browse campaigns" }),
+    ).toHaveAttribute("href", "/campaigns")
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {
@@ -632,7 +827,7 @@ describe("portal routing", () => {
   })
 
   it("provides global appearance selection in the header", () => {
-    renderAppAt("/")
+    renderAppAt("/home")
 
     const header = screen.getByRole("banner")
 
@@ -650,14 +845,78 @@ describe("portal routing", () => {
   })
 
   it("shows an accessible logout control in the authenticated chrome", () => {
-    renderAppAt("/")
+    renderAppAt("/home")
+
+    const header = screen.getByRole("banner")
+
+    fireEvent.click(
+      within(header).getByRole("button", { name: /account menu/i }),
+    )
 
     expect(
-      within(screen.getByRole("banner")).getByRole("button", {
+      within(header).getByRole("button", {
         name: "Log out",
       }),
     ).toBeInTheDocument()
   })
+
+  it.each([
+    ["a global route", "/home"],
+    ["a campaign route", "/app/mundivita/home"],
+  ])(
+    "logs out from %s to the login form, never back to /home (redirect-loop guard)",
+    async (_description, path) => {
+      // Logging out from a campaign route changes RouteSessionProvider's
+      // scope key (campaign:<id> -> outside-campaign), which remounts
+      // SessionProvider and therefore this mocked hook. Track the
+      // authenticated flag outside React state so a fresh mount still
+      // reflects the already-completed logout, the way a real remount's
+      // fresh GET /auth/session would.
+      let authenticated = true
+
+      useSessionBootstrapMock.mockImplementation(() => {
+        const [, forceRender] = useState(0)
+
+        return {
+          state: authenticated
+            ? {
+                status: "authenticated" as const,
+                bootstrap: sessionBootstrapFixture,
+              }
+            : { status: "unauthenticated" as const },
+          reload: () => {
+            authenticated = false
+            forceRender((count) => count + 1)
+          },
+        }
+      })
+
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+      vi.stubGlobal("fetch", fetchMock)
+
+      renderAppAt(path)
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /account menu/i }),
+      )
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Log out" }),
+      )
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("heading", { name: "D&D AI World" }),
+        ).toBeInTheDocument()
+      })
+
+      expect(
+        screen.queryByRole("heading", { level: 1, name: "Home" }),
+      ).not.toBeInTheDocument()
+
+      vi.unstubAllGlobals()
+    },
+  )
 
   it("hides the logout control when unauthenticated", () => {
     useSessionBootstrapMock.mockReturnValue({

@@ -1,11 +1,13 @@
 import { Navigate, Route, Routes } from "react-router"
 import "./App.css"
-import { ThemeSelector } from "./themes/ThemeSelector"
-import { LogoutButton } from "./components/LogoutButton"
+import { PublicLayout } from "./layouts/PublicLayout"
+import { AuthenticatedAppLayout } from "./layouts/AuthenticatedAppLayout"
+import { useAuthenticatedSession } from "./layouts/useAuthenticatedSession"
 import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
+import { NotFoundPage } from "./pages/NotFoundPage"
 import { LoginPage } from "./pages/LoginPage"
-import { AuthenticatedSessionBoundary } from "./layouts/AuthenticatedSessionBoundary"
+import { PortalHomePage } from "./pages/PortalHomePage"
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
@@ -18,203 +20,204 @@ import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
+import { CampaignInvitationsPage } from "./pages/CampaignInvitationsPage"
 import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
-import { AdminAccountsNavLink } from "./components/AdminAccountsNavLink"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
-import { AccountNavLink } from "./components/AccountNavLink"
+
+function PortalHomeRoute() {
+  const { bootstrap } = useAuthenticatedSession()
+  return <PortalHomePage bootstrap={bootstrap} />
+}
+
+function CampaignsRoute() {
+  const { bootstrap } = useAuthenticatedSession()
+  return <CampaignsPage bootstrap={bootstrap} />
+}
+
+function PlatformAccountsRoute() {
+  const { bootstrap } = useAuthenticatedSession()
+
+  // The route adapter itself is the gate: a non-administrator never
+  // mounts AdminAccountsPage, so usePlatformAccounts never mounts either
+  // and no GET /api/admin/accounts request is sent (navigation plan
+  // §3.1). AdminAccountsPage keeps its own internal check as defense in
+  // depth.
+  if (!bootstrap.is_platform_administrator) {
+    return <NotFoundPage />
+  }
+
+  return <AdminAccountsPage bootstrap={bootstrap} />
+}
 
 function App() {
   return (
     <div className="app-shell">
-      <header className="app-header">
-        {/* Not an h1: each route supplies its own single page-level
-            heading (docs/PLAN.md accessibility exit criterion) — this is
-            persistent site-identity chrome, not a heading in the document
-            outline. */}
-        <p className="app-header__title">
-          D&amp;D AI Portal
-        </p>
-        <AccountNavLink />
-        <AdminAccountsNavLink />
-        <ThemeSelector />
-        <LogoutButton />
-      </header>
-
       <Routes>
-        <Route
-          path="/"
-          element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Portal Foundation"
-                description="The Phase 13 portal foundation is running."
-              />
-            </main>
-          }
-        />
-
-        <Route
-          path="/login"
-          element={<LoginPage />}
-        />
-
-        <Route
-          path="/campaigns"
-          element={
-            <AuthenticatedSessionBoundary>
-              {(bootstrap) => (
-                <CampaignsPage bootstrap={bootstrap} />
-              )}
-            </AuthenticatedSessionBoundary>
-          }
-        />
-
-        <Route
-          path="/campaign-invitations/accept"
-          element={<AcceptCampaignInvitationPage />}
-        />
-
-        <Route
-          path="/activate"
-          element={<ActivateAccountPage />}
-        />
-
-        <Route
-          path="/reset-password"
-          element={<ResetPasswordPage />}
-        />
-
-        <Route
-          path="/admin/accounts"
-          element={
-            <AuthenticatedSessionBoundary>
-              {(bootstrap) => (
-                <AdminAccountsPage bootstrap={bootstrap} />
-              )}
-            </AuthenticatedSessionBoundary>
-          }
-        />
-
-        <Route
-          path="/account"
-          element={
-            <AuthenticatedSessionBoundary>
-              {() => <AccountPage />}
-            </AuthenticatedSessionBoundary>
-          }
-        />
-
-        <Route
-          path="/app/:campaignId"
-          element={<CampaignSessionBoundary />}
-        >
+        {/* Public / self-managed routes. Home/Campaigns/profile appear in
+            the header only when the session is authenticated. */}
+        <Route element={<PublicLayout />}>
           <Route
             index
-            element={<Navigate to="home" replace />}
+            element={<Navigate to="/login" replace />}
           />
 
           <Route
-            path="home"
-            element={<CampaignHomePage />}
+            path="/login"
+            element={<LoginPage />}
           />
 
           <Route
-            path="world"
-            element={<CampaignWorldPage />}
+            path="/campaign-invitations/accept"
+            element={<AcceptCampaignInvitationPage />}
           />
 
           <Route
-            path="world/:category/:entityId"
-            element={<CampaignWorldDetailPage />}
+            path="/activate"
+            element={<ActivateAccountPage />}
           />
 
           <Route
-            path="characters"
-            element={<CampaignCharactersPage />}
-          />
-
-          <Route
-            path="quests"
-            element={<CampaignQuestsPage />}
-          />
-
-          <Route
-            path="quests/:questId"
-            element={<CampaignQuestDetailPage />}
-          />
-
-          <Route
-            path="sessions"
-            element={<CampaignSessionsPage />}
-          />
-
-          <Route
-            path="sessions/:sessionId"
-            element={<CampaignSessionDetailPage />}
-          />
-
-          <Route
-            path="knowledge"
-            element={<CampaignKnowledgePage />}
-          />
-
-          <Route
-            path="knowledge/:knowledgeItemId"
-            element={<CampaignKnowledgeDetailPage />}
-          />
-
-          <Route
-            path="ask"
-            element={
-              <PlaceholderPage
-                title="Ask"
-                description="Ask campaign questions from the selected perspective."
-                status="Unavailable until the Phase 12 AI features are verified."
-              />
-            }
-          />
-
-          <Route
-            path="access"
-            element={<CampaignAccessPage />}
-          />
-
-          <Route
-            path="access/audit"
-            element={<CampaignAccessAuditPage />}
+            path="/reset-password"
+            element={<ResetPasswordPage />}
           />
 
           <Route
             path="*"
-            element={
-              <PlaceholderPage
-                title="Campaign page not found"
-                description="The requested campaign page does not exist."
-              />
-            }
+            element={<NotFoundPage />}
           />
         </Route>
 
+        {/* Authenticated global shell — the single session gate. */}
+        <Route element={<AuthenticatedAppLayout />}>
+          <Route
+            path="/home"
+            element={<PortalHomeRoute />}
+          />
+
+          <Route
+            path="/campaigns"
+            element={<CampaignsRoute />}
+          />
+
+          <Route
+            path="/platform/accounts"
+            element={<PlatformAccountsRoute />}
+          />
+
+          <Route
+            path="/account"
+            element={<AccountPage />}
+          />
+
+          <Route
+            path="/app/:campaignId"
+            element={<CampaignSessionBoundary />}
+          >
+            <Route
+              index
+              element={<Navigate to="home" replace />}
+            />
+
+            <Route
+              path="home"
+              element={<CampaignHomePage />}
+            />
+
+            <Route
+              path="world"
+              element={<CampaignWorldPage />}
+            />
+
+            <Route
+              path="world/:category/:entityId"
+              element={<CampaignWorldDetailPage />}
+            />
+
+            <Route
+              path="characters"
+              element={<CampaignCharactersPage />}
+            />
+
+            <Route
+              path="quests"
+              element={<CampaignQuestsPage />}
+            />
+
+            <Route
+              path="quests/:questId"
+              element={<CampaignQuestDetailPage />}
+            />
+
+            <Route
+              path="sessions"
+              element={<CampaignSessionsPage />}
+            />
+
+            <Route
+              path="sessions/:sessionId"
+              element={<CampaignSessionDetailPage />}
+            />
+
+            <Route
+              path="knowledge"
+              element={<CampaignKnowledgePage />}
+            />
+
+            <Route
+              path="knowledge/:knowledgeItemId"
+              element={<CampaignKnowledgeDetailPage />}
+            />
+
+            <Route
+              path="ask"
+              element={
+                <PlaceholderPage
+                  title="Ask"
+                  description="Ask campaign questions from the selected perspective."
+                  status="Unavailable until the Phase 12 AI features are verified."
+                />
+              }
+            />
+
+            <Route
+              path="access"
+              element={<CampaignAccessPage />}
+            />
+
+            <Route
+              path="access/invitations"
+              element={<CampaignInvitationsPage />}
+            />
+
+            <Route
+              path="access/audit"
+              element={<CampaignAccessAuditPage />}
+            />
+
+            <Route
+              path="*"
+              element={
+                <PlaceholderPage
+                  title="Campaign page not found"
+                  description="The requested campaign page does not exist."
+                />
+              }
+            />
+          </Route>
+        </Route>
+
+        {/* Decision D-2: keep bookmarks and prior manual-validation steps
+            working under the backend's still-current /admin/accounts
+            path. */}
         <Route
-          path="*"
-          element={
-            <main className="app-main">
-              <PlaceholderPage
-                title="Page not found"
-                description="The requested portal page does not exist."
-              />
-            </main>
-          }
+          path="/admin/accounts"
+          element={<Navigate to="/platform/accounts" replace />}
         />
       </Routes>
-
-      <footer className="app-footer">
-        <p>&copy; 2026 D&amp;D AI Portal</p>
-      </footer>
     </div>
   )
 }

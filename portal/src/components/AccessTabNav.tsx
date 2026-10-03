@@ -5,11 +5,13 @@ interface AccessTabNavProps {
 }
 
 // A second-level tab strip local to the Access section (Phase 13E-B
-// manual-acceptance fix): "Access management" and "Audit history" are two
-// separate routes, not two panels of one page, so each can be reloaded
-// directly and neither fetches the other's data while it isn't the active
-// tab. `end` on the management link keeps it from also matching
-// `/access/audit`'s longer path -- NavLink otherwise matches by prefix.
+// manual-acceptance fix, extended by the Access/Invitations navigation
+// redesign): "Access management", "Invitations", and "Audit history" are
+// three separate routes, not three panels of one page, so each can be
+// reloaded directly and neither fetches another tab's data while it isn't
+// the active one. `end` on the management link keeps it from also
+// matching the longer `/access/invitations` and `/access/audit` paths --
+// NavLink otherwise matches by prefix.
 export function AccessTabNav({ campaignId }: AccessTabNavProps) {
     const accessPath = `/app/${campaignId}/access`
 
@@ -27,6 +29,18 @@ export function AccessTabNav({ campaignId }: AccessTabNavProps) {
                         }
                     >
                         Access management
+                    </NavLink>
+                </li>
+                <li>
+                    <NavLink
+                        to={`${accessPath}/invitations`}
+                        className={({ isActive }) =>
+                            isActive
+                                ? "access-tab-nav__link access-tab-nav__link--active"
+                                : "access-tab-nav__link"
+                        }
+                    >
+                        Invitations
                     </NavLink>
                 </li>
                 <li>
