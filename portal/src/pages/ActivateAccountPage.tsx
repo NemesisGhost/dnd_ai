@@ -44,7 +44,7 @@ function extractTokenFromLocationHash(): string | null {
 // Public route: reads the activation token from the URL fragment exactly
 // once (see extractTokenFromLocationHash above). No server-side
 // continuation exists for this token (dnd_ai.api.local_auth's own
-// single-shot /auth/activate), so the extracted value lives in this
+// single-shot POST /auth/activate; browser page: /activate), so the extracted value lives in this
 // component's own state for the life of the form and nowhere else.
 export function ActivateAccountPage() {
     const [hadHash] = useState(() => window.location.hash.startsWith(_HASH_TOKEN_PREFIX))

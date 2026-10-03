@@ -38,7 +38,7 @@ function extractTokenFromLocationHash(): string | null {
 
 // Public route: same fragment-read discipline as ActivateAccountPage — no
 // server-side continuation exists for this token either
-// (dnd_ai.api.local_auth's single-shot /auth/password-reset), so it lives
+// (dnd_ai.api.local_auth's single-shot POST /auth/password-reset; browser page: /reset-password), so it lives
 // in this component's own state for the life of the form only.
 export function ResetPasswordPage() {
     const [hadHash] = useState(() => window.location.hash.startsWith(_HASH_TOKEN_PREFIX))

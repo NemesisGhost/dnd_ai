@@ -79,12 +79,12 @@ function App() {
         />
 
         <Route
-          path="/auth/activate"
+          path="/activate"
           element={<ActivateAccountPage />}
         />
 
         <Route
-          path="/auth/password-reset"
+          path="/reset-password"
           element={<ResetPasswordPage />}
         />
 

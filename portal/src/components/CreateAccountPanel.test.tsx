@@ -57,6 +57,6 @@ describe("CreateAccountPanel", () => {
 
         expect(onCreated).toHaveBeenCalledTimes(1)
         const link = screen.getByLabelText("Activation link")
-        expect(link).toHaveValue(`${window.location.origin}/auth/activate#token=raw-token`)
+        expect(link).toHaveValue(`${window.location.origin}/activate#token=raw-token`)
     })
 })

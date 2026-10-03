@@ -44,7 +44,7 @@ export function CreateAccountPanel({ onCreated }: CreateAccountPanelProps) {
                 heading="Copy the activation link now"
                 description="This link is shown once and cannot be recovered later. Send it to the new account holder out of band."
                 secretLabel="Activation link"
-                secret={buildFragmentLink("/auth/activate", created.raw_activation_token)}
+                secret={buildFragmentLink("/activate", created.raw_activation_token)}
                 onDismiss={() => setCreated(null)}
             />
         )

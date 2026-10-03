@@ -16,19 +16,19 @@ describe("OneTimeSecretPanel", () => {
                 heading="Copy the link now"
                 description="Shown once."
                 secretLabel="Activation link"
-                secret="https://example.test/auth/activate#token=abc"
+                secret="https://example.test/activate#token=abc"
                 onDismiss={vi.fn()}
             />,
         )
 
         const input = screen.getByLabelText("Activation link")
         expect(input).toHaveAttribute("readonly")
-        expect(input).toHaveValue("https://example.test/auth/activate#token=abc")
+        expect(input).toHaveValue("https://example.test/activate#token=abc")
 
         fireEvent.click(screen.getByRole("button", { name: "Copy" }))
         await vi.waitFor(() => {
             expect(clipboardWriteText).toHaveBeenCalledWith(
-                "https://example.test/auth/activate#token=abc",
+                "https://example.test/activate#token=abc",
             )
         })
     })

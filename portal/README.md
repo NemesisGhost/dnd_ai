@@ -181,9 +181,12 @@ Public routes:
   fragment exactly once, immediately replaces it with the fragment-free URL,
   and exchanges the token for a short-lived server-side onboarding session
   before offering sign-in or invitation-authorized account creation.
-- `/auth/activate` and `/auth/password-reset` (Phase 13E checkpoint 11) —
+- `/activate` and `/reset-password` (Phase 13E checkpoint 11; deliberately not
+  under the proxied `/auth/*` API prefix) —
   extract a one-time token from the URL fragment the same way, immediately
-  clear it from browser history, and submit it in a JSON body.
+  clear it from browser history, and submit it in a JSON body to the
+  POST-only `POST /auth/activate` / `POST /auth/password-reset` endpoints
+  (a `GET` of those paths is `405`; opening a link never changes state).
 
 Authenticated campaign selection:
 

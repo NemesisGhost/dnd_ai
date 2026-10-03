@@ -50,7 +50,7 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
                 heading="Copy the password-reset link now"
                 description="This link is shown once and cannot be recovered later. Send it to the account holder out of band."
                 secretLabel="Password-reset link"
-                secret={buildFragmentLink("/auth/password-reset", resetToken)}
+                secret={buildFragmentLink("/reset-password", resetToken)}
                 onDismiss={() => setResetToken(null)}
             />
         )

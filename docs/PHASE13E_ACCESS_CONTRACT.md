@@ -1087,8 +1087,10 @@ closed it — except the handful that are deliberately out of scope for Phase
   (checkpoints 8a-8d, §3n) — the manual authenticated-acceptance flow from
   checkpoint 7 remains available as a fallback, not the only path.
 - A UI for account creation/activation/reset/disable/reactivate/revoke-
-  sessions (checkpoints 9-11b, §3p) — `/admin/accounts`, `/auth/activate`,
-  `/auth/password-reset`, `/account`.
+  sessions (checkpoints 9-11b, §3p) — `/admin/accounts`, `/activate`,
+  `/reset-password`, `/account` (browser pages; they submit to the POST-only
+  `/auth/activate` and `/auth/password-reset` endpoints and stay off the
+  proxied `/auth/*` prefix).
 - A UI for the other five resource-grant target kinds and the `deny` effect
   (checkpoint 12, §3o) — every target kind and both effects, for both
   grantee kinds, via the shared `ResourceTargetSelector`.

@@ -120,7 +120,7 @@ describe("AccountLifecycleActions", () => {
 
         expect(onChanged).toHaveBeenCalledTimes(1)
         expect(screen.getByLabelText("Password-reset link")).toHaveValue(
-            `${window.location.origin}/auth/password-reset#token=raw-reset-token`,
+            `${window.location.origin}/reset-password#token=raw-reset-token`,
         )
     })
 

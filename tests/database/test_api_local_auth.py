@@ -1600,6 +1600,16 @@ def test_activate_rejects_missing_origin(
     assert response.status_code == 403
 
 
+def test_one_time_link_endpoints_reject_get(client_factory: Callable[[], TestClient]) -> None:
+    # Browser links open React pages (/activate, /reset-password); the /auth
+    # endpoints stay POST-only so opening a link can never consume a token.
+    with client_factory() as client:
+        for path in ("/auth/activate", "/auth/password-reset"):
+            response = client.get(path)
+            assert response.status_code == 405, path
+            assert response.json()["error"]["code"] == "method_not_allowed"
+
+
 def test_password_reset_rejects_missing_origin(
     client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
 ) -> None:

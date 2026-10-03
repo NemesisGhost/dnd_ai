@@ -19,14 +19,14 @@ beforeEach(() => {
     statusRef.current = { kind: "idle" }
     submitMock.mockReset()
     resetMock.mockReset()
-    window.history.replaceState(null, "", "/auth/activate")
+    window.history.replaceState(null, "", "/activate")
 })
 
 function renderPage(path: string) {
     return render(
         <MemoryRouter initialEntries={[path]}>
             <Routes>
-                <Route path="/auth/activate" element={<ActivateAccountPage />} />
+                <Route path="/activate" element={<ActivateAccountPage />} />
                 <Route path="/login" element={<p>Login page</p>} />
             </Routes>
         </MemoryRouter>,
@@ -35,15 +35,15 @@ function renderPage(path: string) {
 
 describe("ActivateAccountPage", () => {
     it("shows an invalid-link message with no token fragment", () => {
-        renderPage("/auth/activate")
+        renderPage("/activate")
         expect(
             screen.getByRole("heading", { name: "This activation link is not valid" }),
         ).toBeInTheDocument()
     })
 
     it("clears the fragment and submits the extracted token with the entered password", () => {
-        window.history.replaceState(null, "", "/auth/activate#token=raw-token")
-        renderPage("/auth/activate")
+        window.history.replaceState(null, "", "/activate#token=raw-token")
+        renderPage("/activate")
 
         expect(window.location.hash).toBe("")
 
@@ -56,12 +56,12 @@ describe("ActivateAccountPage", () => {
     })
 
     it("extracts the token exactly once under StrictMode's double-invoked render", () => {
-        window.history.replaceState(null, "", "/auth/activate#token=raw-token")
+        window.history.replaceState(null, "", "/activate#token=raw-token")
         render(
             <StrictMode>
-                <MemoryRouter initialEntries={["/auth/activate"]}>
+                <MemoryRouter initialEntries={["/activate"]}>
                     <Routes>
-                        <Route path="/auth/activate" element={<ActivateAccountPage />} />
+                        <Route path="/activate" element={<ActivateAccountPage />} />
                     </Routes>
                 </MemoryRouter>
             </StrictMode>,
@@ -78,8 +78,8 @@ describe("ActivateAccountPage", () => {
 
     it("shows the success screen with a link to sign in, never auto-navigating", () => {
         statusRef.current = { kind: "success", result: { user_id: "user-1", login_name: "new.gm" } }
-        window.history.replaceState(null, "", "/auth/activate#token=raw-token")
-        renderPage("/auth/activate")
+        window.history.replaceState(null, "", "/activate#token=raw-token")
+        renderPage("/activate")
 
         expect(screen.getByRole("heading", { name: "Account activated" })).toBeInTheDocument()
         expect(screen.getByRole("link", { name: "Go to sign in" })).toHaveAttribute(

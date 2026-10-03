@@ -19,14 +19,14 @@ beforeEach(() => {
     statusRef.current = { kind: "idle" }
     submitMock.mockReset()
     resetMock.mockReset()
-    window.history.replaceState(null, "", "/auth/password-reset")
+    window.history.replaceState(null, "", "/reset-password")
 })
 
 function renderPage(path: string) {
     return render(
         <MemoryRouter initialEntries={[path]}>
             <Routes>
-                <Route path="/auth/password-reset" element={<ResetPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/login" element={<p>Login page</p>} />
             </Routes>
         </MemoryRouter>,
@@ -35,15 +35,15 @@ function renderPage(path: string) {
 
 describe("ResetPasswordPage", () => {
     it("shows an invalid-link message with no token fragment", () => {
-        renderPage("/auth/password-reset")
+        renderPage("/reset-password")
         expect(
             screen.getByRole("heading", { name: "This password-reset link is not valid" }),
         ).toBeInTheDocument()
     })
 
     it("clears the fragment and submits the extracted token with the new password", () => {
-        window.history.replaceState(null, "", "/auth/password-reset#token=raw-token")
-        renderPage("/auth/password-reset")
+        window.history.replaceState(null, "", "/reset-password#token=raw-token")
+        renderPage("/reset-password")
 
         expect(window.location.hash).toBe("")
 
@@ -56,12 +56,12 @@ describe("ResetPasswordPage", () => {
     })
 
     it("extracts the token exactly once under StrictMode's double-invoked render", () => {
-        window.history.replaceState(null, "", "/auth/password-reset#token=raw-token")
+        window.history.replaceState(null, "", "/reset-password#token=raw-token")
         render(
             <StrictMode>
-                <MemoryRouter initialEntries={["/auth/password-reset"]}>
+                <MemoryRouter initialEntries={["/reset-password"]}>
                     <Routes>
-                        <Route path="/auth/password-reset" element={<ResetPasswordPage />} />
+                        <Route path="/reset-password" element={<ResetPasswordPage />} />
                     </Routes>
                 </MemoryRouter>
             </StrictMode>,
@@ -78,8 +78,8 @@ describe("ResetPasswordPage", () => {
 
     it("shows whether other sessions were revoked", () => {
         statusRef.current = { kind: "success", result: { user_id: "user-1", sessions_revoked: true } }
-        window.history.replaceState(null, "", "/auth/password-reset#token=raw-token")
-        renderPage("/auth/password-reset")
+        window.history.replaceState(null, "", "/reset-password#token=raw-token")
+        renderPage("/reset-password")
 
         expect(screen.getByText(/every existing browser session has been signed out/i)).toBeInTheDocument()
     })
