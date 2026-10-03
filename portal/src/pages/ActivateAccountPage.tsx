@@ -2,9 +2,8 @@ import { useId, useState } from "react"
 import { Link } from "react-router"
 import { PasswordField } from "../components/PasswordField"
 import { useActivateAccount } from "../hooks/useActivateAccount"
-import PlaceholderPage from "./PlaceholderPage"
-
-const _HASH_TOKEN_PREFIX = "#token="
+import type { ActivateAccountStatus } from "../hooks/useActivateAccount"
+import { captureFragmentToken } from "../utils/fragmentToken"
 
 function statusMessage(
     kind: "pending" | "policy_violation" | "unavailable" | "rate_limited" | "error",
@@ -23,35 +22,12 @@ function statusMessage(
     }
 }
 
-function extractTokenFromLocationHash(): string | null {
-    const hash = window.location.hash
-    if (!hash.startsWith(_HASH_TOKEN_PREFIX)) {
-        return null
-    }
-    const extracted = decodeURIComponent(hash.slice(_HASH_TOKEN_PREFIX.length))
-    // Clears the fragment before this component ever fires a request, so
-    // the token never appears in the address bar or session history
-    // (R-1/R-2 discipline, mirroring AcceptCampaignInvitationPage). Called
-    // from a useState lazy initializer rather than an effect: React 18
-    // StrictMode double-invokes both, but window.location.hash is already
-    // empty by the second call (this function's own replaceState made it
-    // so), which is what makes a second call a safe no-op without a
-    // separate ref latch.
-    window.history.replaceState(null, "", window.location.pathname + window.location.search)
-    return extracted
-}
-
 // Public route: reads the activation token from the URL fragment exactly
-// once (see extractTokenFromLocationHash above). No server-side
+// once (see captureFragmentToken). No server-side
 // continuation exists for this token (dnd_ai.api.local_auth's own
 // single-shot POST /auth/activate; browser page: /activate), so the extracted value lives in this
 // component's own state for the life of the form and nowhere else.
 export function ActivateAccountPage() {
-    const [hadHash] = useState(() => window.location.hash.startsWith(_HASH_TOKEN_PREFIX))
-    const [token] = useState<string | null>(extractTokenFromLocationHash)
-    const [password, setPassword] = useState("")
-    const passwordFieldId = useId()
-
     const { status, submit, reset } = useActivateAccount()
 
     if (status.kind === "success") {
@@ -71,7 +47,31 @@ export function ActivateAccountPage() {
         )
     }
 
-    if (!hadHash) {
+    return <ActivateForm status={status} submit={submit} reset={reset} />
+}
+
+// Owns the raw token and both password values, so they are discarded when
+// the page swaps to the success view (this component unmounts).
+function ActivateForm({
+    status,
+    submit,
+    reset,
+}: {
+    status: Exclude<ActivateAccountStatus, { kind: "success" }>
+    submit: ReturnType<typeof useActivateAccount>["submit"]
+    reset: () => void
+}) {
+    // Lazy initializer, not an effect: StrictMode's second call sees an already
+    // sanitized URL, and React keeps the first call's result.
+    const [token] = useState<string | null>(captureFragmentToken)
+    const [password, setPassword] = useState("")
+    const [confirmation, setConfirmation] = useState("")
+    const passwordFieldId = useId()
+    const confirmFieldId = useId()
+    const mismatchId = useId()
+
+
+    if (token === null) {
         return (
             <main className="app-main">
                 <section className="placeholder-page" aria-labelledby="activate-missing-heading">
@@ -82,18 +82,8 @@ export function ActivateAccountPage() {
         )
     }
 
-    if (token === null) {
-        return (
-            <main className="app-main">
-                <PlaceholderPage
-                    title="Opening your activation link"
-                    description="Reading the activation link."
-                />
-            </main>
-        )
-    }
-
     const isSubmitting = status.kind === "pending"
+    const mismatch = confirmation !== "" && confirmation !== password
 
     return (
         <main className="app-main">
@@ -113,6 +103,10 @@ export function ActivateAccountPage() {
                                 if (isSubmitting) {
                                     return
                                 }
+                                if (confirmation !== password) {
+                                    document.getElementById(confirmFieldId)?.focus()
+                                    return
+                                }
                                 submit(token, password)
                             }}
                         >
@@ -130,6 +124,32 @@ export function ActivateAccountPage() {
                                 minLength={15}
                                 disabled={isSubmitting}
                             />
+
+                            <PasswordField
+                                id={confirmFieldId}
+                                label="Confirm passphrase"
+                                value={confirmation}
+                                onChange={(value) => {
+                                    setConfirmation(value)
+                                    if (status.kind !== "idle") {
+                                        reset()
+                                    }
+                                }}
+                                autoComplete="new-password"
+                                minLength={15}
+                                disabled={isSubmitting}
+                                invalid={mismatch}
+                                describedBy={mismatch ? mismatchId : undefined}
+                            />
+
+                            <p
+                                id={mismatchId}
+                                className="login-error"
+                                role={mismatch ? "alert" : undefined}
+                                hidden={!mismatch}
+                            >
+                                {mismatch ? "The passphrases do not match." : ""}
+                            </p>
 
                             {status.kind !== "idle" && status.kind !== "pending" && (
                                 <p className="login-error" role="alert">

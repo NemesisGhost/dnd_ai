@@ -119,6 +119,14 @@ describe("generated one-time links", () => {
         expect(screen.queryByRole("heading", { name: "Account activated" })).not.toBeInTheDocument()
     })
 
+    it.each(["/activate", "/reset-password"])("%s with a malformed fragment is generic and silent", (path) => {
+        mountAtLink(`${window.location.origin}${path}#token=%`)
+        expect(window.location.hash).toBe("")
+        expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
+        expect(screen.getByRole("heading", { name: /link is not valid/ })).toBeInTheDocument()
+        expect(calls.filter((c) => c.method === "POST")).toHaveLength(0)
+    })
+
     it("password-reset link renders the React page and sanitizes the URL", () => {
         mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)

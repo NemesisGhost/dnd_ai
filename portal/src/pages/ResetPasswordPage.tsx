@@ -2,9 +2,8 @@ import { useId, useState } from "react"
 import { Link } from "react-router"
 import { PasswordField } from "../components/PasswordField"
 import { useResetPassword } from "../hooks/useResetPassword"
-import PlaceholderPage from "./PlaceholderPage"
-
-const _HASH_TOKEN_PREFIX = "#token="
+import type { ResetPasswordStatus } from "../hooks/useResetPassword"
+import { captureFragmentToken } from "../utils/fragmentToken"
 
 function statusMessage(
     kind: "pending" | "policy_violation" | "unavailable" | "rate_limited" | "error",
@@ -23,29 +22,11 @@ function statusMessage(
     }
 }
 
-function extractTokenFromLocationHash(): string | null {
-    const hash = window.location.hash
-    if (!hash.startsWith(_HASH_TOKEN_PREFIX)) {
-        return null
-    }
-    const extracted = decodeURIComponent(hash.slice(_HASH_TOKEN_PREFIX.length))
-    // See ActivateAccountPage's identical helper for why this runs from a
-    // useState lazy initializer, not an effect, and why a StrictMode
-    // double-invocation is a safe no-op on its second call.
-    window.history.replaceState(null, "", window.location.pathname + window.location.search)
-    return extracted
-}
-
 // Public route: same fragment-read discipline as ActivateAccountPage — no
 // server-side continuation exists for this token either
 // (dnd_ai.api.local_auth's single-shot POST /auth/password-reset; browser page: /reset-password), so it lives
 // in this component's own state for the life of the form only.
 export function ResetPasswordPage() {
-    const [hadHash] = useState(() => window.location.hash.startsWith(_HASH_TOKEN_PREFIX))
-    const [token] = useState<string | null>(extractTokenFromLocationHash)
-    const [newPassword, setNewPassword] = useState("")
-    const passwordFieldId = useId()
-
     const { status, submit, reset } = useResetPassword()
 
     if (status.kind === "success") {
@@ -66,7 +47,31 @@ export function ResetPasswordPage() {
         )
     }
 
-    if (!hadHash) {
+    return <ResetForm status={status} submit={submit} reset={reset} />
+}
+
+// Owns the raw token and both password values, so they are discarded when
+// the page swaps to the success view (this component unmounts).
+function ResetForm({
+    status,
+    submit,
+    reset,
+}: {
+    status: Exclude<ResetPasswordStatus, { kind: "success" }>
+    submit: ReturnType<typeof useResetPassword>["submit"]
+    reset: () => void
+}) {
+    // Lazy initializer, not an effect: StrictMode's second call sees an already
+    // sanitized URL, and React keeps the first call's result.
+    const [token] = useState<string | null>(captureFragmentToken)
+    const [newPassword, setNewPassword] = useState("")
+    const [confirmation, setConfirmation] = useState("")
+    const passwordFieldId = useId()
+    const confirmFieldId = useId()
+    const mismatchId = useId()
+
+
+    if (token === null) {
         return (
             <main className="app-main">
                 <section className="placeholder-page" aria-labelledby="reset-missing-heading">
@@ -77,18 +82,8 @@ export function ResetPasswordPage() {
         )
     }
 
-    if (token === null) {
-        return (
-            <main className="app-main">
-                <PlaceholderPage
-                    title="Opening your password-reset link"
-                    description="Reading the password-reset link."
-                />
-            </main>
-        )
-    }
-
     const isSubmitting = status.kind === "pending"
+    const mismatch = confirmation !== "" && confirmation !== newPassword
 
     return (
         <main className="app-main">
@@ -108,6 +103,10 @@ export function ResetPasswordPage() {
                                 if (isSubmitting) {
                                     return
                                 }
+                                if (confirmation !== newPassword) {
+                                    document.getElementById(confirmFieldId)?.focus()
+                                    return
+                                }
                                 submit(token, newPassword)
                             }}
                         >
@@ -125,6 +124,32 @@ export function ResetPasswordPage() {
                                 minLength={15}
                                 disabled={isSubmitting}
                             />
+
+                            <PasswordField
+                                id={confirmFieldId}
+                                label="Confirm passphrase"
+                                value={confirmation}
+                                onChange={(value) => {
+                                    setConfirmation(value)
+                                    if (status.kind !== "idle") {
+                                        reset()
+                                    }
+                                }}
+                                autoComplete="new-password"
+                                minLength={15}
+                                disabled={isSubmitting}
+                                invalid={mismatch}
+                                describedBy={mismatch ? mismatchId : undefined}
+                            />
+
+                            <p
+                                id={mismatchId}
+                                className="login-error"
+                                role={mismatch ? "alert" : undefined}
+                                hidden={!mismatch}
+                            >
+                                {mismatch ? "The passphrases do not match." : ""}
+                            </p>
 
                             {status.kind !== "idle" && status.kind !== "pending" && (
                                 <p className="login-error" role="alert">

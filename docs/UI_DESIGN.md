@@ -155,7 +155,7 @@ This table describes the approved target, not a claim that the routes already ex
 | `/app/:campaignId/knowledge` | Campaign Knowledge |
 | `/app/:campaignId/access` | Campaign Access, gated by `access.manage` |
 
-Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail/subsection routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, `knowledge/:knowledgeItemId`, and `access/audit`, beneath their campaign prefix. Keep `/app/:campaignId/ask` under its existing readiness rules. Preserve the public `/auth/activate` and `/auth/password-reset` pages and their fragment-token handling; they are not authenticated global destinations. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
+Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail/subsection routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, `knowledge/:knowledgeItemId`, and `access/audit`, beneath their campaign prefix. Keep `/app/:campaignId/ask` under its existing readiness rules. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are not authenticated global destinations and are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 
 ## 5. Core screens
 

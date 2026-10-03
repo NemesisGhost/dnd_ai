@@ -6,6 +6,8 @@ interface PasswordFieldProps {
     autoComplete: "new-password" | "current-password"
     disabled?: boolean
     minLength?: number
+    invalid?: boolean
+    describedBy?: string
 }
 
 // Shared across every screen that sets or verifies a local-account
@@ -20,6 +22,8 @@ export function PasswordField({
     autoComplete,
     disabled = false,
     minLength,
+    invalid,
+    describedBy,
 }: PasswordFieldProps) {
     return (
         <div className="form-group">
@@ -34,6 +38,8 @@ export function PasswordField({
                 value={value}
                 disabled={disabled}
                 minLength={minLength}
+                aria-invalid={invalid ? true : undefined}
+                aria-describedby={describedBy}
                 onChange={(event) => {
                     onChange(event.currentTarget.value)
                 }}
