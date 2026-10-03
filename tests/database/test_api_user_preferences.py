@@ -137,15 +137,28 @@ def session(postgres_engine: Engine) -> Iterator[Session]:
             headers={"Origin": _ORIGIN},
         )
         assert login.status_code == 200, login.text
-        yield Session(
-            client=client,
-            csrf=login.json()["csrf_token"],
-            user_id=created.user_id,
-            campaign_a=campaign_a,
-            campaign_b=campaign_b,
-            foreign_campaign=foreign,
-            engine=postgres_engine,
-        )
+        try:
+            yield Session(
+                client=client,
+                csrf=login.json()["csrf_token"],
+                user_id=created.user_id,
+                campaign_a=campaign_a,
+                campaign_b=campaign_b,
+                foreign_campaign=foreign,
+                engine=postgres_engine,
+            )
+        finally:
+            # Committed active campaigns would leak into the shared session
+            # database and trip other suites' "no dependents" invariants.
+            with postgres_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE campaign.campaigns SET lifecycle_status_id = "
+                        "(SELECT lifecycle_status_id FROM core.lifecycle_statuses "
+                        "WHERE code = 'archived') WHERE campaign_id = ANY(:ids)"
+                    ),
+                    {"ids": [campaign_a, campaign_b, foreign]},
+                )
 
 
 # ---------------------------------------------------------------------------
