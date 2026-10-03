@@ -27,6 +27,7 @@ import { AdminAccountsPage } from "./pages/AdminAccountsPage"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
+import { SettingsPage } from "./pages/SettingsPage"
 
 function PortalHomeRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -36,6 +37,11 @@ function PortalHomeRoute() {
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
   return <CampaignsPage bootstrap={bootstrap} />
+}
+
+function SettingsRoute() {
+  const { bootstrap, reload } = useAuthenticatedSession()
+  return <SettingsPage bootstrap={bootstrap} reload={reload} />
 }
 
 function PlatformAccountsRoute() {
@@ -96,6 +102,11 @@ function App() {
           <Route
             path="/home"
             element={<PortalHomeRoute />}
+          />
+
+          <Route
+            path="/settings"
+            element={<SettingsRoute />}
           />
 
           <Route

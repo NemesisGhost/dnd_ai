@@ -17,6 +17,7 @@ describe("resolvePostLoginDestination", () => {
   it.each([
     ["home", "/home"],
     ["campaigns", "/campaigns"],
+    ["settings", "/settings"],
     ["account", "/account"],
     ["platform accounts", "/platform/accounts"],
     ["a campaign subsection", "/app/mundivita/access/audit"],
