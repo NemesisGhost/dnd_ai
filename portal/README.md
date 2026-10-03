@@ -38,8 +38,9 @@ The portal currently includes:
   scope, including browser Back/Forward navigation.
 - In-memory character-perspective selection, checked against the latest
   server-authorized perspective list after refresh; capabilities (e.g. the
-  Access nav item) come only from the bootstrap's per-campaign `capabilities`
-  list, never derived locally from role or perspective.
+  Access nav group and its Access Management/Invitations children) come
+  only from the bootstrap's per-campaign `capabilities` list, never derived
+  locally from role or perspective.
 - A Home dashboard showing the latest session, previous-session recap, and
   recent events (a narrower slice than Phase 13's full dashboard bullet —
   active quests, recent discoveries, relevant NPCs/factions, reminders, and
@@ -234,6 +235,10 @@ lookup):
 - `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
 - `/app/:campaignId/access` — live campaign access-management surface
   (13E-A/13E-B; see [Access management (13E)](#access-management-13e) below)
+- `/app/:campaignId/access/invitations` — the same Access section's
+  invitation-management tab (issuing, listing, and revoking pending
+  campaign invitations), its own route so a direct reload works and
+  neither tab fetches another tab's data
 - `/app/:campaignId/access/audit` — the same Access section's audit-history
   tab, its own route so a direct reload works and neither tab fetches the
   other's data
@@ -443,8 +448,6 @@ never renders them as visible text, only as React keys.
   removing individual group members;
 - adding and revoking a group-owned resource grant of any target kind and
   effect, identically to a direct grant;
-- issuing, listing, and revoking pending campaign invitations, with a
-  copyable single-link invitation (see below) alongside manual-entry;
 - explaining a selected member's effective access (`EffectiveAccessPanel`,
   one disclosure per member row: every capability held, with its role/
   relationship/grant sources, plus any active `deny`); and
@@ -460,13 +463,26 @@ never renders them as visible text, only as React keys.
   used exists. Every placement independently checks the same
   `access.manage` capability before fetching the campaign's member list.
 
+Issuing, listing, and revoking pending campaign invitations, with a
+copyable single-link invitation (see below) alongside manual-entry, is
+likewise its own sibling route — `/app/:campaignId/access/invitations` —
+rather than a section embedded in the management screen above. It shares
+the same `AccessTabNav` tab strip and the same `access.manage` gate as
+Access Management and Audit history; opening it never fetches the
+access-overview the management screen owns, and reloading the invitations
+URL directly works the same as navigating to it from either the tab strip
+or the sidebar's Access navigation group (which nests **Access
+Management** and **Invitations** under a single Access disclosure, the
+same pattern the profile menu uses for Platform Accounts — see
+`docs/UI_DESIGN.md` §4.3/§4.6).
+
 Reading campaign audit history, filterable by category and by actor
 (the actor list sourced from its own bounded, identically-authorized
 facet, `GET .../audit-history/actors` — never the complete access-overview
-response, and never a new account-directory query), is a sibling route
-rather than a panel on this same screen — `/app/:campaignId/access/audit`,
-with its own tab (`AccessTabNav`) shared with the management route above.
-Opening one tab never fetches the other's data, and reloading the audit
+response, and never a new account-directory query), is a third sibling
+route rather than a panel on this same screen — `/app/:campaignId/access/audit`,
+with its own tab (`AccessTabNav`) shared with the other two routes above.
+Opening one tab never fetches another tab's data, and reloading the audit
 URL directly works the same as navigating to it.
 
 The GM's copyable single-link invitation

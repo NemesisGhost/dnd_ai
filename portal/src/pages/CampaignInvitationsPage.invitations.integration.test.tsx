@@ -20,19 +20,10 @@ import {
 } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
-import { CampaignAccessPage } from "./CampaignAccessPage"
+import { CampaignInvitationsPage } from "./CampaignInvitationsPage"
 
 const CAMPAIGN_ID = sessionBootstrapFixture.campaigns[0].campaign_id
 const OTHER_CAMPAIGN_ID = "other-campaign"
-
-const overview = {
-    members: [],
-    assignable_roles: [],
-    assignable_characters: [],
-    assignable_relationship_types: [],
-    grantable_resource_capabilities: [],
-    access_groups: [],
-}
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -58,9 +49,12 @@ function renderAtCampaign(fetchMock: ReturnType<typeof vi.fn>) {
                 reload: vi.fn().mockResolvedValue(undefined),
             }}
         >
-            <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>
+            <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access/invitations`]}>
                 <Routes>
-                    <Route path="/app/:campaignId/access" element={<CampaignAccessPage />} />
+                    <Route
+                        path="/app/:campaignId/access/invitations"
+                        element={<CampaignInvitationsPage />}
+                    />
                 </Routes>
             </MemoryRouter>
         </SessionContext.Provider>,
@@ -75,25 +69,18 @@ function renderAcrossCampaigns(fetchMock: ReturnType<typeof vi.fn>) {
             value={{
                 state: {
                     status: "authenticated",
-                    bootstrap: {
-                        ...sessionBootstrapFixture,
-                        campaigns: [
-                            ...sessionBootstrapFixture.campaigns,
-                            {
-                                ...sessionBootstrapFixture.campaigns[0],
-                                campaign_id: OTHER_CAMPAIGN_ID,
-                                campaign_name: "Other Campaign",
-                            },
-                        ],
-                    },
+                    bootstrap: sessionBootstrapFixture,
                 },
                 reload: vi.fn().mockResolvedValue(undefined),
             }}
         >
-            <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>
-                <Link to={`/app/${OTHER_CAMPAIGN_ID}/access`}>Switch campaign</Link>
+            <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access/invitations`]}>
+                <Link to={`/app/${OTHER_CAMPAIGN_ID}/access/invitations`}>Switch campaign</Link>
                 <Routes>
-                    <Route path="/app/:campaignId/access" element={<CampaignAccessPage />} />
+                    <Route
+                        path="/app/:campaignId/access/invitations"
+                        element={<CampaignInvitationsPage />}
+                    />
                 </Routes>
             </MemoryRouter>
         </SessionContext.Provider>,
@@ -104,7 +91,7 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-describe("CampaignAccessPage invitations integration", () => {
+describe("CampaignInvitationsPage invitations integration", () => {
     it("loads pending invitations, issues one new token, keeps it visible through the refetch, and never renders raw ids as text", async () => {
         const clipboardWriteText = vi.fn().mockResolvedValue(undefined)
         vi.stubGlobal("navigator", { clipboard: { writeText: clipboardWriteText } })
@@ -113,10 +100,6 @@ describe("CampaignAccessPage invitations integration", () => {
         const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = requestUrl(input)
             const method = init?.method ?? "GET"
-
-            if (method === "GET" && url.includes("/access-overview")) {
-                return Promise.resolve(jsonResponse(overview))
-            }
 
             if (method === "GET" && url.includes("/invitations")) {
                 invitationsCallCount += 1
@@ -167,8 +150,7 @@ describe("CampaignAccessPage invitations integration", () => {
 
         const { container } = renderAtCampaign(fetchMock)
 
-        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
-        expect(await screen.findByRole("heading", { name: "Invitations" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Invitations" })).toBeInTheDocument()
         expect(await screen.findByText("No email label")).toBeInTheDocument()
         expect(container.textContent).not.toContain("11111111-1111-1111-1111-111111111111")
 
@@ -195,10 +177,6 @@ describe("CampaignAccessPage invitations integration", () => {
         const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = requestUrl(input)
             const method = init?.method ?? "GET"
-
-            if (method === "GET" && url.includes("/access-overview")) {
-                return Promise.resolve(jsonResponse(overview))
-            }
 
             if (method === "GET" && url.endsWith(`/campaigns/${CAMPAIGN_ID}/invitations`)) {
                 return Promise.resolve(jsonResponse({ invitations: [] }))
@@ -237,7 +215,7 @@ describe("CampaignAccessPage invitations integration", () => {
 
         renderAcrossCampaigns(fetchMock)
 
-        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Invitations" })).toBeInTheDocument()
 
         fireEvent.click(screen.getByRole("button", { name: "Issue invitation" }))
         expect(await screen.findByDisplayValue("campaign-a-token")).toBeInTheDocument()
@@ -258,10 +236,6 @@ describe("CampaignAccessPage invitations integration", () => {
         const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = requestUrl(input)
             const method = init?.method ?? "GET"
-
-            if (method === "GET" && url.includes("/access-overview")) {
-                return Promise.resolve(jsonResponse(overview))
-            }
 
             if (method === "GET" && url.includes("/invitations")) {
                 return Promise.resolve(
@@ -296,7 +270,7 @@ describe("CampaignAccessPage invitations integration", () => {
 
         const { container } = renderAtCampaign(fetchMock)
 
-        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Invitations" })).toBeInTheDocument()
 
         fireEvent.change(screen.getByLabelText("Optional email label"), {
             target: { value: "player@example.com" },
@@ -317,10 +291,6 @@ describe("CampaignAccessPage invitations integration", () => {
         const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = requestUrl(input)
             const method = init?.method ?? "GET"
-
-            if (method === "GET" && url.includes("/access-overview")) {
-                return Promise.resolve(jsonResponse(overview))
-            }
 
             if (method === "GET" && url.includes("/invitations")) {
                 return Promise.resolve(
@@ -367,7 +337,7 @@ describe("CampaignAccessPage invitations integration", () => {
 
         renderAtCampaign(fetchMock)
 
-        expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Invitations" })).toBeInTheDocument()
 
         fireEvent.change(screen.getByLabelText("Optional email label"), {
             target: { value: "first@example.com" },

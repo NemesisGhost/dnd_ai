@@ -20,6 +20,7 @@ import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
+import { CampaignInvitationsPage } from "./pages/CampaignInvitationsPage"
 import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
@@ -185,6 +186,11 @@ function App() {
             <Route
               path="access"
               element={<CampaignAccessPage />}
+            />
+
+            <Route
+              path="access/invitations"
+              element={<CampaignInvitationsPage />}
             />
 
             <Route

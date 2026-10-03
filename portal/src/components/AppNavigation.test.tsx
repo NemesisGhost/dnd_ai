@@ -2,6 +2,7 @@ import {
     fireEvent,
     render,
     screen,
+    waitFor,
     within,
 } from "@testing-library/react"
 import type { ComponentProps } from "react"
@@ -128,13 +129,13 @@ describe("AppNavigation", () => {
         )
     })
 
-    it("shows capability-dependent destinations only when authorized", () => {
+    it("shows the Access disclosure only when authorized", () => {
         const { rerender } = renderNavigation({
             showAccess: false,
         })
 
         expect(
-            screen.queryByRole("link", {
+            screen.queryByRole("button", {
                 name: "Access",
             }),
         ).not.toBeInTheDocument()
@@ -153,13 +154,157 @@ describe("AppNavigation", () => {
         )
 
         expect(
-            screen.getByRole("link", {
+            screen.getByRole("button", {
                 name: "Access",
             }),
-        ).toHaveAttribute(
-            "href",
-            "/app/campaign-a/access",
-        )
+        ).toHaveAttribute("aria-expanded", "false")
+
+        expect(
+            screen.queryByRole("link", {
+                name: "Access Management",
+            }),
+        ).not.toBeInTheDocument()
+    })
+
+    describe("Access submenu", () => {
+        function renderWithAccess(
+            initialEntry = "/app/campaign-a/home",
+        ) {
+            return render(
+                <MemoryRouter initialEntries={[initialEntry]}>
+                    <AppNavigation
+                        {...defaultProps}
+                        showAccess
+                    />
+                </MemoryRouter>,
+            )
+        }
+
+        it("is collapsed by default and reveals both children when opened", () => {
+            renderWithAccess()
+
+            const button = screen.getByRole("button", {
+                name: "Access",
+            })
+
+            expect(button).toHaveAttribute("aria-expanded", "false")
+            expect(
+                screen.queryByRole("link", { name: "Access Management" }),
+            ).not.toBeInTheDocument()
+
+            fireEvent.click(button)
+
+            expect(button).toHaveAttribute("aria-expanded", "true")
+            expect(
+                screen.getByRole("link", { name: "Access Management" }),
+            ).toHaveAttribute("href", "/app/campaign-a/access")
+            expect(
+                screen.getByRole("link", { name: "Invitations" }),
+            ).toHaveAttribute(
+                "href",
+                "/app/campaign-a/access/invitations",
+            )
+        })
+
+        it("marks the parent active while either child route is current", () => {
+            renderWithAccess("/app/campaign-a/access/invitations")
+
+            expect(
+                screen.getByRole("button", { name: "Access" }),
+            ).toHaveClass("app-navigation__link--active")
+
+            expect(
+                screen.getByRole("link", { name: "Invitations" }),
+            ).toHaveAttribute("aria-current", "page")
+            expect(
+                screen.getByRole("link", { name: "Access Management" }),
+            ).not.toHaveAttribute("aria-current")
+        })
+
+        it("starts open when a child route is already active", () => {
+            renderWithAccess("/app/campaign-a/access")
+
+            expect(
+                screen.getByRole("button", { name: "Access" }),
+            ).toHaveAttribute("aria-expanded", "true")
+            expect(
+                screen.getByRole("link", { name: "Access Management" }),
+            ).toHaveAttribute("aria-current", "page")
+        })
+
+        it("closes and refocuses the button on Escape", async () => {
+            renderWithAccess()
+
+            const button = screen.getByRole("button", { name: "Access" })
+            fireEvent.click(button)
+
+            await waitFor(() => {
+                expect(
+                    screen.getByRole("link", { name: "Access Management" }),
+                ).toHaveFocus()
+            })
+
+            fireEvent.keyDown(
+                screen.getByRole("link", { name: "Access Management" }),
+                { key: "Escape" },
+            )
+
+            expect(button).toHaveAttribute("aria-expanded", "false")
+            expect(button).toHaveFocus()
+        })
+
+        it("closes on an outside click without moving focus", () => {
+            renderWithAccess()
+
+            fireEvent.click(screen.getByRole("button", { name: "Access" }))
+
+            const outside = screen.getByRole("link", {
+                name: "World",
+            })
+            fireEvent.pointerDown(outside)
+
+            expect(
+                screen.getByRole("button", { name: "Access" }),
+            ).toHaveAttribute("aria-expanded", "false")
+        })
+
+        it("closes after choosing a child destination", () => {
+            renderWithAccess()
+
+            fireEvent.click(screen.getByRole("button", { name: "Access" }))
+            fireEvent.click(
+                screen.getByRole("link", { name: "Access Management" }),
+            )
+
+            expect(
+                screen.getByRole("button", { name: "Access" }),
+            ).toHaveAttribute("aria-expanded", "false")
+        })
+
+        it("closes the mobile navigation after choosing a child destination", () => {
+            renderWithAccess()
+
+            fireEvent.click(
+                screen.getByRole("button", {
+                    name: "Open campaign navigation",
+                }),
+            )
+
+            const navigation = screen.getByRole("navigation", {
+                name: "Campaign",
+            })
+
+            expect(navigation).toHaveClass("app-navigation--mobile-open")
+
+            fireEvent.click(screen.getByRole("button", { name: "Access" }))
+            fireEvent.click(
+                screen.getByRole("link", { name: "Invitations" }),
+            )
+
+            expect(navigation).not.toHaveClass(
+                "app-navigation--mobile-open",
+            )
+        })
     })
 
     it("collapses into an icon rail while preserving accessible link names", () => {

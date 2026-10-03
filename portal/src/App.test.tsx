@@ -550,10 +550,10 @@ describe("portal routing", () => {
     ).not.toBeInTheDocument()
 
     expect(
-      screen.getByRole("link", {
+      screen.getByRole("button", {
         name: "Access",
       }),
-    ).toBeInTheDocument()
+    ).toHaveAttribute("aria-expanded", "false")
 
     expect(
       within(

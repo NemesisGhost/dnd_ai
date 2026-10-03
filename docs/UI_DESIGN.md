@@ -55,7 +55,7 @@ One deviation from this section's conceptual hierarchy below: `AuthenticatedAppL
 The target has two navigation levels:
 
 - **Global:** D&D AI Portal identity linking to `/home`, Home (`/home`), Campaigns (`/campaigns`), room for future global destinations, a profile/account button, and a consistent footer. This shell surrounds every authenticated page regardless of campaign selection, including account and platform administration pages.
-- **Campaign:** Campaign Home, World, Characters, Quests, Sessions, Knowledge, and Access when the selected campaign's authoritative capabilities include `access.manage`. Ask follows the existing server feature-manifest/readiness rules: it remains disabled or clearly labeled unavailable while disabled and makes no related requests or cached output available. Future GM/import destinations require their own readiness and authorization; this redesign does not add them.
+- **Campaign:** Campaign Home, World, Characters, Quests, Sessions, Knowledge, and Access when the selected campaign's authoritative capabilities include `access.manage`. Ask follows the existing server feature-manifest/readiness rules: it remains disabled or clearly labeled unavailable while disabled and makes no related requests or cached output available. Future GM/import destinations require their own readiness and authorization; this redesign does not add them. **Delivered (Access/Invitations navigation redesign):** Access is itself a parent disclosure, not a single link — it contains two nested destinations, **Access Management** (`/app/:campaignId/access`) and **Invitations** (`/app/:campaignId/access/invitations`), the same way the profile menu nests Platform Accounts (§4.3) rather than exposing it as its own top-level item. Both children share the single `access.manage` gate; the parent is shown or hidden as one unit and is never shown with no visible child.
 
 Use distinct Global and Campaign navigation landmarks and distinguish global Home from Campaign Home. Role and perspective labels are contextual display data, never locally derived authorization. Changing perspective obtains fresh server-authorized data rather than filtering previously downloaded records.
 
@@ -155,7 +155,8 @@ This table describes the approved target, not a claim that the routes already ex
 | `/app/:campaignId/quests` | Campaign Quests |
 | `/app/:campaignId/sessions` | Campaign Sessions |
 | `/app/:campaignId/knowledge` | Campaign Knowledge |
-| `/app/:campaignId/access` | Campaign Access, gated by `access.manage` |
+| `/app/:campaignId/access` | Campaign Access Management (roles, memberships, relationships, grants, audit links, preview), gated by `access.manage` |
+| `/app/:campaignId/access/invitations` | Campaign Invitations (issue/revoke, one-time token), gated by `access.manage` |
 
 Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail/subsection routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, `knowledge/:knowledgeItemId`, and `access/audit`, beneath their campaign prefix. Keep `/app/:campaignId/ask` under its existing readiness rules. Preserve the public `/auth/activate` and `/auth/password-reset` pages and their fragment-token handling; they are not authenticated global destinations. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 
@@ -452,7 +453,8 @@ Screens:
 
 Invitation-specific interaction rules:
 
-- The Access page lists only outstanding campaign invitations and offers issue/revoke controls at the campaign level, never nested under an individual member or access-group card.
+- **Delivered (Access/Invitations navigation redesign):** invitation listing, issuance, and revocation live on their own route, `/app/:campaignId/access/invitations`, not on the Access Management page — reached either through the Access parent's **Invitations** child in the global navigation or through the local `AccessTabNav` tab strip shared with Access Management and Audit history. The route exists so a direct reload works and neither sibling route fetches another's data while it isn't the active one, the same rationale that already applied to splitting out `access/audit`.
+- The Invitations page lists only outstanding campaign invitations and offers issue/revoke controls at the campaign level, never nested under an individual member or access-group card.
 - Invitation issuance may show the raw token exactly once in a dedicated success panel. The token must stay in React memory only: never `localStorage`, `sessionStorage`, IndexedDB, URL path/query/fragment, cookies, analytics, or browser history.
 - The optional invitation email field is a delivery label only, not an account-binding rule. Accepting an invitation grants campaign membership only; role or additional access assignment remains a separate GM action.
 - The authenticated invitation-acceptance route takes the token by manual paste into a secret-appropriate field and submits it only in the request body. Generic failure copy must not disclose whether the token was wrong, expired, revoked, or already accepted by someone else.

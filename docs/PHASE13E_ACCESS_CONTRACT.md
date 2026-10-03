@@ -581,7 +581,9 @@ integration tests.
 
 ### User flow
 
-1. A GM issues an invitation from the campaign Access page.
+1. A GM issues an invitation from the campaign Invitations page
+   (`/app/:campaignId/access/invitations`, reached from the Access
+   navigation — see `docs/UI_DESIGN.md` §4.6/§6.4).
 2. The portal constructs and displays one shareable URL from the current
    trusted portal origin and the one-time raw token:
    `/campaign-invitations/accept#token=<one-time-token>`.

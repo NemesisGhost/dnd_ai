@@ -17,10 +17,6 @@ import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
-vi.mock("../components/InvitationsSection", () => ({
-    InvitationsSection: () => null,
-}))
-
 const { boundaryPropsSpy, retryMock } = vi.hoisted(() => ({
     boundaryPropsSpy: vi.fn(),
     retryMock: vi.fn(),
@@ -113,7 +109,7 @@ describe("CampaignAccessPage", () => {
         ).not.toHaveBeenCalled()
     })
 
-    it("renders the Access tab nav with 'Access management' current and never fetches audit history", () => {
+    it("renders the Access tab nav with 'Access management' current and never fetches audit history or invitations", () => {
         const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"))
         vi.stubGlobal("fetch", fetchSpy)
 
@@ -123,11 +119,19 @@ describe("CampaignAccessPage", () => {
             screen.getByRole("link", { name: "Access management" }),
         ).toHaveAttribute("aria-current", "page")
         expect(
+            screen.getByRole("link", { name: "Invitations" }),
+        ).not.toHaveAttribute("aria-current")
+        expect(
             screen.getByRole("link", { name: "Audit history" }),
         ).not.toHaveAttribute("aria-current")
         expect(
             fetchSpy.mock.calls.some(([url]) =>
                 String(url).includes("/audit-history"),
+            ),
+        ).toBe(false)
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).includes("/invitations"),
             ),
         ).toBe(false)
 

@@ -226,7 +226,7 @@ export function InvitationsSection({
 
     return (
         <section aria-labelledby="access-invitations-heading" className="access-page__groups">
-            <h2 id="access-invitations-heading">Invitations</h2>
+            <h1 id="access-invitations-heading">Invitations</h1>
 
             <p className="access-page__description">
                 Issue and revoke campaign invitations. The optional email label is a delivery aid
@@ -292,7 +292,7 @@ export function InvitationsSection({
 
             {issuedToken !== null && (
                 <section aria-labelledby="issued-token-heading" className="access-member-card__body">
-                    <h3 id="issued-token-heading">Copy invitation token now</h3>
+                    <h2 id="issued-token-heading">Copy invitation token now</h2>
                     <p>This token is shown once and cannot be recovered later.</p>
                     <input type="text" value={issuedToken} readOnly aria-label="Invitation token" />
                     <div className="access-role-editor__actions">
@@ -318,7 +318,7 @@ export function InvitationsSection({
                               : "The token could not be copied. Copy it manually."}
                     </p>
 
-                    <h3 id="issued-link-heading">Or share a single sign-in link</h3>
+                    <h2 id="issued-link-heading">Or share a single sign-in link</h2>
                     <p>
                         Anyone who opens this link can sign in or create an account and join the
                         campaign — treat it like a password until it is accepted, revoked, or
@@ -358,7 +358,7 @@ export function InvitationsSection({
 
             {state.status === "error" && (
                 <section className="placeholder-page" aria-labelledby="invitations-error-heading">
-                    <h3 id="invitations-error-heading">Invitation list unavailable</h3>
+                    <h2 id="invitations-error-heading">Invitation list unavailable</h2>
                     <p>The portal could not load the current invitations. Try again.</p>
                     <button type="button" onClick={retry}>
                         Try again
