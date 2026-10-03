@@ -896,7 +896,7 @@ Key columns:
 
 ##### `security.user_portal_preferences`
 
-**Approved design, not yet migrated** (planned next revision after `108_ios_consumed_by_index`; [UI_DESIGN.md §4.7](../UI_DESIGN.md#47-settings-and-campaign-startup-preferences)). Durable, user-scoped portal navigation preferences: the campaign startup choice and the last-visited campaign. Belongs to the platform user, not to a browser or `security.browser_sessions` row, so it follows the user across browsers and survives logout. The portal theme is deliberately *not* stored here — it remains client-side so it can apply before authentication.
+**Delivered by revision `109_user_portal_preferences`** ([UI_DESIGN.md §4.7](../UI_DESIGN.md#47-settings-and-campaign-startup-preferences)). Durable, user-scoped portal navigation preferences: the campaign startup choice and the last-visited campaign. Belongs to the platform user, not to a browser or `security.browser_sessions` row, so it follows the user across browsers and survives logout. The portal theme is deliberately *not* stored here — it remains client-side so it can apply before authentication.
 
 Key columns:
 
