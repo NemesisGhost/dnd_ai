@@ -1,7 +1,13 @@
-import { AccountLifecycleActions } from "../components/AccountLifecycleActions"
+import { useState } from "react"
+import {
+    AccountLifecycleActions,
+    type IssuedPasswordReset,
+} from "../components/AccountLifecycleActions"
 import { CreateAccountPanel } from "../components/CreateAccountPanel"
+import { OneTimeSecretPanel } from "../components/OneTimeSecretPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
 import type { SessionBootstrap } from "../types/bootstrap"
+import { buildFragmentLink } from "../utils/oneTimeLink"
 
 interface AdminAccountsPageProps {
     bootstrap: SessionBootstrap
@@ -24,6 +30,9 @@ function formatTimestamp(timestamp: string | null): string {
 // server-side").
 export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
     const { state, query, setQuery, retry, loadMore } = usePlatformAccounts()
+    // Transient React memory only. Lives above the account-list loading
+    // boundary so the refetch that follows issuance cannot unmount it.
+    const [issuedReset, setIssuedReset] = useState<IssuedPasswordReset | null>(null)
 
     if (!bootstrap.is_platform_administrator) {
         return (
@@ -42,6 +51,16 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                 <h1 id="admin-accounts-heading">Platform accounts</h1>
 
                 <CreateAccountPanel onCreated={retry} />
+
+                {issuedReset !== null && (
+                    <OneTimeSecretPanel
+                        heading={`Copy the password-reset link for ${issuedReset.displayName} now`}
+                        description={`This link is for ${issuedReset.displayName} only, is shown once, and cannot be recovered later. It expires ${formatTimestamp(issuedReset.expiresAt)}. No email is sent; send it to the account holder out of band.`}
+                        secretLabel="Password-reset link"
+                        secret={buildFragmentLink("/reset-password", issuedReset.rawToken)}
+                        onDismiss={() => setIssuedReset(null)}
+                    />
+                )}
 
                 <label htmlFor="admin-accounts-search">Search by display name or login name</label>
                 <input
@@ -113,7 +132,12 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                             {account.active_session_count}
                                         </td>
                                         <td>
-                                            <AccountLifecycleActions account={account} onChanged={retry} />
+                                            <AccountLifecycleActions
+                                                account={account}
+                                                onChanged={retry}
+                                                onResetStarted={() => setIssuedReset(null)}
+                                                onResetIssued={setIssuedReset}
+                                            />
                                         </td>
                                     </tr>
                                 ))}

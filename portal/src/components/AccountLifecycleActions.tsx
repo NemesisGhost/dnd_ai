@@ -3,24 +3,43 @@ import { useDisableAccount } from "../hooks/useDisableAccount"
 import { useIssuePasswordReset } from "../hooks/useIssuePasswordReset"
 import { useReactivateAccount } from "../hooks/useReactivateAccount"
 import { useRevokeAllSessions } from "../hooks/useRevokeAllSessions"
-import { buildFragmentLink } from "../utils/oneTimeLink"
-import { OneTimeSecretPanel } from "./OneTimeSecretPanel"
 import type { PlatformAccount } from "../types/platformAccounts"
+
+export interface IssuedPasswordReset {
+    displayName: string
+    rawToken: string
+    expiresAt: string
+}
 
 interface AccountLifecycleActionsProps {
     account: PlatformAccount
     onChanged: () => void
+    // The one-time reset secret is owned by a parent that outlives the
+    // account-list refetch (which unmounts this row); this component only
+    // reports start/success and never retains the token itself.
+    onResetStarted: () => void
+    onResetIssued: (issued: IssuedPasswordReset) => void
 }
+
+const _RESET_ERROR_MESSAGE = "The password-reset link could not be issued. Try again."
 
 const _ACTIVE_STATUS_CODE = "active"
 
-export function AccountLifecycleActions({ account, onChanged }: AccountLifecycleActionsProps) {
-    const [resetToken, setResetToken] = useState<string | null>(null)
+export function AccountLifecycleActions({
+    account,
+    onChanged,
+    onResetStarted,
+    onResetIssued,
+}: AccountLifecycleActionsProps) {
     const [confirmingDisable, setConfirmingDisable] = useState(false)
     const [message, setMessage] = useState<string | null>(null)
 
     const { status: resetStatus, submit: submitReset } = useIssuePasswordReset((result) => {
-        setResetToken(result.raw_reset_token)
+        onResetIssued({
+            displayName: account.display_name,
+            rawToken: result.raw_reset_token,
+            expiresAt: result.expires_at,
+        })
         onChanged()
     })
     const { status: disableStatus, submit: submitDisable } = useDisableAccount(() => {
@@ -44,24 +63,15 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
         reactivateStatus.kind === "pending" ||
         revokeStatus.kind === "pending"
 
-    if (resetToken !== null) {
-        return (
-            <OneTimeSecretPanel
-                heading="Copy the password-reset link now"
-                description="This link is shown once and cannot be recovered later. Send it to the account holder out of band."
-                secretLabel="Password-reset link"
-                secret={buildFragmentLink("/reset-password", resetToken)}
-                onDismiss={() => setResetToken(null)}
-            />
-        )
-    }
-
     return (
         <div className="access-role-editor__actions account-actions">
             <button
                 type="button"
                 disabled={anyPending}
-                onClick={() => submitReset(account.user_id, true)}
+                onClick={() => {
+                    onResetStarted()
+                    submitReset(account.user_id, true)
+                }}
             >
                 Issue password reset
             </button>
@@ -110,9 +120,15 @@ export function AccountLifecycleActions({ account, onChanged }: AccountLifecycle
             </button>
 
             <p role="status" aria-live="polite" className="access-role-editor__status">
-                {disableStatus.kind === "conflict"
-                    ? disableStatus.message
-                    : disableStatus.kind === "denied" ||
+                {resetStatus.kind === "pending"
+                    ? "Issuing password-reset link…"
+                    : resetStatus.kind === "success"
+                      ? "Password-reset link issued. Copy it from the panel above the table."
+                      : resetStatus.kind === "error"
+                        ? _RESET_ERROR_MESSAGE
+                        : disableStatus.kind === "conflict"
+                          ? disableStatus.message
+                          : disableStatus.kind === "denied" ||
                         reactivateStatus.kind === "denied" ||
                         revokeStatus.kind === "denied" ||
                         resetStatus.kind === "denied"

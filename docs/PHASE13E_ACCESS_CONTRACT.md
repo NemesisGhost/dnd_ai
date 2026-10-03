@@ -912,7 +912,12 @@ existed before 13E-B.
   reactivate, revoke all sessions), each rendered through `OneTimeSecretPanel`
   — a one-time activation/reset link shown exactly once, in a `repr=False`
   Pydantic field server-side, never persisted client-side beyond the single
-  render. Platform-administrator status is indicated (a badge on admin rows)
+  render. The issued password-reset link is held in transient React state owned
+  by `AdminAccountsPage` (above the account-list loading boundary), so the
+  authoritative refetch after issuance does not lose it; it is replaced by a
+  newer issuance, cleared when a new issuance starts, dismissed explicitly, or
+  dropped on unmount/reload. The administrator must copy it and send it out of
+  band — no email is sent. Platform-administrator status is indicated (a badge on admin rows)
   never tabulated (no separate "role" column) — D-10.
 - **`ActivateAccountPage`/`ResetPasswordPage`** (checkpoint 11): public routes
   that extract a one-time token from the URL **fragment** (never a query
