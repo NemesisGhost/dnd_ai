@@ -125,6 +125,7 @@ beforeEach(() => {
       bootstrap,
     },
     reload,
+    refresh: vi.fn(),
   })
 })
 
@@ -157,6 +158,7 @@ describe("SessionProvider perspective integration", () => {
         status: "loading",
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -179,6 +181,7 @@ describe("SessionProvider perspective integration", () => {
         bootstrap,
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -218,6 +221,7 @@ describe("SessionProvider perspective integration", () => {
         status: "loading",
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -242,6 +246,7 @@ describe("SessionProvider perspective integration", () => {
         },
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)

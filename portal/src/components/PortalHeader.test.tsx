@@ -26,7 +26,7 @@ function renderHeader(
     drawer?: NavigationDrawerControl,
 ) {
     return render(
-        <SessionContext.Provider value={{ state, reload: vi.fn() }}>
+        <SessionContext.Provider value={{ state, reload: vi.fn(), refresh: vi.fn() }}>
             <MemoryRouter>
                 <PortalHeader drawer={drawer} />
             </MemoryRouter>

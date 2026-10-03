@@ -144,7 +144,7 @@ beforeEach(() => {
         state: buildSessionState({
             "character-a": [partyPrimary, partyCouncil],
         }),
-        reload: vi.fn(),
+        reload: vi.fn(), refresh: vi.fn(),
     })
 })
 
@@ -530,7 +530,7 @@ describe("CampaignKnowledgePage", () => {
                 "character-a": [partyPrimary],
                 "character-b": [partyCouncil],
             }),
-            reload: vi.fn(),
+            reload: vi.fn(), refresh: vi.fn(),
         })
 
         const getSelectedCharacterId = vi.fn(
@@ -754,7 +754,7 @@ describe("CampaignKnowledgePage", () => {
                 "character-a": [partyPrimary],
                 "character-b": [partyCouncil],
             }),
-            reload: vi.fn(),
+            reload: vi.fn(), refresh: vi.fn(),
         })
 
         const getSelectedCharacterId = vi.fn(

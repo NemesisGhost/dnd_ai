@@ -11,7 +11,7 @@ function renderPage() {
         <SessionContext.Provider
             value={{
                 state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             }}
         >
             <ThemeProvider>

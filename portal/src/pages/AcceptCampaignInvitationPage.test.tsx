@@ -113,7 +113,7 @@ afterEach(() => {
 
 function renderPage(sessionState: SessionBootstrapState, path = "/campaign-invitations/accept") {
     return render(
-        <SessionContext.Provider value={{ state: sessionState, reload: reloadMock }}>
+        <SessionContext.Provider value={{ state: sessionState, reload: reloadMock, refresh: vi.fn() }}>
             <MemoryRouter initialEntries={[path]}>
                 <Routes>
                     <Route
@@ -162,7 +162,7 @@ describe("AcceptCampaignInvitationPage — hash-driven onboarding", () => {
         render(
             <StrictMode>
                 <SessionContext.Provider
-                    value={{ state: { status: "unauthenticated" }, reload: reloadMock }}
+                    value={{ state: { status: "unauthenticated" }, reload: reloadMock, refresh: vi.fn() }}
                 >
                     <MemoryRouter initialEntries={["/campaign-invitations/accept"]}>
                         <Routes>

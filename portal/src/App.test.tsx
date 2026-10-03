@@ -253,7 +253,7 @@ beforeEach(() => {
       status: "authenticated",
       bootstrap: sessionBootstrapFixture,
     },
-    reload: vi.fn(),
+    reload: vi.fn(), refresh: vi.fn(),
   })
 
   useCampaignSummaryMock.mockReset()
@@ -362,7 +362,7 @@ describe("portal routing", () => {
   it("carries a protected deep link as continuation state through to login", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/app/mundivita/quests")
@@ -375,7 +375,7 @@ describe("portal routing", () => {
   it("redirects / to the login form for an unauthenticated user", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/")
@@ -397,7 +397,7 @@ describe("portal routing", () => {
   it("shows the not-found page for an unknown route, never a login redirect", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/nope")
@@ -420,7 +420,7 @@ describe("portal routing", () => {
     (path) => {
       useSessionBootstrapMock.mockReturnValue({
         state: { status: "unauthenticated" },
-        reload: vi.fn(),
+        reload: vi.fn(), refresh: vi.fn(),
       })
 
       renderAppAt(path)
@@ -474,7 +474,7 @@ describe("portal routing", () => {
           is_platform_administrator: true,
         },
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/platform/accounts")
@@ -493,7 +493,7 @@ describe("portal routing", () => {
           is_platform_administrator: true,
         },
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/admin/accounts")
@@ -508,7 +508,7 @@ describe("portal routing", () => {
       state: {
         status: "unauthenticated",
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/login")
@@ -888,6 +888,7 @@ describe("portal routing", () => {
             authenticated = false
             forceRender((count) => count + 1)
           },
+          refresh: vi.fn(),
         }
       })
 
@@ -921,7 +922,7 @@ describe("portal routing", () => {
   it("hides the logout control when unauthenticated", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/login")
@@ -1110,7 +1111,7 @@ describe("heading hierarchy", () => {
   it("has exactly one h1 while the session is loading", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "loading" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/app/mundivita/home")
@@ -1127,7 +1128,7 @@ describe("heading hierarchy", () => {
   it("has exactly one h1 when the session errors", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "error", error: new Error("boom") },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/app/mundivita/home")
@@ -1144,7 +1145,7 @@ describe("heading hierarchy", () => {
   it("has exactly one h1 on the login page", () => {
     useSessionBootstrapMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderAppAt("/login")

@@ -28,11 +28,15 @@ export function CampaignStartupForm({
     const modeGroupId = useId()
     const selectId = useId()
 
-    const [baseline, setBaseline] = useState<StartupChoice>(() => ({
+    // The authoritative saved value always comes from the shared session
+    // bootstrap (re-fetched after every successful save), never from what
+    // this form last submitted. `draft` holds only the user's unsaved edits.
+    const baseline: StartupChoice = {
         mode: bootstrap.campaign_preferences.startup_mode,
         campaignId: bootstrap.campaign_preferences.preferred_campaign_id ?? "",
-    }))
-    const [choice, setChoice] = useState<StartupChoice>(baseline)
+    }
+    const [draft, setDraft] = useState<StartupChoice | null>(null)
+    const choice = draft ?? baseline
     // Campaigns the server reported as no longer available during this
     // visit; dropped from the selector without a reload (a reload would
     // unmount this page and lose the explanation).
@@ -65,7 +69,7 @@ export function CampaignStartupForm({
         : baseline.mode === "resume_last_visited"
 
     function updateChoice(next: StartupChoice): void {
-        setChoice(next)
+        setDraft(next)
         if (status.kind !== "idle" && status.kind !== "pending") {
             reset()
         }
@@ -79,19 +83,15 @@ export function CampaignStartupForm({
         save(preferredSelected ? choice.campaignId : null)
     }
 
-    // Folded into the shown state rather than an effect: a settled save
-    // updates the baseline the first time its result is observed.
-    if (status.kind === "success" && !unchanged) {
-        setBaseline(
-            preferredSelected
-                ? { mode: "preferred_campaign", campaignId: choice.campaignId }
-                : { mode: "resume_last_visited", campaignId: baseline.campaignId },
-        )
+    // Once a save is confirmed (the bootstrap was re-fetched), drop the
+    // draft so the form shows the server's own saved value.
+    if (status.kind === "success" && draft !== null) {
+        setDraft(null)
     }
 
     if (status.kind === "unavailable" && selectedCampaignAvailable && preferredSelected) {
         setUnavailableIds(new Set([...unavailableIds, choice.campaignId]))
-        setChoice({ mode: "preferred_campaign", campaignId: "" })
+        setDraft({ mode: "preferred_campaign", campaignId: "" })
     }
 
     return (
@@ -173,6 +173,15 @@ export function CampaignStartupForm({
             {status.kind === "denied" && (
                 <p role="alert" className="campaign-startup-form__error">
                     Your session could not be verified, so nothing was saved.{" "}
+                    <button type="button" onClick={onCheckSession}>
+                        Check my session
+                    </button>
+                </p>
+            )}
+            {status.kind === "unconfirmed" && (
+                <p role="alert" className="campaign-startup-form__error">
+                    Your preference may have been saved, but it could not be
+                    confirmed.{" "}
                     <button type="button" onClick={onCheckSession}>
                         Check my session
                     </button>

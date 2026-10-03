@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { UserPreferenceRequestError } from "../api/userPreferences"
 import { useSaveCampaignStartupPreference } from "./useSaveCampaignStartupPreference"
 
-const { setPreferenceMock, sessionStateRef } = vi.hoisted(() => ({
+const { setPreferenceMock, refreshMock, sessionStateRef } = vi.hoisted(() => ({
     setPreferenceMock: vi.fn(),
+    refreshMock: vi.fn(),
     sessionStateRef: {
         current: {
             status: "authenticated" as "authenticated" | "unauthenticated",
@@ -18,11 +19,17 @@ vi.mock("../api/userPreferences", async (importOriginal) => {
     return { ...actual, setCampaignStartupPreference: setPreferenceMock }
 })
 vi.mock("../context/SessionContext", () => ({
-    useSession: () => ({ state: sessionStateRef.current, reload: vi.fn() }),
+    useSession: () => ({
+        state: sessionStateRef.current,
+        reload: vi.fn(),
+        refresh: refreshMock,
+    }),
 }))
 
 beforeEach(() => {
     setPreferenceMock.mockReset()
+    refreshMock.mockReset()
+    refreshMock.mockResolvedValue(true)
     sessionStateRef.current = {
         status: "authenticated",
         bootstrap: { csrf_token: "fixture-csrf-token" },
@@ -30,6 +37,95 @@ beforeEach(() => {
 })
 
 describe("useSaveCampaignStartupPreference", () => {
+    it("stays pending until the authoritative bootstrap is refreshed, then succeeds", async () => {
+        setPreferenceMock.mockResolvedValue(undefined)
+        let finishRefresh: (applied: boolean) => void = () => {}
+        refreshMock.mockReturnValue(
+            new Promise<boolean>((r) => {
+                finishRefresh = r
+            }),
+        )
+        const { result } = renderHook(() => useSaveCampaignStartupPreference())
+
+        act(() => {
+            result.current.save("campaign-a")
+        })
+        await waitFor(() => {
+            expect(refreshMock).toHaveBeenCalledTimes(1)
+        })
+        expect(result.current.status).toEqual({ kind: "pending" })
+
+        await act(async () => {
+            finishRefresh(true)
+        })
+        expect(result.current.status).toEqual({ kind: "success" })
+    })
+
+    it("reports an unconfirmed save, never success, when the refresh fails", async () => {
+        setPreferenceMock.mockResolvedValue(undefined)
+        refreshMock.mockRejectedValue(new Error("offline"))
+        const { result } = renderHook(() => useSaveCampaignStartupPreference())
+
+        act(() => {
+            result.current.save("campaign-a")
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "unconfirmed" })
+        })
+    })
+
+    it("reports denied when the refresh finds the session unauthenticated", async () => {
+        setPreferenceMock.mockResolvedValue(undefined)
+        refreshMock.mockResolvedValue(false)
+        const { result } = renderHook(() => useSaveCampaignStartupPreference())
+
+        act(() => {
+            result.current.save(null)
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "denied" })
+        })
+    })
+
+    it("does not refresh after a rejected save", async () => {
+        setPreferenceMock.mockRejectedValue(new UserPreferenceRequestError(404, "gone"))
+        const { result } = renderHook(() => useSaveCampaignStartupPreference())
+
+        act(() => {
+            result.current.save("campaign-a")
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "unavailable" })
+        })
+        expect(refreshMock).not.toHaveBeenCalled()
+    })
+
+    it("aborts an in-flight save and ignores its refresh on unmount", async () => {
+        let finishRefresh: (applied: boolean) => void = () => {}
+        setPreferenceMock.mockResolvedValue(undefined)
+        refreshMock.mockReturnValue(
+            new Promise<boolean>((r) => {
+                finishRefresh = r
+            }),
+        )
+        const { result, unmount } = renderHook(() => useSaveCampaignStartupPreference())
+        act(() => {
+            result.current.save("campaign-a")
+        })
+        await waitFor(() => {
+            expect(refreshMock).toHaveBeenCalledTimes(1)
+        })
+        const signal = refreshMock.mock.calls[0]![0] as AbortSignal
+
+        unmount()
+        finishRefresh(true)
+
+        expect(signal.aborted).toBe(true)
+    })
+
     it("saves with the session csrf token and reports success", async () => {
         setPreferenceMock.mockResolvedValue(undefined)
         const { result } = renderHook(() => useSaveCampaignStartupPreference())

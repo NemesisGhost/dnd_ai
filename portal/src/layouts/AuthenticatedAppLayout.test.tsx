@@ -73,7 +73,7 @@ describe("AuthenticatedAppLayout", () => {
   it("shows the persistent sidebar and a loading placeholder with no profile button while loading", () => {
     useSessionMock.mockReturnValue({
       state: { status: "loading" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderLayout()
@@ -98,7 +98,7 @@ describe("AuthenticatedAppLayout", () => {
   it("redirects an unauthenticated user to login without any authenticated navigation", () => {
     useSessionMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderLayout()
@@ -114,7 +114,7 @@ describe("AuthenticatedAppLayout", () => {
   it("carries the requested path as continuation state, with no hash", () => {
     useSessionMock.mockReturnValue({
       state: { status: "unauthenticated" },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderLayout("/app/mundivita/quests?x=1#section")
@@ -130,6 +130,7 @@ describe("AuthenticatedAppLayout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "error", error: new Error("Sensitive internal diagnostic") },
       reload,
+      refresh: vi.fn(),
     })
 
     renderLayout()
@@ -157,7 +158,7 @@ describe("AuthenticatedAppLayout", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderLayout()
@@ -187,7 +188,7 @@ describe("AuthenticatedAppLayout", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     renderLayout("/settings")

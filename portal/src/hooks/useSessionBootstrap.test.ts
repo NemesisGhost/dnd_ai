@@ -133,4 +133,82 @@ describe("useSessionBootstrap", () => {
             })
         })
     })
+
+    describe("refresh", () => {
+        const updated = {
+            ...sessionBootstrapFixture,
+            startup_campaign_id: null,
+        }
+
+        async function authenticatedHook() {
+            fetchSessionBootstrapMock.mockResolvedValueOnce(sessionBootstrapFixture)
+            const hook = renderHook(() => useSessionBootstrap())
+            await waitFor(() => {
+                expect(hook.result.current.state.status).toBe("authenticated")
+            })
+            return hook
+        }
+
+        it("replaces the bootstrap in place without passing through loading", async () => {
+            const { result } = await authenticatedHook()
+            fetchSessionBootstrapMock.mockResolvedValueOnce(updated)
+            const seen: string[] = []
+
+            let applied = false
+            await act(async () => {
+                const pending = result.current.refresh()
+                seen.push(result.current.state.status)
+                applied = await pending
+            })
+
+            expect(seen).toEqual(["authenticated"])
+            expect(applied).toBe(true)
+            expect(result.current.state).toEqual({ status: "authenticated", bootstrap: updated })
+        })
+
+        it("becomes unauthenticated and resolves false on a 401", async () => {
+            const { result } = await authenticatedHook()
+            fetchSessionBootstrapMock.mockResolvedValueOnce(null)
+
+            let applied = true
+            await act(async () => {
+                applied = await result.current.refresh()
+            })
+
+            expect(applied).toBe(false)
+            expect(result.current.state).toEqual({ status: "unauthenticated" })
+        })
+
+        it("rejects and keeps the previous bootstrap when the request fails", async () => {
+            const { result } = await authenticatedHook()
+            fetchSessionBootstrapMock.mockRejectedValueOnce(new Error("boom"))
+
+            await act(async () => {
+                await expect(result.current.refresh()).rejects.toThrow("boom")
+            })
+
+            expect(result.current.state).toEqual({
+                status: "authenticated",
+                bootstrap: sessionBootstrapFixture,
+            })
+        })
+
+        it("does not apply a result for an aborted refresh", async () => {
+            const { result } = await authenticatedHook()
+            fetchSessionBootstrapMock.mockResolvedValueOnce(updated)
+            const controller = new AbortController()
+            controller.abort()
+
+            let applied = true
+            await act(async () => {
+                applied = await result.current.refresh(controller.signal)
+            })
+
+            expect(applied).toBe(false)
+            expect(result.current.state).toEqual({
+                status: "authenticated",
+                bootstrap: sessionBootstrapFixture,
+            })
+        })
+    })
 })

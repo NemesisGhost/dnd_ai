@@ -39,6 +39,7 @@ describe("useLogout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload,
+      refresh: vi.fn(),
     })
 
     const { result } = renderHook(() => useLogout())
@@ -67,6 +68,7 @@ describe("useLogout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload,
+      refresh: vi.fn(),
     })
 
     const { result } = renderHook(() => useLogout())
@@ -96,6 +98,7 @@ describe("useLogout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload,
+      refresh: vi.fn(),
     })
 
     const { result } = renderHook(() => useLogout())
@@ -128,6 +131,7 @@ describe("useLogout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload,
+      refresh: vi.fn(),
     })
 
     const { result } = renderHook(() => useLogout())
@@ -151,6 +155,7 @@ describe("useLogout", () => {
     useSessionMock.mockReturnValue({
       state: { status: "unauthenticated" },
       reload,
+      refresh: vi.fn(),
     })
 
     const { result } = renderHook(() => useLogout())

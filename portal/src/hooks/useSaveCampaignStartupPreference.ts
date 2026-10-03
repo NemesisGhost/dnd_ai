@@ -13,6 +13,9 @@ export type SaveCampaignStartupStatus =
     | { kind: "unavailable" }
     // 401/403: session expired or the request was refused.
     | { kind: "denied" }
+    // The PUT succeeded but the authoritative bootstrap could not be
+    // re-fetched, so the new value is not confirmed.
+    | { kind: "unconfirmed" }
     | { kind: "error" }
 
 export interface UseSaveCampaignStartupPreferenceResult {
@@ -25,7 +28,7 @@ export interface UseSaveCampaignStartupPreferenceResult {
 const idleStatus: SaveCampaignStartupStatus = { kind: "idle" }
 
 export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPreferenceResult {
-    const { state: sessionState } = useSession()
+    const { state: sessionState, refresh } = useSession()
     const controllerRef = useRef<AbortController | null>(null)
     const [status, setStatus] = useState<SaveCampaignStartupStatus>(idleStatus)
 
@@ -53,11 +56,26 @@ export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPrefer
                 sessionState.bootstrap.csrf_token,
                 controller.signal,
             )
-                .then(() => {
+                .then(async () => {
                     if (controller.signal.aborted) {
                         return
                     }
-                    setStatus({ kind: "success" })
+                    // Success is reported only once the shared session
+                    // bootstrap holds the server's own view of the saved
+                    // preference; nothing local is treated as authoritative.
+                    let applied: boolean
+                    try {
+                        applied = await refresh(controller.signal)
+                    } catch {
+                        if (!controller.signal.aborted) {
+                            setStatus({ kind: "unconfirmed" })
+                        }
+                        return
+                    }
+                    if (controller.signal.aborted) {
+                        return
+                    }
+                    setStatus(applied ? { kind: "success" } : { kind: "denied" })
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -76,7 +94,7 @@ export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPrefer
                     setStatus({ kind: "error" })
                 })
         },
-        [sessionState, status.kind],
+        [sessionState, refresh, status.kind],
     )
 
     const reset = useCallback(() => {

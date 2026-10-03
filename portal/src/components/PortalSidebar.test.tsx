@@ -76,7 +76,7 @@ function renderSidebar(
     },
 ) {
     return render(
-        <SessionContext.Provider value={{ state, reload: vi.fn() }}>
+        <SessionContext.Provider value={{ state, reload: vi.fn(), refresh: vi.fn() }}>
             <CharacterPerspectiveContext.Provider
                 value={{
                     getSelectedCharacterId: () => null,

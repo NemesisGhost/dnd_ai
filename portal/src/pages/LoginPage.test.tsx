@@ -62,7 +62,7 @@ beforeEach(() => {
     state: {
       status: "unauthenticated",
     },
-    reload: reloadMock,
+    reload: reloadMock, refresh: vi.fn(),
   })
 
   useLoginMock.mockReturnValue({
@@ -170,7 +170,7 @@ describe("LoginPage", () => {
           "Sensitive backend diagnostic",
         ),
       },
-      reload: reloadMock,
+      reload: reloadMock, refresh: vi.fn(),
     })
 
     renderLoginPage()
@@ -202,7 +202,7 @@ describe("LoginPage", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: reloadMock,
+      reload: reloadMock, refresh: vi.fn(),
     })
 
     renderLoginPage()
@@ -226,7 +226,7 @@ describe("LoginPage", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: reloadMock,
+      reload: reloadMock, refresh: vi.fn(),
     })
   }
 
@@ -320,7 +320,7 @@ describe("LoginPage", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: reloadMock,
+      reload: reloadMock, refresh: vi.fn(),
     })
 
     render(
@@ -355,7 +355,7 @@ describe("LoginPage", () => {
         status: "authenticated",
         bootstrap: sessionBootstrapFixture,
       },
-      reload: reloadMock,
+      reload: reloadMock, refresh: vi.fn(),
     })
 
     render(

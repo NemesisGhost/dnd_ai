@@ -25,6 +25,14 @@ export type SessionBootstrapState =
 export interface UseSessionBootstrapResult {
   state: SessionBootstrapState
   reload: () => void
+  // Re-fetches the authoritative bootstrap and replaces it in place,
+  // WITHOUT passing through the "loading" state (which would unmount the
+  // current page). Resolves true when the fresh bootstrap was applied,
+  // false when the session turned out to be unauthenticated (state becomes
+  // "unauthenticated"); rejects on a failed request, leaving the previous
+  // bootstrap untouched. Used after a mutation changes bootstrap-visible
+  // state (e.g. a saved startup preference).
+  refresh: (signal?: AbortSignal) => Promise<boolean>
 }
 
 const initialState: SessionBootstrapState = {
@@ -45,6 +53,25 @@ export function useSessionBootstrap():
 
     setRequestVersion((currentVersion) => currentVersion + 1)
   }, [])
+
+  const refresh = useCallback(
+    async (signal?: AbortSignal): Promise<boolean> => {
+      const bootstrap = await fetchSessionBootstrap(signal)
+
+      if (signal?.aborted) {
+        return false
+      }
+
+      if (bootstrap === null) {
+        setState({ status: "unauthenticated" })
+        return false
+      }
+
+      setState({ status: "authenticated", bootstrap })
+      return true
+    },
+    [],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -91,5 +118,6 @@ export function useSessionBootstrap():
   return {
     state,
     reload,
+    refresh,
   }
 }

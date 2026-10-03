@@ -181,7 +181,7 @@ function renderPage(
                     status: "authenticated",
                     bootstrap: sessionBootstrapFixture,
                 },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             }}
         >
             <AccessPage

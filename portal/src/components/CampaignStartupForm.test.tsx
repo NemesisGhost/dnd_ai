@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { useState } from "react"
 import { MemoryRouter } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { UserPreferenceRequestError } from "../api/userPreferences"
@@ -41,16 +42,55 @@ function makeBootstrap(overrides: Partial<SessionBootstrap> = {}): SessionBootst
 
 const onCheckSession = vi.fn()
 
-function renderForm(bootstrap: SessionBootstrap = makeBootstrap()) {
-    return render(
+// Mirrors the real provider: a successful refresh replaces the shared
+// bootstrap with the server's view of what was just saved.
+let serverPreferred: string | null = null
+const refreshOutcome: { fail: boolean } = { fail: false }
+
+function withServerPreference(base: SessionBootstrap): SessionBootstrap {
+    return {
+        ...base,
+        campaign_preferences: {
+            ...base.campaign_preferences,
+            startup_mode: serverPreferred === null ? "resume_last_visited" : "preferred_campaign",
+            preferred_campaign_id: serverPreferred,
+        },
+    }
+}
+
+function acceptSaves(): void {
+    setPreferenceMock.mockImplementation(async (id: string | null) => {
+        serverPreferred = id
+    })
+}
+
+function Harness({ initial }: { initial: SessionBootstrap }) {
+    const [bootstrap, setBootstrap] = useState(initial)
+    const refresh = async (): Promise<boolean> => {
+        if (refreshOutcome.fail) {
+            throw new Error("offline")
+        }
+        setBootstrap((current) => withServerPreference(current))
+        return true
+    }
+    return (
         <SessionContext.Provider
-            value={{ state: { status: "authenticated", bootstrap }, reload: vi.fn() }}
+            value={{
+                state: { status: "authenticated", bootstrap },
+                reload: vi.fn(),
+                refresh,
+            }}
         >
             <MemoryRouter>
                 <CampaignStartupForm bootstrap={bootstrap} onCheckSession={onCheckSession} />
             </MemoryRouter>
-        </SessionContext.Provider>,
+        </SessionContext.Provider>
     )
+}
+
+function renderForm(bootstrap: SessionBootstrap = makeBootstrap()) {
+    serverPreferred = bootstrap.campaign_preferences.preferred_campaign_id
+    return render(<Harness initial={bootstrap} />)
 }
 
 const resumeRadio = () =>
@@ -62,6 +102,8 @@ const saveButton = () => screen.getByRole("button", { name: /save startup prefer
 beforeEach(() => {
     setPreferenceMock.mockReset()
     onCheckSession.mockReset()
+    refreshOutcome.fail = false
+    acceptSaves()
 })
 
 describe("CampaignStartupForm initial state", () => {
@@ -141,7 +183,6 @@ describe("CampaignStartupForm choosing and saving", () => {
     })
 
     it("saves the chosen campaign, reports success, and treats it as the new baseline", async () => {
-        setPreferenceMock.mockResolvedValue(undefined)
         renderForm()
 
         fireEvent.click(fixedRadio())
@@ -163,7 +204,6 @@ describe("CampaignStartupForm choosing and saving", () => {
     })
 
     it("saves null when returning to resume", async () => {
-        setPreferenceMock.mockResolvedValue(undefined)
         renderForm(
             makeBootstrap({
                 campaign_preferences: {
@@ -212,7 +252,6 @@ describe("CampaignStartupForm choosing and saving", () => {
     })
 
     it("clears the success message when the choice changes again", async () => {
-        setPreferenceMock.mockResolvedValue(undefined)
         renderForm()
         fireEvent.click(fixedRadio())
         fireEvent.change(campaignSelect(), { target: { value: "campaign-a" } })
@@ -265,7 +304,6 @@ describe("CampaignStartupForm failures", () => {
 
     it("keeps the chosen values and allows a retry after a recoverable error", async () => {
         setPreferenceMock.mockRejectedValueOnce(new UserPreferenceRequestError(500, "boom"))
-        setPreferenceMock.mockResolvedValueOnce(undefined)
         renderForm()
 
         fireEvent.click(fixedRadio())
@@ -284,5 +322,24 @@ describe("CampaignStartupForm failures", () => {
             expect(screen.getByRole("status")).toHaveTextContent("saved")
         })
         expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    })
+
+    it("does not report success or apply the choice when the session refresh fails", async () => {
+        refreshOutcome.fail = true
+        renderForm()
+
+        fireEvent.click(fixedRadio())
+        fireEvent.change(campaignSelect(), { target: { value: "campaign-b" } })
+        fireEvent.click(saveButton())
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "could not be confirmed",
+        )
+        expect(screen.getByRole("status")).toBeEmptyDOMElement()
+        // Still the user's draft, still retryable; nothing authoritative changed.
+        expect(campaignSelect()).toHaveValue("campaign-b")
+        expect(saveButton()).toBeEnabled()
+        fireEvent.click(screen.getByRole("button", { name: "Check my session" }))
+        expect(onCheckSession).toHaveBeenCalledTimes(1)
     })
 })

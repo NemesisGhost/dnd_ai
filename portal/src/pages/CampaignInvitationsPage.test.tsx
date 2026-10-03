@@ -24,7 +24,7 @@ function renderPage(initialEntry = "/app/campaign-one/access/invitations") {
                     status: "authenticated",
                     bootstrap: sessionBootstrapFixture,
                 },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             }}
         >
             <MemoryRouter initialEntries={[initialEntry]}>

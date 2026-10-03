@@ -59,7 +59,7 @@ function makeSession(
             status: "authenticated",
             bootstrap: data,
         },
-        reload: vi.fn(),
+        reload: vi.fn(), refresh: vi.fn(),
     }
 }
 
@@ -141,6 +141,7 @@ describe("useCharacterPerspective", () => {
         rerender({
             state: { status: "loading" },
             reload: session.reload,
+            refresh: vi.fn(),
         })
 
         expect(

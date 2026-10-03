@@ -32,7 +32,7 @@ function renderMenu(session: UseSessionBootstrapResult) {
 
 describe("ProfileMenu basics", () => {
   it("renders nothing when not authenticated", () => {
-    renderMenu({ state: { status: "unauthenticated" }, reload: vi.fn() })
+    renderMenu({ state: { status: "unauthenticated" }, reload: vi.fn(), refresh: vi.fn() })
 
     expect(
       screen.queryByRole("button", { name: /account menu/i }),
@@ -42,7 +42,7 @@ describe("ProfileMenu basics", () => {
   it("has an accessible name built from the display name and visible initials", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     const button = screen.getByRole("button", {
@@ -56,7 +56,7 @@ describe("ProfileMenu basics", () => {
   it("toggles aria-expanded and reveals the popup contents", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     const button = screen.getByRole("button", {
@@ -90,7 +90,7 @@ describe("ProfileMenu basics", () => {
   it("never uses ARIA menu semantics", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -106,7 +106,7 @@ describe("ProfileMenu focus and keyboard", () => {
   it("focuses Settings when opened", async () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -123,7 +123,7 @@ describe("ProfileMenu focus and keyboard", () => {
   it("closes and refocuses the button on Escape", async () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     const button = screen.getByRole("button", { name: /account menu/i })
@@ -147,7 +147,7 @@ describe("ProfileMenu focus and keyboard", () => {
   it("closes without moving focus when a pointerdown lands outside", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -167,7 +167,7 @@ describe("ProfileMenu focus and keyboard", () => {
   it("closes on focusout to an element outside the widget", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -187,7 +187,7 @@ describe("ProfileMenu focus and keyboard", () => {
   it("closes and navigates when Settings is activated", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -212,7 +212,7 @@ describe("ProfileMenu capability filtering", () => {
           is_platform_administrator: false,
         },
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -236,7 +236,7 @@ describe("ProfileMenu capability filtering", () => {
           is_platform_administrator: true,
         },
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -267,7 +267,7 @@ describe("ProfileMenu capability filtering", () => {
           ],
         },
       },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -292,7 +292,7 @@ describe("ProfileMenu logout", () => {
 
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(
@@ -329,7 +329,7 @@ describe("ProfileMenu logout", () => {
 
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-      reload: vi.fn(),
+      reload: vi.fn(), refresh: vi.fn(),
     })
 
     fireEvent.click(

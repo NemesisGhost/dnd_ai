@@ -50,7 +50,7 @@ beforeEach(() => {
         state: {
             status: "unauthenticated",
         },
-        reload: reloadMock,
+        reload: reloadMock, refresh: vi.fn(),
     })
 })
 

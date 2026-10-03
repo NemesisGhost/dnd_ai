@@ -59,7 +59,7 @@ function LocationProbe() {
 function renderAt(entries: string[], bootstrap: SessionBootstrap) {
     useSessionBootstrapMock.mockReturnValue({
         state: { status: "authenticated", bootstrap },
-        reload: vi.fn(),
+        reload: vi.fn(), refresh: vi.fn(),
     })
     return render(
         <ThemeProvider>
@@ -204,7 +204,7 @@ describe("persistent sidebar through the real route tree", () => {
         (path) => {
             useSessionBootstrapMock.mockReturnValue({
                 state: { status: "unauthenticated" },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             })
             render(
                 <ThemeProvider>
@@ -223,7 +223,7 @@ describe("persistent sidebar through the real route tree", () => {
     it("is removed when the session is unauthenticated on an authenticated route", () => {
         useSessionBootstrapMock.mockReturnValue({
             state: { status: "unauthenticated" },
-            reload: vi.fn(),
+            reload: vi.fn(), refresh: vi.fn(),
         })
         render(
             <ThemeProvider>

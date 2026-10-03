@@ -28,7 +28,7 @@ function renderWithSession(campaignId: string, hasManageCapability: boolean) {
                         })),
                     },
                 },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             }}
         >
             <AudiencePreviewSection campaignId={campaignId} resourceType="quest" />

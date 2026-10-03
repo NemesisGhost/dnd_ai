@@ -123,7 +123,7 @@ describe("KnowledgeDetailPage — audience preview (Phase 13E-B manual-acceptanc
                             })),
                         },
                     },
-                    reload: vi.fn(),
+                    reload: vi.fn(), refresh: vi.fn(),
                 }}
             >
                 <MemoryRouter>

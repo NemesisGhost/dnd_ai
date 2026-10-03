@@ -48,7 +48,7 @@ function renderPage(initialEntry = "/app/campaign-one/access/audit") {
         <SessionContext.Provider
             value={{
                 state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
-                reload: vi.fn(),
+                reload: vi.fn(), refresh: vi.fn(),
             }}
         >
             <MemoryRouter initialEntries={[initialEntry]}>
