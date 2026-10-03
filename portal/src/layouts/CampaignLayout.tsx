@@ -7,6 +7,7 @@ import {
 import { AppNavigation } from "../components/AppNavigation"
 import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
+import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
 
@@ -23,6 +24,10 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
     bootstrap.campaigns.find(
       (candidate) => candidate.campaign_id === campaignId,
     ) ?? null
+
+  // Only a campaign found in the current scope's bootstrap has passed the
+  // authorization boundary; an unknown/unauthorized route is never recorded.
+  useRecordLastVisitedCampaign(campaign?.campaign_id ?? null, bootstrap)
 
   if (campaign === null) {
     return (

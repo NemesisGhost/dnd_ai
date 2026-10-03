@@ -6,6 +6,7 @@ import {
   useLocation,
 } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import * as userPreferences from "../api/userPreferences"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -13,6 +14,9 @@ import { CampaignLayout } from "./CampaignLayout"
 
 vi.mock("../context/CharacterPerspectiveContext", () => ({
   usePerspective: vi.fn(),
+}))
+vi.mock("../api/userPreferences", () => ({
+  recordLastVisitedCampaign: vi.fn(() => Promise.resolve()),
 }))
 vi.mock("../hooks/useCharacter", () => ({
   useCharacter: () => ({
@@ -22,6 +26,7 @@ vi.mock("../hooks/useCharacter", () => ({
 }))
 
 const usePerspectiveMock = vi.mocked(usePerspective)
+const recordLastVisited = vi.mocked(userPreferences.recordLastVisitedCampaign)
 
 const secondCampaign = {
   ...sessionBootstrapFixture.campaigns[0]!,
@@ -66,6 +71,7 @@ function renderAt(pathname: string) {
 beforeEach(() => {
   usePerspectiveMock.mockReset()
   selectCharacter.mockReset()
+  recordLastVisited.mockClear()
   usePerspectiveMock.mockReturnValue({
     getSelectedCharacterId: () => null,
     selectCharacter,
@@ -163,5 +169,24 @@ describe("CampaignLayout campaign switching", () => {
     expect(
       screen.getByRole("link", { name: "Browse campaigns" }),
     ).toHaveAttribute("href", "/campaigns")
+  })
+})
+
+describe("CampaignLayout last-visited recording", () => {
+  it("records an authorized route campaign once", () => {
+    renderAt("/app/secundivita/home")
+
+    expect(recordLastVisited).toHaveBeenCalledTimes(1)
+    expect(recordLastVisited).toHaveBeenCalledWith(
+      "secundivita",
+      bootstrap.csrf_token,
+      expect.any(AbortSignal),
+    )
+  })
+
+  it("does not record an unknown or unauthorized campaign", () => {
+    renderAt("/app/not-a-real-campaign/home")
+
+    expect(recordLastVisited).not.toHaveBeenCalled()
   })
 })
