@@ -17,12 +17,16 @@ const PASSWORD = "correct horse battery staple"
 
 let calls: { method: string; path: string; body: string | null }[]
 let activateStatus: number
+let linkValid: boolean
 
 function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const path = String(input)
     const method = init?.method ?? "GET"
     const body = typeof init?.body === "string" ? init.body : null
     calls.push({ method, path, body })
+    if (method === "POST" && path === "/api/auth/activation-status") {
+        return Promise.resolve(new Response(JSON.stringify({ valid: linkValid }), { status: 200 }))
+    }
     if (method === "POST" && (path === "/api/auth/activate" || path === "/api/auth/password-reset")) {
         return Promise.resolve(
             activateStatus === 200
@@ -55,6 +59,7 @@ function posts(path: string) {
 beforeEach(() => {
     calls = []
     activateStatus = 200
+    linkValid = true
     vi.stubGlobal("fetch", vi.fn(fakeFetch))
     window.localStorage.clear()
     window.sessionStorage.clear()
@@ -74,14 +79,16 @@ describe("generated one-time links", () => {
         }
     })
 
-    it("activation link renders the React page, sanitizes the URL, and posts once", async () => {
+    it("activation link checks first, sanitizes the URL, then activates with one POST", async () => {
         mountAtLink(buildFragmentLink("/activate", RAW_TOKEN), true)
 
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
         expect(window.location.hash).toBe("")
         expect(window.location.href).not.toContain(RAW_TOKEN)
+        expect(screen.getByText("Checking activation link…")).toBeInTheDocument()
+        expect(screen.queryByLabelText("Choose a passphrase")).not.toBeInTheDocument()
 
-        fireEvent.change(screen.getByLabelText("Choose a passphrase"), { target: { value: PASSWORD } })
+        fireEvent.change(await screen.findByLabelText("Choose a passphrase"), { target: { value: PASSWORD } })
         const confirm = screen.queryByLabelText(/confirm/i)
         if (confirm !== null) fireEvent.change(confirm, { target: { value: PASSWORD } })
         const button = screen.getByRole("button", { name: "Activate account" })
@@ -108,15 +115,38 @@ describe("generated one-time links", () => {
         expect(posts("/api/auth/activate")).toHaveLength(0)
     })
 
-    it("surfaces a consumed/expired activation token without activating", async () => {
+    it("an unusable link never shows password fields and never posts an activation", async () => {
+        linkValid = false
+        mountAtLink(buildFragmentLink("/activate", RAW_TOKEN))
+        expect(
+            await screen.findByText("This activation link is invalid, expired, or has already been used."),
+        ).toBeInTheDocument()
+        expect(screen.queryByLabelText("Choose a passphrase")).not.toBeInTheDocument()
+        expect(posts("/api/auth/activate")).toHaveLength(0)
+        expect(posts("/api/auth/activation-status")).toHaveLength(1)
+    })
+
+    it("a token that goes bad after a valid check ends generically at final activation", async () => {
         activateStatus = 404
         mountAtLink(buildFragmentLink("/activate", RAW_TOKEN))
-        fireEvent.change(screen.getByLabelText("Choose a passphrase"), { target: { value: PASSWORD } })
+        fireEvent.change(await screen.findByLabelText("Choose a passphrase"), { target: { value: PASSWORD } })
         const confirm = screen.queryByLabelText(/confirm/i)
         if (confirm !== null) fireEvent.change(confirm, { target: { value: PASSWORD } })
         fireEvent.click(screen.getByRole("button", { name: "Activate account" }))
         await waitFor(() => expect(posts("/api/auth/activate")).toHaveLength(1))
+        expect(
+            await screen.findByText("This activation link is invalid, expired, or has already been used."),
+        ).toBeInTheDocument()
+        expect(screen.queryByLabelText("Choose a passphrase")).not.toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: "Account activated" })).not.toBeInTheDocument()
+    })
+
+    it("leaves the reset and login routes unaffected by the activation check", async () => {
+        mountAtLink(buildFragmentLink("/reset-password", RAW_TOKEN))
+        expect(posts("/api/auth/activation-status")).toHaveLength(0)
+        cleanup()
+        mountAtLink(`${window.location.origin}/login`)
+        expect(posts("/api/auth/activation-status")).toHaveLength(0)
     })
 
     it.each(["/activate", "/reset-password"])("%s with a malformed fragment is generic and silent", (path) => {

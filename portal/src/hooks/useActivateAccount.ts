@@ -19,7 +19,9 @@ export interface UseActivateAccountResult {
 
 const idleStatus: ActivateAccountStatus = { kind: "idle" }
 
-export function useActivateAccount(): UseActivateAccountResult {
+// `onUnavailable` runs when final activation reports the token unusable, so the
+// caller can drop its in-memory copy of the raw token.
+export function useActivateAccount(onUnavailable?: () => void): UseActivateAccountResult {
     const controllerRef = useRef<AbortController | null>(null)
     const [status, setStatus] = useState<ActivateAccountStatus>(idleStatus)
 
@@ -56,6 +58,7 @@ export function useActivateAccount(): UseActivateAccountResult {
                             return
                         }
                         if (cause.status === 404) {
+                            onUnavailable?.()
                             setStatus({ kind: "unavailable" })
                             return
                         }
@@ -67,10 +70,11 @@ export function useActivateAccount(): UseActivateAccountResult {
                     setStatus({ kind: "error" })
                 })
         },
-        [status.kind],
+        [status.kind, onUnavailable],
     )
 
     const reset = useCallback(() => {
+        controllerRef.current?.abort()
         setStatus(idleStatus)
     }, [])
 

@@ -86,6 +86,7 @@ from dnd_ai.commands.local_auth import (
     authenticate_local_user,
     change_password,
     create_browser_session,
+    is_activation_token_currently_usable,
     list_browser_sessions,
     normalize_login_name,
     resolve_browser_session_csrf_token,
@@ -143,6 +144,10 @@ _LOGIN_ACCOUNT_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 _TOKEN_CONSUMPTION_RATE_LIMIT_MAX_ATTEMPTS = 20
 _TOKEN_CONSUMPTION_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
+_ACTIVATION_STATUS_RATE_LIMIT_MAX_ATTEMPTS = 60
+_ACTIVATION_STATUS_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+
+_activation_status_rate_limiter: RateLimiter | None = None
 _login_ip_rate_limiter: RateLimiter | None = None
 _login_account_rate_limiter: RateLimiter | None = None
 _token_consumption_rate_limiter: RateLimiter | None = None
@@ -188,6 +193,19 @@ def get_login_account_rate_limiter() -> RateLimiter:
             window=_LOGIN_ACCOUNT_RATE_LIMIT_WINDOW,
         )
     return _login_account_rate_limiter
+
+
+def get_activation_status_rate_limiter() -> RateLimiter:
+    """Bounds the advisory activation-link check per client IP. A separate
+    bucket from `get_token_consumption_rate_limiter` so page loads and
+    Retry clicks can never exhaust the budget real activations need."""
+    global _activation_status_rate_limiter
+    if _activation_status_rate_limiter is None:
+        _activation_status_rate_limiter = RateLimiter(
+            max_attempts=_ACTIVATION_STATUS_RATE_LIMIT_MAX_ATTEMPTS,
+            window=_ACTIVATION_STATUS_RATE_LIMIT_WINDOW,
+        )
+    return _activation_status_rate_limiter
 
 
 def get_token_consumption_rate_limiter() -> RateLimiter:
@@ -1050,6 +1068,34 @@ class ActivateAccountRequest(BaseModel):
     password: str = Field(repr=False)
 
 
+class ActivationStatusRequest(BaseModel):
+    token: str = Field(repr=False)
+
+
+class ActivationStatusResponse(BaseModel):
+    valid: bool
+
+
+@router.post("/auth/activation-status", response_model=ActivationStatusResponse, status_code=200)
+def activation_status_endpoint(
+    body: ActivationStatusRequest,
+    request: Request,
+    connection: Annotated[Connection, Depends(get_connection)],
+    rate_limiter: Annotated[RateLimiter, Depends(get_activation_status_rate_limiter)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
+) -> ActivationStatusResponse:
+    """Advisory, read-only pre-check so the portal can avoid showing a
+    passphrase form for an unusable link. POST (token only in the body, never
+    a URL), no row lock, no write, no audit row, no idempotency key, and a
+    bare `valid` boolean identical for every unusable reason. Never
+    authoritative: `POST /auth/activate` repeats every check."""
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
+        raise RateLimitedError()
+    return ActivationStatusResponse(
+        valid=is_activation_token_currently_usable(connection, raw_activation_token=body.token)
+    )
+
+
 class ActivateAccountResponse(BaseModel):
     user_id: uuid.UUID
     login_name: str
@@ -1127,6 +1173,7 @@ def reset_password_endpoint(
 
 __all__ = [
     "router",
+    "get_activation_status_rate_limiter",
     "get_login_account_rate_limiter",
     "get_login_ip_rate_limiter",
     "get_token_consumption_rate_limiter",

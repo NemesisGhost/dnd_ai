@@ -1,20 +1,20 @@
-import { useId, useState } from "react"
+import { useCallback, useEffect, useId, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import { Link } from "react-router"
 import { PasswordField } from "../components/PasswordField"
 import { useActivateAccount } from "../hooks/useActivateAccount"
 import type { ActivateAccountStatus } from "../hooks/useActivateAccount"
+import { useActivationLinkCheck } from "../hooks/useActivationLinkCheck"
 import { captureFragmentToken } from "../utils/fragmentToken"
 
-function statusMessage(
-    kind: "pending" | "policy_violation" | "unavailable" | "rate_limited" | "error",
-): string {
+const INVALID_LINK_MESSAGE = "This activation link is invalid, expired, or has already been used."
+
+function statusMessage(kind: "pending" | "policy_violation" | "rate_limited" | "error"): string {
     switch (kind) {
         case "pending":
             return "Activating…"
         case "policy_violation":
             return "Choose a passphrase of at least 15 characters that is not commonly used."
-        case "unavailable":
-            return "This activation link is no longer available. It may have expired or already been used."
         case "rate_limited":
             return "Too many attempts. Wait and try again."
         case "error":
@@ -22,65 +22,154 @@ function statusMessage(
     }
 }
 
-// Public route: reads the activation token from the URL fragment exactly
-// once (see captureFragmentToken). No server-side
-// continuation exists for this token (dnd_ai.api.local_auth's own
-// single-shot POST /auth/activate; browser page: /activate), so the extracted value lives in this
-// component's own state for the life of the form and nowhere else.
-export function ActivateAccountPage() {
-    const { status, submit, reset } = useActivateAccount()
+interface ActivationLink {
+    // Identity of this link, so a response for an older link can never apply to a newer one.
+    id: number
+    // Held only in memory; set to null as soon as the link is known to be unusable.
+    token: string | null
+}
 
-    if (status.kind === "success") {
+let nextLinkId = 0
+
+function newLink(token: string | null): ActivationLink {
+    nextLinkId += 1
+    return { id: nextLinkId, token }
+}
+
+// Moves focus to the heading once, when a state's view mounts. Each state
+// renders its own keyed view, so re-renders within a state never refocus.
+function StateHeading({ id, children }: { id: string; children: ReactNode }) {
+    const ref = useRef<HTMLHeadingElement>(null)
+    useEffect(() => {
+        ref.current?.focus()
+    }, [])
+    return (
+        <h1 id={id} ref={ref} tabIndex={-1}>
+            {children}
+        </h1>
+    )
+}
+
+function Notice({ headingId, heading, children }: { headingId: string; heading: string; children: ReactNode }) {
+    return (
+        <main className="app-main">
+            <section className="placeholder-page" aria-labelledby={headingId}>
+                <StateHeading id={headingId}>{heading}</StateHeading>
+                {children}
+            </section>
+        </main>
+    )
+}
+
+// Public route. The fragment token is read once (see captureFragmentToken),
+// then checked with a read-only, advisory request before any password field is
+// rendered. POST /auth/activate remains authoritative and repeats every check.
+// The token lives only in this component's state, never in storage or the URL.
+export function ActivateAccountPage() {
+    // Lazy initializer, not an effect: StrictMode's second call sees an already
+    // sanitized URL, and React keeps the first call's result.
+    const [link, setLink] = useState<ActivationLink>(() => newLink(captureFragmentToken()))
+    // Drop the raw token as soon as it is known to be unusable.
+    const dropToken = useCallback(() => {
+        setLink((current) => ({ ...current, token: null }))
+    }, [])
+    const dropTokenOfLink = useCallback((linkId: number) => {
+        setLink((current) => (current.id === linkId ? { ...current, token: null } : current))
+    }, [])
+    const { status: activation, submit, reset } = useActivateAccount(dropToken)
+    const { status: check, retry } = useActivationLinkCheck(link.id, link.token, dropTokenOfLink)
+
+    // A second activation URL opened in the same tab replaces the first.
+    useEffect(() => {
+        const onHashChange = () => {
+            const token = captureFragmentToken()
+            if (token !== null) {
+                reset()
+                setLink(newLink(token))
+            }
+        }
+        window.addEventListener("hashchange", onHashChange)
+        return () => window.removeEventListener("hashchange", onHashChange)
+    }, [reset])
+
+    const unusable = check === "invalid" || activation.kind === "unavailable"
+    const hasToken = link.token !== null
+
+    if (activation.kind === "success") {
         return (
-            <main className="app-main">
-                <section className="placeholder-page" aria-labelledby="activate-success-heading">
-                    <h1 id="activate-success-heading">Account activated</h1>
-                    <p>
-                        Signed in as <strong>{status.result.login_name}</strong>. You can now sign in
-                        with your chosen password.
-                    </p>
-                    <p>
-                        <Link to="/login">Go to sign in</Link>
-                    </p>
-                </section>
-            </main>
+            <Notice key="success" headingId="activate-success-heading" heading="Account activated">
+                <p>
+                    Signed in as <strong>{activation.result.login_name}</strong>. You can now sign in with your
+                    chosen password.
+                </p>
+                <p>
+                    <Link to="/login">Go to sign in</Link>
+                </p>
+            </Notice>
         )
     }
 
-    return <ActivateForm status={status} submit={submit} reset={reset} />
+    if (unusable) {
+        return (
+            <Notice key="invalid" headingId="activate-invalid-heading" heading="This activation link is not valid">
+                <p>{INVALID_LINK_MESSAGE}</p>
+                <p>Ask an administrator for a new activation link.</p>
+            </Notice>
+        )
+    }
+
+    if (!hasToken) {
+        return (
+            <Notice key="missing" headingId="activate-missing-heading" heading="This activation link is not valid">
+                <p>Check that you copied the entire link, including everything after the #.</p>
+                <p>
+                    The link is removed from the address bar when this page opens, so refreshing the page
+                    cannot recover it. Open the original link again.
+                </p>
+            </Notice>
+        )
+    }
+
+    if (check === "checking") {
+        return (
+            <Notice key="checking" headingId="activate-checking-heading" heading="Activate your account">
+                <p role="status">Checking activation link…</p>
+            </Notice>
+        )
+    }
+
+    if (check === "error") {
+        return (
+            <Notice key="check-error" headingId="activate-check-error-heading" heading="Activate your account">
+                <p role="alert">We could not check this activation link. This is not a problem with the link itself.</p>
+                <button type="button" className="login-button" onClick={retry}>
+                    Retry
+                </button>
+            </Notice>
+        )
+    }
+
+    return <ActivateForm key={link.id} token={link.token ?? ""} status={activation} submit={submit} reset={reset} />
 }
 
-// Owns the raw token and both password values, so they are discarded when
-// the page swaps to the success view (this component unmounts).
+// Owns both password values, so they are discarded when the page leaves the
+// ready state (this component unmounts).
 function ActivateForm({
+    token,
     status,
     submit,
     reset,
 }: {
-    status: Exclude<ActivateAccountStatus, { kind: "success" }>
+    token: string
+    status: Exclude<ActivateAccountStatus, { kind: "success" } | { kind: "unavailable" }>
     submit: ReturnType<typeof useActivateAccount>["submit"]
     reset: () => void
 }) {
-    // Lazy initializer, not an effect: StrictMode's second call sees an already
-    // sanitized URL, and React keeps the first call's result.
-    const [token] = useState<string | null>(captureFragmentToken)
     const [password, setPassword] = useState("")
     const [confirmation, setConfirmation] = useState("")
     const passwordFieldId = useId()
     const confirmFieldId = useId()
     const mismatchId = useId()
-
-
-    if (token === null) {
-        return (
-            <main className="app-main">
-                <section className="placeholder-page" aria-labelledby="activate-missing-heading">
-                    <h1 id="activate-missing-heading">This activation link is not valid</h1>
-                    <p>Check that you copied the entire link, including everything after the #.</p>
-                </section>
-            </main>
-        )
-    }
 
     const isSubmitting = status.kind === "pending"
     const mismatch = confirmation !== "" && confirmation !== password
@@ -90,10 +179,8 @@ function ActivateForm({
             <section className="login-page" aria-labelledby="activate-heading">
                 <div className="login-container">
                     <div className="login-box">
-                        <h1 id="activate-heading" className="login-title">
-                            Activate your account
-                        </h1>
-                        <p className="login-subtitle">Choose a password to finish setting up your account.</p>
+                        <StateHeading id="activate-heading">Set passphrase</StateHeading>
+                        <p className="login-subtitle">Choose a passphrase to finish setting up your account.</p>
 
                         <form
                             className="login-form"

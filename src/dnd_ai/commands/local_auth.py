@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, RowMapping, text
 
 from dnd_ai.domain.access import (
     LOCAL_AUTH_ISSUER,
@@ -352,6 +352,65 @@ class ActivateLocalAccountResult:
     login_name: str
 
 
+def _load_consumable_activation_token(
+    connection: Connection, *, token_hash: str, lock: bool
+) -> RowMapping | None:
+    """The single definition of an activatable token, shared by final
+    activation (`lock=True`: `FOR UPDATE`, serializing concurrent
+    consumers) and the advisory pre-check (`lock=False`: no row lock, no
+    write). Returns `None` for a missing, consumed, or expired token — the
+    caller never learns which."""
+    token_row = (
+        connection.execute(
+            text(
+                """
+                SELECT user_activation_token_id, user_id, login_name, consumed_at,
+                       (expires_at <= now()) AS expired
+                FROM security.user_activation_tokens
+                WHERE token_hash = :hash
+                """
+                + (" FOR UPDATE" if lock else "")
+            ),
+            {"hash": token_hash},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+        return None
+    return token_row
+
+
+def _activation_login_name_claimed(connection: Connection, *, login_name: str) -> bool:
+    return (
+        connection.execute(
+            text("""
+                SELECT 1 FROM security.external_identities
+                WHERE issuer = :issuer AND subject = :subject AND revoked_at IS NULL
+            """),
+            {"issuer": LOCAL_AUTH_ISSUER, "subject": login_name},
+        ).scalar()
+        is not None
+    )
+
+
+def is_activation_token_currently_usable(
+    connection: Connection, *, raw_activation_token: str
+) -> bool:
+    """Advisory, read-only, non-consuming: would `_activate_local_account_impl`
+    accept this token right now (ignoring only the password policy)? Takes
+    no row lock and writes nothing — the answer may be stale the instant
+    it returns, so final activation always repeats every check itself.
+    Deliberately a bare boolean: never distinguishes unknown, malformed,
+    expired, consumed, or login-name-conflict."""
+    token_row = _load_consumable_activation_token(
+        connection, token_hash=hash_opaque_secret(raw_activation_token), lock=False
+    )
+    if token_row is None:
+        return False
+    return not _activation_login_name_claimed(connection, login_name=token_row["login_name"])
+
+
 def _activate_local_account_impl(
     connection: Connection, *, raw_activation_token: str, raw_password: str
 ) -> ActivateLocalAccountResult:
@@ -368,36 +427,14 @@ def _activate_local_account_impl(
     validate_password_policy(raw_password)
     token_hash = hash_opaque_secret(raw_activation_token)
 
-    token_row = (
-        connection.execute(
-            text("""
-                SELECT user_activation_token_id, user_id, login_name, consumed_at,
-                       (expires_at <= now()) AS expired
-                FROM security.user_activation_tokens
-                WHERE token_hash = :hash
-                FOR UPDATE
-            """),
-            {"hash": token_hash},
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
-        raise ActivationNotAcceptableError(
-            f"activation token hash {token_hash} is not consumable (row={token_row is not None})"
-        )
+    token_row = _load_consumable_activation_token(connection, token_hash=token_hash, lock=True)
+    if token_row is None:
+        raise ActivationNotAcceptableError(f"activation token hash {token_hash} is not consumable")
 
     user_id = token_row["user_id"]
     login_name = token_row["login_name"]
 
-    already_claimed = connection.execute(
-        text("""
-            SELECT 1 FROM security.external_identities
-            WHERE issuer = :issuer AND subject = :subject AND revoked_at IS NULL
-        """),
-        {"issuer": LOCAL_AUTH_ISSUER, "subject": login_name},
-    ).scalar()
-    if already_claimed is not None:
+    if _activation_login_name_claimed(connection, login_name=login_name):
         raise LoginNameAlreadyTakenError()
 
     connection.execute(

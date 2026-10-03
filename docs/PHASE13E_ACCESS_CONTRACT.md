@@ -63,6 +63,7 @@ character-relationship, resource-grant, or invitation state.
 | `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
+| `/auth/activation-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only advisory check (`{"valid": bool}`); no principal, machine credentials ignored | Self-service |
 | `/auth/activate`, `/auth/password-reset`, `/auth/change-password`, `/auth/sessions` (list/delete own) | various | `dnd_ai.api.local_auth` | none — acts on the caller's own account | Self-service |
 
 None of the campaign-scoped rows above pass `allow_foundry_access=True` to `require_campaign_capability` — see §4.

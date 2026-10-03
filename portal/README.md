@@ -187,6 +187,15 @@ Public routes:
   clear it from browser history, and submit it in a JSON body to the
   POST-only `POST /auth/activate` / `POST /auth/password-reset` endpoints
   (a `GET` of those paths is `405`; opening a link never changes state).
+  `/activate` first sends the token in the JSON body of the read-only,
+  non-consuming `POST /auth/activation-status` and shows **Checking
+  activation link…**; the **Set passphrase** form renders only after
+  `{"valid": true}`. Every unusable link (unknown, malformed, expired,
+  consumed, login name since claimed) gets the same generic message with no
+  password fields; a network/timeout/408/429/5xx failure shows **Retry**
+  instead. The result is advisory and may be stale: `POST /auth/activate`
+  repeats every check, and a link that went bad in between ends in the same
+  generic state. The token and passphrase live only in component memory.
 
 Authenticated campaign selection:
 
