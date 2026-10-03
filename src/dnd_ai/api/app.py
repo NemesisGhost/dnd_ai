@@ -80,6 +80,7 @@ from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
 from .sessions import router as sessions_router
 from .summary import router as summary_router
+from .user_preferences import router as user_preferences_router
 from .world_explorer import router as world_explorer_router
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(relationships_router)
     app.include_router(sessions_router)
     app.include_router(summary_router)
+    app.include_router(user_preferences_router)
     app.include_router(world_explorer_router)
 
     @app.get("/healthz")

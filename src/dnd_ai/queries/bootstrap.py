@@ -57,21 +57,26 @@ itself already performs per campaign:
   = ()`, so the portal is never handed a `(character_id, party_id)` pair
   the resolver would reject.
 
-Selection defaults (no persisted preference exists yet — see this module's
-own `SessionBootstrapView` docstring):
+Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
 
-- `selected_campaign_id` is `None` with no accessible campaigns, otherwise
-  the first campaign in the same deterministic `(campaign name, campaign_
-  id)` ordering `get_session_bootstrap`'s own query returns rows in — an
-  arbitrary but stable, audience-safe choice (never a hint about
-  inaccessible campaigns, since the ordering only ever ranges over rows
-  this user's own membership already authorized);
+- `campaign_preferences` carries the user's stored `security.user_portal_
+  preferences` values, but only while each stored campaign ID is still in
+  the authorized campaign set above — a stored ID never grants access and
+  is silently dropped (never disclosed) once membership or campaign status
+  no longer authorizes it;
+- `startup_campaign_id` is the server-computed landing campaign
+  (`resolve_startup_campaign_id`): `None` with no accessible campaigns,
+  the only campaign when exactly one is accessible, otherwise a valid
+  preferred campaign, otherwise a valid last-visited campaign, otherwise
+  `None` (the portal then lands on the campaign list). It is never the
+  first alphabetical campaign by default;
 - `selected_character_id` is `None` unless exactly one character
   perspective is authorized for that campaign, in which case that one is
   the unambiguous default — never guessed among two or more.
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
@@ -122,6 +127,21 @@ class CampaignBootstrapView:
     capabilities: tuple[str, ...]
 
 
+STARTUP_MODE_RESUME_LAST_VISITED = "resume_last_visited"
+STARTUP_MODE_PREFERRED_CAMPAIGN = "preferred_campaign"
+
+
+@dataclass(frozen=True)
+class CampaignPreferencesView:
+    """The caller's stored campaign-startup values, already filtered to the
+    authorized campaign set. `startup_mode` is fully determined by whether a
+    still-authorized `preferred_campaign_id` exists."""
+
+    startup_mode: str
+    preferred_campaign_id: uuid.UUID | None
+    last_visited_campaign_id: uuid.UUID | None
+
+
 @dataclass(frozen=True)
 class SessionBootstrapView:
     """The complete, audience-safe portal-bootstrap payload for one
@@ -131,14 +151,10 @@ class SessionBootstrapView:
     applied to authorization data the same way it already applies to
     session validity).
 
-    `selected_campaign_id` has no persisted-preference backing yet: a
-    search of `security.*`/`campaign.*` for a "last selected campaign/
-    character" column or table found none (Phase 13C, docs/PLAN.md §1951,
-    is where the portal is expected to hold that state client-side against
-    this bootstrap response, or a future increment adds real persistence);
-    this module deliberately does not add speculative persistence merely to
-    answer this query, and instead returns the deterministic fallback
-    `get_session_bootstrap`'s own docstring describes.
+    `startup_campaign_id` and `campaign_preferences` are derived from the
+    user's stored portal preferences, filtered through the authorized
+    campaign set computed in the same call (see this module's docstring):
+    a stored ID that is no longer authorized never appears here.
     """
 
     user_id: uuid.UUID
@@ -150,8 +166,77 @@ class SessionBootstrapView:
     # `dnd_ai.commands.local_auth._create_local_account_impl`/`_issue_
     # password_reset_token_impl` already gate on.
     is_platform_administrator: bool
-    selected_campaign_id: uuid.UUID | None
+    startup_campaign_id: uuid.UUID | None
+    campaign_preferences: CampaignPreferencesView
     campaigns: tuple[CampaignBootstrapView, ...]
+
+
+_BOOTSTRAP_SCOPE_FROM_WHERE = """
+    FROM security.campaign_memberships cm
+    JOIN campaign.campaigns c ON c.campaign_id = cm.campaign_id
+    JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = c.lifecycle_status_id
+    JOIN security.membership_statuses ms
+      ON ms.membership_status_id = cm.membership_status_id
+    WHERE cm.user_id = :user_id
+      AND cm.ended_at IS NULL
+      AND ms.code = 'active'
+      AND ms.is_active
+      AND cls.code = 'active'
+"""
+
+
+def list_bootstrap_campaign_ids(connection: Connection, *, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """The campaign IDs the session bootstrap would list for `user_id`,
+    ordered `(name, campaign_id)` — the single definition of "authorized
+    bootstrap campaign scope" shared with `is_campaign_bootstrap_authorized`
+    so preference writes can never drift from what the bootstrap offers."""
+    return list(
+        connection.execute(
+            text(
+                "SELECT c.campaign_id "
+                + _BOOTSTRAP_SCOPE_FROM_WHERE
+                + " ORDER BY c.name, c.campaign_id"
+            ),
+            {"user_id": user_id},
+        ).scalars()
+    )
+
+
+def is_campaign_bootstrap_authorized(
+    connection: Connection, *, user_id: uuid.UUID, campaign_id: uuid.UUID
+) -> bool:
+    """True only when `campaign_id` is in the same scope the bootstrap lists
+    (active membership in an active campaign) *and* `resolve_access_context`
+    resolves for it — the bootstrap skips a campaign when that returns
+    `None`, so this does too."""
+    in_scope = connection.execute(
+        text(
+            "SELECT 1 " + _BOOTSTRAP_SCOPE_FROM_WHERE + " AND c.campaign_id = :campaign_id LIMIT 1"
+        ),
+        {"user_id": user_id, "campaign_id": campaign_id},
+    ).scalar()
+    if in_scope is None:
+        return False
+    return resolve_access_context(connection, user_id=user_id, campaign_id=campaign_id) is not None
+
+
+def resolve_startup_campaign_id(
+    campaign_ids: Sequence[uuid.UUID],
+    preferred: uuid.UUID | None,
+    last_visited: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """Pure landing-campaign precedence (docs/UI_DESIGN.md §4.2 steps 2-6).
+    `preferred`/`last_visited` are assumed unfiltered; membership in
+    `campaign_ids` is checked here."""
+    if not campaign_ids:
+        return None
+    if len(campaign_ids) == 1:
+        return campaign_ids[0]
+    if preferred is not None and preferred in campaign_ids:
+        return preferred
+    if last_visited is not None and last_visited in campaign_ids:
+        return last_visited
+    return None
 
 
 def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> SessionBootstrapView:
@@ -171,20 +256,11 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
 
     membership_rows = (
         connection.execute(
-            text("""
-                SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name
-                FROM security.campaign_memberships cm
-                JOIN campaign.campaigns c ON c.campaign_id = cm.campaign_id
-                JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = c.lifecycle_status_id
-                JOIN security.membership_statuses ms
-                  ON ms.membership_status_id = cm.membership_status_id
-                WHERE cm.user_id = :user_id
-                  AND cm.ended_at IS NULL
-                  AND ms.code = 'active'
-                  AND ms.is_active
-                  AND cls.code = 'active'
-                ORDER BY c.name, c.campaign_id
-            """),
+            text(
+                "SELECT cm.campaign_membership_id, c.campaign_id, c.name AS campaign_name "
+                + _BOOTSTRAP_SCOPE_FROM_WHERE
+                + " ORDER BY c.name, c.campaign_id"
+            ),
             {"user_id": user_id},
         )
         .mappings()
@@ -358,12 +434,38 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             )
         )
 
-    selected_campaign_id = campaigns[0].campaign_id if campaigns else None
+    authorized_ids = [campaign.campaign_id for campaign in campaigns]
+    stored = (
+        connection.execute(
+            text("""
+                SELECT preferred_campaign_id, last_visited_campaign_id
+                FROM security.user_portal_preferences
+                WHERE user_id = :user_id
+            """),
+            {"user_id": user_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    stored_preferred = stored["preferred_campaign_id"] if stored is not None else None
+    stored_last_visited = stored["last_visited_campaign_id"] if stored is not None else None
+    # A stored ID never grants access: drop anything no longer authorized.
+    preferred = stored_preferred if stored_preferred in authorized_ids else None
+    last_visited = stored_last_visited if stored_last_visited in authorized_ids else None
 
     return SessionBootstrapView(
         user_id=user_id,
         display_name=display_name,
         is_platform_administrator=is_platform_administrator(connection, user_id=user_id),
-        selected_campaign_id=selected_campaign_id,
+        startup_campaign_id=resolve_startup_campaign_id(authorized_ids, preferred, last_visited),
+        campaign_preferences=CampaignPreferencesView(
+            startup_mode=(
+                STARTUP_MODE_PREFERRED_CAMPAIGN
+                if preferred is not None
+                else STARTUP_MODE_RESUME_LAST_VISITED
+            ),
+            preferred_campaign_id=preferred,
+            last_visited_campaign_id=last_visited,
+        ),
         campaigns=tuple(campaigns),
     )

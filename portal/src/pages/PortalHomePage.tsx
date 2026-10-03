@@ -20,11 +20,11 @@ export function PortalHomePage({ bootstrap }: PortalHomePageProps) {
     const hasUsableName = displayName.trim().length > 0
 
     const defaultCampaign =
-        bootstrap.selected_campaign_id === null
+        bootstrap.startup_campaign_id === null
             ? null
             : bootstrap.campaigns.find(
                 (campaign) =>
-                    campaign.campaign_id === bootstrap.selected_campaign_id,
+                    campaign.campaign_id === bootstrap.startup_campaign_id,
             ) ?? null
 
     const visibleCampaigns = bootstrap.campaigns.slice(
@@ -104,7 +104,7 @@ export function PortalHomePage({ bootstrap }: PortalHomePageProps) {
                                         )}
 
                                         {campaign.campaign_id ===
-                                            bootstrap.selected_campaign_id && (
+                                            bootstrap.startup_campaign_id && (
                                             <span>Default campaign</span>
                                         )}
                                     </Link>

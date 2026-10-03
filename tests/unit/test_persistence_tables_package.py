@@ -282,6 +282,7 @@ EXPECTED_TABLES = {
         "security.service_accounts",
         "security.timeline_bootstrap_grants",
         "security.user_activation_tokens",
+        "security.user_portal_preferences",
         "security.users",
     ],
 }

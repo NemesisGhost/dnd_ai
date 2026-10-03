@@ -44,9 +44,12 @@ export function CampaignsPage({
                 </p>
 
                 {campaign.campaign_id ===
-                  bootstrap.selected_campaign_id && (
-                    <span>Default campaign</span>
-                  )}
+                  bootstrap.campaign_preferences.preferred_campaign_id ? (
+                  <span>Opens at sign-in</span>
+                ) : campaign.campaign_id ===
+                  bootstrap.campaign_preferences.last_visited_campaign_id ? (
+                  <span>Last visited</span>
+                ) : null}
               </Link>
             </li>
           ))}

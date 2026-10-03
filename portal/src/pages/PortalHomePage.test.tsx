@@ -34,7 +34,7 @@ describe("PortalHomePage", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("shows a default-campaign link when selected_campaign_id matches an authorized campaign", () => {
+  it("shows a default-campaign link when startup_campaign_id matches an authorized campaign", () => {
     renderHome(sessionBootstrapFixture)
 
     expect(
@@ -46,18 +46,18 @@ describe("PortalHomePage", () => {
     ).toHaveAttribute("href", "/app/mundivita/home")
   })
 
-  it("omits the default-campaign section when selected_campaign_id is null", () => {
-    renderHome({ ...sessionBootstrapFixture, selected_campaign_id: null })
+  it("omits the default-campaign section when startup_campaign_id is null", () => {
+    renderHome({ ...sessionBootstrapFixture, startup_campaign_id: null })
 
     expect(
       screen.queryByRole("heading", { name: "Default campaign" }),
     ).not.toBeInTheDocument()
   })
 
-  it("omits the default-campaign section when selected_campaign_id is not in the campaign list", () => {
+  it("omits the default-campaign section when startup_campaign_id is not in the campaign list", () => {
     renderHome({
       ...sessionBootstrapFixture,
-      selected_campaign_id: "not-a-real-campaign",
+      startup_campaign_id: "not-a-real-campaign",
     })
 
     expect(
@@ -78,7 +78,7 @@ describe("PortalHomePage", () => {
 
     renderHome({
       ...sessionBootstrapFixture,
-      selected_campaign_id: null,
+      startup_campaign_id: null,
       campaigns,
     })
 
@@ -103,7 +103,7 @@ describe("PortalHomePage", () => {
   })
 
   it("shows the empty state with Browse and Accept-invitation links when there are no campaigns", () => {
-    renderHome({ ...sessionBootstrapFixture, campaigns: [], selected_campaign_id: null })
+    renderHome({ ...sessionBootstrapFixture, campaigns: [], startup_campaign_id: null })
 
     expect(
       screen.getByText("You do not have access to any campaigns yet."),

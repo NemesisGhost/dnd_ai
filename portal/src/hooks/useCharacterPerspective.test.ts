@@ -42,7 +42,12 @@ const bootstrap: SessionBootstrap = {
     },
     browser_session_id: "session-a",
     is_platform_administrator: false,
-    selected_campaign_id: "campaign-a",
+    startup_campaign_id: "campaign-a",
+    campaign_preferences: {
+      startup_mode: "resume_last_visited",
+      preferred_campaign_id: null,
+      last_visited_campaign_id: null,
+    },
     campaigns: [campaign],
 }
 
