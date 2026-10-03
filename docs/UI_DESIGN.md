@@ -46,44 +46,80 @@ A person may hold multiple roles in one campaign and different roles in other ca
 
 ## 4. Information architecture
 
-**Implemented.** The navigation redesign below was built on the `phase13/ui-navigation-implementation` branch (base commit `a31cb5e`) and supersedes the earlier login-to-campaign-selector model. Existing Phase 13E verification and acceptance records are unchanged. The authoritative frontend is the React/TypeScript/Vite application under `portal/`, not the obsolete `ui/` directory.
+**Status: approved target, not yet implemented.** This section and §4.2–§4.7 describe the approved *single-navigation and settings* redesign. Until it lands, the deployed portal still behaves as summarized under **Currently deployed behavior** below. Do not describe the target as delivered until its implementation and verification are recorded in [PLAN.md §23.6](PLAN.md#236-web-portal-experience) and `portal/README.md`. The authoritative frontend is the React/TypeScript/Vite application under `portal/`.
 
-`App` now composes `PublicLayout` (identity/theme chrome, used by `/`, `/login`, the invitation/activation/reset pages, and unknown routes) and `AuthenticatedAppLayout` (the single authenticated session gate, with persistent Home/Campaigns navigation and the profile menu, wrapping `/home`, `/campaigns`, `/account`, `/platform/accounts`, and every `/app/:campaignId/*` route). `/` redirects to `/login`; `LoginPage` sends an authenticated visitor to `/home` or to a validated continuation destination. `CampaignSessionBoundary` no longer wraps its own copy of `AuthenticatedSessionBoundary` — it reads the already-authenticated bootstrap from `AuthenticatedAppLayout`'s outlet context, so there is exactly one session gate for the whole authenticated application. The separate `AccountNavLink`, `AdminAccountsNavLink`, and `LogoutButton` header controls have been replaced by one `ProfileMenu`.
+**Currently deployed behavior (superseded by the target below).** `App` composes `PublicLayout` and `AuthenticatedAppLayout`. `AuthenticatedAppLayout` renders `PortalHeader` (brand link to `/home`, a `GlobalNavigation` landmark with **Home** and **Campaigns**, the theme selector, and `ProfileMenu`) *outside* `AuthenticatedSessionBoundary`, then the route outlet. The campaign sidebar (`AppNavigation`) is owned by `CampaignLayout`, so it exists only on `/app/:campaignId/*` and its Access group lists Access Management and Invitations (Audit History is reachable only from the Access tab strip). Its collapsed state is component-local and resets on every campaign-scope change, because `RouteSessionProvider` remounts the whole application subtree. `/home` is a global dashboard (`PortalHomePage`). `ProfileMenu` contains **Your Account** and, for a platform administrator, **Platform Accounts**, then **Log out**. `CampaignContextPanel` carries its own campaign `<select>` switcher and a **Browse all campaigns** link. The bootstrap's `selected_campaign_id` is **not** a stored preference: `dnd_ai.queries.bootstrap.get_session_bootstrap` returns the first authorized campaign in `(campaign name, campaign_id)` order, or `null` with no campaigns, and no preference table exists. Theme choice is stored only in browser `localStorage` (`dnd-ai-theme`).
 
-One deviation from this section's conceptual hierarchy below: `AuthenticatedAppLayout` renders its header *outside* `AuthenticatedSessionBoundary`, not inside it. This is what keeps Home/Campaigns navigation visible during the loading state that `RouteSessionProvider`'s scope-keyed remount causes on every campaign-scope change (§4.5) — under the hierarchy as drawn, the header would disappear and reappear on every such change. The header renders no session-derived data while unauthenticated; `ProfileMenu` hides itself entirely in that state.
+### Target: one authenticated navigation system
 
-The target has two navigation levels:
+The target has exactly one primary navigation system for authenticated work — a persistent sidebar owned by the authenticated application shell — plus a minimal header.
 
-- **Global:** D&D AI Portal identity linking to `/home`, Home (`/home`), Campaigns (`/campaigns`), room for future global destinations, a profile/account button, and a consistent footer. This shell surrounds every authenticated page regardless of campaign selection, including account and platform administration pages.
-- **Campaign:** Campaign Home, World, Characters, Quests, Sessions, Knowledge, and Access when the selected campaign's authoritative capabilities include `access.manage`. Ask follows the existing server feature-manifest/readiness rules: it remains disabled or clearly labeled unavailable while disabled and makes no related requests or cached output available. Future GM/import destinations require their own readiness and authorization; this redesign does not add them. **Delivered (Access/Invitations navigation redesign):** Access is itself a parent disclosure, not a single link — it contains two nested destinations, **Access Management** (`/app/:campaignId/access`) and **Invitations** (`/app/:campaignId/access/invitations`), the same way the profile menu nests Platform Accounts (§4.3) rather than exposing it as its own top-level item. Both children share the single `access.manage` gate; the parent is shown or hidden as one unit and is never shown with no visible child.
+- **Header** (`PortalHeader`): portal identity/branding, the narrow-screen navigation-drawer control where required, and the User Account/profile control (§4.3). Nothing else: no Home/Campaigns links, no other primary navigation, and no theme selector (theme selection moves to Settings, §4.7). For an authenticated user the brand links to `/home`, which is an authenticated landing resolver (§4.2), never a duplicate dashboard. For a signed-out visitor the brand is plain text.
+- **Sidebar** (one `nav` landmark labeled "Main"): rendered by `AuthenticatedAppLayout`, not `CampaignLayout`, on every authenticated route — campaign pages, `/campaigns`, `/settings`, `/account`, `/platform/accounts`, and future authenticated global pages. It never appears on public pages: `/login`, `/activate`, `/reset-password`, `/campaign-invitations/accept` (logged-out onboarding and the authenticated manual fallback alike, since it is a public-layout route), and the public not-found state. An authenticated visitor on a public route keeps the header's brand link and profile menu as the way back.
 
-Use distinct Global and Campaign navigation landmarks and distinguish global Home from Campaign Home. Role and perspective labels are contextual display data, never locally derived authorization. Changing perspective obtains fresh server-authorized data rather than filtering previously downloaded records.
-
-Conceptual hierarchy (see the implementation note above for the one deviation — `AuthenticatedAppLayout` renders its header outside, not inside, `AuthenticatedSessionBoundary`):
+Sidebar organization:
 
 ```text
-AuthenticatedAppLayout
-  Global header/navigation and profile menu
-  AuthenticatedSessionBoundary
-    Global route outlet
-      Home (/home)
-      Campaigns (CampaignsPage)
-      Your Account (AccountPage)
-      Platform Accounts (AdminAccountsPage; authorized only)
-      CampaignSessionBoundary
-        CampaignLayout
-          Campaign context/navigation (CampaignContextPanel, AppNavigation)
-          Campaign page outlet
-  Footer
+Campaign Home  [Choose campaign ▾]   link to the resolved campaign's Home + separate disclosure button
+  Authorized Campaign A
+  Authorized Campaign B
+  Authorized Campaign C
+  View all campaigns                  /campaigns
+World
+Characters
+Quests
+Sessions
+Knowledge
+Ask                                   server feature manifest
+Access ▾                              disclosure; access.manage
+  Access Management
+  Invitations
+  Audit History
+-------------------------------------
+Collapse / expand navigation          always last
 ```
 
-`AuthenticatedSessionBoundary` remains responsible for the authenticated session boundary. `CampaignSessionBoundary` owns campaign-specific context and authorization, not the entire authenticated application shell. `CampaignLayout` continues to compose campaign context and campaign pages. Moving between global and campaign routes must preserve global navigation while retaining the existing fresh-bootstrap and campaign-context reset semantics. Without a selected campaign, the global shell stays present; an optional context area may say "No campaign selected" with a native **Select Campaign** link to `/campaigns`.
+Rules:
+
+- **Campaign choices** come only from the current authoritative session bootstrap (`campaigns`). The sidebar never invents, guesses, caches, or carries forward a campaign from a previous bootstrap, from browser storage, or from a stored preference. Selecting a campaign clears that campaign's character-perspective selection (as `CampaignLayout`'s switcher does today) and enters `/app/{campaignId}/home`. **View all campaigns** always links to `/campaigns`, the full campaign-selection route (§5.2).
+- **Campaign Home is a link plus a separate disclosure button**, never one control that is ambiguously both. The link (visible text "Campaign Home") navigates to the resolved campaign's Home; an adjacent button (accessible name "Choose campaign", `aria-expanded`, `aria-controls`) shows or hides the campaign list beneath it. When no campaign resolves, the link is absent and the disclosure button carries the visible text "Choose a campaign". The list starts open on `/campaigns` and closed elsewhere. The active campaign's entry carries `aria-current="true"`.
+- **Resolved campaign for campaign-specific links:** the route's `:campaignId` when it is in the current bootstrap's `campaigns`; otherwise `campaign_preferences.last_visited_campaign_id`; otherwise `startup_campaign_id` (§4.7); otherwise none. A route campaign ID that is not authorized is never used or echoed. With no resolved campaign, World/Characters/Quests/Sessions/Knowledge/Ask/Access are not rendered as links — the sidebar shows a short "Choose a campaign to see its pages" note instead — so no link ever contains a guessed ID.
+- **Ask** follows the server feature manifest exactly as before: a link only when `features.ask` is true, otherwise a visibly disabled item that is not a link and makes no request.
+- **Access** is a disclosure button (not a link) over **Access Management** (`/access`), **Invitations** (`/access/invitations`), and **Audit History** (`/access/audit`). The group is shown only when the resolved campaign's server-supplied `capabilities` include `access.manage` — the capability each of those routes' APIs already requires — and is never shown with no visible child. Hiding it is presentation only; each route and API re-authorizes. The Access page's own tab strip remains as page-local navigation.
+- **Collapse/expand** stays the last item. Collapsed, the sidebar is an icon rail: every item keeps an accessible name (visible label hidden, `title` shown), the campaign-list disclosure is replaced by a rail **All campaigns** link to `/campaigns`, and activating the Access button in the rail expands the sidebar with the group open, so its children stay keyboard-reachable. The collapsed/expanded choice is a per-viewer convenience persisted in browser storage (never authentication data), so it survives the scope-keyed remount.
+- **Loading and refresh:** every campaign-scope change remounts the session provider and refetches the bootstrap (§4.5). During that loading state the shell keeps the header, the sidebar frame, the collapse/expand control, the drawer control, and the static **View all campaigns** destination; bootstrap-derived entries are replaced by a busy placeholder until the fresh bootstrap arrives. The previous scope's campaign list is never shown in the meantime. A session-check error keeps the same frame with no bootstrap-derived entries. Authentication expiry removes the authenticated shell and follows §4.2.
+
+Landmarks: the header `banner`, the sidebar `nav` ("Main"), and page-local navigation such as the Access tab strip ("Access"). There is no global Home page in the target; Campaign Home (`/app/:campaignId/home`) is the only Home. Role and perspective labels are contextual display data, never locally derived authorization. Changing perspective obtains fresh server-authorized data rather than filtering previously downloaded records.
+
+Target hierarchy:
+
+```text
+App
+  PublicLayout                 header (identity; profile menu when authenticated), no sidebar
+    /login, /campaign-invitations/accept, /activate, /reset-password, public not-found
+  AuthenticatedAppLayout
+    PortalHeader               identity, drawer control, profile menu   (outside the session boundary)
+    PortalSidebar              persistent; reads session state directly (outside the session boundary)
+    AuthenticatedSessionBoundary
+      Route outlet
+        /home                  LandingRedirect (no content)
+        /campaigns             CampaignsPage
+        /settings              SettingsPage
+        /account               AccountPage
+        /platform/accounts     AdminAccountsPage (platform-authorized only)
+        /app/:campaignId       CampaignSessionBoundary -> CampaignLayout
+                                 CampaignContextPanel (display + perspective selector)
+                                 Campaign page outlet
+    PortalFooter
+```
+
+`AuthenticatedSessionBoundary` remains the single authenticated session gate. `CampaignSessionBoundary`/`CampaignLayout` own campaign-specific context and authorization — the authorized-campaign lookup, perspective wiring, the campaign-not-found state, and the last-visited update (§4.7) — but no longer own navigation. `CampaignContextPanel`'s Campaign section becomes display-only (name and roles): the sidebar's campaign list is the one campaign-selection control during campaign work, with `/campaigns` as the full browser.
 
 ### 4.1 Reusable presentation system
 
 A small set of reusable `portal/src/components` primitives supports the screens below rather than each screen inventing its own layout. The exact component names may evolve, but their responsibilities remain separate:
 
-- **`CampaignContextPanel`** answers "what campaign context and viewing perspective am I using?" It is one compact, infobox-styled panel divided into four stacked sections — **World, Campaign, Timeline, Character**, in that order — each showing the current selection plus a few compact read-only detail rows for it. The hierarchy is causal: changing a higher selection repopulates the lower options and clears the lower selection. **World** is a read-only value and **Timeline** a disabled control until the backend exposes authorized worlds/timelines and their selection APIs; **Campaign** is a quick switcher over authorized session-bootstrap campaigns, with an adjacent **All Campaigns** or **Browse Campaigns** link to `/campaigns`; target switching normally enters the selected campaign's Home and clears or refreshes campaign-scoped context as specified in §4.5 (the current implementation preserves the top-level section and discards detail IDs); **Character** reuses the established character-perspective context/selector and shows compact live character facts. The panel is presentation-oriented — the surrounding layout (`CampaignLayout`) owns the routing and perspective wiring. It collapses behind a native disclosure control on narrow screens and is meant for a right-hand column or the shared shell.
+- **`CampaignContextPanel`** answers "what campaign context and viewing perspective am I using?" It is one compact, infobox-styled panel divided into four stacked sections — **World, Campaign, Timeline, Character**, in that order — each showing the current selection plus a few compact read-only detail rows for it. The hierarchy is causal: changing a higher selection repopulates the lower options and clears the lower selection. **World** is a read-only value and **Timeline** a disabled control until the backend exposes authorized worlds/timelines and their selection APIs; **Campaign** shows the current campaign and the user's roles (deployed: also a quick `<select>` switcher with a **Browse all campaigns** link; target: display-only, because the sidebar's Campaign Home campaign list and `/campaigns` are the campaign-selection controls — §4, §4.5); **Character** reuses the established character-perspective context/selector and shows compact live character facts. The panel is presentation-oriented — the surrounding layout (`CampaignLayout`) owns the routing and perspective wiring. It collapses behind a native disclosure control on narrow screens and is meant for a right-hand column or the shared shell.
 - **`InfoBox`** answers "what are the important facts about the entity on this page?" It is a generic, Wiki-style label/value panel (title, optional subtitle/image/status, label/value sections, related links) with no built-in knowledge of any entity type; per-entity wrappers (e.g. `CampaignInfoBox`) translate an authorized domain record into the generic model and are responsible for authorization-safe field selection.
 - **Collection-card primitives** answer "which authorized record should I open?" A responsive card grid presents concise, domain-mapped cards for world entities, knowledge, quests, campaigns, and other browsable collections. Cards use real links, expose only fields present in the audience-safe list contract, and do not fetch or imply inaccessible detail records.
 - **Detail-panel primitives** answer "how is this authorized record organized?" A full-page detail layout composes stat cards, semantic fact groups, compact lists or tables, and bounded panels under one page heading. Domain-specific wrappers decide which authorized fields belong in each panel; a generic primitive never reflects over an arbitrary API object.
@@ -92,29 +128,39 @@ These concepts stay distinct: context describes the viewer's current vantage poi
 
 Activating a navigable card changes route and loads the detail contract for that campaign and perspective. The detail page may visually continue the selected card's category, title, status, and surface treatment so that it feels expanded, but correctness, deep linking, refresh, browser Back/Forward behavior, and authorization do not depend on animation.
 
-### 4.2 Root, authentication, and deep links
+### 4.2 Root, authentication, landing, and deep links
 
-- `/` uses replacement navigation to `/login`, removing the "Portal Foundation" dead end from the target. With a valid session, the login boundary then replaces `/login` with `/home`.
-- Successful ordinary login lands at `/home`, not directly at `/campaigns`. An authenticated visit to `/login` also replaces it with `/home`.
-- Successful logout revokes the server session, clears protected client context, and routes to `/login`. A failed logout shows a safe recoverable error and retry; it must not claim sign-out succeeded.
-- **Delivered.** Known protected deep links without a valid session route to login using replacement navigation, carrying the intended destination in router history state (never the URL). `AuthenticatedSessionBoundary` sets `state={{from: pathname+search}}` (the hash is never carried); `LoginPage` resolves it through `utils/postLoginDestination.ts`'s same-origin, allowlisted-path check before navigating, and rejects anything else (including `/login` itself and other public routes) back to `/home`. The destination still fully reauthorizes on arrival — this allowlist is a UX convenience, not a security boundary.
-- `/campaign-invitations/accept` retains its public single-link onboarding and authenticated manual-token fallback. Inline sign-in/registration and the server-side onboarding session continue under [PHASE13E_ACCESS_CONTRACT.md §3n](PHASE13E_ACCESS_CONTRACT.md#3n-single-link-invitation-onboarding-delivered-checkpoints-8a-8d); the ordinary login landing rule must not interrupt invitation completion. Do not retain invitation secrets in a return path.
+- `/` uses replacement navigation to `/login`. With a valid session, the login boundary replaces `/login` with the post-login destination below.
+- **`/home` is an authenticated landing resolver, not a content page** (target). It renders no dashboard; once the bootstrap is authenticated it replaces itself (`<Navigate replace>`) with the landing destination, so Back never returns to `/home`. It stays a valid route for old bookmarks, the brand link, and the ordinary login default.
+- **Post-login landing precedence** (target), evaluated after sign-in or on an authenticated visit to `/login`:
+  1. An explicit security/onboarding continuation wins. A live campaign-invitation onboarding continuation keeps its existing explicit **Resume invitation** / **Continue** choice on the login page ([PHASE13E_ACCESS_CONTRACT.md §3n](PHASE13E_ACCESS_CONTRACT.md#3n-single-link-invitation-onboarding-delivered-checkpoints-8a-8d)); a validated protected-route return path (below) is the other explicit continuation. **Continue**, and every login without a continuation, goes to `/home`.
+  2. `/home` then resolves: no authorized campaigns → `/campaigns`.
+  3. Exactly one authorized campaign → its Campaign Home.
+  4. Startup mode **Always open this campaign** with the preferred campaign still authorized → its Campaign Home.
+  5. Otherwise, the last-visited campaign if still authorized → its Campaign Home.
+  6. Otherwise → `/campaigns`.
+
+  Steps 2–6 are computed by the server into the bootstrap's `startup_campaign_id` (§4.7) so the rule lives in one place; the client navigates to `/app/{startup_campaign_id}/home` when that ID is in the current `campaigns` list, and to `/campaigns` otherwise. The client never picks the first or alphabetically first campaign when several exist and no valid preference resolves. A stored campaign that is inaccessible, revoked, ended, archived, or deleted is never disclosed or navigated to.
+- Successful logout revokes the server session, clears protected client context, and routes to `/login` with no continuation state. A failed logout shows a safe recoverable error and retry; it must not claim sign-out succeeded.
+- **Delivered.** Known protected deep links without a valid session route to login using replacement navigation, carrying the intended destination in router history state (never the URL). `AuthenticatedSessionBoundary` sets `state={{from: pathname+search}}` (the hash is never carried); `LoginPage` resolves it through `utils/postLoginDestination.ts`'s same-origin, allowlisted-path check before navigating, and rejects anything else (including `/login` itself and other public routes) back to `/home`. The target adds `/settings` to that allowlist. The destination still fully reauthorizes on arrival — this allowlist is a UX convenience, not a security boundary.
+- `/campaign-invitations/accept` retains its public single-link onboarding and authenticated manual-token fallback. Inline sign-in/registration and the server-side onboarding session continue under [PHASE13E_ACCESS_CONTRACT.md §3n](PHASE13E_ACCESS_CONTRACT.md#3n-single-link-invitation-onboarding-delivered-checkpoints-8a-8d); the ordinary landing rule must not interrupt invitation completion, and its completion link to `/campaigns` is unchanged. Do not retain invitation secrets in a return path.
 - Unknown routes display a proper not-found state, including unknown campaign sections; do not turn a wildcard into a login redirect. A known protected route still checks its session and authorization. Missing and unauthorized resources remain indistinguishable.
 
-### 4.3 Profile menu
+### 4.3 Profile (User Account) menu
 
-Replace the separate Your Account, Platform Accounts, and Log Out header controls with one profile button. Display the user's server-provided display name where space allows and initials in the avatar position by default. The fallback order is a future configured profile image, initials, the first usable account identifier already authorized for this viewer, then a generic account icon. Initials remain the default without a configured image. The current bootstrap supplies `user.display_name` and an opaque `user_id`, not a profile image or displayable login identifier; never show the UUID or fetch another account's identifier to fill an avatar. The generic icon covers an unusable display name until an authorized identifier is available.
+One profile button in the header. Display the user's server-provided display name where space allows and initials in the avatar position by default. The fallback order is a future configured profile image, initials, the first usable account identifier already authorized for this viewer, then a generic account icon. Initials remain the default without a configured image. The current bootstrap supplies `user.display_name` and an opaque `user_id`, not a profile image or displayable login identifier; never show the UUID or fetch another account's identifier to fill an avatar. The generic icon covers an unusable display name until an authorized identifier is available.
 
-Menu order:
+Target menu order (currently deployed: Your Account, Administration → Platform Accounts, Log out):
 
 1. Identity summary for the signed-in user.
-2. **Your Account** linking to `/account`.
-3. **Administration**, containing **Platform Accounts** linking to `/platform/accounts` only when authorized; omit the section when empty.
-4. **Log Out**, separated from navigation as an action.
+2. **Settings** linking to `/settings` (§4.7).
+3. **Account & Security** linking to `/account` — the existing self-service password-change and own-session page, renamed in the menu only.
+4. **Platform Accounts** linking to `/platform/accounts`, only when the bootstrap's `is_platform_administrator` is true (§4.4), kept under its **Administration** group label; omit the group otherwise.
+5. **Log out**, separated from navigation as an action.
 
-Allow future account destinations without designing profile-image upload or extending profile contracts in this change. The button needs an accessible name even when the display name is visually hidden; decorative avatar content must not duplicate that name.
+Allow future account destinations without designing profile-image upload or extending profile contracts. The button needs an accessible name even when the display name is visually hidden; decorative avatar content must not duplicate that name.
 
-Use a real button with `aria-expanded`, `aria-controls`, and an appropriate `aria-haspopup` state for the chosen menu semantics. Enter/Space opens it and moves focus into the menu. With ARIA menu semantics, provide menu/menuitem roles, Up/Down movement, Home/End, and Enter/Space activation; Tab closes and continues normal focus order. Escape closes and returns focus to the profile button. Outside-click and focus leaving the menu close it; dismissal must not steal focus from an outside control the user activated. Close on navigation or logout, and apply the route-focus convention after navigation. Hidden menu content is absent from keyboard and screen-reader navigation. Every action remains usable by keyboard and touch, with visible focus and no hover-only controls.
+Keep the delivered disclosure pattern (deliberately not an ARIA `menu`): a real button with `aria-expanded` and `aria-controls`; Enter/Space opens it and moves focus to the first item; Tab moves through native links/buttons and leaving the popup closes it; Escape closes and returns focus to the profile button. Outside-click and focus leaving the menu close it; dismissal must not steal focus from an outside control the user activated. Close on navigation or logout. Hidden menu content is absent from keyboard and screen-reader navigation. Every action remains usable by keyboard and touch, with visible focus and no hover-only controls.
 
 ### 4.4 Platform Accounts authorization
 
@@ -122,43 +168,73 @@ Platform Accounts is global platform administration, independent of campaign sel
 
 **Existing-contract compatibility:** the current bootstrap reports `is_platform_administrator`, not a platform-capability list or `accounts.manage`; [PHASE13E_ACCESS_CONTRACT.md §3p/§4](PHASE13E_ACCESS_CONTRACT.md#3p-platform-account-lifecycle-ui-delivered-checkpoints-9-11b) documents the actual server gate. Use that explicit server-provided authorization signal while that contract remains current. `accounts.manage` is an example of a future named platform capability, not a capability introduced or synthesized locally by this redesign. No authorization contract changes are approved here.
 
-Hiding a menu item is presentation only. The direct page route must enforce platform eligibility, and every list/mutation request must independently enforce backend authorization. Preserve the fixed non-disclosing not-found/unavailable behavior for unauthorized callers (currently server 404), without leaking account names, counts, identifiers, or diagnostics. **Delivered:** `/platform/accounts` is now the browser route (its route adapter itself is the gate, so a non-administrator never mounts the page and triggers no list request), with `/admin/accounts` kept only as a redirect for existing bookmarks. The backend account APIs are unchanged and still live at `/api/admin/accounts*` — the frontend route move did not rename those backend APIs or grant new access.
+Hiding a menu item is presentation only. The direct page route must enforce platform eligibility, and every list/mutation request must independently enforce backend authorization. Preserve the fixed non-disclosing not-found/unavailable behavior for unauthorized callers (currently server 404), without leaking account names, counts, identifiers, or diagnostics. **Delivered:** `/platform/accounts` is the browser route (its route adapter itself is the gate, so a non-administrator never mounts the page and triggers no list request), with `/admin/accounts` kept only as a redirect for existing bookmarks. The backend account APIs are unchanged and still live at `/api/admin/accounts*`.
 
 ### 4.5 Campaign discovery and switching
 
-The full `/campaigns` page provides complete authorized campaign browsing and selection with the fuller audience-safe information available for each campaign (§5.2). The context/infobox switcher provides quick switching during campaign work; it does not replace discovery. Users always have both the persistent global **Campaigns** item and an **All Campaigns** or **Browse Campaigns** action adjacent to the switcher. The switcher must never be the only way out of a selected campaign.
+The full `/campaigns` page provides complete authorized campaign browsing and selection with the fuller audience-safe information available for each campaign (§5.2). In the target, the sidebar's Campaign Home campaign list is the quick switcher during campaign work and always ends with **View all campaigns** (`/campaigns`); the sidebar is present on every authenticated route, so it is never the only way out of a selected campaign. The deployed `CampaignContextPanel` `<select>` switcher and its **Browse all campaigns** link are retired with it (§4).
 
 Preserve these authoritative behaviors:
 
-- Choices come only from authorized bootstrap/session data, never guessed IDs or locally filtered role lists.
+- Choices come only from authorized bootstrap/session data, never guessed IDs, stored preferences, or locally filtered role lists.
 - Revalidate campaign authorization through fresh bootstrap and server checks when campaign scope changes, including browser Back/Forward. A missing, revoked, or unauthorized campaign is not disclosed.
-- Reset or refresh campaign-scoped timeline, provider, perspective, character, party, detail, and preview context according to existing contracts. Do not carry one campaign's data under another campaign's URL. `RouteSessionProvider` currently remounts `SessionProvider` when its campaign route scope changes; `CampaignLayout` clears the target character selection. Global-shell persistence must preserve those security behaviors.
-- **Delivered.** Switching always enters `/app/:campaignId/home`; the former `buildCampaignSelectionPath` section/detail-preservation behavior has been removed. `CampaignContextPanel` now carries a "Browse all campaigns" link to `/campaigns` beside the switcher, and the campaign-not-found state carries the same link.
+- Reset or refresh campaign-scoped timeline, provider, perspective, character, party, detail, and preview context according to existing contracts. Do not carry one campaign's data under another campaign's URL. `RouteSessionProvider` remounts `SessionProvider` (and the application subtree beneath it) when its campaign route scope changes; switching clears the target campaign's character selection. Shell persistence must preserve those security behaviors: the sidebar's persistent state is limited to its collapsed/expanded presentation.
+- **Delivered.** Switching always enters `/app/:campaignId/home`; section/detail preservation is not offered.
 - Roles remain display information, not locally derived capabilities.
 
-### 4.6 Intended route model
+### 4.6 Route model
 
-This table describes the approved target, not a claim that the routes already exist.
+| Browser route | Boundary and purpose | Status |
+|---|---|---|
+| `/` | Replacement redirect to `/login` | Delivered |
+| `/login` | Public login; valid session follows §4.2's landing precedence | Delivered (precedence is target) |
+| `/campaign-invitations/accept` | Public onboarding/manual authenticated acceptance under the existing contract | Delivered |
+| `/activate`, `/reset-password` | Public one-time-link pages (fragment tokens) | Delivered |
+| `/home` | Authenticated landing resolver; renders no content (§4.2) | Target (deployed: global dashboard) |
+| `/settings` | Authenticated user settings: appearance and campaign startup (§4.7) | Target |
+| `/campaigns` | Authenticated full campaign browsing/selection | Delivered |
+| `/account` | Authenticated Account & Security: own password and sessions | Delivered |
+| `/platform/accounts` | Authenticated, platform-authorized Platform Accounts | Delivered |
+| `/admin/accounts` | Redirect to `/platform/accounts` for old bookmarks | Delivered |
+| `/app/:campaignId/home` | Campaign-authorized Campaign Home | Delivered |
+| `/app/:campaignId/{world,characters,quests,sessions,knowledge}` | Campaign pages | Delivered |
+| `/app/:campaignId/access` | Access Management, gated by `access.manage` | Delivered |
+| `/app/:campaignId/access/invitations` | Invitations, gated by `access.manage` | Delivered |
+| `/app/:campaignId/access/audit` | Audit History, gated by `access.manage` | Delivered |
+| `/app/:campaignId/ask` | Ask, under its existing feature-readiness rules | Placeholder |
 
-| Browser route | Boundary and purpose |
-|---|---|
-| `/` | Replacement redirect to `/login` |
-| `/login` | Public login; valid session redirects to `/home` |
-| `/campaign-invitations/accept` | Public onboarding/manual authenticated acceptance under the existing contract |
-| `/home` | Authenticated global landing/dashboard; no campaign required |
-| `/campaigns` | Authenticated full campaign browsing/selection |
-| `/account` | Authenticated Your Account/self-service |
-| `/platform/accounts` | Authenticated, platform-authorized Platform Accounts |
-| `/app/:campaignId/home` | Authenticated and campaign-authorized Campaign Home |
-| `/app/:campaignId/world` | Campaign World |
-| `/app/:campaignId/characters` | Campaign Characters |
-| `/app/:campaignId/quests` | Campaign Quests |
-| `/app/:campaignId/sessions` | Campaign Sessions |
-| `/app/:campaignId/knowledge` | Campaign Knowledge |
-| `/app/:campaignId/access` | Campaign Access Management (roles, memberships, relationships, grants, audit links, preview), gated by `access.manage` |
-| `/app/:campaignId/access/invitations` | Campaign Invitations (issue/revoke, one-time token), gated by `access.manage` |
+Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, and `knowledge/:knowledgeItemId`. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 
-Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail/subsection routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, `knowledge/:knowledgeItemId`, and `access/audit`, beneath their campaign prefix. Keep `/app/:campaignId/ask` under its existing readiness rules. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are not authenticated global destinations and are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
+### 4.7 Settings and campaign startup preferences
+
+**Status: approved target, not yet implemented.**
+
+`/settings` is an authenticated global page (sidebar present, no campaign required) with one `h1` ("Settings") and these sections:
+
+- **Appearance** — the existing theme selector, moved out of the header unchanged: the same supported themes (`System` plus the light and dark options in `portal/src/themes/themes.ts`) and the same behavior. The preference stays **client-side** in `localStorage` (`dnd-ai-theme`), applied by `ThemeProvider` before authentication/bootstrap completes so there is no flash of the wrong theme, and therefore it also applies on public pages and is per browser rather than per account. Nothing authentication-related (session, CSRF token, bootstrap) is ever stored alongside it.
+- **Campaign startup** — a radio group:
+  - **Resume my last visited campaign**
+  - **Always open this campaign:** [selector of currently authorized campaigns from the bootstrap]
+
+  Saving sends one explicit mutation (below); the selector is required when the second option is chosen. Only campaigns in the current bootstrap's `campaigns` list are offered. With zero campaigns the section explains that no campaigns are available yet and links to `/campaigns`; the radio group is not shown. With exactly one campaign the page notes that it always opens that campaign (step 3 of §4.2) while still allowing the preference to be saved. Save shows pending, success (polite status), and safe retryable error states; a non-disclosing 404 for an unavailable campaign tells the user the campaign is no longer available and reloads the bootstrap.
+
+**Persisted, user-scoped preferences.** Startup mode, preferred campaign, and last-visited campaign belong to the platform user, not to a browser or browser session, and are stored server-side in one row per user (`security.user_portal_preferences`, [DATABASE_MODEL.md §19.1](architecture/DATABASE_MODEL.md#191-identity-and-login)). Startup mode is not a separate column: a non-null preferred campaign means **Always open this campaign**; null means **Resume my last visited campaign**.
+
+Authorization boundaries:
+
+- Stored campaign IDs never grant access, are never copied into authorization decisions, and are never returned unless the campaign is currently in the user's authorized bootstrap campaign set (active membership in an active campaign, resolved through the same path as `campaigns`). An unauthorized stored ID is ignored silently: no error, no name, no hint that it exists. If access is later restored, the stored preference applies again.
+- The preference row stores only the user and the two campaign IDs plus timestamps — never roles, capabilities, memberships, or other authorization state.
+- Writes re-verify that the campaign is currently authorized for the caller (non-disclosing 404 otherwise) and require the existing cookie-session `X-CSRF-Token` and allowed-`Origin` protections. They are idempotent set operations, so they take no `Idempotency-Key`. Preference changes are presentation state, not canon, typed campaign state, or permission changes ([DATABASE_CONVENTIONS.md §24.1](DATABASE_CONVENTIONS.md#241-what-to-audit)), so they write neither `audit.change_log` rows nor security-audit events.
+- `GET /auth/session` never writes. **Last visited** is updated by an explicit client mutation sent only after `CampaignLayout` has confirmed the route campaign against the fresh bootstrap for that scope, at most once per campaign-scope entry and only when it differs from the bootstrap's current value; the server re-verifies authorization before writing. A failed or rejected last-visited write is silent and never blocks the page.
+
+**Bootstrap contract (target).** `GET /auth/session` replaces `selected_campaign_id` (whose "first authorized campaign" fallback is retired, not redefined) with:
+
+- `startup_campaign_id: UUID | null` — the server-resolved result of §4.2 steps 2–6; always either null or an ID present in `campaigns`.
+- `campaign_preferences: { startup_mode: "resume_last_visited" | "preferred_campaign", preferred_campaign_id: UUID | null, last_visited_campaign_id: UUID | null }` — each ID only when currently authorized; `startup_mode` reports the *effective* mode (`preferred_campaign` only when the preferred campaign is authorized).
+
+Write API (target): `PUT /auth/preferences/campaign-startup` with `{ "preferred_campaign_id": UUID | null }`, and `PUT /auth/preferences/last-visited-campaign` with `{ "campaign_id": UUID }`; both return `204`.
+
+Accepted limitations: last-visited writes from multiple tabs or rapid successive switches are last-writer-wins; the theme is per browser, not per account; `/home` costs one extra bootstrap request before landing; the sidebar shows a busy placeholder (never stale campaigns) during each campaign-scope bootstrap refresh.
 
 ## 5. Core screens
 
@@ -190,20 +266,18 @@ Show only campaigns the user may discover. Each item may include:
 - last accessible session date;
 - membership status.
 
-Show fuller campaign information only when the authoritative contract supplies it; these optional fields do not authorize new fetches or invented metadata. Do not show aggregate counts that include inaccessible campaigns. Selection normally opens Campaign Home, with revalidation as described in §4.5.
+Show fuller campaign information only when the authoritative contract supplies it; these optional fields do not authorize new fetches or invented metadata. Do not show aggregate counts that include inaccessible campaigns. Selection normally opens Campaign Home, with revalidation as described in §4.5. In the target this page is also the landing destination when no startup campaign resolves (§4.2) and owns the zero-campaign empty state, including the invitation-acceptance entry point. It may mark the user's preferred startup campaign and last-visited campaign using only the authorized `campaign_preferences` values (§4.7); it never labels campaigns "recent" from any other data. The sidebar's Campaign Home campaign list starts open on this route.
 
-### 5.2a Authenticated landing/dashboard (`/home`; implemented)
+### 5.2a Retired global dashboard (`/home`)
 
-This global page directs users to useful destinations before campaign selection. It is distinct from Campaign Home. **Implemented** (`PortalHomePage`), with the following omissions, each because no authoritative contract exists for it: pending-invitation entry points beyond the existing `/campaign-invitations/accept` manual-token page (current outstanding-invitation lists are campaign-manager reads, not a recipient inbox); recent/last-visited campaigns or their persistence (the default-campaign marker is the server's bootstrap default, not recent activity, exactly as on `/campaigns`); campaign activity, last-session dates, or membership status per card; a profile image; and campaign creation. The list below is otherwise delivered as written, limited to the first six campaigns in server order plus a "View all campaigns (N)" link to `/campaigns`, where N counts only authorized campaigns.
+**Target: retired.** The deployed `PortalHomePage` global dashboard (welcome line, bootstrap default-campaign shortcut, up to six campaign cards, and an Account section) is not retained, and Campaign Home is not turned into a settings page. Its responsibilities move as follows:
 
-- Welcome and identity information from the current session bootstrap.
-- An **Open Default Campaign** shortcut when the bootstrap-designated default is still authorized and available. The existing `selected_campaign_id` default marker is not a last-visited preference and does not imply recent activity.
-- A limited set of authorized campaign cards or shortcuts using only available audience-safe fields, plus a clear **View All Campaigns** action to `/campaigns`. The limited set is not a substitute for the complete campaign list.
-- Pending invitation entry points when that feature has an authoritative user-facing contract. Current outstanding-invitation lists are campaign-manager reads, not a global recipient inbox; do not repurpose them or infer invitations from email labels.
-- Authorized global/platform actions, including Your Account and Platform Accounts according to §4.4, without requiring a campaign.
-- A useful no-campaign empty state explaining that no accessible campaigns are available, with View All Campaigns/Select Campaign and the existing invitation-acceptance entry point where applicable. Do not suggest hidden campaigns exist or offer unrestricted account/campaign creation.
+- campaign selection → the sidebar's Campaign Home campaign list and `/campaigns` (§4, §5.2);
+- account/platform destinations → the profile menu (§4.3);
+- "open my default campaign" → the post-login landing resolver and the Campaign startup preference (§4.2, §4.7);
+- the zero-campaign empty state and invitation entry point → `/campaigns`.
 
-Do not label campaigns "recent" or persist recent-campaign selection without authoritative recent-activity data. New recent-activity storage, profile-image upload, recipient-invitation discovery, and broader dashboards are future capabilities outside this redesign. Preserve existing invitation completion links to `/campaigns` and membership-only admission semantics; a global landing page must not force a newly invited user into content they cannot yet access.
+`/home` remains a valid authenticated route only as the landing resolver (§4.2). Recipient-invitation discovery, campaign activity feeds, profile images, and broader global dashboards remain future capabilities outside this redesign. Preserve existing invitation completion links to `/campaigns` and membership-only admission semantics; landing must never force a newly invited user into content they cannot yet access.
 
 <a id="53-home-dashboard"></a>
 
@@ -569,7 +643,7 @@ Explanations are themselves filtered; they must not reveal a hidden intermediary
 
 ## 10. States and interaction behavior
 
-Global landing, account, platform, campaign, and boundary screens all define stable states. Preserve the global shell while the session remains valid, including without a campaign or when campaign access is denied; expired/invalid sessions clear protected data and follow §4.2. Every major screen defines:
+Global (settings, campaign selection, account, platform), campaign, and boundary screens all define stable states. Preserve the authenticated shell — header and sidebar frame — while the session remains valid, including without a campaign or when campaign access is denied; expired/invalid sessions clear protected data and follow §4.2. Every major screen defines:
 
 - initial loading;
 - partial loading;
@@ -597,12 +671,12 @@ Collection and detail transitions additionally obey these rules:
 ## 11. Responsive and accessible behavior
 
 - Support desktop, tablet, and phone layouts.
-- Reflow global and campaign navigation independently into labeled mobile menus without removing Home, Campaigns, the profile button, or the adjacent Browse Campaigns action. Mobile toggles expose expanded/control state, support Escape and keyboard/touch dismissal, restore focus on cancellation, and close after navigation. Hidden links are not focusable; modal drawers, if used, contain focus while open and restore it when dismissed.
+- Target sidebar behavior by width: at wide widths it is expanded or collapsed to an icon rail (user choice, persisted per browser); at narrow widths it becomes an off-canvas drawer opened by the header's drawer control, which is always visible there. The drawer is modal: it traps focus while open, Escape or the backdrop closes it and returns focus to the drawer control, and it closes after navigation. Hidden or off-canvas links are not focusable. The collapse/expand control and the drawer control always remain reachable; the profile button and **View all campaigns** are never removed at any width. Disclosure buttons (Campaign Home's campaign list, Access) use `aria-expanded`/`aria-controls`; current-route items use `aria-current="page"` (and the active campaign entry `aria-current="true"`).
 - Keep perspective indicators visible near the page title even when the main navigation collapses.
 - Reflow card collections and detail panels from multiple columns to one without page-level horizontal scrolling.
 - Allow only inherently wide tables to scroll inside a bounded local container.
 - Preserve meaningful source order when a multi-column detail layout becomes a single column.
-- Use semantic headings, distinctly labeled Global/Campaign navigation landmarks, tables, forms, and buttons. Preserve one page-level `h1` per route, logical `h2`/`h3` panel headings, and non-heading site-identity chrome as specified in [UI_STYLE_GUIDE.md §14](UI_STYLE_GUIDE.md#14-accessibility-requirements).
+- Use semantic headings, distinctly labeled navigation landmarks (one sidebar `nav` labeled "Main" plus labeled page-local navigation), tables, forms, and buttons. Preserve one page-level `h1` per route, logical `h2`/`h3` panel headings, and non-heading site-identity chrome as specified in [UI_STYLE_GUIDE.md §14](UI_STYLE_GUIDE.md#14-accessibility-requirements).
 - Use semantic lists for card collections and native links for card navigation.
 - Support keyboard navigation and visible focus in every theme, with profile-menu keyboard/screen-reader behavior as specified in §4.3. No essential control is hover-only; responsive name truncation must retain accessible names.
 - Do not encode canon/rumor/secret/status distinctions by color alone.

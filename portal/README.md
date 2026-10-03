@@ -76,7 +76,11 @@ Navigating between pages within the same campaign preserves the provider
 and selected perspective. Changing campaign scope resets them.
 
 The campaign picker's Default campaign marker describes the server's
-bootstrap default, not a persisted last-visited preference.
+bootstrap `selected_campaign_id`, which today is simply the first authorized
+campaign in name order — not a persisted or last-visited preference. The
+approved navigation/settings redesign replaces it with persisted startup and
+last-visited preferences; see
+[Approved navigation and settings redesign](#approved-navigation-and-settings-redesign-not-yet-implemented).
 
 ## Prerequisites
 
@@ -172,8 +176,13 @@ Do not commit local database credentials or authentication secrets.
 
 ## Routes
 
-The navigation redesign (`docs/UI_DESIGN.md` §4-§5, `docs/PLAN.md` §23.6) is
-implemented. `/` always redirects to `/login`; an authenticated visitor is
+This section describes the **currently deployed** routes. The approved
+single-navigation/settings redesign changes `/home`, adds `/settings`, and
+moves navigation into one persistent sidebar — see
+[Approved navigation and settings redesign](#approved-navigation-and-settings-redesign-not-yet-implemented).
+
+The first navigation redesign (`docs/UI_DESIGN.md` §4-§5, `docs/PLAN.md`
+§23.6) is implemented. `/` always redirects to `/login`; an authenticated visitor is
 then redirected again, from `/login`, to `/home` (or to a validated
 continuation destination carried in router history state — never the URL —
 when the visitor was redirected here from a protected route). Logging out
@@ -360,6 +369,50 @@ activate their own local account, after which the invitation is accepted
 for that authenticated account. Acceptance creates or reactivates a
 campaign membership only; it does not assign roles or restore historical
 relationships, grants, or access-group membership.
+
+## Approved navigation and settings redesign (not yet implemented)
+
+The authoritative design is `docs/UI_DESIGN.md` §4-§4.7 and §5.2a; this is a
+summary for portal contributors. None of it is delivered yet — the routes and
+shell described above remain the deployed behavior until this section is
+replaced by a delivered description and verification record.
+
+- **One navigation system.** A persistent sidebar (`nav` "Main") rendered by
+  `AuthenticatedAppLayout` on every authenticated route — campaign pages,
+  `/campaigns`, `/settings`, `/account`, `/platform/accounts` — and never on
+  public pages (`/login`, `/activate`, `/reset-password`,
+  `/campaign-invitations/accept`, public not-found). Expanded, collapsed to an
+  icon rail (persisted per browser), or an accessible modal drawer at narrow
+  widths; its collapse/drawer controls are always reachable, and a bootstrap
+  refresh shows a busy placeholder rather than removing the frame or showing
+  stale campaigns.
+- **Sidebar contents.** Campaign Home (a link to the resolved campaign plus a
+  separate "Choose campaign" disclosure listing only bootstrap-authorized
+  campaigns and **View all campaigns** → `/campaigns`), World, Characters,
+  Quests, Sessions, Knowledge, Ask (server feature manifest), and Access
+  (`access.manage`) → Access Management / Invitations / Audit History, with
+  the collapse control last. With no resolvable campaign, no campaign-specific
+  link is rendered.
+- **Header.** Identity/brand (links to `/home`), the narrow-screen drawer
+  control, and the profile menu only. `GlobalNavigation` and the header theme
+  selector are removed.
+- **Profile menu.** Settings, Account & Security (`/account`), Platform
+  Accounts (platform administrators only), Log out.
+- **`/settings`.** Appearance (the existing theme selector; still
+  `localStorage`-backed so it applies before sign-in) and Campaign startup
+  (**Resume my last visited campaign** or **Always open this campaign:** an
+  authorized campaign), persisted server-side per user.
+- **`/home`.** No longer a dashboard (`PortalHomePage` is retired): an
+  authenticated landing resolver that replaces itself with
+  `/app/{startup_campaign_id}/home`, or `/campaigns` when the bootstrap
+  resolves no startup campaign. Invitation and protected-route continuations
+  still take precedence on the login page.
+- **Last visited.** After `CampaignLayout` confirms a campaign against the
+  fresh bootstrap, the portal sends `PUT /api/auth/preferences/last-visited-campaign`
+  (CSRF-protected, failures silent). `GET /auth/session` never writes.
+- **Bootstrap.** `selected_campaign_id` is replaced by `startup_campaign_id`
+  and `campaign_preferences` (`startup_mode`, `preferred_campaign_id`,
+  `last_visited_campaign_id`), each ID returned only while authorized.
 
 ## Navigation redesign verification
 
