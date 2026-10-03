@@ -12,3 +12,13 @@
 # --check` can both pass without rewriting the file's pre-existing line
 # endings.
 tests/database/test_api_campaigns.py whitespace=cr-at-eol
+
+# Same rationale, hit by the Phase 13E-B manual-acceptance-fix pass:
+# src/dnd_ai/api/auth.py is itself stored with CRLF line endings, and
+# tests/database/test_role_grants.py's LF-stored blob is displayed with
+# CRLF by `git diff` whenever core.autocrlf=true (as in this Windows-
+# authored history) — either way, a line new or modified in a diff gets
+# its own trailing CR misread as "trailing whitespace" without this
+# attribute.
+src/dnd_ai/api/auth.py whitespace=cr-at-eol
+tests/database/test_role_grants.py whitespace=cr-at-eol

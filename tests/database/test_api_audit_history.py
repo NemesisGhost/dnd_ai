@@ -40,6 +40,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.audit import record_change_log
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
 from tests.factories import (
     lookup_id,
     make_campaign,
@@ -381,6 +382,57 @@ class Fixture:
             record_id=self.departing_membership_id,
         )
 
+        # 14. invitation-onboarding completion (checkpoint 14): the record
+        # names the campaign_membership_id it activates, exactly like
+        # accept_campaign_invitation above, resolved through the same
+        # membership branch.
+        self.onboarded_user_id = make_user(connection, "Audit History Onboarded Member")
+        onboarded_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.onboarded_user_id
+        )
+        self.onboarded_membership_id = onboarded_membership_id
+        _record(
+            command="invitation_onboarding.complete",
+            action="updated",
+            table="campaign_memberships",
+            record_id=onboarded_membership_id,
+            actor_user_id=self.onboarded_user_id,
+        )
+
+        # 14b. invited registration: the register endpoint's campaign-
+        # resolvable row names the membership the same transaction
+        # accepted (the sibling invitation_onboarding.register row names a
+        # users row and is intentionally not in this history).
+        self.registered_user_id = make_user(connection, "Audit History Registered Member")
+        registered_membership_id = make_campaign_membership(
+            connection, self.campaign_id, self.registered_user_id
+        )
+        _record(
+            command="invitation_onboarding.register_accept",
+            action="updated",
+            table="campaign_memberships",
+            record_id=registered_membership_id,
+            actor_user_id=self.registered_user_id,
+        )
+
+        # 15. create a *deny* resource grant (checkpoint 14: change_summary
+        # must mark a deny grant distinctly from an ordinary allow one).
+        denied_grant_id = make_resource_grant(
+            connection,
+            self.campaign_id,
+            grant_capability_id,
+            grantee_campaign_membership_id=self.member_membership_id,
+            character_id=self.character_id,
+            effect="deny",
+        )
+        self.denied_grant_id = denied_grant_id
+        _record(
+            command="create_resource_grant",
+            action="created",
+            table="resource_grants",
+            record_id=denied_grant_id,
+        )
+
         # A service-attributed event: audit.change_log.actor_service is set
         # *instead of* actor_user_id (dnd_ai.api.audit.record_change_log's
         # own contract — used today only by dnd_ai.api.local_auth's failed-
@@ -631,8 +683,8 @@ def test_authorized_admin_reads_the_full_curated_history(
     assert response.status_code == 200
     body = response.json()
     assert body["next_cursor"] is None
-    # 15 events recorded for campaign A (14 numbered + 1 ghost-actor event).
-    assert len(body["items"]) == 15
+    # 18 events recorded for campaign A (17 numbered + 1 ghost-actor event).
+    assert len(body["items"]) == 18
     categories = {item["category"] for item in body["items"]}
     assert categories == {
         "membership",
@@ -643,6 +695,62 @@ def test_authorized_admin_reads_the_full_curated_history(
         "campaign",
     }
     assert any(item["action_label"] == "Invitation revoked" for item in body["items"])
+
+
+def test_invitation_onboarding_completion_appears_under_the_invitation_category(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    body = response.json()
+    matching = [
+        item for item in body["items"] if item["action_label"] == "Invitation onboarding completed"
+    ]
+    assert len(matching) == 1
+    item = matching[0]
+    assert item["category"] == "invitation"
+    assert item["actor_label"] == "Audit History Onboarded Member"
+    assert item["target_label"] == "Audit History Onboarded Member"
+    assert item["target_type"] == "account"
+
+
+def test_invited_registration_acceptance_appears_under_the_invitation_category(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    matching = [
+        item
+        for item in response.json()["items"]
+        if item["action_label"] == "Invitation accepted (new account)"
+    ]
+    assert len(matching) == 1
+    item = matching[0]
+    assert item["category"] == "invitation"
+    assert item["actor_label"] == "Audit History Registered Member"
+    assert item["target_label"] == "Audit History Registered Member"
+    assert item["target_type"] == "account"
+
+
+def test_a_deny_resource_grant_is_marked_distinctly_in_its_summary(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_url(f.campaign_id, limit=100))
+    body = response.json()
+    grant_items = [item for item in body["items"] if item["category"] == "resource_grant"]
+    deny_items = [
+        item
+        for item in grant_items
+        if item["change_summary"] is not None and "(deny)" in item["change_summary"]
+    ]
+    assert len(deny_items) == 1
+    allow_items = [
+        item
+        for item in grant_items
+        if item["change_summary"] is not None and "(deny)" not in item["change_summary"]
+    ]
+    assert len(allow_items) >= 1
 
 
 def test_ordering_is_deterministic_newest_first_under_a_real_timestamp_tie(
@@ -671,9 +779,9 @@ def test_pagination_is_stable_across_the_timestamp_tie(
         page2 = client.get(_url(f.campaign_id, limit=5, cursor=page1["next_cursor"])).json()
         assert len(page2["items"]) == 5
 
-        page3 = client.get(_url(f.campaign_id, limit=5, cursor=page2["next_cursor"])).json()
+        page3 = client.get(_url(f.campaign_id, limit=8, cursor=page2["next_cursor"])).json()
         assert page3["next_cursor"] is None
-        assert len(page3["items"]) == 5  # 15 total - 5 - 5
+        assert len(page3["items"]) == 8  # 18 total - 5 - 5
 
     all_ids = [i["change_log_id"] for i in page1["items"] + page2["items"] + page3["items"]]
     assert len(all_ids) == len(set(all_ids)), "pagination must never repeat a row"
@@ -768,7 +876,7 @@ def test_campaign_a_never_sees_campaign_b_history(
         response = client.get(_url(f.campaign_id, limit=100))
     body = response.json()
     change_log_ids = {item["change_log_id"] for item in body["items"]}
-    assert len(change_log_ids) == 15
+    assert len(change_log_ids) == 18
     # Every change_log_id here must have been produced for campaign A —
     # cross-checked structurally by re-querying campaign B and confirming
     # no overlap in ids at all.
@@ -954,3 +1062,136 @@ def test_a_renamed_character_target_shows_its_current_name(
         body = client.get(_url(f.campaign_id, category="character_relationship", limit=100)).json()
     matching = [i for i in body["items"] if i["target_label"] == "Renamed Character (current)"]
     assert len(matching) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Actor facet (`GET /campaigns/{campaign_id}/audit-history/actors`) — the
+# audit-actor-contract fix: the audit route's actor-select filter no longer
+# depends on the complete `GET .../access-overview` response, just this
+# bounded, identically-authorized facet.
+# ---------------------------------------------------------------------------
+
+
+def _actors_url(campaign_id: uuid.UUID) -> str:
+    return f"/campaigns/{campaign_id}/audit-history/actors"
+
+
+def test_actors_non_member_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.outsider_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 404
+
+
+def test_actors_member_without_access_manage_gets_forbidden(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 403
+
+
+def test_actors_an_unknown_campaign_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_actors_url(uuid.uuid4()))
+    assert response.status_code == 404
+
+
+def test_actors_a_caller_whose_membership_has_ended_gets_not_found(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    """Current-state checked: `f.departing_user_id` once held a real
+    membership in this campaign (and still appears *inside* its audit
+    history, as the target of an `end_campaign_membership` event) but that
+    membership is now closed. Authorization is resolved fresh from current
+    state, never from the historical record, so this caller gets the
+    identical non-disclosing 404 an outright non-member gets — the same
+    "current-state checked" contract `require_campaign_capability` already
+    enforces for the main history endpoint, proven here for the actor
+    facet too."""
+    with client_factory(f.departing_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 404
+
+
+def test_actors_a_foundry_access_principal_gets_forbidden(
+    postgres_engine: Engine, f: Fixture
+) -> None:
+    """Neither this endpoint nor its `/audit-history` sibling opts into
+    `allow_foundry_access` — both inherit `require_campaign_capability`'s
+    default-deny for a paired Foundry connection unchanged. The retired
+    `FOUNDRY_SYSTEM_AUTH_METHOD` ("machine") credential cannot reach any
+    authenticated route at all — rejected earlier, in `get_authenticated_
+    user_id` itself (see that function's own docstring) — so there is no
+    live code path to construct that principal against this route either;
+    this is the one Foundry/machine principal type that can still reach
+    `require_campaign_capability` at all."""
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: postgres_engine
+    principal = AuthenticatedPrincipal(
+        user_id=f.admin_user_id,
+        auth_method=FOUNDRY_ACCESS_AUTH_METHOD,
+        foundry_external_system_id=uuid.uuid4(),
+        foundry_world_id=f.world_id,
+        campaign_id=f.campaign_id,
+        foundry_connection_id=uuid.uuid4(),
+        foundry_device_id=uuid.uuid4(),
+        # A real, broad scope -- irrelevant to this test either way, since
+        # require_campaign_capability rejects a non-opted-in route's
+        # FOUNDRY_ACCESS_AUTH_METHOD caller before it ever checks scope.
+        foundry_scopes=frozenset({"encounter_read"}),
+    )
+    app.dependency_overrides[get_authenticated_user_id] = lambda: principal
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 403
+
+
+def test_actors_returns_the_distinct_human_actors_for_this_campaign_only(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_actors_url(f.campaign_id))
+    assert response.status_code == 200
+    body = response.json()
+    actors = {(a["user_id"], a["display_name"]) for a in body["actors"]}
+    assert actors == {
+        (str(f.admin_user_id), "Audit History Admin A"),
+        (str(f.accepted_user_id), "Audit History Accepted Member"),
+        (str(f.onboarded_user_id), "Audit History Onboarded Member"),
+        (str(f.registered_user_id), "Audit History Registered Member"),
+    }
+    # The service-attributed ("test.audit_history_fixture_service") event
+    # has no actor_user_id at all and must never surface here — this
+    # facet's contract is user_id/display_name only, matching item 4 of
+    # the audit-actor-contract fix.
+    assert not any(
+        a["display_name"] == "test.audit_history_fixture_service" for a in body["actors"]
+    )
+    # Campaign B's own actor (a different campaign, same shared timeline —
+    # the exact leak this module's campaign_id resolution exists to
+    # prevent) must never appear in Campaign A's own actor list.
+    assert str(f.other_admin_user_id) not in {a["user_id"] for a in body["actors"]}
+
+
+def test_actors_are_scoped_per_campaign_not_leaked_across_a_shared_timeline(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.other_admin_user_id) as client:
+        response = client.get(_actors_url(f.other_campaign_id))
+    assert response.status_code == 200
+    body = response.json()
+    actors = {(a["user_id"], a["display_name"]) for a in body["actors"]}
+    assert actors == {(str(f.other_admin_user_id), "Audit History Admin B")}
+
+
+def test_actors_an_empty_campaign_returns_an_empty_list_not_an_error(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.empty_admin_user_id) as client:
+        response = client.get(_actors_url(f.empty_campaign_id))
+    assert response.status_code == 200
+    assert response.json() == {"actors": []}

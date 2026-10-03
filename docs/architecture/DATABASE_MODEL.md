@@ -876,6 +876,24 @@ Key columns:
 
 No pruning/archival job for expired or revoked rows in any of the four tables above is added by migration 099 — like `security.idempotent_requests`, these are disposable operational state with real `ON DELETE CASCADE` foreign keys, not audit history; a periodic cleanup job is left to a future operational workstream.
 
+##### `security.invitation_onboarding_sessions`
+
+Pre-authentication scratch state for the single-link campaign-invitation onboarding flow (Phase 13E-B checkpoint 8a; `docs/PHASE13E_ACCESS_CONTRACT.md` §3n). Bridges a shareable `/campaign-invitations/accept#token=...` link through sign-in or invitation-authorized registration to automatic invitation acceptance, without ever putting the raw invitation token anywhere but the link itself and the JSON body that exchanges it.
+
+Key columns:
+
+- `invitation_onboarding_session_id UUID PK`
+- `campaign_invitation_id UUID FK -> security.campaign_invitations` — the invitation this session is onboarding toward; never the invitation's own raw token
+- `onboarding_token_hash TEXT` (`ux_ios_token_hash` unique) — sha256 hex digest of the server-generated opaque onboarding-cookie value; the raw token is set as the cookie's value and never stored
+- `onboarding_csrf_token TEXT` — a server-generated double-submit secret for `register`/`cancel`, stored in the clear (mirrors `security.browser_sessions.csrf_token`'s identical "the bootstrap-equivalent status read already returns the same value" reasoning) — alone grants nothing
+- `created_at TIMESTAMPTZ`
+- `expires_at TIMESTAMPTZ` — `min(now() + 20 minutes, the invitation's own expires_at)` at creation time, never extended afterward
+- `consumed_at TIMESTAMPTZ NULL`, `consumed_by_user_id UUID FK -> security.users NULL` (`ON DELETE RESTRICT` — no command in this codebase ever deletes a `security.users` row) — set together by `complete_invitation_onboarding`
+- `cancelled_at TIMESTAMPTZ NULL`
+- `created_ip TEXT NULL`
+
+`security.users.display_name` also gained a length bound in the same migration (`ck_users_display_name_length`, `1-100` chars) — invitation-authorized registration is the first path where `display_name` is untrusted, caller-supplied input reaching this table, unlike every prior write path (administrator-issued account creation).
+
 ##### `security.external_identities`
 
 Maps one application user to one or more OIDC identities.

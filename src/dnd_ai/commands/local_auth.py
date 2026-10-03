@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, RowMapping, text
 
 from dnd_ai.domain.access import (
     LOCAL_AUTH_ISSUER,
@@ -54,6 +54,10 @@ from dnd_ai.domain.passwords import (
 
 from ._shared import lookup_id
 from .foundry_pairing import revoke_all_foundry_connections
+from .invitation_onboarding import (
+    _lock_and_validate_onboarding_session,
+    accept_locked_onboarding_invitation,
+)
 
 _ACTIVATION_TOKEN_TTL = timedelta(hours=48)
 _PASSWORD_RESET_TOKEN_TTL = timedelta(hours=2)
@@ -102,11 +106,26 @@ _LOGIN_NAME_MIN_LENGTH = 3
 _LOGIN_NAME_MAX_LENGTH = 64
 _LOGIN_NAME_ALLOWED_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 
+# D-11: reserved login names, compared after normalize_login_name — applies
+# to every path that creates a login name (invited registration via
+# _register_invited_local_account_impl, administrator-created accounts via
+# _create_local_account_impl, and bootstrap_initial_admin alike), since all
+# three funnel through this one function. Checkpoint 8b's invited
+# self-registration is what first makes login-name choice untrusted input;
+# before that, only a platform administrator ever chose one. Rejected via
+# the existing LoginNameFormatError, so this discloses nothing about
+# whether a name is merely reserved vs. actually taken.
+_RESERVED_LOGIN_NAMES = frozenset(
+    {"admin", "administrator", "root", "system", "gm", "dnd_ai", "support"}
+)
+
 
 def _validate_login_name_format(login_name: str) -> None:
     if not (_LOGIN_NAME_MIN_LENGTH <= len(login_name) <= _LOGIN_NAME_MAX_LENGTH):
         raise LoginNameFormatError()
     if any(ch not in _LOGIN_NAME_ALLOWED_CHARS for ch in login_name):
+        raise LoginNameFormatError()
+    if login_name in _RESERVED_LOGIN_NAMES:
         raise LoginNameFormatError()
 
 
@@ -333,6 +352,97 @@ class ActivateLocalAccountResult:
     login_name: str
 
 
+def _load_consumable_activation_token(
+    connection: Connection, *, token_hash: str, lock: bool
+) -> RowMapping | None:
+    """The single definition of an activatable token, shared by final
+    activation (`lock=True`: `FOR UPDATE`, serializing concurrent
+    consumers) and the advisory pre-check (`lock=False`: no row lock, no
+    write). Returns `None` for a missing, consumed, or expired token — the
+    caller never learns which."""
+    token_row = (
+        connection.execute(
+            text(
+                """
+                SELECT user_activation_token_id, user_id, login_name, consumed_at,
+                       (expires_at <= now()) AS expired
+                FROM security.user_activation_tokens
+                WHERE token_hash = :hash
+                """
+                + (" FOR UPDATE" if lock else "")
+            ),
+            {"hash": token_hash},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+        return None
+    return token_row
+
+
+def _activation_login_name_claimed(connection: Connection, *, login_name: str) -> bool:
+    return (
+        connection.execute(
+            text("""
+                SELECT 1 FROM security.external_identities
+                WHERE issuer = :issuer AND subject = :subject AND revoked_at IS NULL
+            """),
+            {"issuer": LOCAL_AUTH_ISSUER, "subject": login_name},
+        ).scalar()
+        is not None
+    )
+
+
+def _account_is_active(connection: Connection, *, user_id: uuid.UUID, lock: bool) -> bool:
+    """Whether the token's account currently has the `active` lifecycle
+    status (shared by activation and password reset). Final activation passes `lock=True` (`FOR SHARE OF u`) so a
+    concurrent disable, which takes `FOR UPDATE` on the same row, either
+    commits first (and is observed here, after the wait) or waits until
+    this transaction ends; the advisory pre-check passes `lock=False`.
+
+    Lock order, final activation: token row (`FOR UPDATE`) -> `security.
+    users` row (`FOR SHARE`). Disable/reactivate
+    (`_set_local_account_lifecycle_status_impl`): platform-administrator
+    advisory lock (disable only) -> `security.users` row (`FOR UPDATE`),
+    and they never touch activation-token rows. The only shared resource is
+    the users row, always taken last, so no inverse order exists and the
+    two cannot deadlock. Activation never takes the advisory lock: it cannot
+    reduce the active-administrator count it protects."""
+    row = connection.execute(
+        text(
+            """
+            SELECT ls.code
+            FROM security.users u
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+            WHERE u.user_id = :user_id
+            """
+            + (" FOR SHARE OF u" if lock else "")
+        ),
+        {"user_id": user_id},
+    ).scalar()
+    return bool(row == _ACTIVE_LIFECYCLE_STATUS_CODE)
+
+
+def is_activation_token_currently_usable(
+    connection: Connection, *, raw_activation_token: str
+) -> bool:
+    """Advisory, read-only, non-consuming: would `_activate_local_account_impl`
+    accept this token right now (ignoring only the password policy)? Takes
+    no row lock and writes nothing — the answer may be stale the instant
+    it returns, so final activation always repeats every check itself.
+    Deliberately a bare boolean: never distinguishes unknown, malformed,
+    expired, consumed, or login-name-conflict."""
+    token_row = _load_consumable_activation_token(
+        connection, token_hash=hash_opaque_secret(raw_activation_token), lock=False
+    )
+    if token_row is None:
+        return False
+    if not _account_is_active(connection, user_id=token_row["user_id"], lock=False):
+        return False
+    return not _activation_login_name_claimed(connection, login_name=token_row["login_name"])
+
+
 def _activate_local_account_impl(
     connection: Connection, *, raw_activation_token: str, raw_password: str
 ) -> ActivateLocalAccountResult:
@@ -349,36 +459,19 @@ def _activate_local_account_impl(
     validate_password_policy(raw_password)
     token_hash = hash_opaque_secret(raw_activation_token)
 
-    token_row = (
-        connection.execute(
-            text("""
-                SELECT user_activation_token_id, user_id, login_name, consumed_at,
-                       (expires_at <= now()) AS expired
-                FROM security.user_activation_tokens
-                WHERE token_hash = :hash
-                FOR UPDATE
-            """),
-            {"hash": token_hash},
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
-        raise ActivationNotAcceptableError(
-            f"activation token hash {token_hash} is not consumable (row={token_row is not None})"
-        )
+    token_row = _load_consumable_activation_token(connection, token_hash=token_hash, lock=True)
+    if token_row is None:
+        raise ActivationNotAcceptableError(f"activation token hash {token_hash} is not consumable")
 
     user_id = token_row["user_id"]
     login_name = token_row["login_name"]
 
-    already_claimed = connection.execute(
-        text("""
-            SELECT 1 FROM security.external_identities
-            WHERE issuer = :issuer AND subject = :subject AND revoked_at IS NULL
-        """),
-        {"issuer": LOCAL_AUTH_ISSUER, "subject": login_name},
-    ).scalar()
-    if already_claimed is not None:
+    # Indistinguishable from any other unusable token: a disabled account must
+    # not be told apart from an unknown, consumed, or expired link.
+    if not _account_is_active(connection, user_id=user_id, lock=True):
+        raise ActivationNotAcceptableError(f"activation token hash {token_hash} is not consumable")
+
+    if _activation_login_name_claimed(connection, login_name=login_name):
         raise LoginNameAlreadyTakenError()
 
     connection.execute(
@@ -866,6 +959,65 @@ class ResetPasswordResult:
     sessions_revoked: bool
 
 
+def _load_consumable_reset_token(
+    connection: Connection, *, token_hash: str, lock: bool
+) -> RowMapping | None:
+    """The single definition of a consumable reset token, shared by final
+    reset (`lock=True`: `FOR UPDATE`) and the advisory pre-check
+    (`lock=False`: no row lock, no write). `None` for a missing, consumed, or
+    expired token — the caller never learns which."""
+    token_row = (
+        connection.execute(
+            text(
+                """
+                SELECT password_reset_token_id, user_id, revoke_sessions, consumed_at,
+                       (expires_at <= now()) AS expired
+                FROM security.password_reset_tokens
+                WHERE token_hash = :hash
+                """
+                + (" FOR UPDATE" if lock else "")
+            ),
+            {"hash": token_hash},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+        return None
+    return token_row
+
+
+def _reset_target_is_eligible(connection: Connection, *, user_id: uuid.UUID, lock: bool) -> bool:
+    """A reset applies only to an `active` account that already has a local
+    credential to replace. Lock semantics as `_account_is_active`."""
+    if not _account_is_active(connection, user_id=user_id, lock=lock):
+        return False
+    return (
+        connection.execute(
+            text("SELECT 1 FROM security.local_credentials WHERE user_id = :user_id"),
+            {"user_id": user_id},
+        ).scalar()
+        is not None
+    )
+
+
+def is_password_reset_token_currently_usable(
+    connection: Connection, *, raw_reset_token: str
+) -> bool:
+    """Advisory, read-only, non-consuming: would `_reset_password_with_token_impl`
+    accept this token right now (ignoring only the password policy)? Takes no
+    row lock and writes nothing — the answer may be stale the instant it
+    returns, so final reset always repeats every check itself. Deliberately a
+    bare boolean: never distinguishes unknown, malformed, expired, consumed,
+    or an ineligible target account."""
+    token_row = _load_consumable_reset_token(
+        connection, token_hash=hash_opaque_secret(raw_reset_token), lock=False
+    )
+    if token_row is None:
+        return False
+    return _reset_target_is_eligible(connection, user_id=token_row["user_id"], lock=False)
+
+
 def _reset_password_with_token_impl(
     connection: Connection, *, raw_reset_token: str, new_raw_password: str
 ) -> ResetPasswordResult:
@@ -879,24 +1031,14 @@ def _reset_password_with_token_impl(
     "full sign-out" policy)."""
     validate_password_policy(new_raw_password)
     token_hash = hash_opaque_secret(raw_reset_token)
-    token_row = (
-        connection.execute(
-            text("""
-                SELECT password_reset_token_id, user_id, revoke_sessions, consumed_at,
-                       (expires_at <= now()) AS expired
-                FROM security.password_reset_tokens
-                WHERE token_hash = :hash
-                FOR UPDATE
-            """),
-            {"hash": token_hash},
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if token_row is None or token_row["consumed_at"] is not None or token_row["expired"]:
+    token_row = _load_consumable_reset_token(connection, token_hash=token_hash, lock=True)
+    # Lock order mirrors activation: token row (`FOR UPDATE`) -> users row
+    # (`FOR SHARE`), via the same eligibility check the advisory pre-check uses.
+    if token_row is None or not _reset_target_is_eligible(
+        connection, user_id=token_row["user_id"], lock=True
+    ):
         raise PasswordResetNotAcceptableError(
-            f"password reset token hash {token_hash} is not consumable "
-            f"(row={token_row is not None})"
+            f"password reset token hash {token_hash} is not consumable"
         )
     connection.execute(
         text("""
@@ -967,9 +1109,16 @@ class LastActivePlatformAdministratorError(SafeMessageError):
 
     safe_status_code = 409
     safe_error_code = "last_active_platform_administrator"
+    # D-10 correction: the previous wording ("Activate another
+    # administrator account first") named a remedy no application path can
+    # perform — no command anywhere promotes an existing account to
+    # platform administrator over HTTP (see scripts/
+    # grant_platform_administrator.py, the only path that can). Restated to
+    # describe the invariant without implying an in-app fix.
     safe_message = (
         "This is the platform's only active administrator account and cannot be disabled. "
-        "Activate another administrator account first."
+        "Promoting a second administrator requires direct database access — see the "
+        "platform administrator recovery runbook."
     )
 
 
@@ -999,6 +1148,92 @@ def _count_active_platform_administrators(connection: Connection) -> int:
     ).scalar()
     assert isinstance(value, int)
     return value
+
+
+class PlatformAccountNotFoundError(SafeMessageError):
+    """Raised by `grant_platform_administrator` when `login_name` does not
+    resolve to a currently-active local account. Disclosing here is safe:
+    the only caller is `scripts/grant_platform_administrator.py`, run by an
+    operator who already has direct database access — the same "never
+    reachable over HTTP" posture `AlreadyBootstrappedError`'s own docstring
+    establishes for the identical reasoning."""
+
+    safe_status_code = 404
+    safe_error_code = "account_not_found"
+    safe_message = "No active local account was found for that login name."
+
+
+@dataclass(frozen=True)
+class GrantPlatformAdministratorResult:
+    user_id: uuid.UUID
+    login_name: str
+    already_administrator: bool
+
+
+def grant_platform_administrator(
+    engine: Engine, *, login_name: str
+) -> GrantPlatformAdministratorResult:
+    """Out-of-band promotion (D-10) — the only path in this codebase that
+    ever sets `is_platform_administrator = true` on an *existing* account
+    (`bootstrap_initial_admin` above is the only other writer, and only for
+    the platform's very first account ever). Deliberately **no API route
+    and no portal control call this** — see `scripts/
+    grant_platform_administrator.py`'s own docstring for the full "trusted
+    infrastructure, never over HTTP" reasoning, the same boundary
+    `security.timeline_bootstrap_grants` already establishes for its own
+    analogous entitlement.
+
+    Resolves `login_name` by normalized `security.external_identities.
+    subject` (issuer `LOCAL_AUTH_ISSUER`, `revoked_at IS NULL`) against a
+    currently-`active` account — never a raw `user_id`, which is easy to
+    mistype into the wrong account at a shell prompt. Acquires `_PLATFORM_
+    ADMINISTRATOR_LIFECYCLE_LOCK_KEY`'s advisory lock for the whole
+    transaction, the identical key `_set_local_account_lifecycle_status_
+    impl`'s disable path already serializes on, so this can never race a
+    concurrent disable that is mid-way through counting active
+    administrators. Idempotent: promoting an already-administrator account
+    is a documented no-op (`already_administrator=True`), not an error."""
+    with engine.begin() as connection:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": _PLATFORM_ADMINISTRATOR_LIFECYCLE_LOCK_KEY},
+        )
+        normalized_login_name = normalize_login_name(login_name)
+        row = (
+            connection.execute(
+                text("""
+                    SELECT u.user_id, u.is_platform_administrator
+                    FROM security.users u
+                    JOIN security.external_identities ei ON ei.user_id = u.user_id
+                    JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
+                    WHERE ei.issuer = :issuer AND ei.subject = :subject
+                      AND ei.revoked_at IS NULL AND ls.code = 'active'
+                    FOR UPDATE OF u
+                """),
+                {"issuer": LOCAL_AUTH_ISSUER, "subject": normalized_login_name},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise PlatformAccountNotFoundError(
+                f"login name {normalized_login_name!r} does not resolve to an active local account"
+            )
+        user_id = row["user_id"]
+        already_administrator = bool(row["is_platform_administrator"])
+        if not already_administrator:
+            connection.execute(
+                text(
+                    "UPDATE security.users SET is_platform_administrator = true "
+                    "WHERE user_id = :user_id"
+                ),
+                {"user_id": user_id},
+            )
+        return GrantPlatformAdministratorResult(
+            user_id=user_id,
+            login_name=normalized_login_name,
+            already_administrator=already_administrator,
+        )
 
 
 def _set_local_account_lifecycle_status_impl(
@@ -1182,6 +1417,86 @@ def _admin_revoke_all_browser_sessions_impl(
     return AdminRevokeAllSessionsResult(user_id=target_user_id, revoked_count=result.rowcount)
 
 
+@dataclass(frozen=True)
+class RegisterInvitedLocalAccountResult:
+    user_id: uuid.UUID
+    login_name: str
+    campaign_id: uuid.UUID
+    campaign_membership_id: uuid.UUID
+    campaign_display_name: str
+    session: CreatedBrowserSession
+
+
+def _register_invited_local_account_impl(
+    connection: Connection,
+    *,
+    onboarding_token: str,
+    login_name: str,
+    display_name: str,
+    raw_password: str,
+    created_ip: str | None = None,
+    user_agent: str | None = None,
+) -> RegisterInvitedLocalAccountResult:
+    """The single-link onboarding "no account yet" path
+    (`PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §6.2/§8.2's `POST
+    .../onboarding/register`): composes this module's own account-creation
+    and activation primitives with `dnd_ai.commands.invitation_onboarding`'s
+    session lock/consumption, all in the caller's own request-scoped
+    transaction, so a policy rejection or a duplicate login name rolls
+    everything back together — no orphan `security.users` row, no orphan
+    onboarding consumption (P-5).
+
+    Locks the onboarding session (and, transitively, its invitation) first,
+    before creating anything — `invitation_onboarding_sessions` ->
+    `campaign_invitations` -> `campaign_memberships` -> `users`, this
+    module's own docstring's lock order — so a concurrent revoke or a
+    competing acceptance of the same invitation is observed before this
+    function commits to creating an account for it.
+
+    This POST is itself the explicit, human-initiated action that both
+    creates the account and accepts the invitation (`PHASE13E_REMAINING_
+    IMPLEMENTATION_PLAN.md` §7.1 S-1): a brand-new registrant has no
+    separate "confirm" step to click, because submitting this form already
+    named the campaign it is joining (the caller's own prior `GET
+    .../status` call already returned `campaign_display_name` for the page
+    to display before this submission).
+
+    Reuses `_activate_local_account_impl` on the activation token this
+    function's own `_create_user_with_activation_token` call just minted —
+    the identical "compose the existing single-use-token consumption
+    primitive rather than re-deriving Argon2id hashing, `external_
+    identities` claiming, and the `LoginNameAlreadyTakenError` race check"
+    shape `PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md` §6.2 documents."""
+    session = _lock_and_validate_onboarding_session(connection, onboarding_token=onboarding_token)
+
+    validate_password_policy(raw_password)
+    issued = _create_user_with_activation_token(
+        connection,
+        login_name=login_name,
+        display_name=display_name,
+        email=None,
+        created_by_user_id=None,
+        is_platform_administrator_flag=False,
+    )
+    _activate_local_account_impl(
+        connection, raw_activation_token=issued.raw_token, raw_password=raw_password
+    )
+    accept_result = accept_locked_onboarding_invitation(
+        connection, session=session, accepting_user_id=issued.user_id
+    )
+    browser_session = create_browser_session(
+        connection, user_id=issued.user_id, created_ip=created_ip, user_agent=user_agent
+    )
+    return RegisterInvitedLocalAccountResult(
+        user_id=issued.user_id,
+        login_name=issued.login_name,
+        campaign_id=accept_result.campaign_id,
+        campaign_membership_id=accept_result.campaign_membership_id,
+        campaign_display_name=session.campaign_display_name,
+        session=browser_session,
+    )
+
+
 __all__ = [
     "AccountLifecycleResult",
     "ActivateLocalAccountResult",
@@ -1198,7 +1513,10 @@ __all__ = [
     "LoginNameAlreadyTakenError",
     "LoginNameFormatError",
     "NotPlatformAdministratorError",
+    "GrantPlatformAdministratorResult",
     "PasswordResetNotAcceptableError",
+    "PlatformAccountNotFoundError",
+    "RegisterInvitedLocalAccountResult",
     "ResetPasswordResult",
     "_activate_local_account_impl",
     "_admin_revoke_all_browser_sessions_impl",
@@ -1206,6 +1524,7 @@ __all__ = [
     "_disable_local_account_impl",
     "_issue_password_reset_token_impl",
     "_reactivate_local_account_impl",
+    "_register_invited_local_account_impl",
     "_reset_password_with_token_impl",
     "activate_local_account",
     "authenticate_local_user",
@@ -1213,6 +1532,7 @@ __all__ = [
     "change_password",
     "create_browser_session",
     "create_local_account",
+    "grant_platform_administrator",
     "issue_password_reset_token",
     "list_browser_sessions",
     "normalize_login_name",

@@ -312,19 +312,33 @@ def advance_objective_endpoint(
     return response
 
 
-@router.get(
-    "/campaigns/{campaign_id}/quests/{quest_id}",
-    response_model=QuestResponse,
-    status_code=200,
-)
-def get_quest_endpoint(
+def resolve_quest_response(
+    connection: Connection,
+    *,
+    access: AccessContext,
     campaign_id: uuid.UUID,
     quest_id: uuid.UUID,
-    access: Annotated[AccessContext, Depends(require_campaign_capability(_QUEST_VIEW_CAPABILITY))],
-    connection: Annotated[Connection, Depends(get_connection)],
-    character_id: uuid.UUID | None = None,
-    party_id: uuid.UUID | None = None,
-) -> QuestResponse:
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> QuestResponse | None:
+    """The exact audience-scoped `QuestResponse` `access` would see for
+    `quest_id` in `campaign_id`, or `None` for the identical non-disclosing
+    "this caller may not see this quest at all" case `get_quest_endpoint`
+    itself used to raise `NotFoundError` for inline.
+
+    Extracted (checkpoint 15, PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md
+    §8.4b) so `get_quest_endpoint` and the per-resource audience-preview
+    route (`dnd_ai.api.preview`) call the *identical* audience derivation —
+    duplicating this logic for a preview route would let the preview drift
+    from what a real request actually returns, which is worse than no
+    preview at all (a GM could clear a quest for release on the strength of
+    a stale projection). Every line below is unchanged from the pre-
+    checkpoint-15 body of `get_quest_endpoint`; only the 404 became a `None`
+    return so a preview caller (which must translate every failure into its
+    own single non-disclosing 404, indistinguishable from a subject that
+    cannot see the resource for any other reason) can decide the response
+    shape itself, exactly like `get_quest_endpoint` still does directly
+    below."""
     if not access.has_capability(_QUEST_VIEW_CAPABILITY, quest_id=quest_id):
         # A per-quest campaign.view resource-grant deny — indistinguishable
         # from a nonexistent quest, matching every other resource-scoped
@@ -333,7 +347,7 @@ def get_quest_endpoint(
         # below: that one decides objective-level visibility for an
         # already-authorized caller, not whether the caller may see the
         # quest at all.
-        raise NotFoundError()
+        return None
 
     # Two independent capability dimensions, never conflated:
     #
@@ -413,6 +427,32 @@ def get_quest_endpoint(
             for stage in view.stages
         ],
     )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/quests/{quest_id}",
+    response_model=QuestResponse,
+    status_code=200,
+)
+def get_quest_endpoint(
+    campaign_id: uuid.UUID,
+    quest_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_QUEST_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    character_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
+) -> QuestResponse:
+    response = resolve_quest_response(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        quest_id=quest_id,
+        character_id=character_id,
+        party_id=party_id,
+    )
+    if response is None:
+        raise NotFoundError()
+    return response
 
 
 class QuestListItemResponse(BaseModel):

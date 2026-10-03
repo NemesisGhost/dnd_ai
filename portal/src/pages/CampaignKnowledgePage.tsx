@@ -204,6 +204,7 @@ function CampaignKnowledgeContent({
 
     return (
         <KnowledgePage
+            campaignId={campaignId}
             view={view}
             query={searchInputValue}
             partyId={partyId}

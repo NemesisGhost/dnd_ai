@@ -18,7 +18,14 @@ import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
+import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
+import { AdminAccountsPage } from "./pages/AdminAccountsPage"
+import { AdminAccountsNavLink } from "./components/AdminAccountsNavLink"
+import { ActivateAccountPage } from "./pages/ActivateAccountPage"
+import { ResetPasswordPage } from "./pages/ResetPasswordPage"
+import { AccountPage } from "./pages/AccountPage"
+import { AccountNavLink } from "./components/AccountNavLink"
 
 function App() {
   return (
@@ -31,6 +38,8 @@ function App() {
         <p className="app-header__title">
           D&amp;D AI Portal
         </p>
+        <AccountNavLink />
+        <AdminAccountsNavLink />
         <ThemeSelector />
         <LogoutButton />
       </header>
@@ -67,6 +76,36 @@ function App() {
         <Route
           path="/campaign-invitations/accept"
           element={<AcceptCampaignInvitationPage />}
+        />
+
+        <Route
+          path="/activate"
+          element={<ActivateAccountPage />}
+        />
+
+        <Route
+          path="/reset-password"
+          element={<ResetPasswordPage />}
+        />
+
+        <Route
+          path="/admin/accounts"
+          element={
+            <AuthenticatedSessionBoundary>
+              {(bootstrap) => (
+                <AdminAccountsPage bootstrap={bootstrap} />
+              )}
+            </AuthenticatedSessionBoundary>
+          }
+        />
+
+        <Route
+          path="/account"
+          element={
+            <AuthenticatedSessionBoundary>
+              {() => <AccountPage />}
+            </AuthenticatedSessionBoundary>
+          }
         />
 
         <Route
@@ -142,6 +181,11 @@ function App() {
           <Route
             path="access"
             element={<CampaignAccessPage />}
+          />
+
+          <Route
+            path="access/audit"
+            element={<CampaignAccessAuditPage />}
           />
 
           <Route

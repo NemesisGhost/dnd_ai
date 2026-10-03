@@ -1,24 +1,26 @@
 import { useId, useState } from "react"
+import { ResourceTargetSelector } from "./ResourceTargetSelector"
 import { useAddGroupResourceGrant } from "../hooks/useAddGroupResourceGrant"
 import type {
     AccessResourceGrantSummary,
     AssignableCharacter,
+    GrantableResourceCapability,
 } from "../types/accessOverview"
+import type { ResourceGrantEffect, ResourceGrantTargetField } from "../types/resourceGrantTarget"
+import { humanizeCode } from "../utils/humanize"
 
 interface AddGroupResourceGrantProps {
     campaignId: string
     accessGroupId: string
     groupName: string
     assignableCharacters: AssignableCharacter[]
-    grantableCapabilityCodes: { code: string; display_name: string }[]
+    grantableCapabilities: GrantableResourceCapability[]
     existingGrants: AccessResourceGrantSummary[]
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
 
-function statusMessage(
-    kind: "pending" | "success" | "denied" | "conflict" | "error",
-): string {
+function statusMessage(kind: "pending" | "success" | "denied" | "conflict" | "error"): string {
     switch (kind) {
         case "pending":
             return "Adding resource access…"
@@ -33,71 +35,101 @@ function statusMessage(
     }
 }
 
-// One control per group — character-target, allow-effect only, the
-// identical portal scope ../components/AddResourceGrant.tsx already
-// applies to a member grantee (see dnd_ai.commands.access_grants' own
-// module docstring for why the other five target kinds, and an explicit
-// deny effect, are deferred). Resource type is fixed to "Character" —
-// never offered as a choice — since that is the only target kind this
-// portal has a safe display/search contract for.
+function targetFieldForType(targetType: string): ResourceGrantTargetField {
+    return `${targetType}_id` as ResourceGrantTargetField
+}
+
+// One control per group — the identical selector, effect, and cascade
+// AddResourceGrant.tsx uses for a member grantee, reused here rather than
+// duplicated (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §8.5's "the same
+// selector reused for group grantees").
 export function AddGroupResourceGrant({
     campaignId,
     accessGroupId,
     groupName,
     assignableCharacters,
-    grantableCapabilityCodes,
+    grantableCapabilities,
     existingGrants,
     onChanged,
     onMutationStart,
 }: AddGroupResourceGrantProps) {
-    const characterSelectId = useId()
+    const typeSelectId = useId()
+    const resourceLabelId = useId()
+    const effectGroupId = useId()
     const capabilitySelectId = useId()
     const statusId = useId()
 
     const [isEditing, setIsEditing] = useState(false)
-    const [selectedCharacter, setSelectedCharacter] = useState(
-        assignableCharacters[0]?.character_id ?? "",
-    )
-    const [selectedCapability, setSelectedCapability] = useState<{
-        characterId: string
-        code: string
-    }>({ characterId: "", code: "" })
+    const [denyConfirmed, setDenyConfirmed] = useState(false)
 
-    const { status, submit, reset } = useAddGroupResourceGrant(
-        campaignId,
-        () => onChanged("Resource access added."),
+    const targetTypes = Array.from(
+        new Set(grantableCapabilities.map((capability) => capability.target_type)),
+    )
+    // See AddResourceGrant's identical usableTargetTypes for why
+    // "character" is excluded here when nothing is assignable, but the
+    // four async kinds cannot be pre-checked the same way.
+    const usableTargetTypes = targetTypes.filter(
+        (targetType) => targetType !== "character" || assignableCharacters.length > 0,
+    )
+
+    const [selectedTargetType, setSelectedTargetType] = useState(usableTargetTypes[0] ?? "")
+    const [selectedResource, setSelectedResource] = useState<{
+        targetType: string
+        id: string
+    }>({ targetType: "", id: "" })
+    const [selectedEffect, setSelectedEffect] = useState<ResourceGrantEffect>("allow")
+    const [selectedCapability, setSelectedCapability] = useState<{
+        targetType: string
+        resourceId: string
+        effect: ResourceGrantEffect
+        code: string
+    }>({ targetType: "", resourceId: "", effect: "allow", code: "" })
+
+    const { status, submit, reset } = useAddGroupResourceGrant(campaignId, () =>
+        onChanged(selectedEffect === "deny" ? "Resource denial added." : "Resource access added."),
     )
 
     const isPending = status.kind === "pending"
 
-    const activeCapabilityCodesForSelectedCharacter = new Set(
+    const selectedResourceId =
+        selectedResource.targetType === selectedTargetType ? selectedResource.id : ""
+
+    const capabilitiesForType = grantableCapabilities.filter(
+        (capability) => capability.target_type === selectedTargetType,
+    )
+    const activeCapabilityCodesForSelectedResource = new Set(
         existingGrants
             .filter(
                 (grant) =>
-                    grant.target_type === "character" &&
-                    grant.target_id === selectedCharacter &&
-                    grant.effect === "allow",
+                    grant.target_type === selectedTargetType &&
+                    grant.target_id === selectedResourceId &&
+                    grant.effect === selectedEffect,
             )
             .map((grant) => grant.capability_code),
     )
-    const availableCapabilities = grantableCapabilityCodes.filter(
-        (capability) =>
-            !activeCapabilityCodesForSelectedCharacter.has(capability.code),
+    const availableCapabilitiesForSelectedResource = capabilitiesForType.filter(
+        (capability) => !activeCapabilityCodesForSelectedResource.has(capability.code),
     )
 
     let selectedCapabilityCode = selectedCapability.code
-    if (selectedCapability.characterId !== selectedCharacter) {
-        selectedCapabilityCode = availableCapabilities[0]?.code ?? ""
+    if (
+        selectedCapability.targetType !== selectedTargetType ||
+        selectedCapability.resourceId !== selectedResourceId ||
+        selectedCapability.effect !== selectedEffect
+    ) {
+        selectedCapabilityCode = availableCapabilitiesForSelectedResource[0]?.code ?? ""
         setSelectedCapability({
-            characterId: selectedCharacter,
+            targetType: selectedTargetType,
+            resourceId: selectedResourceId,
+            effect: selectedEffect,
             code: selectedCapabilityCode,
         })
     }
 
-    if (assignableCharacters.length === 0 || grantableCapabilityCodes.length === 0) {
-        // Nothing eligible to target, or no character-target capability is
-        // currently grantable at all — never show a control with nowhere
-        // safe to send it.
+    if (usableTargetTypes.length === 0) {
+        // No grantable capability of any kind, or the only kind available
+        // is "character" with none assignable — never show a control
+        // with nowhere safe to send it.
         return null
     }
 
@@ -108,9 +140,9 @@ export function AddGroupResourceGrant({
                 className="access-role-editor__trigger"
                 onClick={() => {
                     reset()
-                    setSelectedCharacter(
-                        assignableCharacters[0]?.character_id ?? "",
-                    )
+                    setSelectedTargetType(usableTargetTypes[0] ?? "")
+                    setSelectedEffect("allow")
+                    setDenyConfirmed(false)
                     setIsEditing(true)
                 }}
             >
@@ -119,74 +151,135 @@ export function AddGroupResourceGrant({
         )
     }
 
+    const canSubmit =
+        selectedTargetType !== "" &&
+        selectedResourceId !== "" &&
+        selectedCapabilityCode !== "" &&
+        (selectedEffect === "allow" || denyConfirmed)
+
     return (
         <form
             className="access-role-editor"
             onSubmit={(event) => {
                 event.preventDefault()
-                if (selectedCharacter === "" || selectedCapabilityCode === "") {
+                if (!canSubmit) {
                     return
                 }
                 onMutationStart()
-                submit(accessGroupId, selectedCharacter, selectedCapabilityCode)
+                submit(
+                    accessGroupId,
+                    { field: targetFieldForType(selectedTargetType), id: selectedResourceId },
+                    selectedCapabilityCode,
+                    selectedEffect,
+                )
             }}
         >
-            <label htmlFor={characterSelectId}>
-                Add resource access for {groupName} — Character
-            </label>
+            <label htmlFor={typeSelectId}>Add resource access for {groupName}</label>
 
             <select
-                id={characterSelectId}
-                value={selectedCharacter}
-                disabled={isPending}
+                id={typeSelectId}
+                value={selectedTargetType}
+                disabled={isPending || usableTargetTypes.length <= 1}
                 onChange={(event) => {
-                    setSelectedCharacter(event.currentTarget.value)
+                    setSelectedTargetType(event.currentTarget.value)
                 }}
             >
-                {assignableCharacters.map((character) => (
-                    <option
-                        key={character.character_id}
-                        value={character.character_id}
-                    >
-                        {character.display_name}
+                {usableTargetTypes.map((targetType) => (
+                    <option key={targetType} value={targetType}>
+                        {humanizeCode(targetType)}
                     </option>
                 ))}
             </select>
 
+            <label id={resourceLabelId}>{humanizeCode(selectedTargetType)}</label>
+            <ResourceTargetSelector
+                campaignId={campaignId}
+                targetType={selectedTargetType}
+                assignableCharacters={assignableCharacters}
+                value={selectedResourceId}
+                disabled={isPending}
+                labelId={resourceLabelId}
+                onChange={(option) => {
+                    setSelectedResource({
+                        targetType: selectedTargetType,
+                        id: option?.id ?? "",
+                    })
+                }}
+            />
+
+            <fieldset id={effectGroupId}>
+                <legend>Effect</legend>
+                <label>
+                    <input
+                        type="radio"
+                        name={effectGroupId}
+                        value="allow"
+                        checked={selectedEffect === "allow"}
+                        disabled={isPending}
+                        onChange={() => {
+                            setSelectedEffect("allow")
+                            setDenyConfirmed(false)
+                        }}
+                    />
+                    Allow
+                </label>
+                <label>
+                    <input
+                        type="radio"
+                        name={effectGroupId}
+                        value="deny"
+                        checked={selectedEffect === "deny"}
+                        disabled={isPending}
+                        onChange={() => {
+                            setSelectedEffect("deny")
+                            setDenyConfirmed(false)
+                        }}
+                    />
+                    Deny
+                </label>
+            </fieldset>
+
+            {selectedEffect === "deny" && (
+                <label className="access-role-editor__confirm-text">
+                    <input
+                        type="checkbox"
+                        checked={denyConfirmed}
+                        disabled={isPending}
+                        onChange={(event) => setDenyConfirmed(event.currentTarget.checked)}
+                    />
+                    I understand this explicitly denies this capability for every member of{" "}
+                    {groupName}, even if another role or grant would otherwise allow it.
+                </label>
+            )}
+
             <label htmlFor={capabilitySelectId}>Permission</label>
 
-            {availableCapabilities.length > 0 ? (
+            {availableCapabilitiesForSelectedResource.length > 0 ? (
                 <select
                     id={capabilitySelectId}
                     value={selectedCapabilityCode}
                     disabled={isPending}
                     onChange={(event) => {
                         setSelectedCapability({
-                            characterId: selectedCharacter,
+                            targetType: selectedTargetType,
+                            resourceId: selectedResourceId,
+                            effect: selectedEffect,
                             code: event.currentTarget.value,
                         })
                     }}
                 >
-                    {availableCapabilities.map((capability) => (
+                    {availableCapabilitiesForSelectedResource.map((capability) => (
                         <option key={capability.code} value={capability.code}>
                             {capability.display_name}
                         </option>
                     ))}
                 </select>
             ) : (
-                <p>Every available permission is already granted for this character.</p>
+                <p>Every available permission is already granted for this resource and effect.</p>
             )}
 
             <div className="access-role-editor__actions">
-                <button
-                    type="submit"
-                    disabled={
-                        isPending ||
-                        selectedCharacter === "" ||
-                        selectedCapabilityCode === ""
-                    }
-                    aria-busy={isPending}
-                >
+                <button type="submit" disabled={isPending || !canSubmit} aria-busy={isPending}>
                     {isPending ? "Adding…" : "Add"}
                 </button>
 
@@ -205,9 +298,7 @@ export function AddGroupResourceGrant({
             <p
                 id={statusId}
                 className={
-                    status.kind === "denied" ||
-                    status.kind === "conflict" ||
-                    status.kind === "error"
+                    status.kind === "denied" || status.kind === "conflict" || status.kind === "error"
                         ? "access-role-editor__status access-role-editor__status--error"
                         : "access-role-editor__status"
                 }

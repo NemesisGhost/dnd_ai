@@ -40,9 +40,13 @@ vi.mock("../hooks/useKnowledgeItems", () => ({
     useKnowledgeItems: vi.fn(),
 }))
 
-vi.mock("../context/SessionContext", () => ({
-    useSession: vi.fn(),
-}))
+vi.mock("../context/SessionContext", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../context/SessionContext")>()
+    return {
+        ...actual,
+        useSession: vi.fn(),
+    }
+})
 
 const useKnowledgeItemsMock =
     vi.mocked(useKnowledgeItems)
@@ -70,6 +74,7 @@ function buildSessionState(
             },
             csrf_token: "fixture-csrf-token",
             browser_session_id: "browser-session-a",
+            is_platform_administrator: false,
             selected_campaign_id: "campaign-a",
             campaigns: [
                 {

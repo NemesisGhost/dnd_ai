@@ -1,9 +1,11 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
+import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeView } from "../types/knowledge"
 
 interface KnowledgePageProps {
+    campaignId: string
     view: KnowledgeView
     query: string
     partyId: string | null
@@ -29,6 +31,7 @@ const viewOptions: ViewOption[] = [
 ]
 
 export function KnowledgePage({
+    campaignId,
     view,
     query,
     partyId,
@@ -47,6 +50,8 @@ export function KnowledgePage({
     return (
         <section aria-labelledby="knowledge-heading">
             <h1 id="knowledge-heading">Knowledge</h1>
+
+            <AudiencePreviewSection campaignId={campaignId} resourceType="knowledge_item" />
 
             <div
                 className="knowledge-page__filters"

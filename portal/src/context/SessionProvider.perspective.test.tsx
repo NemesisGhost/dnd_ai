@@ -86,6 +86,7 @@ const campaign = {
 const bootstrap: SessionBootstrap = {
   ...sessionBootstrapFixture,
   browser_session_id: "session-a",
+  is_platform_administrator: false,
   selected_campaign_id: "campaign-a",
   campaigns: [campaign],
 }

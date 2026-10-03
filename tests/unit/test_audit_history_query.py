@@ -89,6 +89,25 @@ def test_resolve_target_membership_command_placeholder_when_join_fails() -> None
     assert (label, target_type) == ("Removed account", "account")
 
 
+def test_resolve_target_invitation_onboarding_complete_uses_target_user() -> None:
+    # Checkpoint 14: folded into _MEMBERSHIP_TABLE_COMMANDS since its audit
+    # row names the campaign_membership_id it activates — resolves
+    # identically to add_campaign_member/accept_campaign_invitation.
+    label, target_type = _resolve_target(
+        {"target_user_id": "u1", "target_user_display_name": "Player Sam"},
+        command_name="invitation_onboarding.complete",
+    )
+    assert (label, target_type) == ("Player Sam", "account")
+
+
+def test_resolve_target_invited_registration_acceptance_uses_target_user() -> None:
+    label, target_type = _resolve_target(
+        {"target_user_id": "u1", "target_user_display_name": "New Registrant"},
+        command_name="invitation_onboarding.register_accept",
+    )
+    assert (label, target_type) == ("New Registrant", "account")
+
+
 def test_resolve_target_relationship_command_uses_target_character() -> None:
     label, target_type = _resolve_target(
         {"target_character_id": "c1", "target_character_name": "Elenwe"},
@@ -208,3 +227,30 @@ def test_change_summary_grant_commands_include_capability_and_grantee() -> None:
 def test_change_summary_membership_commands_have_no_summary() -> None:
     assert _change_summary({}, command_name="add_campaign_member") is None
     assert _change_summary({}, command_name="end_campaign_membership") is None
+    assert _change_summary({}, command_name="invitation_onboarding.complete") is None
+
+
+def test_change_summary_grant_commands_mark_a_deny_effect() -> None:
+    summary = _change_summary(
+        {
+            "capability_display_name": "View Full Character",
+            "grantee_user_display_name": "Player Sam",
+            "grantee_group_name": None,
+            "grant_effect": "deny",
+        },
+        command_name="create_resource_grant",
+    )
+    assert summary == "View Full Character (deny) — Player Sam"
+
+
+def test_change_summary_grant_commands_omit_the_suffix_for_an_allow_effect() -> None:
+    summary = _change_summary(
+        {
+            "capability_display_name": "View Full Character",
+            "grantee_user_display_name": "Player Sam",
+            "grantee_group_name": None,
+            "grant_effect": "allow",
+        },
+        command_name="create_resource_grant",
+    )
+    assert summary == "View Full Character — Player Sam"

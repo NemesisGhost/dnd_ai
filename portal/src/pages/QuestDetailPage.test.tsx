@@ -12,11 +12,22 @@ import {
     describe,
     expect,
     it,
+    vi,
 } from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type {
     QuestDetail,
 } from "../types/quest"
 import { QuestDetailPage } from "./QuestDetailPage"
+
+const { accessOverviewStateRef } = vi.hoisted(() => ({
+    accessOverviewStateRef: { current: { status: "loading" } as Record<string, unknown> },
+}))
+
+vi.mock("../hooks/useAccessOverview", () => ({
+    useAccessOverview: () => ({ state: accessOverviewStateRef.current, retry: vi.fn() }),
+}))
 
 const questFixture = {
     quest_id: "quest-a",
@@ -69,7 +80,7 @@ function renderQuestDetail(
                 <Route
                     path="/app/:campaignId/quests/:questId"
                     element={
-                        <QuestDetailPage quest={quest} />
+                        <QuestDetailPage campaignId="test-campaign" quest={quest} />
                     }
                 />
             </Routes>
@@ -197,5 +208,70 @@ describe("QuestDetailPage", () => {
                 "No stages are available for this quest.",
             ),
         ).toBeInTheDocument()
+    })
+})
+
+describe("QuestDetailPage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
+    it("shows 'Preview as member' locked to this quest for a GM/admin membership", () => {
+        accessOverviewStateRef.current = {
+            status: "success",
+            overview: {
+                members: [
+                    {
+                        campaign_membership_id: "membership-a",
+                        display_name: "Player One",
+                        user_id: "user-1",
+                    },
+                ],
+                assignable_roles: [],
+                assignable_characters: [],
+                assignable_relationship_types: [],
+                grantable_resource_capabilities: [],
+                access_groups: [],
+            },
+        }
+
+        render(
+            <SessionContext.Provider
+                value={{
+                    state: {
+                        status: "authenticated",
+                        bootstrap: {
+                            ...sessionBootstrapFixture,
+                            campaigns: sessionBootstrapFixture.campaigns.map((campaign) => ({
+                                ...campaign,
+                                campaign_id: "test-campaign",
+                                capabilities: ["access.manage"],
+                            })),
+                        },
+                    },
+                    reload: vi.fn(),
+                }}
+            >
+                <MemoryRouter initialEntries={["/app/test-campaign/quests/quest-a"]}>
+                    <Routes>
+                        <Route
+                            path="/app/:campaignId/quests/:questId"
+                            element={<QuestDetailPage campaignId="test-campaign" quest={questFixture} />}
+                        />
+                    </Routes>
+                </MemoryRouter>
+            </SessionContext.Provider>,
+        )
+
+        fireEvent.click(screen.getByRole("button", { name: "Preview as member" }))
+
+        // No ResourceTargetSelector for the quest itself -- it is already
+        // fixed to the quest this page is showing.
+        expect(screen.queryByLabelText("Quest")).not.toBeInTheDocument()
+        expect(screen.getByText(questFixture.name, { selector: "strong" })).toBeInTheDocument()
+    })
+
+    it("does not show 'Preview as member' without access.manage", () => {
+        renderQuestDetail(questFixture)
+
+        expect(
+            screen.queryByRole("button", { name: "Preview as member" }),
+        ).not.toBeInTheDocument()
     })
 })

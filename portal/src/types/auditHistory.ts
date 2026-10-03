@@ -11,6 +11,8 @@ export type AuditHistoryCategory =
     | "resource_grant"
     | "invitation"
     | "campaign"
+    | "access_group"
+    | "access_group_membership"
 
 export const AUDIT_HISTORY_CATEGORIES: AuditHistoryCategory[] = [
     "membership",
@@ -19,6 +21,8 @@ export const AUDIT_HISTORY_CATEGORIES: AuditHistoryCategory[] = [
     "resource_grant",
     "invitation",
     "campaign",
+    "access_group",
+    "access_group_membership",
 ]
 
 export type AuditActorType = "user" | "service" | "unknown"
@@ -56,4 +60,18 @@ export const EMPTY_AUDIT_HISTORY_FILTERS: AuditHistoryFilters = {
     actorUserId: null,
     occurredFrom: null,
     occurredTo: null,
+}
+
+// Mirrors dnd_ai.api.audit_history.AuditActorResponse — the bounded actor
+// facet backing the filter above (`GET .../audit-history/actors`,
+// audit-actor-contract fix). Deliberately just these two fields: the
+// actor-select filter never needs anything else, and the endpoint itself
+// never returns anything else.
+export interface AuditActor {
+    user_id: string
+    display_name: string
+}
+
+export interface AuditActorListResponse {
+    actors: AuditActor[]
 }

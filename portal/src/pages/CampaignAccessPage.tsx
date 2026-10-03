@@ -1,6 +1,10 @@
 import { useState } from "react"
 import { useParams } from "react-router"
 import { AccessOverviewBoundary } from "../components/AccessOverviewBoundary"
+import { AccessTabNav } from "../components/AccessTabNav"
+import { AudiencePreviewPanel } from "../components/AudiencePreviewPanel"
+import { useSession } from "../context/SessionContext"
+import { canPreviewAudience as canPreviewAudienceFor } from "../utils/canPreviewAudience"
 import { AccessPage } from "./AccessPage"
 import PlaceholderPage from "./PlaceholderPage"
 
@@ -25,6 +29,8 @@ interface IssuedInvitationToken {
 export function CampaignAccessPage() {
     const { campaignId } =
         useParams<{ campaignId: string }>()
+
+    const { state: sessionState } = useSession()
 
     // Owned here, above AccessOverviewBoundary, so this live region
     // survives the overview's own transition to its loading state after a
@@ -71,6 +77,8 @@ export function CampaignAccessPage() {
             ? issuedInvitationToken.token
             : null
 
+    const canPreviewAudience = canPreviewAudienceFor(sessionState, activeCampaignId)
+
     function handleRoleChanged(
         retry: () => void,
         message: string,
@@ -112,6 +120,8 @@ export function CampaignAccessPage() {
 
     return (
         <>
+            <AccessTabNav campaignId={activeCampaignId} />
+
             <p
                 className="campaign-access-page__announcement"
                 role="status"
@@ -122,16 +132,28 @@ export function CampaignAccessPage() {
 
             <AccessOverviewBoundary campaignId={activeCampaignId}>
                 {(overview, retry) => (
-                    <AccessPage
-                        campaignId={activeCampaignId}
-                        overview={overview}
-                        onChanged={(message) =>
-                            handleRoleChanged(retry, message)
-                        }
-                        onMutationStart={handleMutationStart}
-                        issuedInvitationToken={activeIssuedInvitationToken}
-                        onIssuedInvitationTokenChange={handleIssuedInvitationTokenChange}
-                    />
+                    <>
+                        <AccessPage
+                            campaignId={activeCampaignId}
+                            overview={overview}
+                            onChanged={(message) =>
+                                handleRoleChanged(retry, message)
+                            }
+                            onMutationStart={handleMutationStart}
+                            issuedInvitationToken={activeIssuedInvitationToken}
+                            onIssuedInvitationTokenChange={handleIssuedInvitationTokenChange}
+                        />
+                        {canPreviewAudience && (
+                            <AudiencePreviewPanel
+                                key={activeCampaignId}
+                                campaignId={activeCampaignId}
+                                members={overview.members.map((member) => ({
+                                    campaign_membership_id: member.campaign_membership_id,
+                                    display_name: member.display_name,
+                                }))}
+                            />
+                        )}
+                    </>
                 )}
             </AccessOverviewBoundary>
         </>

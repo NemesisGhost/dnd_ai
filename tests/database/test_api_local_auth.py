@@ -44,7 +44,10 @@ from dnd_ai.api.local_auth import (
     get_login_ip_rate_limiter,
     get_token_consumption_rate_limiter,
 )
-from dnd_ai.commands.local_auth import _create_local_account_impl
+from dnd_ai.commands.local_auth import (
+    _create_local_account_impl,
+    _issue_password_reset_token_impl,
+)
 from dnd_ai.domain.rate_limit import RateLimiter
 from tests.factories import make_platform_administrator, make_user, oidc_principal
 
@@ -1544,3 +1547,83 @@ def test_audit_rows_never_contain_password_or_token_fields(
     assert row is not None
     serialized = str(row)
     assert _VALID_PASSWORD not in serialized
+
+
+# ---------------------------------------------------------------------------
+# Phase 13E checkpoint 8b: Origin enforcement on the pre-authentication
+# boundary (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §7.1 S-3). Before this
+# checkpoint, /auth/login, /auth/activate, and /auth/password-reset had no
+# Origin check at all -- dnd_ai.api.auth.require_allowed_origin closes that.
+# ---------------------------------------------------------------------------
+
+
+def test_login_rejects_missing_origin(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_name = f"noorigin-login-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        _create_and_activate(client, postgres_engine, admin_user_id, login_name=login_name)
+        response = client.post(
+            "/auth/login", json={"login_name": login_name, "password": _VALID_PASSWORD}
+        )
+    assert response.status_code == 403
+
+
+def test_login_rejects_disallowed_origin(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_name = f"badorigin-login-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        _create_and_activate(client, postgres_engine, admin_user_id, login_name=login_name)
+        response = client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": _VALID_PASSWORD},
+            headers={"Origin": "http://evil.example"},
+        )
+    assert response.status_code == 403
+
+
+def test_activate_rejects_missing_origin(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    with postgres_engine.begin() as connection:
+        result = _create_local_account_impl(
+            connection,
+            created_by_user_id=admin_user_id,
+            login_name=f"noorigin-activate-{uuid.uuid4().hex[:8]}",
+            display_name="Test Account",
+        )
+    with client_factory() as client:
+        response = client.post(
+            "/auth/activate", json={"token": result.raw_token, "password": _VALID_PASSWORD}
+        )
+    assert response.status_code == 403
+
+
+def test_one_time_link_endpoints_reject_get(client_factory: Callable[[], TestClient]) -> None:
+    # Browser links open React pages (/activate, /reset-password); the /auth
+    # endpoints stay POST-only so opening a link can never consume a token.
+    with client_factory() as client:
+        for path in ("/auth/activate", "/auth/password-reset"):
+            response = client.get(path)
+            assert response.status_code == 405, path
+            assert response.json()["error"]["code"] == "method_not_allowed"
+
+
+def test_password_reset_rejects_missing_origin(
+    client_factory: Callable[[], TestClient], postgres_engine: Engine, admin_user_id: uuid.UUID
+) -> None:
+    login_name = f"noorigin-reset-{uuid.uuid4().hex[:8]}"
+    with client_factory() as client:
+        user_id = _create_and_activate(
+            client, postgres_engine, admin_user_id, login_name=login_name
+        )
+        with postgres_engine.begin() as connection:
+            reset = _issue_password_reset_token_impl(
+                connection, requested_by_user_id=admin_user_id, target_user_id=user_id
+            )
+        response = client.post(
+            "/auth/password-reset",
+            json={"token": reset.raw_token, "new_password": _OTHER_VALID_PASSWORD},
+        )
+    assert response.status_code == 403

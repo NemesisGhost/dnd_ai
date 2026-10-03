@@ -9,6 +9,7 @@ import { CharacterRelationshipEditor } from "../components/CharacterRelationship
 import { CreateAccessGroup } from "../components/CreateAccessGroup"
 import { DeactivateAccessGroup } from "../components/DeactivateAccessGroup"
 import { EditAccessGroup } from "../components/EditAccessGroup"
+import { EffectiveAccessPanel } from "../components/EffectiveAccessPanel"
 import { MemberRoleEditor } from "../components/MemberRoleEditor"
 import { ReactivateAccessGroup } from "../components/ReactivateAccessGroup"
 import { RemoveAccessGroupMember } from "../components/RemoveAccessGroupMember"
@@ -255,6 +256,12 @@ function MemberAccessCard({
                     />
                 </section>
 
+                <EffectiveAccessPanel
+                    campaignId={campaignId}
+                    campaignMembershipId={member.campaign_membership_id}
+                    memberDisplayName={member.display_name}
+                />
+
                 <p className="access-member-card__joined">
                     Joined {formatTimestamp(member.joined_at)}
                 </p>
@@ -319,12 +326,6 @@ function AccessGroupCard({
             display_name: member.display_name,
         }))
 
-    const characterCapabilities = grantableResourceCapabilities
-        .filter((capability) => capability.target_type === "character")
-        .map((capability) => ({
-            code: capability.code,
-            display_name: capability.display_name,
-        }))
 
     return (
         <details className="access-member-card">
@@ -444,7 +445,7 @@ function AccessGroupCard({
                             accessGroupId={group.access_group_id}
                             groupName={group.name}
                             assignableCharacters={assignableCharacters}
-                            grantableCapabilityCodes={characterCapabilities}
+                            grantableCapabilities={grantableResourceCapabilities}
                             existingGrants={group.grants}
                             onChanged={onChanged}
                             onMutationStart={onMutationStart}

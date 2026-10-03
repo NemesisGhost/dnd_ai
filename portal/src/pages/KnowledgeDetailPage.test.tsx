@@ -1,8 +1,18 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { SessionContext } from "../context/SessionContext"
+import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { KnowledgeDetail } from "../types/knowledge"
 import { KnowledgeDetailPage } from "./KnowledgeDetailPage"
+
+const { accessOverviewStateRef } = vi.hoisted(() => ({
+    accessOverviewStateRef: { current: { status: "loading" } as Record<string, unknown> },
+}))
+
+vi.mock("../hooks/useAccessOverview", () => ({
+    useAccessOverview: () => ({ state: accessOverviewStateRef.current, retry: vi.fn() }),
+}))
 
 const itemFixture: KnowledgeDetail = {
     knowledge_item_id: "knowledge-a",
@@ -76,5 +86,62 @@ describe("KnowledgeDetailPage", () => {
         })
 
         expect(screen.getAllByText("Not recorded").length).toBeGreaterThan(0)
+    })
+})
+
+describe("KnowledgeDetailPage — audience preview (Phase 13E-B manual-acceptance fix)", () => {
+    it("shows 'Preview as member' locked to this knowledge item for a GM/admin membership", () => {
+        accessOverviewStateRef.current = {
+            status: "success",
+            overview: {
+                members: [
+                    {
+                        campaign_membership_id: "membership-a",
+                        display_name: "Player One",
+                        user_id: "user-1",
+                    },
+                ],
+                assignable_roles: [],
+                assignable_characters: [],
+                assignable_relationship_types: [],
+                grantable_resource_capabilities: [],
+                access_groups: [],
+            },
+        }
+
+        render(
+            <SessionContext.Provider
+                value={{
+                    state: {
+                        status: "authenticated",
+                        bootstrap: {
+                            ...sessionBootstrapFixture,
+                            campaigns: sessionBootstrapFixture.campaigns.map((campaign) => ({
+                                ...campaign,
+                                campaign_id: "campaign-a",
+                                capabilities: ["access.manage"],
+                            })),
+                        },
+                    },
+                    reload: vi.fn(),
+                }}
+            >
+                <MemoryRouter>
+                    <KnowledgeDetailPage campaignId="campaign-a" item={itemFixture} />
+                </MemoryRouter>
+            </SessionContext.Provider>,
+        )
+
+        fireEvent.click(screen.getByRole("button", { name: "Preview as member" }))
+
+        expect(screen.queryByLabelText("Knowledge item")).not.toBeInTheDocument()
+    })
+
+    it("does not show 'Preview as member' without access.manage", () => {
+        renderPage(itemFixture)
+
+        expect(
+            screen.queryByRole("button", { name: "Preview as member" }),
+        ).not.toBeInTheDocument()
     })
 })

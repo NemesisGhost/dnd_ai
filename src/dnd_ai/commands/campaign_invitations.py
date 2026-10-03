@@ -241,6 +241,39 @@ def _activate_or_create_membership(
     return membership_id
 
 
+def _accept_locked_invitation(
+    connection: Connection,
+    *,
+    campaign_invitation_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    accepting_user_id: uuid.UUID,
+) -> AcceptCampaignInvitationResult:
+    """Shared tail of a *first* acceptance: activates or creates the
+    membership, then marks the invitation accepted. The caller must have
+    already locked `campaign_invitation_id`'s row `FOR UPDATE` and
+    validated it is outstanding (not revoked, not expired, not already
+    accepted) in the same transaction — this function performs no
+    validation of its own, so it is safe to reuse from a caller with a
+    different validation shape, such as `dnd_ai.commands.
+    invitation_onboarding`'s onboarding-session lock chain, without
+    re-deriving `accept_campaign_invitation`'s own token-lookup and
+    rejection logic."""
+    membership_id = _activate_or_create_membership(
+        connection, campaign_id=campaign_id, user_id=accepting_user_id
+    )
+    connection.execute(
+        text("""
+            UPDATE security.campaign_invitations
+            SET accepted_by_user_id = :user, accepted_at = now()
+            WHERE campaign_invitation_id = :invitation
+        """),
+        {"user": accepting_user_id, "invitation": campaign_invitation_id},
+    )
+    return AcceptCampaignInvitationResult(
+        campaign_id=campaign_id, campaign_membership_id=membership_id
+    )
+
+
 def accept_campaign_invitation(
     connection: Connection, *, token: str, accepting_user_id: uuid.UUID
 ) -> AcceptCampaignInvitationResult:
@@ -298,21 +331,11 @@ def accept_campaign_invitation(
             f"invitation {invitation['campaign_invitation_id']} is revoked or expired"
         )
 
-    membership_id = _activate_or_create_membership(
-        connection, campaign_id=invitation["campaign_id"], user_id=accepting_user_id
-    )
-
-    connection.execute(
-        text("""
-            UPDATE security.campaign_invitations
-            SET accepted_by_user_id = :user, accepted_at = now()
-            WHERE campaign_invitation_id = :invitation
-        """),
-        {"user": accepting_user_id, "invitation": invitation["campaign_invitation_id"]},
-    )
-
-    return AcceptCampaignInvitationResult(
-        campaign_id=invitation["campaign_id"], campaign_membership_id=membership_id
+    return _accept_locked_invitation(
+        connection,
+        campaign_invitation_id=invitation["campaign_invitation_id"],
+        campaign_id=invitation["campaign_id"],
+        accepting_user_id=accepting_user_id,
     )
 
 

@@ -17,8 +17,15 @@ character-relationship-management checkpoint (add a character relationship
 to an existing membership; change an existing relationship's type; revoke
 a character relationship — see §3g/§3h/§3i/§3j), and 13E-B checkpoint 5
 (add a direct, character-targeted resource grant to an existing
-membership; revoke an existing resource grant — see §3k) are
-delivered.** Everything else below marked "reserved for a later increment"
+membership; revoke an existing resource grant — see §3k), checkpoint 6
+(campaign access-group management — see §3l), and checkpoint 7
+(invitation issuance/list/revocation plus manual authenticated acceptance —
+see §3m), checkpoints 8a-8d (single-link invitation onboarding — see §3n),
+checkpoints 9-11b (platform account lifecycle UI — see §3p), checkpoint 12
+(resource-grant target kinds, group grants, and the `deny` effect — see
+§3o), checkpoint 13 (effective-access explanation — see §3q), and
+checkpoint 15 (per-resource audience preview — see §3r) are delivered.**
+Everything else below marked "reserved for a later increment"
 is existing backend capability with no portal UI yet, or (where noted) a
 backend contract that does not exist at all yet.
 
@@ -28,8 +35,10 @@ backend contract that does not exist at all yet.
 |---|---|---|---|
 | `GET /campaigns/{campaign_id}/access-overview` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-A. **Extended, checkpoint 5**: `grantable_resource_capabilities` metadata and per-grant `target_id`/`target_display_name`. See §3/§3k. |
 | `GET /campaigns/{campaign_id}/eligible-accounts` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-B checkpoint 3 — exact-match account lookup for "Add campaign member". See §3d. |
+| `GET /campaigns/{campaign_id}/invitations` | `dnd_ai.api.campaign_invitations` | `access.manage` | Delivered in checkpoint 7. Returns outstanding invitations only; never returns the raw token or token hash. See §3m. |
 
-No other read endpoint exposes campaign membership, role, character-relationship, or resource-grant state — confirmed by inspection of `dnd_ai.api.memberships`, `dnd_ai.api.access_grants`, and `dnd_ai.api.campaign_invitations` (all write-only; see §2).
+No other read endpoint exposes campaign membership, role,
+character-relationship, resource-grant, or invitation state.
 
 ## 2. Existing mutation endpoints (reserved for a later 13E increment, except where noted)
 
@@ -45,14 +54,17 @@ No other read endpoint exposes campaign membership, role, character-relationship
 | `/campaigns/{campaign_id}/character-relationships/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, character-relationship-management checkpoint.** See §3j. |
 | `/campaigns/{campaign_id}/resource-grants` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, checkpoint 5** (character targets only). See §3k. |
 | `/campaigns/{campaign_id}/resource-grants/{id}/revoke` | POST | `dnd_ai.api.access_grants` | `access.manage` | Campaign-scoped — **portal-wired, hardened, checkpoint 5.** See §3k. |
-| `/campaigns/{campaign_id}/invitations` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped (returns a raw invitation token — never suitable to echo in a list contract) |
-| `/campaign-invitations/accept` | POST | `dnd_ai.api.campaign_invitations` | none (`require_human_user_id` only) | Self-service |
+| `/campaigns/{campaign_id}/invitations` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped — **portal-wired, checkpoint 7**. Returns a raw invitation token once; see §3m. |
+| `/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke` | POST | `dnd_ai.api.campaign_invitations` | `access.manage` | Campaign-scoped — **portal-wired, checkpoint 7**. See §3m. |
+| `/campaign-invitations/accept` | POST | `dnd_ai.api.campaign_invitations` | none (`require_human_user_id` only) | Self-service — **portal-wired, checkpoint 7**, currently through manual token entry. See §3m. |
 | `/campaigns` | POST | `dnd_ai.api.campaigns` | none at the route; real authorization inside `dnd_ai.commands.campaigns.create_campaign` | Human, but not generically self-service — see §4 |
 | `/admin/accounts` | POST | `dnd_ai.api.local_auth` | `security.users.is_platform_administrator` (checked in-command) | Platform-administrator |
 | `/admin/accounts/{user_id}/password-reset` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/disable` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/reactivate` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
 | `/admin/accounts/{user_id}/revoke-sessions` | POST | `dnd_ai.api.local_auth` | `is_platform_administrator` | Platform-administrator |
+| `/auth/password-reset-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only, non-consuming advisory check (`{"valid": bool}`), own rate-limit bucket; uses the same token loader and target eligibility (active account with a local credential) as the final reset; no row lock, audit row, or idempotency key; every unusable reason is indistinguishable | Self-service |
+| `/auth/activation-status` | POST | `dnd_ai.api.local_auth` | none — public, Origin-checked, read-only advisory check (`{"valid": bool}`); no principal, machine credentials ignored | Self-service |
 | `/auth/activate`, `/auth/password-reset`, `/auth/change-password`, `/auth/sessions` (list/delete own) | various | `dnd_ai.api.local_auth` | none — acts on the caller's own account | Self-service |
 
 None of the campaign-scoped rows above pass `allow_foundry_access=True` to `require_campaign_capability` — see §4.
@@ -511,7 +523,7 @@ only** this checkpoint.
 - **No change endpoint:** unlike a character relationship's single-dimension type change, a resource grant's meaningful fields (target, capability, effect, temporal/timeline scope) could each independently change, with no single unambiguous "this is what changed" audit story — revoking the old grant and creating a new one (both already hardened, audited, and idempotent) is the deliberate replacement for a generic edit form; see `dnd_ai.commands.access_grants`' own module docstring.
 - **Membership-ending integration (checkpoint 5, extended by correction):** `end_campaign_membership` revokes every currently active `security.resource_grants` row whose `grantee_campaign_membership_id` is the ending membership, in the same transaction that closes it — the identical silent-reactivation gap checkpoint 4 closed for character relationships. It also now closes (`removed_at = now()`, never deletes) the ending membership's own currently open `security.access_group_memberships` rows — the *membership's link* to each access group it belonged to — so a group's own resource grants stop applying to a departed member too, without touching the group's grant row or any other member's link to it. This closes a real gap the first cut of this checkpoint missed: `resolve_access_context`'s group-membership subquery only ever considers a currently open `access_group_memberships` row, and `_activate_or_create_membership` reactivates the *same* `campaign_membership_id` row in place on a later invitation acceptance — without this correction, a departed member's stale group membership (and every grant made to that group) would silently regain effect the moment they rejoined. Covered by `tests/database/test_api_membership_lifecycle.py::test_ending_a_membership_also_revokes_its_resource_grants`/`::test_ending_a_membership_also_closes_its_access_group_memberships` and `tests/database/test_api_campaign_invitations.py::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_character_relationship` (extended checkpoint 5 to also cover the resource-grant half through a real reactivation) and the new `::test_ending_a_membership_then_reaccepting_an_invitation_does_not_restore_its_old_access_group_membership` (checkpoint-5 correction — the full access-group scenario: initial effect, closure on end, non-reactivation on a reopened membership, and restoration only via an explicit new `access_group_memberships` insert).
 - **Read-side parity (checkpoint 5):** `dnd_ai.domain.access.resolve_access_context` and `get_campaign_access_overview` both now exclude a resource grant whose own target is not currently active — the same "currently true" generalization applied to the mutation side above, so a target deactivated *after* a grant was created stops being authorization-effective (and stops appearing on the overview) on the very next request, not just at creation time.
-- **Portal scope this checkpoint (deliberate, not full coverage):** the portal's "Add direct resource access" control only offers **character** as a selectable resource type — the one target kind with an existing safe display-name/search contract (`dnd_ai.queries.access_overview.list_assignable_campaign_characters`, already built for §3g). The other five target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) have no safe, campaign-scoped display/search contract of their own yet (resolving one for each is a materially larger surface — five unrelated resource kinds — than this checkpoint's own scope), so they are omitted from the portal rather than presented with a raw id; a grant to any of them remains fully supported by the backend (all six target kinds are hardened identically) and, if one already exists (created directly, or by a future increment), still appears on the overview with its `target_type` label and no display name, exactly as before. Access-group-targeted grants are likewise omitted from the portal this checkpoint — "Do not implement access-group grants" was this checkpoint's own explicit instruction; the backend continues to support them unchanged. `grantable_resource_capabilities` (§3) is shaped generally (one row per valid `(capability, target_type)` pairing) specifically so a future checkpoint that adds a safe contract for another target kind needs no change to that endpoint, only a portal change.
+- **Portal scope, checkpoint 5 (superseded by checkpoint 12 — see §3o):** at checkpoint 5, the portal's "Add direct resource access" control offered only **character** as a selectable resource type, reasoning that the other five target kinds had no safe, campaign-scoped display/search contract of their own yet. **That reasoning is stale as of Phase 13D**, which delivered exactly those five contracts (world search, knowledge browse, quest list, session list) before this checkpoint's own portal work began — §3o documents what checkpoint 12 built on top of them. `grantable_resource_capabilities` (§3) was shaped generally (one row per valid `(capability, target_type)` pairing) specifically so this later checkpoint needed no change to that endpoint, only a portal change.
 - **Server delegation policy answers this checkpoint's own open question:** an access manager may delegate any capability in the fixed catalog for the target's kind, **not** only capabilities they personally currently hold — see the delegation-policy bullet above for the precedent this follows and the reasoning.
 
 ## 3l. `POST /campaigns/{campaign_id}/access-groups` and friends (new, checkpoint 6)
@@ -553,25 +565,564 @@ The invitation-issuance and acceptance routes already existed; this checkpoint a
 - **Portal behavior:** the Access page now includes a campaign-level `Invitations` section, separate from member and access-group cards. It lists only outstanding invitations; shows the optional email label (or `No email label`), inviter display name, created time, and expiration time; and offers `Issue invitation` plus per-row `Revoke` controls. The one-time token returned by issuance lives in React memory only, is shown in a dedicated success panel, can be copied only by explicit user action, and is erased when the panel is dismissed. The panel is intentionally owned above the Access overview's refetch boundary so the authoritative pending-list reload does not erase the token before the GM can copy it. The authenticated portal acceptance page at `/campaign-invitations/accept` uses a password-style token field, never stores the token, reloads session bootstrap after success, states that a GM may still need to assign role/access, and links the user to `/campaigns` rather than auto-navigating into a possibly still-denied campaign route.
 - **Still out of scope:** email delivery, invitation resend, editable expiration, invitation binding to an email/account, account lifecycle changes, membership-role assignment during acceptance, non-character resource-grant invitation UX, Foundry administration, and AI features.
 
+## 3n. Single-link invitation onboarding (delivered, checkpoints 8a-8d)
+
+Checkpoint 7 deliberately shipped the smallest secure invitation workflow:
+the GM copies a raw token and an already-authenticated player pastes it into
+`/campaign-invitations/accept`. Checkpoints 8a-8d deliver the intended
+player-facing workflow: a single link that continues through authentication
+or invitation-authorized account registration and then accepts the
+invitation automatically. Every endpoint, cookie, and registration behavior
+below is implemented and covered by `tests/database/test_invitation_
+onboarding.py`, `.test_invitation_onboarding_concurrency.py`, and `.
+test_api_invitation_onboarding.py` (backend) and the portal's own
+`useBeginInvitationOnboarding`/`useInvitationOnboardingStatus`/
+`useRegisterInvitedAccount`/`useCompleteInvitationOnboarding`/
+`useCancelInvitationOnboarding` hook suite plus `AcceptCampaignInvitationPage`
+integration tests.
+
+### User flow
+
+1. A GM issues an invitation from the campaign Access page.
+2. The portal constructs and displays one shareable URL from the current
+   trusted portal origin and the one-time raw token:
+   `/campaign-invitations/accept#token=<one-time-token>`.
+3. The GM sends that URL to the intended player through a trusted channel.
+4. The player opens the URL. The portal reads the fragment exactly once,
+   immediately replaces the current history entry with the fragment-free
+   acceptance URL, and exchanges the token in a JSON request body for a
+   short-lived server-side onboarding session.
+5. An existing player signs in. A player without an account may create one
+   only while the valid onboarding session exists; there is no unrestricted
+   public-registration route.
+6. After successful authentication or invitation-authorized registration,
+   the server accepts the pending invitation for that authenticated account.
+7. The completion screen identifies the campaign by an audience-safe display
+   name, links to `/campaigns`, and explains that a GM may still need to
+   assign a role, character relationship, resource grant, or access-group
+   membership before campaign content becomes available.
+
+The existing password-style manual token form remains available as a fallback
+for users who cannot open the generated link.
+
+### Delivered backend contract
+
+Five routes, all in `src/dnd_ai/api/invitation_onboarding.py`:
+
+- **`POST /campaign-invitations/onboarding/start`** (unauthenticated-human,
+  `require_allowed_origin`, IP rate-limited): accepts `{ token }` in the JSON
+  body. Validates the invitation without accepting it (read-only —
+  `dnd_ai.commands.invitation_onboarding.begin_invitation_onboarding` takes
+  no lock), creates a `security.invitation_onboarding_sessions` row, and sets
+  a random opaque onboarding cookie (`HttpOnly`, `Secure` in production,
+  `SameSite=Lax`, host-only, `Path=/`, `Max-Age` equal to the remaining onboarding lifetime — the `__Host-` prefix used in production requires `Path=/`, so the cookie is *not* path-scoped to the onboarding routes; see `dnd_ai.api.cookies`).
+  The raw invitation token is never stored — only its hash, matching every
+  other opaque-secret table in this codebase. Returns the campaign display
+  name, invitation/onboarding expiry, the onboarding CSRF token, and the
+  caller's `next_action`/`signed_in_display_name` (whether they are already
+  signed in, so the portal can skip straight to completion).
+- **`GET /campaign-invitations/onboarding/status`**: identical safe fields to
+  `start`'s response, re-derived from the still-live onboarding cookie —
+  including the onboarding CSRF token (an additive correction found while
+  building the portal page: without it, refreshing the page permanently lost
+  the only copy, blocking `register`/`cancel` for the rest of that session).
+  Never exposes `campaign_id`, membership state, inviter identity, or the raw
+  token/hash.
+- **`POST /campaign-invitations/onboarding/register`** (unauthenticated-
+  human, `require_allowed_origin`, onboarding CSRF double-submit, IP rate-
+  limited, `Authorization` header rejected): usable only with a valid
+  onboarding session. Accepts `login_name`, `display_name` (`1-100` chars,
+  matching `ck_users_display_name_length`), and `password`. Creates the
+  local account (Argon2id, the existing minimum-length/common-password/
+  audit/generic-error policies), a browser session, and — via
+  `accept_locked_onboarding_invitation` (shared with `accept_campaign_
+  invitation`) — the campaign membership, atomically in one transaction. The
+  same transaction writes two `audit.change_log` rows: the existing
+  `invitation_onboarding.register` row (names the new `security.users` row;
+  not campaign-resolvable) and an `invitation_onboarding.register_accept`
+  row naming the accepted `security.campaign_memberships` row, which the
+  campaign audit history shows as "Invitation accepted (new account)" under
+  the `invitation` category. Neither row carries a token, token hash,
+  password, email, or onboarding CSRF value, and a failed or replayed
+  registration writes neither.
+- **`POST /campaign-invitations/onboarding/complete`** (an ordinary
+  authenticated human session, session CSRF via `require_human_user_id`):
+  binds the already-authenticated caller to the still-open invitation and
+  activates the membership, reusing the identical `_accept_locked_invitation`
+  tail `accept_campaign_invitation` uses.
+- **`POST /campaign-invitations/onboarding/cancel`** (unauthenticated-human,
+  `require_allowed_origin`): clears the onboarding cookie and marks the
+  session cancelled; safe to call at any point, including after a token that
+  never resolved to a valid session.
+- **Cancellation/expiry, and when the cookie is actually cleared.** The server
+  sends an explicit cookie deletion only on a *successful* `register`,
+  `complete`, or `cancel`. Every other end state — invitation revocation,
+  invitation expiry, onboarding-session expiry, a consumed or cancelled
+  session, and any rejected request (generic `404`, or `403` for a wrong
+  CSRF value) — leaves the browser cookie in place to expire on its own
+  `Max-Age`; it is already unusable server-side, and every later read of it
+  returns the same generic unavailable response. A `start` for an unavailable
+  invitation sets no cookie at all. The onboarding session's own expiry is
+  `min(now() + 20 minutes, the invitation's own expires_at)` — never extends
+  the invitation's expiry.
+- **No role assignment:** completion creates or reactivates membership only.
+  It does not assign roles or restore historical roles, relationships, direct
+  grants, or access-group membership — a GM still configures those
+  separately after onboarding, exactly as after a manual-token acceptance.
+
+### Token and secret handling
+
+The shareable URL intentionally makes a narrow exception to checkpoint 7's
+"never in a URL" rule. The raw token may exist only:
+
+- in the one-time issuance response held in GM-side React memory;
+- in the generated URL **fragment** and the GM/player delivery channel;
+- briefly in recipient-side JavaScript while it is removed from the URL and
+  submitted in the onboarding-start JSON body; and
+- in the existing manual-entry fallback while that form is being submitted.
+
+It must never appear in a URL path or query string, HTTP request target,
+`Referer` header, reverse-proxy/access log, application log, exception text,
+audit metadata, database plaintext, cookie value, `localStorage`,
+`sessionStorage`, IndexedDB, analytics event, or later read response. The
+portal must not derive the public origin from an untrusted forwarded host;
+it should construct the URL from the already-loaded same-origin portal or a
+validated configured public portal base URL.
+
+Because the fragment is a bearer credential before exchange, the invitation
+remains short-lived and single-use. Documentation and UI copy must tell the GM
+that anyone who obtains the link can claim it until it is accepted, revoked,
+or expired. The optional `invited_email` remains an operator label and does
+not become an identity proof unless a separate verified-email design is
+approved later.
+
+### Authentication and routing behavior
+
+- `/campaign-invitations/accept` becomes a public landing route, but it does
+  not expose protected campaign content and cannot accept an invitation
+  without a valid onboarding session plus an authenticated human account.
+- If a valid local/OIDC human session already exists, the portal may proceed
+  directly to completion after showing the audience-safe campaign name and
+  which signed-in account will join. It must not silently switch accounts.
+- If no authenticated session exists, the player is offered **Sign in** and
+  **Create account**, rendered inline on `/campaign-invitations/accept`
+  itself rather than a redirect to `/login` — so the captured onboarding
+  state is never lost to a route change. Both flows preserve the onboarding
+  cookie, not the raw token. Refresh after fragment cleanup resumes from the
+  server-side onboarding record while it remains valid. Successful sign-in,
+  registration, or confirmation reloads the session bootstrap before
+  offering the "Go to campaigns" link, so the newly joined campaign is
+  present the first time that link is followed rather than only after a
+  later, unrelated reload.
+- **Login destination selection.** Sign-in for an invitation happens inline
+  on `/campaign-invitations/accept`. `/login` has exactly two fixed internal
+  destinations after a successful sign-in, and asks the server (the
+  onboarding cookie is `HttpOnly`, so only the server can say) whether this
+  browser still holds a live onboarding continuation. None: `/campaigns`,
+  exactly as before. A live one **never auto-redirects**: a cookie left by
+  an abandoned flow cannot be told apart from current intent (no return URL
+  or stored flag is trusted, and the raw token is never persisted), so Login
+  shows the campaign name and an explicit **Resume invitation** (to the
+  confirm step at `/campaign-invitations/accept`) / **Continue to campaigns**
+  choice. Signing in never accepts by itself; acceptance always needs the
+  explicit confirm click (or, for a new account, the register submit).
+  Neither destination is read from the URL, a query parameter, or history
+  state, so Login cannot be used as an open redirect. If the check itself
+  fails, Login says so and offers **Try again** or **Continue to campaigns**
+  rather than silently dropping a possibly live invitation. A failed login
+  leaves the continuation untouched; a later successful retry reaches the
+  same choice.
+- **Wrong account and cancellation.** The confirm step always names the
+  signed-in account (safe display name only) and keeps the Join button
+  disabled until the session bootstrap has finished reloading. **Use a
+  different account** signs the current account out and returns, in place, to
+  Sign in / Create account on the same continuation. **Not now** (shown on
+  both the sign-in and confirm states) calls the existing `cancel` endpoint:
+  it clears the onboarding cookie and closes the onboarding session but never
+  accepts the invitation, which remains pending for the GM to revoke or
+  re-share. A continuation that expires or is revoked while the user is on
+  Login or at the confirm step ends in the generic "no longer available"
+  state (or the ordinary `/campaigns` destination from Login) with no
+  membership change.
+- **Malformed fragment.** The fragment is removed from the current history
+  entry before anything that can throw. A value that is empty or not valid
+  percent-encoding renders the same generic "no longer available" state as
+  an invalid invitation, with no `start` request and no retry.
+- A transient `start` failure (rate-limited or a generic request error)
+  offers **Try again**, resubmitting the same token this component already
+  captured from the fragment — never re-reading the URL, which was already
+  cleared. `denied` (this session is not allowed to accept invitations at
+  all) and `unavailable` (token already consumed/expired/revoked) are
+  deliberately not retryable: retrying cannot change either outcome.
+- Foundry and machine principals cannot begin, register through, or complete
+  this workflow.
+- Invalid, expired, revoked, already-consumed-by-another-user, or missing
+  tokens/onboarding sessions use one generic unavailable response and never
+  disclose which condition applied.
+
+### Verification
+
+Covered by focused PostgreSQL-backed and portal tests for: fragment removal;
+no query/path token; onboarding-cookie flags and expiry; refresh across
+login; existing-account completion; invitation-authorized registration;
+duplicate login and weak/compromised passphrase handling; revoke/expire
+races; accept-vs-accept serialization (real-lock concurrency tests, `tests/
+database/test_invitation_onboarding_concurrency.py`); same-user replay;
+account/session/membership/audit atomicity; no restoration of old access;
+generic rejection; Foundry/machine rejection; CSRF/Origin protection; rate
+limiting; cancellation; stale-token suppression; and absence of the raw
+token from persistence, logs, audit, URLs after cleanup, browser storage,
+and later responses. The invitation onboarding category also appears in the
+campaign audit history (checkpoint 14) — see `docs/AUDIT_HISTORY_API.md` §2
+for the full label-resolution contract.
+
+**Manual-acceptance fix (post-checkpoint-8d):** a logged-out visitor opening
+a valid link could get stuck indefinitely on "Checking the invitation
+link." — never wrong, never insecure, just never resolving. Root cause:
+`useBeginInvitationOnboarding` fired its one real network request from
+inside an imperative `submit()` call, while a *separate* effect owned that
+request's `AbortController` unmount cleanup. React 18 StrictMode's
+mount → cleanup → mount replay of a component's first commit (`npm run
+dev`; stripped from production builds, but exactly what local manual
+testing runs against) let the phantom cleanup abort the one live request
+with nothing left to resubmit it, since the page's own ref latch correctly
+prevents a second `submit()` call. Fixed by moving the `fetch` itself into
+a `useEffect` keyed on a `pending` state value that `submit()` only sets —
+so the effect that creates the `AbortController` and the effect that
+cleans it up are always the same invocation, and a StrictMode replay
+creates-then-aborts-then-recreates a fresh, live request rather than
+leaking an aborted one. Covered by `useBeginInvitationOnboarding.test.tsx`
+mounting the real hook under `<StrictMode>` with a mount-effect-driven
+`submit()` (mirroring the page's own pattern) and a controllable, never-
+auto-resolving mock request.
+
+**Post-login continuation fix:** a logged-out visitor opening a valid link
+could be bounced to `/login` and, after signing in, land on `/campaigns` with
+the invitation never accepted or explained. Root cause: on mount the page
+fired the onboarding **status** read concurrently with the **start** request
+that creates the onboarding cookie. The status read raced ahead of the
+cookie, returned `404`, and left a stale "unavailable" snapshot; `start`
+then succeeded, and the one render before the page's status refetch took
+effect saw "unavailable" + "unauthenticated" and ran the page's
+`<Navigate to="/login">` for a visitor with no continuation — unmounting the
+page (and with it the invitation flow) while the valid cookie sat unused
+server-side. Fixed by gating the status read on the begin request
+(`useInvitationOnboardingStatus({ enabled })`: held off until `start` has
+succeeded when the page opened with a fragment, immediate otherwise), by
+having Login offer an explicit Resume / Continue choice for a live
+continuation (above, never an automatic redirect), and by giving the user a
+**Not now** exit. (A later review round added the malformed-fragment handling and
+the invited-registration audit row described above.) Backend behavior was unchanged by the original fix: the continuation is still the
+same short-lived, single-use opaque `HttpOnly` onboarding cookie backed by
+`security.invitation_onboarding_sessions`; the raw invitation token still
+appears only in the one-time fragment (removed before any await) and the
+`start` request body. Covered by `App.invitationContinuation.integration.test.tsx`,
+which mounts the real `<App />` under the real `RouteSessionProvider` and
+router with only `fetch` faked by a small stateful server — including a gated
+`start` that reproduces the original race, Strict Mode, failed-then-successful
+login, Back/Forward, wrong-account switching, cancellation, registration,
+expiry/revocation, double submission, unmount abort, and the absence of the
+raw token from the URL, history state, and browser storage.
+
+## 3o. Resource-grant target kinds, group grants, and the `deny` effect (checkpoint 12)
+
+Closes §3k's checkpoint-5 portal-scope limitation, which had gone stale:
+Phase 13D delivered an audience-safe, campaign-scoped display/search
+contract for every one of the six resource-grant target kinds before this
+checkpoint's own work began, so the "no safe contract yet" reasoning no
+longer applied. No new backend read endpoint was added — this checkpoint
+is entirely: one backend correctness fix, and portal reuse of contracts
+that already existed.
+
+- **The CTI column trap (backend fix, P-8).** `character.characters`,
+  `narrative.quests`, `narrative.events`, and `knowledge.knowledge_items`
+  all key their primary key off `core.entities(entity_id)` via class-table
+  inheritance (migrations 073/057/041) — so one UUID can satisfy several of
+  `security.resource_grants`' six mutually exclusive target columns at
+  once, and `ck_resource_grants_exactly_one_target` cannot tell which
+  column the caller meant. The read side always keys off one specific
+  column (`dnd_ai.api.world_explorer`'s own `resource_grant_targets(cap,
+  "event_id")` call reads `event_id`, never `entity_id`), so a grant
+  written to `entity_id` for one of these four kinds was a **silent
+  authorization no-op** — it never authorized anything, while still
+  displaying as an active grant on the access overview. `dnd_ai.commands.
+  access_grants.create_resource_grant` now rejects an `entity_id` target
+  whose resolved `core.entities.entity_type_id` belongs to
+  `character`/`npc`/`player_character`/`event`/`quest`/`knowledge_item`,
+  folded into the existing non-disclosing `TargetNotInCampaignWorldError`
+  — a caller cannot distinguish this from "wrong world" or "not active." A
+  genuine `location`/`organization`/`religion`/`item` `entity_id` target is
+  unaffected. Covered by `tests/database/test_resource_grant_target_column.py`.
+- **Portal: every target kind, both grantee kinds.** `ResourceTargetSelector`
+  (new shared component) switches over target kind and reuses four existing
+  read hooks, each fired only for the currently selected kind (never all
+  four at once, to avoid populating one dropdown with four requests):
+
+  | Kind | Read contract reused | Filter applied |
+  |---|---|---|
+  | `character` | the overview's own `assignable_characters` | unchanged |
+  | `entity` | `GET /campaigns/{id}/world/search` | `category ∈ {location, organization, religion, item}` |
+  | `event` | `GET /campaigns/{id}/world/search` | `category = event` |
+  | `knowledge_item` | `GET /campaigns/{id}/knowledge?view=known` (no character/party — the canonical/ground-truth projection, reachable for a baseline GM) | — |
+  | `quest` | `GET /campaigns/{id}/quests` | — |
+  | `session` | `GET /campaigns/{id}/sessions` | — |
+
+  The selector is shared verbatim by `AddResourceGrant` (membership
+  grantee) and `AddGroupResourceGrant` (access-group grantee) — no new
+  backend endpoint for the group case either, matching §3l's own note that
+  group-owned grants reuse the member-grant routes unchanged. No new
+  resource-directory endpoint was created for any kind: every selector
+  reuses an existing `campaign.view`-gated, audience-filtered contract, so
+  nothing inaccessible to the actor is ever offered, and the selector is
+  hidden (presentation only) when `campaign.view` is absent from the
+  campaign's own bootstrap capabilities — the backend remains the sole
+  authority regardless.
+- **Portal: the `deny` effect.** Both Add-grant forms now offer an
+  Allow/Deny radio; choosing Deny requires an explicit confirmation
+  checkbox ("I understand this explicitly denies this capability…") before
+  the submit button is enabled — a caller cannot create a deny grant by
+  selection alone. Presentation of an existing deny grant (the "Remove
+  denial" wording) already existed from §3k's own correction; only
+  creation was missing before this checkpoint.
+- **What is still not in the portal.** A resource-directory/search endpoint
+  spanning multiple kinds at once — deliberately never built, per
+  `UI_DESIGN.md` §9's non-disclosure rules ("a purpose-built 'grantable
+  resources' directory would risk disclosing resources the actor cannot
+  see"). Bulk grant management (grant the same capability to many
+  resources at once) — out of scope, not requested.
+
+## 3p. Platform account lifecycle UI (delivered, checkpoints 9-11b)
+
+Closes the account-lifecycle gap §5 (pre-checkpoint-16 revision) listed as
+missing: a full portal surface for platform-account administration and
+self-service, layered on the local-authentication backend that already
+existed before 13E-B.
+
+- **`GET /admin/accounts`** (checkpoint 9): keyset-paginated platform-account
+  list, gated on `SessionBootstrap.is_platform_administrator` — never a
+  campaign-scoped `access.manage` grant, which confers nothing here (`dnd_ai.
+  queries.access_overview`'s own module docstring: "do not merge account-wide
+  administration with campaign administration unless the existing
+  authorization model explicitly does so"). `dnd_ai.commands.local_auth.
+  grant_platform_administrator` (checkpoint 9b) is the only way to create the
+  first platform administrator — deliberately out-of-band only, no API route
+  ever, per D-10 — documented operationally in `docs/operations/
+  PLATFORM_ADMINISTRATOR_RECOVERY.md`.
+- **`AdminAccountsPage`** (checkpoint 10): lists every platform account
+  (`AccountLifecycleActions`: create, issue a password-reset link, disable,
+  reactivate, revoke all sessions), each rendered through `OneTimeSecretPanel`
+  — a one-time activation/reset link shown exactly once, in a `repr=False`
+  Pydantic field server-side, never persisted client-side beyond the single
+  render. The issued password-reset link is held in transient React state owned
+  by `AdminAccountsPage` (above the account-list loading boundary), so the
+  authoritative refetch after issuance does not lose it; it is replaced by a
+  newer issuance, cleared when a new issuance starts, dismissed explicitly, or
+  dropped on unmount/reload. The administrator must copy it and send it out of
+  band — no email is sent. Platform-administrator status is indicated (a badge on admin rows)
+  never tabulated (no separate "role" column) — D-10.
+- **`ActivateAccountPage`/`ResetPasswordPage`** (checkpoint 11): public routes
+  that extract a one-time token from the URL **fragment** (never a query
+  string or path segment, matching the invitation-onboarding link's own
+  token-handling discipline in §3n), immediately clear it from browser
+  history (`extractTokenFromLocationHash`'s lazy-initializer pattern — safe
+  under React 18 `StrictMode`'s double-invoke, since the side effect
+  self-idempotently sees the already-cleared hash on a second call), and
+  submit it in a JSON body.
+- **`AccountPage`** (checkpoint 11b, self-service): change own password
+  (current-password-verified), list own active browser sessions
+  (`OwnSessionsList`), and revoke any one of them individually — the
+  self-service counterpart to an administrator's "revoke all sessions"
+  action, scoped to the caller's own account only.
+- **Non-disclosure carried through the whole surface.** Every account-
+  lifecycle mutation response and every list item exposes only `user_id`,
+  `display_name`, and account status — never login name, email, or a raw
+  secret outside its own one-time issuance response. `display_name` is
+  bounded `1-100` characters with a reserved-login-name denylist (D-11),
+  since invited registration (§3n) makes it untrusted input reaching this
+  same account model.
+
+## 3q. Effective-access explanation (delivered, checkpoint 13)
+
+```
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/effective-access
+  auth: access.manage (require_campaign_capability), human principals only
+  200: { display_name,
+         capabilities: [ { code, display_name,
+                           sources: [ { kind: "role" | "character_relationship"
+                                             | "resource_grant" | "access_group",
+                                        label, target_display_name? } ] } ],
+         denials: [ { capability_code, target_type, target_display_name? } ] }
+  404: non-disclosing — membership missing, foreign-campaign, or closed
+```
+
+`dnd_ai.queries.effective_access.resolve_member_effective_access` — every
+capability the named member currently holds, each with the role
+assignments, character relationships, direct resource grants, and access-
+group resource grants that contribute to it, plus every capability an
+active `deny` grant currently overrides for a specific target (independent
+of whether the member also holds that capability more broadly — a `deny`
+only ever narrows one target, never the capability as a whole). The
+administrator remains the only authenticated actor: no second session, no
+request authorized as the explained member, nothing mutable, no protected
+campaign content — only the member's own access shape, every label drawn
+from the same audience-safe field set `GET .../access-overview` already
+uses. A pure read: no `audit.change_log` row.
+
+Portal: `EffectiveAccessPanel`, one disclosure per member row on the Access
+page (never a single shared side panel) — `EffectiveAccessContent` mounts,
+and therefore only fetches, while its own row's disclosure is open; closing
+it or opening a different member's instead unmounts it, clearing that
+member's access shape from memory rather than merely hiding it. This
+satisfies `UI_DESIGN.md` §6.4's "Effective-access explanation" screen and
+§8.3, but not §16's full preview line on its own — §3r below covers the
+spoiler-checking half of that (D-1, Option B here, Option C there).
+
+## 3r. Per-resource audience preview (delivered, checkpoint 15)
+
+```
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/quests/{quest_id}
+GET /campaigns/{campaign_id}/members/{campaign_membership_id}/preview/knowledge/{knowledge_item_id}
+  auth: access.manage on {campaign_id} (require_campaign_capability, UNCHANGED), human only
+  query: character_id?, party_id? — interpreted against the SUBJECT, not the actor
+  200: the identical QuestResponse/KnowledgeResponse body the member's own request returns
+  404: non-disclosing — membership absent/closed/cross-campaign, subject denied, or the
+       subject may not see this resource at all
+```
+
+The capability half of D-1's "preview as a selected member" answer (§3q)
+tells a GM *what capabilities* a member holds; it does not show what a
+specific quest or knowledge item actually renders as for that member —
+quest detail (hidden stages) and knowledge-item detail (per-knower belief
+versus ground truth) are `visibility_policy`-driven, not capability-
+listing-driven, so no capability listing can answer "did I accidentally
+expose the hidden stage to the party?" This is explicitly **not** Option A
+(no full-portal impersonation, no projection over all ~15 13D read routes):
+two bounded routes only, confined to the two genuine spoiler surfaces in
+the 13D read set.
+
+**Actor and subject are never interchangeable.** `require_campaign_
+capability` is not modified at all — it authorizes the actor for `access.
+manage` and resolves their own `AccessContext` before either route ever
+looks at who the preview is about. `dnd_ai.api.preview.
+resolve_preview_subject` then separately resolves the **subject** into a
+`PreviewSubjectContext` — a distinct frozen type nothing else in this
+codebase returns or accepts. A caller cannot pass one where an
+`AccessContext` is expected, and `require_campaign_capability` can never
+construct or return one — an actor/subject swap is a mypy error, not a
+runtime authorization bypass (confirmed against a throwaway negative-type
+script during development: mypy rejected both misuse directions).
+
+**The preview does not lie.** Both routes call `dnd_ai.api.quests.
+resolve_quest_response`/`dnd_ai.api.knowledge.resolve_knowledge_response` —
+the exact functions the real `GET .../quests/{quest_id}`/`.../knowledge/
+{knowledge_item_id}` routes call — passing the subject's own resolved
+`AccessContext` in place of the actor's. `tests/database/test_api_preview.py`
+proves the preview response is byte-identical to what the subject's own
+authenticated request returns for the same resource and query parameters
+(the anti-lying test), for both a GM subject and a player subject.
+
+Portal: `AudiencePreviewPanel` — pick a member (from the overview's own
+member list), pick a quest or knowledge item (reusing checkpoint 12's
+`ResourceTargetSelector`), see the rendered result in a container labelled
+with both. Changing either selection, or closing the panel, remounts (never
+merely re-renders) the fetching component, so a previous selection's
+content is gone the instant a different one is made. Presentation-only
+gate (the server's `access.manage` check on the campaign, `require_
+campaign_capability`, is what actually authorizes every request regardless)
+— the frontend hides the control from a session whose own campaign
+membership lacks `access.manage` (`utils/canPreviewAudience.ts`, shared by
+every placement below; corrected post-checkpoint-15 from an earlier,
+overly-permissive `campaign.view` check that every ordinary member also
+carries).
+
+**Placement (post-checkpoint-15 manual-acceptance fix):** the panel is no
+longer confined to the Access page. `AudiencePreviewSection` wraps it for
+four additional pages, each gating and fetching the member list
+independently (a player visiting any of them never triggers the
+campaign-access-overview request the panel's member list needs):
+- **Quest collection** (`QuestsPage`) and **Knowledge collection**
+  (`KnowledgePage`): the resource-type selector is locked to that page's
+  own type (`fixedResourceType`), but the resource itself is still picked
+  from `ResourceTargetSelector` — there is no collection-level preview
+  endpoint, only the same per-resource one §3r already describes.
+- **Quest detail** (`QuestDetailPage`) and **Knowledge detail**
+  (`KnowledgeDetailPage`): both the resource type and the specific resource
+  are locked to the one already on screen (`fixedResource`), so only a
+  member picker is shown — these routes ARE the single-resource detail
+  projection §3r's endpoints already return, so no separate resource
+  picker is needed or offered.
+
+No other page gets the control: no route in this codebase has a backend
+contract that can project a *collection* through a member's perspective
+(only single-quest/single-knowledge-item detail), so no page simulates that
+locally. Campaign navigation always remounts the section (keyed by
+`campaignId`), clearing any selected member/resource from a previous
+campaign rather than carrying it forward.
+
 ## 4. Principal/boundary summary
 
 - **Local-session/OIDC-human:** `dnd_ai.api.auth.require_human_user_id` accepts only `LOCAL_SESSION_AUTH_METHOD` and `OIDC_AUTH_METHOD`. Every campaign-scoped access-management route (§2's campaign-scoped rows, plus the new overview read) is reachable by either.
 - **Platform-administrator:** `/admin/accounts*` (`dnd_ai.api.local_auth`) — gated on `security.users.is_platform_administrator`, checked *inside* the command (a non-platform-administrator caller gets a fixed, non-disclosing 404, not 403). Entirely separate from any campaign's `access.manage` — a campaign owner is not automatically a platform administrator, and vice versa.
 - **Campaign-scoped:** every `access.manage`-gated route in §2, plus the new overview read — authorization is per-campaign, resolved fresh per request via `dnd_ai.domain.access.resolve_access_context`.
 - **Self-service:** routes that act only on the caller's own account/own invitation with no special capability (`/auth/login`, `/auth/logout`, `/auth/change-password`, `/auth/sessions` list/delete-own, `/auth/activate`, `/auth/password-reset`, `POST /campaign-invitations/accept`).
+- **Invitation onboarding (delivered, §3n):** a narrowly unauthenticated
+  landing/start boundary plus invitation-authorized registration.
+  Possession of a valid onboarding invitation authorizes only creation of
+  that player's own local account and membership in the named campaign; it
+  never grants platform-administrator or campaign capabilities.
 - **Foundry/machine boundary:** a `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated principal may reach a campaign-scoped route only when that route explicitly opts in via `require_campaign_capability(..., allow_foundry_access=True, foundry_scope=...)`. **None** of the access-management routes in §2, §3l's access-group routes, nor the access-overview read, opt in — a paired Foundry device or its adapter credential cannot list, create, or revoke any membership, role, relationship, grant, or access group, and cannot read the overview either. The retired `FOUNDRY_SYSTEM_AUTH_METHOD` cannot reach any authenticated route at all (rejected earlier, in `get_authenticated_user_id` itself).
 - **`POST /campaigns` (its own category):** callable by any human principal, but real authorization is inside `dnd_ai.commands.campaigns.create_campaign` (pre-existing `access.manage` in another campaign attached to the same timeline, plus a positively issued `security.timeline_bootstrap_grants` row) — not a generic "any authenticated human may create any campaign" self-service contract.
 
-## 5. Missing contracts deferred to a later Phase 13E increment
+## 5. Contracts delivered across Phase 13E, and what remains genuinely deferred
 
-No backend read/write contract exists yet for:
-- ~~Access-group management~~ — **delivered by checkpoint 6, §3l**: create/rename/deactivate/reactivate a group, add/remove a member. Group-owned resource grants continue through the existing §3k routes unchanged in shape (hardened to require the grantee group currently be active).
-- ~~Any audit-history read endpoint~~ — **delivered independently of this checkpoint sequence**: `GET /campaigns/{campaign_id}/audit-history` (`dnd_ai.api.audit_history`/`.queries.audit_history`; see `docs/AUDIT_HISTORY_API.md` for the full contract). Checkpoint 6 extends its category allowlist with `access_group`/`access_group_membership` (§3l).
-- A preview-as-user/perspective workflow (docs/UI_DESIGN.md §6.3) — no existing endpoint.
-- A UI for the remaining mutation endpoints in §2: account creation/activation/reset/disable/reactivate/revoke-sessions, membership reactivation, and access-group-targeted resource grants of a non-character target kind (see §3k's own "Portal scope this checkpoint" note). **Invitation issuance/list/revocation plus self-service invitation acceptance (§3m), changing an existing member's role assignment (§3a, checkpoint 1), adding/revoking one role on an existing membership (§3b/§3c, checkpoint 2), adding an existing account as a member/ending an existing membership (§3d/§3e/§3f, checkpoint 3), adding/changing/revoking a member's character relationship (§3g/§3h/§3i/§3j, the character-relationship-management checkpoint), adding/revoking a member's character-targeted direct resource grant (§3k, checkpoint 5), and the complete access-group lifecycle/membership/character-target-grant management (§3l, checkpoint 6) are now wired** — the exceptions to this list.
-- A UI for the other five resource-grant target kinds (`entity`, `knowledge_item`, `quest`, `session`, `event`) and for a resource-grant `deny` effect — see §3k's own "Portal scope this checkpoint" note for why (no safe display/search contract yet for the five target kinds; no portal need yet for an explicit deny). The backend command itself is hardened identically for all six target kinds and both effects, for both grantee kinds.
+Historical note: this section originally tracked contracts *not yet*
+implemented as of 13E-A/13E-B's early checkpoints. As of checkpoint 16, every
+item it once listed is delivered — recorded below with the checkpoint that
+closed it — except the handful that are deliberately out of scope for Phase
+13E entirely, listed at the end of this section with the reason.
 
-None of the above is implemented yet, except as noted. 13E-A was read-only; 13E-B checkpoints 1, 2, 3, the character-relationship-management checkpoint, checkpoint 5, checkpoint 6, and checkpoint 7 together add the role, membership, character-relationship, direct resource-grant, access-group, and invitation-management reads/mutations documented in §3a-§3m — and nothing else in this list. Remaining exclusions still include non-character access-group grants, preview-as-user, Foundry, AI mutation, account creation/activation/disablement/reactivation, and membership reactivation.
+**Delivered:**
+- Access-group management (checkpoint 6, §3l): create/rename/deactivate/
+  reactivate a group, add/remove a member. Group-owned resource grants
+  continue through the existing §3k routes unchanged in shape.
+- The campaign audit-history read (delivered independently of this
+  checkpoint sequence; `GET /campaigns/{campaign_id}/audit-history` — see
+  `docs/AUDIT_HISTORY_API.md`). Checkpoint 6 extends its category allowlist
+  with `access_group`/`access_group_membership`; checkpoint 14 folds in
+  `invitation_onboarding.complete` and adds the actor filter to the portal.
+- The single-link onboarding/start/status/registration/completion contracts
+  (checkpoints 8a-8d, §3n) — the manual authenticated-acceptance flow from
+  checkpoint 7 remains available as a fallback, not the only path.
+- A UI for account creation/activation/reset/disable/reactivate/revoke-
+  sessions (checkpoints 9-11b, §3p) — `/admin/accounts`, `/activate`,
+  `/reset-password`, `/account` (browser pages; they submit to the POST-only
+  `/auth/activate` and `/auth/password-reset` endpoints and stay off the
+  proxied `/auth/*` prefix).
+- A UI for the other five resource-grant target kinds and the `deny` effect
+  (checkpoint 12, §3o) — every target kind and both effects, for both
+  grantee kinds, via the shared `ResourceTargetSelector`.
+- The effective-access explanation (checkpoint 13, §3q) and a per-resource
+  audience preview for quests and knowledge items (checkpoint 15, §3r) — D-1's
+  bounded substitute for full preview-as-user (Option B + Option C; see
+  below).
+
+**Deliberately out of scope for Phase 13E (not deferred by oversight):**
+- **Full preview-as-user / full-portal impersonation (Option A)** —
+  docs/UI_DESIGN.md §16's own preview line is only *partially* met by §3q/
+  §3r's bounded pair, by owner decision D-1. Projecting all ~15 13D read
+  routes through an arbitrary member's perspective is a materially larger
+  surface (every route would need its own actor/subject separation audit)
+  with a correspondingly larger blast radius if that separation were ever
+  gotten wrong anywhere in it — deferred to whichever future phase actually
+  needs it, not attempted piecemeal here.
+- **Explicit membership reactivation outside invitation acceptance** — §3e's
+  own design: a departed member is re-added as a new membership row, never
+  reactivated in place; only invitation acceptance (§3n) reactivates a
+  closed membership. This is a considered design position, not a gap.
+- Foundry-adapter and AI-proposal mutation surfaces for any of the above —
+  every route in this document remains human-portal-only by its own
+  `allow_foundry_access`/`require_human_user_id` gates; extending any of
+  them to a Foundry or AI-agent actor is out of scope here.
 
 ## 6. Manual-validation development fixture accounts
 
@@ -879,6 +1430,39 @@ unaffected; reactivating it and confirming it starts empty (no members, no
 grants) until explicitly re-populated; and reviewing the resulting
 `access_group`/`access_group_membership` audit-history entries for correct
 labels.
+
+### Checkpoint 13 (effective-access explanation) manual-validation scenarios
+
+Exercised against the dev fixture during this checkpoint's own development:
+`GET /campaigns/{campaign_a_id}/members/{membership_id}/effective-access`
+for `phase13e.gm2`, `phase13e.player_a`, and `phase13e.observer_a` (as
+`phase13e.gm2`, the `access.manage`-holding actor). Results matched §6's own
+"Expected access behavior" below exactly:
+- GM2's own explanation: `access.manage`/`canon.edit` each with one `role`
+  source (`Campaign Owner`); `campaign.view` with two role sources
+  (`Campaign Owner` and `Player`); no denials.
+- Player A's own explanation: `campaign.view` with one `role` source
+  (`Player`); no other capability; no denials.
+- Observer A's own explanation: `campaign.view` with one `role` source
+  (`Observer`); `character.view_full` with one `resource_grant` source
+  (labelled with the grant's own `reason`, target `Phase13C Character A`);
+  no denials — matching §6's own "Observer A shows exactly one grant" fact
+  above, now explained rather than merely listed.
+
+### Checkpoint 15 (per-resource audience preview) manual-validation scenarios
+
+`tests/database/test_api_preview.py`'s own fixture (GM/player subjects, a
+`gm_only` quest objective, a knowledge item with a party belief distinct
+from ground truth) is the primary evidence — including the byte-identical
+comparison against each subject's own authenticated request, for both a GM
+and a player subject. A full walkthrough against the dev fixture (creating
+a `gm_only`-objective quest and a belief-divergent knowledge item under
+"Phase13C Campaign A", then previewing both as `phase13e.player_a`,
+`phase13e.observer_a`, and `phase13e.gm2` from `phase13e.gm2`'s own signed-in
+session) is deferred to a future manual pass, matching checkpoint 6's own
+"not yet exercised against the dev fixture" precedent above — the automated
+byte-identical test already proves the property this manual pass would
+otherwise exist to confirm.
 
 ### Expected access behavior
 

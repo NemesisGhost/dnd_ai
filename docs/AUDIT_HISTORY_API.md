@@ -1,12 +1,30 @@
 # Campaign audit-history read API (Phase 13E-B audit-history workstream)
 
-Independent foundation for a future Access-page "Audit history" panel.
-Read-only — no new command, no new mutation, no new capability. This
-document records the discovered `audit.change_log` contract and the exact
-endpoint this workstream adds. It does not change, and is not a substitute
-for, [docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which
+Backs the Access section's "Audit history" tab (`AuditHistory.tsx`, its own
+page at `CampaignAccessAuditPage.tsx` — checkpoint 14 first wired the
+component in, embedded directly in `CampaignAccessPage.tsx`; a
+manual-acceptance fix afterward split it into its own route, `/app/
+:campaignId/access/audit`, alongside the management route `/app/
+:campaignId/access`, so opening either tab never fetches the other's data
+and a direct reload of the audit URL works. `AccessTabNav` renders the two
+tabs on both routes). Read-only — no new command, no new mutation, no new
+capability. This document records
+the discovered `audit.change_log` contract and the exact endpoint this
+workstream adds. It does not change, and is not a substitute for,
+[docs/PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) (which
 remains the authoritative record of the Access-page mutation/read contract
-this endpoint is designed to sit alongside, once a later PR wires it in).
+this endpoint sits alongside).
+
+**Audit-actor-contract fix.** The actor-select filter's option list no
+longer comes from `GET .../access-overview` (which the audit route would
+otherwise need to fetch in full — memberships, roles, relationships,
+grants, access groups — merely to populate one filter). `GET .../audit-
+history/actors` (§6a below) is a second, narrower endpoint added
+alongside the list endpoint: same `access.manage` authorization, same
+campaign-scoping join-by-`record_id` resolution, `user_id`/`display_name`
+only. `AuditHistory.tsx` always renders regardless of that facet's own
+status — a failed or still-loading actor fetch simply omits the filter,
+never blocks or errors the page itself.
 
 ## 1. Discovered data model
 
@@ -78,7 +96,7 @@ this endpoint is designed to sit alongside, once a later PR wires it in).
 | `role` | `assign_membership_role`, `revoke_membership_role`, `change_membership_role` | `security.membership_roles` |
 | `character_relationship` | `grant_character_relationship`, `change_character_relationship`, `revoke_character_relationship` | `security.membership_character_relationships` |
 | `resource_grant` | `create_resource_grant`, `revoke_resource_grant` | `security.resource_grants` |
-| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation` | `security.campaign_invitations` |
+| `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation`, `invitation_onboarding.complete`, `invitation_onboarding.register_accept` | `security.campaign_invitations` for the first/third; `security.campaign_memberships` for `accept_campaign_invitation`/`invitation_onboarding.complete`/`invitation_onboarding.register_accept` (see below) |
 | `campaign` | `create_campaign` | `campaign.campaigns` |
 | `access_group` | `create_access_group`, `update_access_group`, `deactivate_access_group`, `reactivate_access_group` | `security.access_groups` |
 | `access_group_membership` | `add_access_group_member`, `remove_access_group_member` | `security.access_group_memberships` |
@@ -105,6 +123,26 @@ grant` category unchanged — creating or revoking a *grant* is a different
 audited action from creating, renaming, (de)activating a *group*, or
 adding/removing a *member* of one.
 
+**Checkpoint 14 addition.** `invitation_onboarding.complete` (`dnd_ai.api.
+invitation_onboarding.complete_invitation_onboarding_endpoint`) is folded
+into the `invitation` category rather than a new one: its audit row names
+the `security.campaign_memberships` row it activates, resolved through the
+same membership branch `accept_campaign_invitation` already uses, since
+both events end in the identical state — an existing membership becoming
+active. `invitation_onboarding.register` (`dnd_ai.api.invitation_
+onboarding.register_invited_account_endpoint`) is **not** in this
+allowlist, and never can be through this module's join-by-`record_id`
+design: its own audit row names the `security.users` row it creates, and a
+user account is not scoped to one campaign at all — there is no exact
+`campaign_id` to resolve it against. The same endpoint writes a second row
+in the same transaction, `invitation_onboarding.register_accept`, naming the
+`security.campaign_memberships` row the registration accepted; that row *is*
+in the `invitation` category, resolved through the membership branch, and is
+labelled "Invitation accepted (new account)" (actor and target are the new
+account). Registration is an atomic create-account-and-accept, so there is no
+separate `invitation_onboarding.complete` event for it. A failed or replayed
+registration writes neither row.
+
 ## 3. Safe-presentation allowlist (server-generated projection)
 
 Every returned item (`dnd_ai.api.audit_history.AuditHistoryItemResponse`)
@@ -120,7 +158,7 @@ carries only:
 | `actor_type` | `"user"` \| `"service"` \| `"unknown"` | |
 | `target_label` | `security.users.display_name` (account target), `core.entities.canonical_name` (character target), or an access group's `name` — current values, resolved per category (§2's source table) | `null` when the category has no single discrete target (`invitation`, `campaign`). |
 | `target_type` | `"account"` \| `"character"` \| `"access_group"` \| `null` | |
-| `change_summary` | Server-generated from role/relationship-type/capability display names (and, for a `change_*` action, `audit.change_log.previous_status` — the old **code** — resolved to a display name where the old value can be identified exactly; see §3a) | Never `changed_fields` (JSONB) verbatim. |
+| `change_summary` | Server-generated from role/relationship-type/capability display names (and, for a `change_*` action, `audit.change_log.previous_status` — the old **code** — resolved to a display name where the old value can be identified exactly; see §3a). For `resource_grant`, a `deny`-effect grant appends a fixed `" (deny)"` marker after the capability name (checkpoint 14) — omitted entirely for `allow`, so an ordinary grant's summary is unchanged from before checkpoint 12 introduced the effect column. | Never `changed_fields` (JSONB) verbatim. |
 | `outcome` | Reserved, always `null` today | No category in scope has a fail/deny outcome yet. |
 
 **Never returned**, even internally selected by the query: `audit.
@@ -230,6 +268,46 @@ invented here.
 - `422` — a malformed `category`/`actor_user_id`/datetime query parameter,
   or a malformed/wrong-endpoint pagination cursor.
 
+## 4a. Actor facet (audit-actor-contract fix)
+
+`GET /campaigns/{campaign_id}/audit-history/actors`
+
+The actor-select filter's own option list — added so the audit route
+never needs the complete `GET .../access-overview` response merely to
+populate this one filter. Same capability, same non-disclosing 404/403
+split, same campaign-scoping join-by-`record_id` resolution `dnd_ai.
+queries.audit_history.list_campaign_audit_history` uses (`dnd_ai.queries.
+audit_history.list_campaign_audit_actors`, sharing that module's `scoped`
+CTE) — an actor can never leak from a different campaign on a shared
+timeline, and can never name a category/command this module doesn't
+otherwise surface in the list itself.
+
+**Capability:** `access.manage`, identical to §4 above. No query
+parameters — this is a bounded facet, not a filtered/paginated list; it
+always returns every distinct human actor this campaign's own audit
+history has ever recorded, regardless of the current filter selection (the
+same "always lists every option" contract `access-overview`'s own
+`assignable_roles`/`assignable_characters` already follow).
+
+**Response `200`:**
+
+```json
+{
+  "actors": [
+    { "user_id": "3fa2...", "display_name": "GM Alex" }
+  ]
+}
+```
+
+Only `user_id`/`display_name` — never email, login name, or any other
+account field. A service-attributed event (`audit.change_log.actor_
+service` set, `actor_user_id` NULL) never appears here; this facet is
+human-actor-only, matching what an actor **filter** can meaningfully
+select by.
+
+**Status codes:** identical to §4 — `200` (including `{"actors": []}` for
+a campaign with no audit history yet), `403`, `404`.
+
 ## 5. Ordering and pagination
 
 Newest first: `ORDER BY recorded_at DESC, change_log_id DESC`. The
@@ -255,6 +333,14 @@ Phase 13D precedent) — a page reports only whether a `next_cursor` exists.
   `campaign_id` at all (they are world/entity-scoped, shared across
   sibling campaigns on the same timeline) — and is explicitly out of scope
   for this foundation.
+- **`invitation_onboarding.register` itself is not covered.** Its audit row
+  names the `security.users` row it creates, not any campaign-scoped row — a
+  user account is not owned by one campaign, so there is no exact
+  `campaign_id` for this module's join-by-`record_id` design to resolve it
+  against. The campaign-visible record of an invited registration is the
+  separate `invitation_onboarding.register_accept` row (the accepted
+  membership), so a GM sees the acceptance but not the account-creation
+  detail.
 - **Actor/target name fidelity.** Every label (actor, account/character
   target, role/relationship-type/capability display name) is resolved
   against that record's **current** row — this schema keeps no

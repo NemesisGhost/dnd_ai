@@ -528,16 +528,17 @@ including `compose.yaml` — there is nothing to open or revoke.
 
 CI is the project's merge gate, not advisory, per [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) — it verifies the same self-hosted PostgreSQL 18 target the project deploys, not AWS RDS.
 
-`.github/workflows/ci.yml` has five jobs, none of which need AWS credentials or repository secrets:
+`.github/workflows/ci.yml` has six jobs, none of which need AWS credentials or repository secrets:
 
 **`lint-and-type-check`**: `ruff format --check`, `ruff check`, `mypy src`.
 
 **`foundry-module-check`** (Phase 11 workstream 7): `actions/setup-node`, then `node --test` (portable automatic discovery) and `node packaging/package.mjs` inside `foundry-module/` — the only job that touches Node; independent of every other job, needs no PostgreSQL or Docker.
 
-**Portal checks are not yet wired into CI.** Until a dedicated portal job is
-added, run `npm test`, `npm run lint`, and `npm run build` locally from
-`portal/`. Do not treat the Python or Foundry jobs as verification of the React
-application.
+**`portal-check`**: `npm ci` from the committed `portal/package-lock.json`, then
+`npm test`, `npm run lint`, and `npm run build` inside `portal/` (Node 24). It is
+independent of every other job — no PostgreSQL, Docker, Python, or Foundry — so the
+Python and Foundry jobs are not verification of the React application; this one is.
+Run the same three commands locally before pushing portal changes.
 
 **`postgres-verification`** — a `postgres:18.4` GitHub Actions service container, health-checked before the job's steps run — covers, per [PLAN.md Phase 1](PLAN.md#phase-1-database-bootstrap), [§24.0](PLAN.md#240-verification-policy), and [DATABASE_CONVENTIONS.md §25.6](DATABASE_CONVENTIONS.md#256-migration-testing):
 

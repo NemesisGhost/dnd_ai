@@ -356,27 +356,32 @@ def list_knowledge_endpoint(
     )
 
 
-@router.get(
-    "/campaigns/{campaign_id}/knowledge/{knowledge_item_id}",
-    response_model=KnowledgeResponse,
-    status_code=200,
-)
-def get_knowledge_endpoint(
+def resolve_knowledge_response(
+    connection: Connection,
+    *,
+    access: AccessContext,
     campaign_id: uuid.UUID,
     knowledge_item_id: uuid.UUID,
-    access: Annotated[
-        AccessContext, Depends(require_campaign_capability(_KNOWLEDGE_VIEW_CAPABILITY))
-    ],
-    connection: Annotated[Connection, Depends(get_connection)],
-    character_id: uuid.UUID | None = None,
-    party_id: uuid.UUID | None = None,
-) -> KnowledgeResponse:
+    character_id: uuid.UUID | None,
+    party_id: uuid.UUID | None,
+) -> KnowledgeResponse | None:
+    """The exact audience-scoped `KnowledgeResponse` `access` would see for
+    `knowledge_item_id` in `campaign_id`, or `None` for the identical non-
+    disclosing "this caller may not see this item at all" case
+    `get_knowledge_endpoint` itself used to raise `NotFoundError` for
+    inline.
+
+    Extracted (checkpoint 15, PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md
+    §8.4b) for the identical reason `dnd_ai.api.quests.
+    resolve_quest_response` was — see that function's own docstring. Every
+    line below is unchanged from the pre-checkpoint-15 body of
+    `get_knowledge_endpoint`; only the 404 became a `None` return."""
     if not access.has_capability(_KNOWLEDGE_VIEW_CAPABILITY, knowledge_item_id=knowledge_item_id):
         # A per-item `campaign.view` deny — indistinguishable from a
         # nonexistent item, and keeps this route in agreement with the
         # Phase 13D `GET /campaigns/{id}/knowledge` list, which excludes a
         # denied `knowledge_item_id` in SQL.
-        raise NotFoundError()
+        return None
 
     include_ground_truth = access.has_capability(
         _KNOWLEDGE_GROUND_TRUTH_CAPABILITY,
@@ -427,6 +432,34 @@ def get_knowledge_endpoint(
         confidence=view.confidence,
         willing_to_share=view.willing_to_share,
     )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/knowledge/{knowledge_item_id}",
+    response_model=KnowledgeResponse,
+    status_code=200,
+)
+def get_knowledge_endpoint(
+    campaign_id: uuid.UUID,
+    knowledge_item_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_KNOWLEDGE_VIEW_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+    character_id: uuid.UUID | None = None,
+    party_id: uuid.UUID | None = None,
+) -> KnowledgeResponse:
+    response = resolve_knowledge_response(
+        connection,
+        access=access,
+        campaign_id=campaign_id,
+        knowledge_item_id=knowledge_item_id,
+        character_id=character_id,
+        party_id=party_id,
+    )
+    if response is None:
+        raise NotFoundError()
+    return response
 
 
 # A module-level guard so a typo in `KnowledgeView` above cannot silently

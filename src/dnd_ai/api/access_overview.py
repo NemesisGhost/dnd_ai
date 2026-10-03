@@ -93,10 +93,12 @@ from dnd_ai.queries.access_overview import (
     list_campaign_access_groups,
     list_grantable_resource_capabilities,
 )
+from dnd_ai.queries.effective_access import resolve_member_effective_access
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .deps import get_connection
+from .errors import NotFoundError
 
 router = APIRouter(tags=["access-overview"])
 
@@ -244,6 +246,30 @@ class EligibleAccountResponse(BaseModel):
 
 class EligibleAccountLookupResponse(BaseModel):
     account: EligibleAccountResponse | None
+
+
+class EffectiveAccessSourceResponse(BaseModel):
+    kind: str
+    label: str
+    target_display_name: str | None
+
+
+class EffectiveAccessCapabilityResponse(BaseModel):
+    code: str
+    display_name: str
+    sources: list[EffectiveAccessSourceResponse]
+
+
+class EffectiveAccessDenialResponse(BaseModel):
+    capability_code: str
+    target_type: str
+    target_display_name: str | None
+
+
+class MemberEffectiveAccessResponse(BaseModel):
+    display_name: str
+    capabilities: list[EffectiveAccessCapabilityResponse]
+    denials: list[EffectiveAccessDenialResponse]
 
 
 # ---------------------------------------------------------------------------
@@ -445,4 +471,72 @@ def find_eligible_campaign_account_endpoint(
             if account is not None
             else None
         )
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/members/{campaign_membership_id}/effective-access",
+    response_model=MemberEffectiveAccessResponse,
+    status_code=200,
+)
+def get_member_effective_access_endpoint(
+    campaign_id: uuid.UUID,
+    campaign_membership_id: uuid.UUID,
+    access: Annotated[
+        AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> MemberEffectiveAccessResponse:
+    """The GM-facing "why can this person see this?" explanation (docs/
+    UI_DESIGN.md §6.4 "Effective-access explanation" / §8.3, Phase 13E-B
+    checkpoint 13) — every capability `campaign_membership_id` currently
+    holds, each with the role assignments, character relationships, direct
+    resource grants, and access-group resource grants that contribute to it,
+    plus every capability an active `deny` resource grant currently
+    overrides for a specific target. `access.manage` is required exactly
+    like every other route in this module. The caller (the administrator)
+    remains the only authenticated actor: no second session is created, no
+    request is authorized as the explained member, nothing here is
+    mutable, and no protected campaign content is returned — only the
+    member's own access shape, every label drawn from the same
+    audience-safe field set `GET .../access-overview` already uses. Pure
+    read: no idempotency key, no `audit.change_log` row, matching that
+    route's own contract. A `campaign_membership_id` not belonging to
+    `campaign_id`, or not currently open, is a non-disclosing 404 —
+    `dnd_ai.queries.effective_access.resolve_member_effective_access`
+    returns `None` for both, indistinguishable from each other and from a
+    caller lacking `access.manage` in the first place."""
+    result = resolve_member_effective_access(
+        connection,
+        campaign_id=campaign_id,
+        campaign_membership_id=campaign_membership_id,
+        timeline_id=access.timeline_id,
+    )
+    if result is None:
+        raise NotFoundError()
+    return MemberEffectiveAccessResponse(
+        display_name=result.display_name,
+        capabilities=[
+            EffectiveAccessCapabilityResponse(
+                code=capability.code,
+                display_name=capability.display_name,
+                sources=[
+                    EffectiveAccessSourceResponse(
+                        kind=source.kind,
+                        label=source.label,
+                        target_display_name=source.target_display_name,
+                    )
+                    for source in capability.sources
+                ],
+            )
+            for capability in result.capabilities
+        ],
+        denials=[
+            EffectiveAccessDenialResponse(
+                capability_code=denial.capability_code,
+                target_type=denial.target_type,
+                target_display_name=denial.target_display_name,
+            )
+            for denial in result.denials
+        ],
     )

@@ -35,6 +35,7 @@ from sqlalchemy import Connection
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.audit_history import (
     KEYSET,
+    list_campaign_audit_actors,
     list_campaign_audit_history,
 )
 
@@ -82,6 +83,46 @@ class AuditHistoryItemResponse(BaseModel):
 class AuditHistoryListResponse(BaseModel):
     items: list[AuditHistoryItemResponse]
     next_cursor: str | None
+
+
+class AuditActorResponse(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+
+
+class AuditActorListResponse(BaseModel):
+    actors: list[AuditActorResponse]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/audit-history/actors",
+    response_model=AuditActorListResponse,
+    status_code=200,
+)
+def list_campaign_audit_actors_endpoint(
+    campaign_id: uuid.UUID,
+    access: Annotated[  # noqa: ARG001 — required only to enforce the access.manage capability
+        AccessContext, Depends(require_campaign_capability(_AUDIT_HISTORY_CAPABILITY))
+    ],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> AuditActorListResponse:
+    """The bounded actor facet backing the audit-history filter's actor
+    select — every distinct user who has ever acted in `campaign_id`'s own
+    audit history, `user_id`/`display_name` only. Authorization is
+    identical to `GET .../audit-history` above (the same `access.manage`
+    dependency, the same non-disclosing 404/403 split), so a caller who
+    can read one can read the other and no one else can read either.
+    Deliberately independent of `GET .../access-overview`: the audit route
+    no longer needs the complete access-overview response (memberships,
+    roles, relationships, grants, access groups) merely to populate this
+    one filter."""
+    actors = list_campaign_audit_actors(connection, campaign_id=campaign_id)
+    return AuditActorListResponse(
+        actors=[
+            AuditActorResponse(user_id=actor.user_id, display_name=actor.display_name)
+            for actor in actors
+        ]
+    )
 
 
 @router.get(

@@ -69,9 +69,9 @@ owner. See `login_endpoint`'s own docstring for the exact flow.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
@@ -86,6 +86,8 @@ from dnd_ai.commands.local_auth import (
     authenticate_local_user,
     change_password,
     create_browser_session,
+    is_activation_token_currently_usable,
+    is_password_reset_token_currently_usable,
     list_browser_sessions,
     normalize_login_name,
     resolve_browser_session_csrf_token,
@@ -95,15 +97,17 @@ from dnd_ai.commands.local_auth import (
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
+from dnd_ai.queries.accounts import ACCOUNT_LIST_KEYSET, list_platform_accounts
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from .audit import record_change_log
-from .auth import get_authenticated_user_id, require_human_user_id
+from .auth import get_authenticated_user_id, require_allowed_origin, require_human_user_id
 from .client_address import resolve_client_ip
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
 from .deps import get_connection
 from .errors import RateLimitedError, UnauthorizedError
+from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
 
 router = APIRouter(tags=["local_auth"])
 
@@ -141,6 +145,14 @@ _LOGIN_ACCOUNT_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 _TOKEN_CONSUMPTION_RATE_LIMIT_MAX_ATTEMPTS = 20
 _TOKEN_CONSUMPTION_RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
+_ACTIVATION_STATUS_RATE_LIMIT_MAX_ATTEMPTS = 60
+_ACTIVATION_STATUS_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+
+_PASSWORD_RESET_STATUS_RATE_LIMIT_MAX_ATTEMPTS = 60
+_PASSWORD_RESET_STATUS_RATE_LIMIT_WINDOW = timedelta(minutes=15)
+
+_activation_status_rate_limiter: RateLimiter | None = None
+_password_reset_status_rate_limiter: RateLimiter | None = None
 _login_ip_rate_limiter: RateLimiter | None = None
 _login_account_rate_limiter: RateLimiter | None = None
 _token_consumption_rate_limiter: RateLimiter | None = None
@@ -186,6 +198,32 @@ def get_login_account_rate_limiter() -> RateLimiter:
             window=_LOGIN_ACCOUNT_RATE_LIMIT_WINDOW,
         )
     return _login_account_rate_limiter
+
+
+def get_activation_status_rate_limiter() -> RateLimiter:
+    """Bounds the advisory activation-link check per client IP. A separate
+    bucket from `get_token_consumption_rate_limiter` so page loads and
+    Retry clicks can never exhaust the budget real activations need."""
+    global _activation_status_rate_limiter
+    if _activation_status_rate_limiter is None:
+        _activation_status_rate_limiter = RateLimiter(
+            max_attempts=_ACTIVATION_STATUS_RATE_LIMIT_MAX_ATTEMPTS,
+            window=_ACTIVATION_STATUS_RATE_LIMIT_WINDOW,
+        )
+    return _activation_status_rate_limiter
+
+
+def get_password_reset_status_rate_limiter() -> RateLimiter:
+    """Bounds the advisory password-reset-link check per client IP, in its own
+    bucket so page loads and Try-again clicks can never exhaust the budget
+    real resets need."""
+    global _password_reset_status_rate_limiter
+    if _password_reset_status_rate_limiter is None:
+        _password_reset_status_rate_limiter = RateLimiter(
+            max_attempts=_PASSWORD_RESET_STATUS_RATE_LIMIT_MAX_ATTEMPTS,
+            window=_PASSWORD_RESET_STATUS_RATE_LIMIT_WINDOW,
+        )
+    return _password_reset_status_rate_limiter
 
 
 def get_token_consumption_rate_limiter() -> RateLimiter:
@@ -301,6 +339,7 @@ def login_endpoint(
     ip_rate_limiter: Annotated[RateLimiter, Depends(get_login_ip_rate_limiter)],
     account_rate_limiter: Annotated[RateLimiter, Depends(get_login_account_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> LoginResponse:
     """docs/PLAN.md §23.4 steps 1-4: rate limit, constant-work credential
     check, session creation with a rotated identifier, and the `Set-Cookie`
@@ -524,6 +563,7 @@ class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
+    is_platform_administrator: bool
     selected_campaign_id: uuid.UUID | None
     campaigns: list[CampaignBootstrapResponse]
     features: SessionFeaturesResponse
@@ -571,6 +611,7 @@ def session_bootstrap_endpoint(
         user=SessionUserResponse(user_id=bootstrap.user_id, display_name=bootstrap.display_name),
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
+        is_platform_administrator=bootstrap.is_platform_administrator,
         selected_campaign_id=bootstrap.selected_campaign_id,
         campaigns=[
             CampaignBootstrapResponse(
@@ -704,6 +745,85 @@ def revoke_session_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Platform-account directory (Phase 13E checkpoint 9; D-2)
+# ---------------------------------------------------------------------------
+
+
+class PlatformAccountResponse(BaseModel):
+    user_id: uuid.UUID
+    display_name: str
+    login_name: str | None
+    lifecycle_status_code: str
+    is_platform_administrator: bool
+    has_local_credential: bool
+    has_outstanding_activation: bool
+    last_login_at: str | None
+    active_session_count: int
+
+
+class PlatformAccountListResponse(BaseModel):
+    items: list[PlatformAccountResponse]
+    next_cursor: str | None
+
+
+@router.get("/admin/accounts", response_model=PlatformAccountListResponse, status_code=200)
+def list_platform_accounts_endpoint(
+    admin_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
+    connection: Annotated[Connection, Depends(get_connection)],
+    q: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query()] = None,
+) -> PlatformAccountListResponse:
+    """`list_platform_accounts` itself checks `admin_user_id` is a platform
+    administrator (`NotPlatformAdministratorError`, a `DomainAuthorizationError`
+    — fixed non-disclosing 404) inside the same transaction — see that
+    query's own docstring for why the check lives there rather than a
+    duplicate API-layer dependency. A campaign owner holding `access.manage`
+    gets the identical response; this directory grants nothing on its own
+    (D-2)."""
+    keyset = decode_typed_cursor(cursor, keyset=ACCOUNT_LIST_KEYSET, fields=("str", "uuid"))
+    after_name = cast(str, keyset[0]) if keyset is not None else None
+    after_user_id = cast(uuid.UUID, keyset[1]) if keyset is not None else None
+
+    accounts = list_platform_accounts(
+        connection,
+        requesting_user_id=admin_user_id,
+        query=q,
+        status_code=status,
+        limit=limit,
+        after_name=after_name,
+        after_user_id=after_user_id,
+    )
+
+    page = build_page(
+        accounts,
+        limit=limit,
+        keyset=ACCOUNT_LIST_KEYSET,
+        cursor_key=lambda account: [account.display_name.lower(), account.user_id],
+    )
+    return PlatformAccountListResponse(
+        items=[
+            PlatformAccountResponse(
+                user_id=account.user_id,
+                display_name=account.display_name,
+                login_name=account.login_name,
+                lifecycle_status_code=account.lifecycle_status_code,
+                is_platform_administrator=account.is_platform_administrator,
+                has_local_credential=account.has_local_credential,
+                has_outstanding_activation=account.has_outstanding_activation,
+                last_login_at=account.last_login_at.isoformat()
+                if account.last_login_at is not None
+                else None,
+                active_session_count=account.active_session_count,
+            )
+            for account in page.items
+        ],
+        next_cursor=page.next_cursor,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Administrator account/reset issuance (security.users.is_platform_administrator)
 # ---------------------------------------------------------------------------
 
@@ -717,7 +837,7 @@ class CreateAccountRequest(BaseModel):
 class CreateAccountResponse(BaseModel):
     user_id: uuid.UUID
     login_name: str
-    raw_activation_token: str
+    raw_activation_token: str = Field(repr=False)
     expires_at: str
 
 
@@ -767,7 +887,7 @@ class IssuePasswordResetRequest(BaseModel):
 
 class IssuePasswordResetResponse(BaseModel):
     user_id: uuid.UUID
-    raw_reset_token: str
+    raw_reset_token: str = Field(repr=False)
     expires_at: str
 
 
@@ -966,6 +1086,34 @@ class ActivateAccountRequest(BaseModel):
     password: str = Field(repr=False)
 
 
+class ActivationStatusRequest(BaseModel):
+    token: str = Field(repr=False)
+
+
+class ActivationStatusResponse(BaseModel):
+    valid: bool
+
+
+@router.post("/auth/activation-status", response_model=ActivationStatusResponse, status_code=200)
+def activation_status_endpoint(
+    body: ActivationStatusRequest,
+    request: Request,
+    connection: Annotated[Connection, Depends(get_connection)],
+    rate_limiter: Annotated[RateLimiter, Depends(get_activation_status_rate_limiter)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
+) -> ActivationStatusResponse:
+    """Advisory, read-only pre-check so the portal can avoid showing a
+    passphrase form for an unusable link. POST (token only in the body, never
+    a URL), no row lock, no write, no audit row, no idempotency key, and a
+    bare `valid` boolean identical for every unusable reason. Never
+    authoritative: `POST /auth/activate` repeats every check."""
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
+        raise RateLimitedError()
+    return ActivationStatusResponse(
+        valid=is_activation_token_currently_usable(connection, raw_activation_token=body.token)
+    )
+
+
 class ActivateAccountResponse(BaseModel):
     user_id: uuid.UUID
     login_name: str
@@ -978,6 +1126,7 @@ def activate_account_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> ActivateAccountResponse:
     if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
@@ -1010,6 +1159,36 @@ class ResetPasswordResponse(BaseModel):
     sessions_revoked: bool
 
 
+class PasswordResetStatusRequest(BaseModel):
+    token: str = Field(repr=False)
+
+
+class PasswordResetStatusResponse(BaseModel):
+    valid: bool
+
+
+@router.post(
+    "/auth/password-reset-status", response_model=PasswordResetStatusResponse, status_code=200
+)
+def password_reset_status_endpoint(
+    body: PasswordResetStatusRequest,
+    request: Request,
+    connection: Annotated[Connection, Depends(get_connection)],
+    rate_limiter: Annotated[RateLimiter, Depends(get_password_reset_status_rate_limiter)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
+) -> PasswordResetStatusResponse:
+    """Advisory, read-only pre-check so the portal can avoid showing a
+    passphrase form for an unusable reset link. POST (token only in the body,
+    never a URL), no row lock, no write, no audit row, no idempotency key, and
+    a bare `valid` boolean identical for every unusable reason. Never
+    authoritative: `POST /auth/password-reset` repeats every check."""
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
+        raise RateLimitedError()
+    return PasswordResetStatusResponse(
+        valid=is_password_reset_token_currently_usable(connection, raw_reset_token=body.token)
+    )
+
+
 @router.post("/auth/password-reset", response_model=ResetPasswordResponse, status_code=200)
 def reset_password_endpoint(
     body: ResetPasswordRequest,
@@ -1017,6 +1196,7 @@ def reset_password_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
     rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
+    _origin: Annotated[None, Depends(require_allowed_origin)],
 ) -> ResetPasswordResponse:
     if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
         raise RateLimitedError()
@@ -1041,7 +1221,9 @@ def reset_password_endpoint(
 
 __all__ = [
     "router",
+    "get_activation_status_rate_limiter",
     "get_login_account_rate_limiter",
     "get_login_ip_rate_limiter",
+    "get_password_reset_status_rate_limiter",
     "get_token_consumption_rate_limiter",
 ]

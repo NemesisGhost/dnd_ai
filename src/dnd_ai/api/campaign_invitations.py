@@ -35,10 +35,11 @@ timeline-to-world one.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import Connection, text
 
 from dnd_ai.commands.campaign_invitations import (
@@ -47,15 +48,19 @@ from dnd_ai.commands.campaign_invitations import (
     revoke_campaign_invitation,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.rate_limit import RateLimiter
 from dnd_ai.queries.campaign_invitations import list_pending_campaign_invitations
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
 from .audit import record_change_log
 from .auth import require_human_user_id
+from .client_address import resolve_client_ip
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .errors import RateLimitedError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .local_auth import get_token_consumption_rate_limiter
 
 router = APIRouter(tags=["campaign_invitations"])
 
@@ -73,7 +78,7 @@ class CreateCampaignInvitationRequest(BaseModel):
 
 class CreateCampaignInvitationResponse(BaseModel):
     campaign_invitation_id: uuid.UUID
-    token: str | None = None
+    token: str | None = Field(default=None, repr=False)
 
 
 class AcceptCampaignInvitationRequest(BaseModel):
@@ -281,9 +286,18 @@ def revoke_campaign_invitation_endpoint(
 def accept_campaign_invitation_endpoint(
     body: AcceptCampaignInvitationRequest,
     accepting_user_id: Annotated[uuid.UUID, Depends(require_human_user_id)],
+    request: Request,
     connection: Annotated[Connection, Depends(get_connection)],
+    rate_limiter: Annotated[RateLimiter, Depends(get_token_consumption_rate_limiter)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> AcceptCampaignInvitationResponse:
+    # S-9: this token-consumption route was unrate-limited, unlike
+    # /auth/activate and /auth/password-reset, which both already use this
+    # same limiter. 256 bits of entropy makes online guessing impractical
+    # regardless, but the asymmetry is worth closing while this area is
+    # being touched (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §7.1).
+    if not rate_limiter.allow(resolve_client_ip(request), now=datetime.now(UTC)):
+        raise RateLimitedError()
     result = accept_campaign_invitation(
         connection, token=body.token, accepting_user_id=accepting_user_id
     )

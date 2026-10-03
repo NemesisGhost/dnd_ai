@@ -270,6 +270,7 @@ EXPECTED_TABLES = {
         "security.character_relationship_types",
         "security.external_identities",
         "security.idempotent_requests",
+        "security.invitation_onboarding_sessions",
         "security.local_credentials",
         "security.membership_character_relationships",
         "security.membership_roles",

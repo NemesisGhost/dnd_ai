@@ -1707,6 +1707,37 @@
   border-radius: 0.25rem;
 }
 
+/* Access section tab nav (Phase 13E-B manual-acceptance fix): local to
+   /app/:campaignId/access and /access/audit, distinct from the sidebar's
+   own top-level "Access" link in .app-navigation__link above. */
+.access-tab-nav__list {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0 0 1rem;
+  list-style: none;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.access-tab-nav__link {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.access-tab-nav__link:hover,
+.access-tab-nav__link:focus-visible {
+  color: var(--color-text);
+}
+
+.access-tab-nav__link--active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent, currentColor);
+  font-weight: 600;
+}
+
 /* Persistent, campaign-scoped role-change announcement (Phase 13E-B):
    mounted above the overview boundary for the whole life of the Access
    page so a role-change success is still observable while the boundary
@@ -1813,6 +1844,28 @@
 
 .access-member-card__joined {
   font-size: 0.8rem;
+}
+
+/* Effective-access explanation (checkpoint 13): one disclosure per member
+   row, mirroring .access-member-card's own <details>-style toggle
+   language, but without a persistent border/background — this is a
+   secondary, read-only affordance nested inside an already-expanded
+   member card, not a top-level card of its own. */
+.effective-access-panel {
+  margin: 0.5rem 0;
+}
+
+.effective-access-panel__capabilities,
+.effective-access-panel__sources,
+.effective-access-panel__denials {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.effective-access-panel__denials-heading {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
 }
 
 /* Role-change control (Phase 13E-B checkpoint 1): one per active role
@@ -1926,6 +1979,176 @@
 
 .access-role-editor__status--error {
   color: var(--color-danger);
+}
+
+/* Platform accounts grid (AdminAccountsPage). The table previously had no
+   styling, so column values ran together and the Actions cell stretched
+   every row. Header row, dividers, padding, and a fixed two-column button
+   grid in the Actions cell make each value and control line up. */
+.admin-accounts__table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.admin-accounts__table caption {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.admin-accounts__table th,
+.admin-accounts__table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.admin-accounts__table th {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  background-color: var(--color-surface-muted);
+  border-bottom-width: 2px;
+}
+
+.admin-accounts__table tbody tr:hover {
+  background-color: var(--color-surface-muted);
+}
+
+.admin-accounts__table .admin-accounts__numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-accounts__name {
+  display: block;
+  font-weight: 600;
+}
+
+.admin-accounts__admin-badge {
+  margin: 0.25rem 0 0;
+}
+
+.admin-accounts__status {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--color-warning);
+  background-color: var(--color-warning-background);
+  border: 1px solid var(--color-warning-border);
+}
+
+.admin-accounts__status--active {
+  color: var(--color-text);
+  background-color: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+.access-role-editor__actions.account-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 9.5rem);
+  gap: 0.5rem;
+}
+
+.account-actions button {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.account-actions .account-actions__danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+
+.account-actions .account-actions__danger:hover:not(:disabled) {
+  background-color: var(--color-danger-background);
+}
+
+.account-actions .access-role-editor__status {
+  grid-column: 1 / -1;
+}
+
+.account-actions .access-role-editor__status:empty {
+  display: none;
+}
+
+/* AudiencePreviewPanel (Phase 13E-B checkpoint 15, spacing fix): the
+   member/resource-type/resource fields had no styling at all and rendered
+   as a single cramped run of labels and selects. Each field gets its own
+   row (label above control, like .knowledge-page__field above) with real
+   gaps between rows and before the rendered result. */
+.audience-preview-panel {
+  margin-top: 1rem;
+}
+
+.audience-preview-panel__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  max-width: 28rem;
+  margin: 0.75rem 0 0;
+}
+
+.audience-preview-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.audience-preview-panel__field label {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.audience-preview-panel__field select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  font: inherit;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.audience-preview-panel__field select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.audience-preview-panel__fixed-resource {
+  margin: 0;
+}
+
+.audience-preview-panel__target {
+  margin: 1rem 0 0.5rem;
+}
+
+.audience-preview-panel__result {
+  margin-top: 0.5rem;
+}
+
+/* Platform-administrator indicator (CP 10) — shown only on the rows that
+   are one, per D-10: "indicate, do not tabulate." No dedicated table
+   column exists for this, so the badge carries its own accessible text
+   rather than relying on colour alone. */
+.access-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-accent);
+  color: var(--color-text);
 }
 
 /* Batch access-group membership picker. Each eligible campaign member is

@@ -11,6 +11,11 @@ import {
     EMPTY_AUDIT_HISTORY_FILTERS,
 } from "../types/auditHistory"
 
+export interface AuditActorOption {
+    user_id: string
+    display_name: string
+}
+
 export interface AuditHistoryProps {
     /**
      * The campaign whose audit history this instance shows. Changing this
@@ -18,14 +23,25 @@ export interface AuditHistoryProps {
      * underlying hook (`useAuditHistory`) never shows a previous
      * campaign's rows, even briefly, while the new request is in flight.
      *
-     * This is the entire integration seam: a later PR embeds this
-     * component into `AccessPage.tsx` with
-     * `<AuditHistory campaignId={campaignId} />` — no other prop is
-     * required, and this component renders no page-level `<h1>` of its
-     * own (it uses an `<h2>` section heading), so it is safe to embed
-     * under an existing page heading.
+     * Rendered by `CampaignAccessAuditPage.tsx` at its own
+     * `/app/:campaignId/access/audit` route — this component owns that
+     * route's single page-level `<h1>`.
      */
     campaignId: string
+    /**
+     * The actor filter's own option list (checkpoint 14; re-sourced by
+     * the audit-actor-contract fix). Originally sourced from the caller's
+     * `GET .../access-overview` `members` array; now sourced from the
+     * bounded, identically `access.manage`-authorized `GET .../audit-
+     * history/actors` facet instead (`useAuditActors`), so opening this
+     * route no longer needs the complete access-overview response
+     * (memberships, roles, relationships, grants, access groups) merely
+     * to populate this one filter. Either way, never a new account-
+     * directory query of this component's own. Defaults to `[]` — the
+     * actor filter is simply not offered when the caller has no actor
+     * list in hand yet (loading, unavailable, or errored).
+     */
+    actors?: AuditActorOption[]
 }
 
 const CATEGORY_LABELS: Record<AuditHistoryCategory, string> = {
@@ -35,6 +51,8 @@ const CATEGORY_LABELS: Record<AuditHistoryCategory, string> = {
     resource_grant: "Access grant",
     invitation: "Invitation",
     campaign: "Campaign",
+    access_group: "Access group",
+    access_group_membership: "Access group membership",
 }
 
 function formatOccurredAt(iso: string): string {
@@ -50,12 +68,14 @@ function formatOccurredAt(iso: string): string {
 
 interface PendingFilters {
     category: AuditHistoryCategory | ""
+    actorUserId: string
     occurredFrom: string
     occurredTo: string
 }
 
 const emptyPendingFilters: PendingFilters = {
     category: "",
+    actorUserId: "",
     occurredFrom: "",
     occurredTo: "",
 }
@@ -89,9 +109,10 @@ function AuditHistoryRow({ item }: { item: AuditHistoryItem }) {
     )
 }
 
-export function AuditHistory({ campaignId }: AuditHistoryProps) {
+export function AuditHistory({ campaignId, actors = [] }: AuditHistoryProps) {
     const headingId = useId()
     const categoryId = useId()
+    const actorId = useId()
     const fromId = useId()
     const toId = useId()
 
@@ -115,6 +136,10 @@ export function AuditHistory({ campaignId }: AuditHistoryProps) {
                 pending.category === ""
                     ? null
                     : pending.category,
+            actorUserId:
+                pending.actorUserId === ""
+                    ? null
+                    : pending.actorUserId,
             occurredFrom: toIsoOrNull(
                 pending.occurredFrom,
             ),
@@ -173,6 +198,30 @@ export function AuditHistory({ campaignId }: AuditHistoryProps) {
                 </select>
             </div>
 
+            {actors.length > 0 && (
+                <div className="audit-history__filter-field">
+                    <label htmlFor={actorId}>Actor</label>
+                    <select
+                        id={actorId}
+                        value={pending.actorUserId}
+                        onChange={(event) => {
+                            const value = event.target.value
+                            setPending((current) => ({
+                                ...current,
+                                actorUserId: value,
+                            }))
+                        }}
+                    >
+                        <option value="">All actors</option>
+                        {actors.map((actor) => (
+                            <option key={actor.user_id} value={actor.user_id}>
+                                {actor.display_name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
             <div className="audit-history__filter-field">
                 <label htmlFor={fromId}>From</label>
                 <input
@@ -214,7 +263,7 @@ export function AuditHistory({ campaignId }: AuditHistoryProps) {
 
     return (
         <section aria-labelledby={headingId}>
-            <h2 id={headingId}>Audit history</h2>
+            <h1 id={headingId}>Audit history</h1>
 
             {filtersForm}
 

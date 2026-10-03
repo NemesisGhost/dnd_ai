@@ -41,6 +41,7 @@ const bootstrap: SessionBootstrap = {
         user_id: "user-a",
     },
     browser_session_id: "session-a",
+    is_platform_administrator: false,
     selected_campaign_id: "campaign-a",
     campaigns: [campaign],
 }

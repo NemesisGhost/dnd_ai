@@ -46,3 +46,43 @@ def session_cookie_set_kwargs() -> dict[str, object]:
         "secure": settings.environment == "production",
         "path": "/",
     }
+
+
+# Phase 13E checkpoint 8b: the single-link campaign-invitation onboarding
+# cookie (PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §6.2/§8.2). Mirrors
+# session_cookie_name()/session_cookie_set_kwargs() exactly, including the
+# `__Host-` prefix in production, with one deliberate difference from
+# §3n's original brief: the `__Host-` prefix *requires* `Path=/` (browsers
+# refuse to set it otherwise), so a path narrowed to only the onboarding
+# route is structurally incompatible with the prefix. This module chooses
+# the prefix's structural guarantees (host-only, Secure-only) over a
+# cosmetically narrower path — see §13 limitation 12 of the implementation
+# plan above.
+PRODUCTION_ONBOARDING_COOKIE_NAME = "__Host-dnd_ai_onboarding"
+DEV_ONBOARDING_COOKIE_NAME = "dnd_ai_onboarding"
+
+
+def onboarding_cookie_name() -> str:
+    return (
+        PRODUCTION_ONBOARDING_COOKIE_NAME
+        if settings.environment == "production"
+        else DEV_ONBOARDING_COOKIE_NAME
+    )
+
+
+def onboarding_cookie_set_kwargs(*, max_age_seconds: int) -> dict[str, object]:
+    """Like `session_cookie_set_kwargs()`, plus an explicit `max_age` — the
+    onboarding cookie's own lifetime is a short, absolute window (at most
+    20 minutes, clamped to the invitation's own expiry:
+    `dnd_ai.commands.invitation_onboarding.begin_invitation_onboarding`),
+    unlike the sliding-window session cookie, which carries no `max_age` at
+    all and instead relies on server-side idle/absolute timestamps. Giving
+    the *cookie* a matching browser-side lifetime means it does not
+    needlessly outlive the server-side row it names."""
+    return {
+        "httponly": True,
+        "samesite": "lax",
+        "secure": settings.environment == "production",
+        "path": "/",
+        "max_age": max_age_seconds,
+    }
