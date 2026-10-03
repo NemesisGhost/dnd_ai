@@ -1355,8 +1355,14 @@ def _access(db_connection: Connection, campaign: CampaignBootstrapView):
     access = resolve_access_context(
         db_connection,
         user_id=db_connection.execute(
+            # Campaign A also holds the Phase 13E dev GM2/player/observer members, so
+            # an unordered "any member" lookup depends on heap order; the tester is
+            # the one platform administrator among them.
             text(
-                "SELECT sm.user_id FROM security.campaign_memberships sm WHERE sm.campaign_id = :c"
+                "SELECT sm.user_id FROM security.campaign_memberships sm "
+                "JOIN security.users u ON u.user_id = sm.user_id "
+                "WHERE sm.campaign_id = :c AND u.is_platform_administrator "
+                "ORDER BY sm.user_id"
             ),
             {"c": campaign.campaign_id},
         ).scalar(),
