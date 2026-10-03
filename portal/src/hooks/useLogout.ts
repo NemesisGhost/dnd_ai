@@ -23,8 +23,8 @@ const idleStatus: LogoutStatus = { kind: "idle" }
 // other future trigger) can drive the same request, abort-on-unmount,
 // and error-message behavior. On success it reloads session state and
 // then explicitly navigates to /login with no continuation state, so a
-// different user signing in next always lands on /home rather than the
-// page the previous user was on (UI_DESIGN §4.2, navigation plan §2.4).
+// different user signing in next always lands on the landing resolver
+// (/home) rather than the page the previous user was on (UI_DESIGN §4.2, navigation plan §2.4).
 export function useLogout(): UseLogoutResult {
     const { state, reload } = useSession()
     const navigate = useNavigate()

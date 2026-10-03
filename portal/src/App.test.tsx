@@ -385,11 +385,12 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
   })
 
-  it("redirects / to the home landing page for an authenticated user", async () => {
+  it("redirects / through the landing resolver for an authenticated user", async () => {
     renderAppAt("/")
 
+    // The fixture has exactly one campaign, so the resolver opens it.
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Home" }),
+      await screen.findByRole("heading", { level: 1, name: "Campaign Home" }),
     ).toBeInTheDocument()
   })
 

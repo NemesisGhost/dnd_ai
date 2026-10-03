@@ -45,13 +45,13 @@ describe("CampaignsPage", () => {
 
     expect(
       screen.getByText(
-        "You do not have access to any campaigns yet. Ask a GM to grant you access.",
+        "You do not have access to any campaigns yet. Ask a GM to invite you.",
       ),
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole("link"),
-    ).not.toBeInTheDocument()
+      screen.getByRole("link", { name: "Accept a campaign invitation" }),
+    ).toHaveAttribute("href", "/campaign-invitations/accept")
   })
 
   it("lists an authorized campaign as a link", () => {

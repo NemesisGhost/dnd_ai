@@ -425,12 +425,12 @@ describe("invitation continuation across Login", () => {
         expectNoTokenAnywhere()
     })
 
-    it("keeps the ordinary /home destination for a login with no continuation", async () => {
+    it("lands through /home on the campaign list for a login with no continuation and no campaigns", async () => {
         openPlainLogin()
 
         await signInOnLoginPage("existing", PASSWORD)
 
-        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Campaigns" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
         expect(server.completeCount).toBe(0)
     })
@@ -450,7 +450,7 @@ describe("invitation continuation across Login", () => {
         expect(await screen.findByRole("link", { name: "Resume invitation" })).toBeInTheDocument()
         expect(screen.queryByRole("heading", { name: /^Join / })).not.toBeInTheDocument()
         fireEvent.click(screen.getByRole("link", { name: "Continue" }))
-        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Campaigns" })).toBeInTheDocument()
         expect(server.completeCount).toBe(0)
         expect(server.members.size).toBe(0)
     })
@@ -484,7 +484,7 @@ describe("invitation continuation across Login", () => {
         expect(server.count("GET", "/api/campaign-invitations/onboarding/status")).toBe(0)
     })
 
-    it("falls back to /home when the continuation expired while on Login, and never accepts", async () => {
+    it("falls back to the ordinary landing when the continuation expired while on Login, and never accepts", async () => {
         openInvitationLink()
         await screen.findByRole("heading", { name: `Join ${CAMPAIGN_NAME}` })
         navigateExternally("/login")
@@ -493,7 +493,7 @@ describe("invitation continuation across Login", () => {
         server.expireInvitation()
         await signInOnLoginPage("existing", PASSWORD)
 
-        expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 1, name: "Campaigns" })).toBeInTheDocument()
         expect(server.completeCount).toBe(0)
         expect(server.members.size).toBe(0)
     })

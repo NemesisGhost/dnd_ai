@@ -7,7 +7,7 @@ import { CampaignSessionBoundary } from "./layouts/CampaignSessionBoundary"
 import PlaceholderPage from "./pages/PlaceholderPage"
 import { NotFoundPage } from "./pages/NotFoundPage"
 import { LoginPage } from "./pages/LoginPage"
-import { PortalHomePage } from "./pages/PortalHomePage"
+import { LandingRedirect } from "./pages/LandingRedirect"
 import { CampaignsPage } from "./pages/CampaignsPage"
 import { CampaignHomePage } from "./pages/CampaignHomePage"
 import { CampaignCharactersPage } from "./pages/CampaignCharactersPage"
@@ -28,11 +28,6 @@ import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
 import { SettingsPage } from "./pages/SettingsPage"
-
-function PortalHomeRoute() {
-  const { bootstrap } = useAuthenticatedSession()
-  return <PortalHomePage bootstrap={bootstrap} />
-}
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -63,8 +58,8 @@ function App() {
   return (
     <div className="app-shell">
       <Routes>
-        {/* Public / self-managed routes. Home/Campaigns/profile appear in
-            the header only when the session is authenticated. */}
+        {/* Public / self-managed routes: no authenticated navigation; only
+            the profile menu appears for an authenticated visitor. */}
         <Route element={<PublicLayout />}>
           <Route
             index
@@ -99,9 +94,11 @@ function App() {
 
         {/* Authenticated global shell — the single session gate. */}
         <Route element={<AuthenticatedAppLayout />}>
+          {/* Landing resolver: no content, replaces itself with the
+              server-resolved startup campaign or /campaigns. */}
           <Route
             path="/home"
-            element={<PortalHomeRoute />}
+            element={<LandingRedirect />}
           />
 
           <Route
