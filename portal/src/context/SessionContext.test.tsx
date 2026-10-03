@@ -45,6 +45,7 @@ describe("SessionProvider", () => {
                 status: "unauthenticated",
             },
             reload,
+            refresh: vi.fn(),
         })
 
         render(

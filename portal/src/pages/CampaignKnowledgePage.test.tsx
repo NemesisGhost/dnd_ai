@@ -75,7 +75,12 @@ function buildSessionState(
             csrf_token: "fixture-csrf-token",
             browser_session_id: "browser-session-a",
             is_platform_administrator: false,
-            selected_campaign_id: "campaign-a",
+            startup_campaign_id: "campaign-a",
+            campaign_preferences: {
+              startup_mode: "resume_last_visited",
+              preferred_campaign_id: null,
+              last_visited_campaign_id: null,
+            },
             campaigns: [
                 {
                     campaign_id: "campaign-a",
@@ -139,7 +144,7 @@ beforeEach(() => {
         state: buildSessionState({
             "character-a": [partyPrimary, partyCouncil],
         }),
-        reload: vi.fn(),
+        reload: vi.fn(), refresh: vi.fn(),
     })
 })
 
@@ -525,7 +530,7 @@ describe("CampaignKnowledgePage", () => {
                 "character-a": [partyPrimary],
                 "character-b": [partyCouncil],
             }),
-            reload: vi.fn(),
+            reload: vi.fn(), refresh: vi.fn(),
         })
 
         const getSelectedCharacterId = vi.fn(
@@ -749,7 +754,7 @@ describe("CampaignKnowledgePage", () => {
                 "character-a": [partyPrimary],
                 "character-b": [partyCouncil],
             }),
-            reload: vi.fn(),
+            reload: vi.fn(), refresh: vi.fn(),
         })
 
         const getSelectedCharacterId = vi.fn(

@@ -11,7 +11,7 @@ export function HomePage({
         <section
             className="placeholder-page"
             aria-labelledby="home-heading">
-            <h1 id="home-heading">Home</h1>
+            <h1 id="home-heading">Campaign Home</h1>
             <section aria-labelledby="latest-session-heading">
                 <h2 id="latest-session-heading">Latest session</h2>
                 {summary.current_session === null ? (

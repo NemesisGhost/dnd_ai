@@ -5,16 +5,23 @@
   background-color: var(--color-background);
 }
 
-/* When a campaign route mounts the navigation rail, lay the shell out as
-   a sidebar column beside the content; the header and footer still span
-   the full width. Routes without the rail keep the single column. */
-.app-shell:has(.app-navigation) {
-  grid-template-columns: auto minmax(0, 1fr);
+/* Authenticated shell (UI_DESIGN §4): header across the top, then the one
+   persistent sidebar beside the routed content, then the footer. Public
+   routes keep the plain single-column .app-shell. */
+.authenticated-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 100vh;
 }
 
-.app-shell:has(.app-navigation)>.app-header,
-.app-shell:has(.app-navigation)>.app-footer {
-  grid-column: 1 / -1;
+.authenticated-shell__body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.authenticated-shell__content {
+  min-width: 0;
 }
 
 .app-header {
@@ -30,7 +37,195 @@
 
 .app-header__title {
   margin: 0;
+  color: inherit;
   font-size: 1.5rem;
+  text-decoration: none;
+}
+
+a.app-header__title:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Narrow-viewport drawer toggle for the persistent sidebar. Always rendered
+   inside the authenticated shell so its focus-return target exists; shown
+   only below the narrow breakpoint. */
+.app-header__drawer-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  color: var(--color-chrome-text);
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.app-header__drawer-toggle:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.app-header__drawer-toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Profile menu: a disclosure (button + popup), never an ARIA menu
+   (navigation plan §4.3). */
+.profile-menu {
+  position: relative;
+}
+
+.profile-menu__button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.75rem;
+  color: var(--color-chrome-text);
+  font: inherit;
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.profile-menu__button:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.profile-menu__button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  overflow: hidden;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-chrome-text);
+  background-color: var(--color-chrome);
+  border-radius: 50%;
+}
+
+.profile-menu__avatar--image {
+  object-fit: cover;
+}
+
+.profile-menu__name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-menu__popup {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 45;
+  width: max-content;
+  min-width: 14rem;
+  padding: 0.75rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow:
+    0 4px 6px var(--color-shadow),
+    0 2px 4px var(--color-shadow);
+}
+
+.profile-menu__popup[hidden] {
+  display: none;
+}
+
+.profile-menu__identity {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.profile-menu__list {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.profile-menu__list a {
+  display: block;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.25rem;
+  color: var(--color-text);
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+
+.profile-menu__list a:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.profile-menu__list a:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__group {
+  margin-top: 0.5rem;
+}
+
+.profile-menu__section-label {
+  margin: 0.5rem 0 0.1rem;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.profile-menu__logout {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.25rem;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.profile-menu__logout:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+}
+
+.profile-menu__logout:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.profile-menu__logout:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.profile-menu__error {
+  margin: 0.35rem 0 0;
+  color: var(--color-danger);
+  font-size: 0.8rem;
 }
 
 .theme-selector {
@@ -65,46 +260,6 @@
   margin: 0;
   color: var(--color-chrome-muted);
   font-size: 0.75rem;
-}
-
-.logout-control {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.35rem;
-}
-
-.logout-control__button {
-  min-height: 2.25rem;
-  padding: 0.35rem 0.85rem;
-  color: var(--color-chrome-text);
-  font: inherit;
-  background-color: var(--color-chrome-secondary);
-  border: 1px solid var(--color-chrome-muted);
-  border-radius: 0.25rem;
-  cursor: pointer;
-}
-
-.logout-control__button:hover:not(:disabled) {
-  background-color: var(--color-chrome-hover);
-}
-
-.logout-control__button:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-.logout-control__button:disabled {
-  cursor: not-allowed;
-  opacity: 0.75;
-}
-
-.logout-control__error {
-  margin: 0;
-  max-width: 16rem;
-  color: var(--color-danger);
-  font-size: 0.75rem;
-  text-align: right;
 }
 
 .app-main {
@@ -156,52 +311,41 @@
     padding-left: 1rem;
   }
 
-  .app-shell:has(.app-navigation) {
-    position: relative;
+  .authenticated-shell__body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-shell:has(.app-navigation)>.app-header,
-  .app-shell:has(.app-navigation)>.app-footer {
-    grid-column: 1;
+  .app-header__drawer-toggle {
+    display: inline-flex;
+    order: 0;
   }
 
-  .app-navigation__mobile-toggle {
-    position: absolute;
-    top: 0.65rem;
-    right: 1rem;
-    z-index: 40;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-height: 2.75rem;
-    padding: 0.4rem 0.65rem;
-    color: var(--color-chrome-text);
-    font: inherit;
-    background-color: var(--color-chrome-secondary);
-    border: 1px solid var(--color-chrome-muted);
-    border-radius: 0.25rem;
-    cursor: pointer;
-  }
-
-  .app-navigation__mobile-toggle:focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 2px;
-  }
-
-  .app-navigation__backdrop {
+  /* Drawer-mode rules are prefixed with .authenticated-shell so they win
+     over the base sidebar/backdrop rules declared later in this file at
+     equal specificity (otherwise the closed drawer would stay visible). */
+  .authenticated-shell .portal-sidebar__backdrop {
     position: fixed;
-    inset: 0;
+    inset: 5rem 0 0;
     z-index: 20;
     display: block;
     background-color: var(--color-overlay);
     border: 0;
   }
 
-  .app-navigation,
-  .app-navigation--collapsed {
+  /* The header stays above the drawer and backdrop, so the drawer toggle
+     (which becomes "Close navigation") and the profile menu stay visible
+     and reachable while the drawer is open; the drawer starts beneath it. */
+  .authenticated-shell .app-header {
+    position: relative;
+    z-index: 40;
+    box-sizing: border-box;
+    min-height: 5rem;
+  }
+
+  .authenticated-shell .portal-sidebar,
+  .authenticated-shell .portal-sidebar--collapsed {
     position: fixed;
-    top: 0;
+    top: 5rem;
     bottom: 0;
     left: 0;
     z-index: 30;
@@ -210,17 +354,17 @@
     overflow-y: auto;
   }
 
-  .app-navigation--mobile-open {
+  .authenticated-shell .portal-sidebar--mobile-open {
     display: flex;
   }
 
-  .app-navigation--collapsed .app-navigation__link,
-  .app-navigation--collapsed .app-navigation__toggle {
+  .portal-sidebar--collapsed .portal-sidebar__link,
+  .portal-sidebar--collapsed .portal-sidebar__toggle {
     gap: 0.75rem;
     justify-content: flex-start;
   }
 
-  .app-navigation--collapsed .app-navigation__label {
+  .portal-sidebar--collapsed .portal-sidebar__label {
     position: static;
     width: auto;
     height: auto;
@@ -231,32 +375,47 @@
     white-space: normal;
   }
 
-  .app-navigation__toggle-item {
+  .portal-sidebar__toggle-item {
     display: none;
   }
 
+  /* Drawer toggle, identity, and profile menu share one wrapping row
+     (profile pushed to the end). */
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 0.75rem;
   }
 
   .app-header__title {
-    padding-right: 6rem;
+    order: 1;
   }
 
-  .theme-selector {
-    grid-template-columns: minmax(0, 1fr);
-    width: 100%;
+  .profile-menu {
+    order: 2;
+    margin-left: auto;
   }
 
-  .theme-selector__select {
-    width: 100%;
+  /* Avatar only below 40rem — the accessible name (aria-label on the
+     button) is unchanged; only the redundant visible name is hidden. */
+  .profile-menu__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
-  .theme-selector__status {
-    grid-column: 1;
+  .profile-menu__popup {
+    width: min(18rem, calc(100vw - 2rem));
+    min-width: 0;
+    right: 0;
   }
+
 }
 
 .placeholder-page {
@@ -313,20 +472,20 @@
    labels are clipped for assistive tech rather than removed. Collapsing
    is driven solely by the toggle button — there is no hover expansion. */
 
-.app-navigation {
+.portal-sidebar {
   display: flex;
   flex-direction: column;
-  width: 12rem;
+  width: 15rem;
   color: var(--color-chrome-text);
   background-color: var(--color-chrome-secondary);
   border-right: 1px solid var(--color-chrome);
 }
 
-.app-navigation--collapsed {
+.portal-sidebar--collapsed {
   width: 3.5rem;
 }
 
-.app-navigation__list {
+.portal-sidebar__list {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -336,13 +495,18 @@
   list-style: none;
 }
 
-/* Push the collapse/expand control to the bottom of the rail. */
-.app-navigation__toggle-item {
+/* Push the collapse/expand control to the bottom of the rail and keep it
+   reachable at the bottom of the viewport on tall pages. */
+.portal-sidebar__toggle-item {
+  position: sticky;
+  bottom: 0;
   margin-top: auto;
+  padding-top: 0.25rem;
+  background-color: var(--color-chrome-secondary);
 }
 
-.app-navigation__link,
-.app-navigation__toggle {
+.portal-sidebar__link,
+.portal-sidebar__toggle {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -359,19 +523,19 @@
   cursor: pointer;
 }
 
-.app-navigation__link:hover,
-.app-navigation__toggle:hover {
+.portal-sidebar__link:hover,
+.portal-sidebar__toggle:hover {
   color: var(--color-chrome-text);
   background-color: var(--color-chrome-hover);
 }
 
-.app-navigation__link:focus-visible,
-.app-navigation__toggle:focus-visible {
+.portal-sidebar__link:focus-visible,
+.portal-sidebar__toggle:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-.app-navigation__icon {
+.portal-sidebar__icon {
   flex: 0 0 auto;
   width: 1.25rem;
   height: 1.25rem;
@@ -379,16 +543,70 @@
 
 /* aria-current on the active NavLink also carries the accent bar so the
    current route stays identifiable in the collapsed icon-only rail. */
-.app-navigation__link--active {
+.portal-sidebar__link--active {
   color: var(--color-primary-foreground);
   background-color: var(--color-chrome-active);
   font-weight: 700;
   box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
+/* Access disclosure (navigation plan): the trigger reuses
+   .portal-sidebar__link styling; the chevron and nested submenu are
+   additive, inline rather than a floating popup, so the rail's own
+   scroll/collapse/mobile behaviour applies to the children unchanged. */
+.portal-sidebar__chevron {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+
+.portal-sidebar__chevron--open {
+  transform: rotate(180deg);
+}
+
+.portal-sidebar__submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.25rem 0 0.25rem 2rem;
+  margin: 0;
+  list-style: none;
+}
+
+.portal-sidebar__submenu[hidden] {
+  display: none;
+}
+
+.portal-sidebar__sublink {
+  display: block;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+  color: var(--color-chrome-text);
+  font: inherit;
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+
+.portal-sidebar__sublink:hover {
+  background-color: var(--color-chrome-hover);
+}
+
+.portal-sidebar__sublink:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.portal-sidebar__sublink--active {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-chrome-active);
+  font-weight: 700;
+}
+
 /* Disabled "Ask": dashed border and reduced opacity so the unavailable
    state reads without depending on the muted colour alone. */
-.app-navigation__link--disabled {
+.portal-sidebar__link--disabled {
   color: var(--color-chrome-muted);
   border-color: var(--color-chrome-muted);
   border-style: dashed;
@@ -396,20 +614,52 @@
   cursor: not-allowed;
 }
 
-.app-navigation__link--disabled:hover {
+.portal-sidebar__link--disabled:hover {
   color: var(--color-chrome-muted);
   background-color: transparent;
 }
 
+/* Campaign Home group: the Campaign Home link and the disclosure button
+   are separate controls on one row; the button is a compact chevron when a
+   campaign resolves, or a full-width labelled row when none does. */
+.portal-sidebar__row {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.portal-sidebar__row .portal-sidebar__link:not(.portal-sidebar__link--icon-only) {
+  flex: 1 1 auto;
+}
+
+.portal-sidebar__link--icon-only {
+  flex: 0 0 auto;
+  width: 2.75rem;
+  justify-content: center;
+}
+
+.portal-sidebar__link--icon-only .portal-sidebar__chevron {
+  margin-left: 0;
+}
+
+.portal-sidebar__sublink {
+  overflow-wrap: anywhere;
+}
+
+.portal-sidebar__note {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-chrome-muted);
+  font-size: 0.85rem;
+}
+
 /* Collapsed rail: centre the icons and clip the labels using the same
    screen-reader-only pattern used elsewhere in this stylesheet. */
-.app-navigation--collapsed .app-navigation__link,
-.app-navigation--collapsed .app-navigation__toggle {
+.portal-sidebar--collapsed .portal-sidebar__link,
+.portal-sidebar--collapsed .portal-sidebar__toggle {
   gap: 0;
   justify-content: center;
 }
 
-.app-navigation--collapsed .app-navigation__label {
+.portal-sidebar--collapsed .portal-sidebar__label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -421,8 +671,94 @@
   border: 0;
 }
 
-.app-navigation__mobile-toggle,
-.app-navigation__backdrop {
+.portal-sidebar--collapsed .portal-sidebar__chevron {
+  display: none;
+}
+
+/* Collapsed rail: the Access children have no icon, so their
+   clipped labels would leave two blank links. Open the submenu as a
+   bounded flyout beside the rail with the labels shown; the group is the
+   positioning context so the flyout lines up with the Access button. */
+.portal-sidebar--collapsed .portal-sidebar__access-group {
+  position: relative;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 0.25rem);
+  z-index: 40;
+  width: max-content;
+  min-width: 12rem;
+  max-width: min(18rem, 60vw);
+  padding: 0.25rem;
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.25rem 0.75rem var(--color-overlay);
+}
+
+.portal-sidebar--collapsed .portal-sidebar__submenu[hidden] {
+  display: none;
+}
+
+.portal-sidebar--collapsed .portal-sidebar__sublink .portal-sidebar__label {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Narrow drawer: collapsed state survives a resize from desktop, but the
+   drawer scrolls (overflow-y: auto also clips x), so an absolute flyout
+   would sit outside it. Keep the drawer at its full width with labels
+   shown and the Access submenu inline. */
+@media (max-width: 40rem) {
+  .portal-sidebar--collapsed {
+    width: min(18rem, 85vw);
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__link,
+  .portal-sidebar--collapsed .portal-sidebar__toggle {
+    gap: 0.75rem;
+    justify-content: flex-start;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__label,
+  .portal-sidebar--collapsed .portal-sidebar__sublink .portal-sidebar__label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__chevron {
+    display: block;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__access-group {
+    position: static;
+  }
+
+  .portal-sidebar--collapsed .portal-sidebar__submenu {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0.25rem 0 0.25rem 2rem;
+    background: none;
+    border: 0;
+    box-shadow: none;
+  }
+}
+
+.portal-sidebar__backdrop {
   display: none;
 }
 
@@ -1707,9 +2043,11 @@
   border-radius: 0.25rem;
 }
 
-/* Access section tab nav (Phase 13E-B manual-acceptance fix): local to
-   /app/:campaignId/access and /access/audit, distinct from the sidebar's
-   own top-level "Access" link in .app-navigation__link above. */
+/* Access section tab nav (Phase 13E-B manual-acceptance fix, extended by
+   the Access/Invitations navigation redesign): local to
+   /app/:campaignId/access, /access/invitations, and /access/audit,
+   distinct from the sidebar's own top-level Access disclosure
+   (.portal-sidebar__access-group above). */
 .access-tab-nav__list {
   display: flex;
   gap: 0.5rem;
@@ -2329,4 +2667,64 @@
   margin-top: 2rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--color-border);
+}
+
+/* Settings page (UI_DESIGN §4.7). */
+.settings-page {
+  max-width: 48rem;
+}
+
+.settings-page__section {
+  margin-top: 2rem;
+}
+
+.settings-page__section h2 {
+  margin-bottom: 0.75rem;
+}
+
+.settings-page .theme-selector {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-page .theme-selector__status {
+  grid-column: 1;
+  color: var(--color-text-muted, inherit);
+}
+
+.campaign-startup-form fieldset {
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.campaign-startup-form__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+}
+
+.campaign-startup-form__select {
+  min-height: 2.25rem;
+  max-width: 100%;
+  margin: 0.25rem 0 0.5rem 1.75rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--color-text);
+  font: inherit;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.campaign-startup-form__select:disabled {
+  opacity: 0.6;
+}
+
+.campaign-startup-form__select:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.campaign-startup-form__error {
+  color: var(--color-danger);
 }

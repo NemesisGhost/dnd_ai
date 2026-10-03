@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import {
   MemoryRouter,
   Route,
@@ -6,6 +6,7 @@ import {
   useLocation,
 } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import * as userPreferences from "../api/userPreferences"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -13,6 +14,9 @@ import { CampaignLayout } from "./CampaignLayout"
 
 vi.mock("../context/CharacterPerspectiveContext", () => ({
   usePerspective: vi.fn(),
+}))
+vi.mock("../api/userPreferences", () => ({
+  recordLastVisitedCampaign: vi.fn(() => Promise.resolve()),
 }))
 vi.mock("../hooks/useCharacter", () => ({
   useCharacter: () => ({
@@ -22,6 +26,7 @@ vi.mock("../hooks/useCharacter", () => ({
 }))
 
 const usePerspectiveMock = vi.mocked(usePerspective)
+const recordLastVisited = vi.mocked(userPreferences.recordLastVisitedCampaign)
 
 const secondCampaign = {
   ...sessionBootstrapFixture.campaigns[0]!,
@@ -66,52 +71,19 @@ function renderAt(pathname: string) {
 beforeEach(() => {
   usePerspectiveMock.mockReset()
   selectCharacter.mockReset()
+  recordLastVisited.mockClear()
   usePerspectiveMock.mockReturnValue({
     getSelectedCharacterId: () => null,
     selectCharacter,
   })
 })
 
-describe("CampaignLayout campaign switching", () => {
-  it("keeps the current section and drops the detail id", () => {
-    renderAt("/app/mundivita/quests/quest-7")
-
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "secundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/secundivita/quests",
-    )
-    expect(selectCharacter).toHaveBeenCalledWith("secundivita", null)
-  })
-
-  it("preserves a plain section route", () => {
+describe("CampaignLayout", () => {
+  it("renders no navigation of its own (the shell owns the sidebar)", () => {
     renderAt("/app/mundivita/home")
 
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "secundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/secundivita/home",
-    )
-  })
-
-  it("does not navigate when the active campaign is re-selected", () => {
-    renderAt("/app/mundivita/quests/quest-7")
-
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "mundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/mundivita/quests/quest-7",
-    )
-    expect(selectCharacter).not.toHaveBeenCalled()
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument()
+    expect(screen.getAllByRole("main")).toHaveLength(1)
   })
 
   it("renders the workspace with the panel before the routed content", () => {
@@ -126,30 +98,34 @@ describe("CampaignLayout campaign switching", () => {
     ).toBeInTheDocument()
   })
 
-  it("ignores a campaign outside the authorized bootstrap list", () => {
-    renderAt(
-      "/app/mundivita/quests/quest-7",
-    )
-
-    fireEvent.change(
-      screen.getByRole("combobox", {
-        name: "Campaign",
-      }),
-      {
-        target: {
-          value: "campaign-unavailable",
-        },
-      },
-    )
+  it("offers a non-disclosing Browse campaigns link for an unknown campaign", () => {
+    renderAt("/app/not-a-real-campaign/home")
 
     expect(
-      screen.getByTestId("location"),
-    ).toHaveTextContent(
-      "/app/mundivita/quests/quest-7",
-    )
+      screen.getByRole("heading", { name: "Campaign not found" }),
+    ).toBeInTheDocument()
 
     expect(
-      selectCharacter,
-    ).not.toHaveBeenCalled()
+      screen.getByRole("link", { name: "Browse campaigns" }),
+    ).toHaveAttribute("href", "/campaigns")
+  })
+})
+
+describe("CampaignLayout last-visited recording", () => {
+  it("records an authorized route campaign once", () => {
+    renderAt("/app/secundivita/home")
+
+    expect(recordLastVisited).toHaveBeenCalledTimes(1)
+    expect(recordLastVisited).toHaveBeenCalledWith(
+      "secundivita",
+      bootstrap.csrf_token,
+      expect.any(AbortSignal),
+    )
+  })
+
+  it("does not record an unknown or unauthorized campaign", () => {
+    renderAt("/app/not-a-real-campaign/home")
+
+    expect(recordLastVisited).not.toHaveBeenCalled()
   })
 })

@@ -25,7 +25,12 @@ describe("CampaignsPage", () => {
           bootstrap={{
             ...sessionBootstrapFixture,
             is_platform_administrator: false,
-            selected_campaign_id: null,
+            startup_campaign_id: null,
+            campaign_preferences: {
+              startup_mode: "resume_last_visited",
+              preferred_campaign_id: null,
+              last_visited_campaign_id: null,
+            },
             campaigns: [],
           }}
         />
@@ -40,13 +45,13 @@ describe("CampaignsPage", () => {
 
     expect(
       screen.getByText(
-        "You do not have access to any campaigns yet. Ask a GM to grant you access.",
+        "You do not have access to any campaigns yet. Ask a GM to invite you.",
       ),
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole("link"),
-    ).not.toBeInTheDocument()
+      screen.getByRole("link", { name: "Accept a campaign invitation" }),
+    ).toHaveAttribute("href", "/campaign-invitations/accept")
   })
 
   it("lists an authorized campaign as a link", () => {
@@ -78,8 +83,43 @@ describe("CampaignsPage", () => {
     ).toBeInTheDocument()
 
     expect(
-      within(link).getByText("Default campaign"),
+      within(link).queryByText("Opens at sign-in"),
+    ).not.toBeInTheDocument()
+  })
+
+  it("marks the campaign that opens at sign-in and the last visited one", () => {
+    const second = {
+      ...fixtureCampaign,
+      campaign_id: "second",
+      campaign_name: "Second",
+    }
+    render(
+      <MemoryRouter>
+        <CampaignsPage
+          bootstrap={{
+            ...sessionBootstrapFixture,
+            campaign_preferences: {
+              startup_mode: "preferred_campaign",
+              preferred_campaign_id: "mundivita",
+              last_visited_campaign_id: "second",
+            },
+            campaigns: [fixtureCampaign, second],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(
+      within(screen.getByRole("link", { name: /Mundivita/ })).getByText(
+        "Opens at sign-in",
+      ),
     ).toBeInTheDocument()
+    expect(
+      within(screen.getByRole("link", { name: /Second/ })).getByText(
+        "Last visited",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Default campaign")).not.toBeInTheDocument()
   })
 
   it("handles a campaign without a timeline", () => {
@@ -89,7 +129,12 @@ describe("CampaignsPage", () => {
           bootstrap={{
             ...sessionBootstrapFixture,
             is_platform_administrator: false,
-            selected_campaign_id: null,
+            startup_campaign_id: null,
+            campaign_preferences: {
+              startup_mode: "resume_last_visited",
+              preferred_campaign_id: null,
+              last_visited_campaign_id: null,
+            },
             campaigns: [
               {
                 ...fixtureCampaign,
@@ -111,7 +156,7 @@ describe("CampaignsPage", () => {
     ).toBeInTheDocument()
 
     expect(
-      within(link).queryByText("Default campaign"),
+      within(link).queryByText("Opens at sign-in"),
     ).not.toBeInTheDocument()
   })
 })

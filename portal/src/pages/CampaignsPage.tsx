@@ -1,5 +1,4 @@
 import { Link } from "react-router"
-import PlaceholderPage from "./PlaceholderPage"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 interface CampaignsPageProps {
@@ -12,10 +11,18 @@ export function CampaignsPage({
   if (bootstrap.campaigns.length === 0) {
     return (
       <main className="app-main">
-        <PlaceholderPage
-          title="Campaigns"
-          description="You do not have access to any campaigns yet. Ask a GM to grant you access."
-        />
+        <section className="placeholder-page">
+          <h1>Campaigns</h1>
+          <p>
+            You do not have access to any campaigns yet. Ask a GM to invite
+            you.
+          </p>
+          <p>
+            <Link to="/campaign-invitations/accept">
+              Accept a campaign invitation
+            </Link>
+          </p>
+        </section>
       </main>
     )
   }
@@ -44,9 +51,12 @@ export function CampaignsPage({
                 </p>
 
                 {campaign.campaign_id ===
-                  bootstrap.selected_campaign_id && (
-                    <span>Default campaign</span>
-                  )}
+                  bootstrap.campaign_preferences.preferred_campaign_id ? (
+                  <span>Opens at sign-in</span>
+                ) : campaign.campaign_id ===
+                  bootstrap.campaign_preferences.last_visited_campaign_id ? (
+                  <span>Last visited</span>
+                ) : null}
               </Link>
             </li>
           ))}

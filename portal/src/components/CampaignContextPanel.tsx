@@ -5,16 +5,12 @@ import { CharacterPerspectiveSelector } from "./CharacterPerspectiveSelector"
 
 interface CampaignContextPanelProps {
   campaign: CampaignContext
-  campaigns: CampaignContext[]
   selectedCharacterId: string | null
-  onSelectCampaign: (campaignId: string) => void
   onSelectCharacter: (characterId: string | null) => void
 }
 export function CampaignContextPanel({
   campaign,
-  campaigns,
   selectedCharacterId,
-  onSelectCampaign,
   onSelectCharacter,
 }: CampaignContextPanelProps) {
   const worldHeadingId = useId()
@@ -67,26 +63,9 @@ export function CampaignContextPanel({
           >
             Campaign
           </h3>
-          <select
-            className="campaign-context-panel__control"
-            aria-labelledby={campaignHeadingId}
-            value={campaign.campaign_id}
-            onChange={(event) => {
-              const nextCampaignId = event.currentTarget.value
-              if (nextCampaignId !== campaign.campaign_id) {
-                onSelectCampaign(nextCampaignId)
-              }
-            }}
-          >
-            {campaigns.map((candidate) => (
-              <option
-                key={candidate.campaign_id}
-                value={candidate.campaign_id}
-              >
-                {candidate.campaign_name}
-              </option>
-            ))}
-          </select>
+          <p className="campaign-context-panel__value">
+            {campaign.campaign_name}
+          </p>
 
           <dl className="campaign-context-panel__detail">
             <div className="campaign-context-panel__detail-row">

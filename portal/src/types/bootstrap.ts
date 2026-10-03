@@ -35,6 +35,17 @@ export interface FeatureManifest {
   cited_rules: boolean
 }
 
+export type CampaignStartupMode = "resume_last_visited" | "preferred_campaign"
+
+// Stored startup values, already filtered by the server to campaigns the
+// caller can currently access (docs/UI_DESIGN.md §4.7). An ID here never
+// grants access.
+export interface CampaignPreferences {
+  startup_mode: CampaignStartupMode
+  preferred_campaign_id: string | null
+  last_visited_campaign_id: string | null
+}
+
 export interface SessionBootstrap {
   user: UserSummary
   csrf_token: string
@@ -43,7 +54,11 @@ export interface SessionBootstrap {
   // whether to render an admin surface at all (CP 10's /admin/accounts
   // page) — campaign-scoped access.manage grants nothing here.
   is_platform_administrator: boolean
-  selected_campaign_id: string | null
+  // Server-computed landing campaign (docs/UI_DESIGN.md §4.2): null means
+  // "no campaign to resume" and the portal lands on /campaigns. Always null or
+  // one of `campaigns`.
+  startup_campaign_id: string | null
+  campaign_preferences: CampaignPreferences
   campaigns: CampaignContext[]
   features: FeatureManifest
 }

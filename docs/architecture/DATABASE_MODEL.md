@@ -894,6 +894,20 @@ Key columns:
 
 `security.users.display_name` also gained a length bound in the same migration (`ck_users_display_name_length`, `1-100` chars) — invitation-authorized registration is the first path where `display_name` is untrusted, caller-supplied input reaching this table, unlike every prior write path (administrator-issued account creation).
 
+##### `security.user_portal_preferences`
+
+**Delivered by revision `109_user_portal_preferences`** ([UI_DESIGN.md §4.7](../UI_DESIGN.md#47-settings-and-campaign-startup-preferences)). Durable, user-scoped portal navigation preferences: the campaign startup choice and the last-visited campaign. Belongs to the platform user, not to a browser or `security.browser_sessions` row, so it follows the user across browsers and survives logout. The portal theme is deliberately *not* stored here — it remains client-side so it can apply before authentication.
+
+Key columns:
+
+- `user_portal_preference_id UUID PK`
+- `user_id UUID FK -> security.users ON DELETE CASCADE` — unique; at most one row per user, created lazily by the first preference write (upsert on `user_id`)
+- `preferred_campaign_id UUID NULL FK -> campaign.campaigns ON DELETE SET NULL` — non-null means startup mode "Always open this campaign"; null means "Resume my last visited campaign". No separate mode column or lookup table: the mode is fully determined by this column
+- `last_visited_campaign_id UUID NULL FK -> campaign.campaigns ON DELETE SET NULL`
+- `created_at TIMESTAMPTZ`, `updated_at TIMESTAMPTZ` (shared `updated_at` trigger)
+
+Authorization boundary: neither campaign column grants, implies, or caches access. Writers (`PUT /auth/preferences/campaign-startup`, `PUT /auth/preferences/last-visited-campaign`) store a campaign ID only after re-verifying that the caller currently has an active membership in that active campaign — the same scope `dnd_ai.queries.bootstrap.get_session_bootstrap` lists — and readers (the session bootstrap) return a stored ID only when it is still in that authorized set, silently ignoring it otherwise. No role, capability, membership, or other authorization state is copied into this table. Writes are idempotent set operations (no `security.idempotent_requests` row) and, as presentation state rather than canon, typed state, or permission data, are not recorded in `audit.change_log` or the security audit trail.
+
 ##### `security.external_identities`
 
 Maps one application user to one or more OIDC identities.

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Navigate } from "react-router"
+import { Navigate, useLocation } from "react-router"
 import { useSession } from "../context/SessionContext"
 import type { SessionBootstrap } from "../types/bootstrap"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -15,6 +15,7 @@ export function AuthenticatedSessionBoundary({
     children,
 }: AuthenticatedSessionBoundaryProps) {
     const { state, reload } = useSession()
+    const location = useLocation()
 
     switch (state.status) {
         case "loading":
@@ -28,7 +29,15 @@ export function AuthenticatedSessionBoundary({
             )
 
         case "unauthenticated":
-            return <Navigate to="/login" replace />
+            return (
+                <Navigate
+                    to="/login"
+                    replace
+                    state={{
+                        from: `${location.pathname}${location.search}`,
+                    }}
+                />
+            )
 
         case "error":
             return (

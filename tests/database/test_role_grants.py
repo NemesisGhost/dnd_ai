@@ -227,6 +227,9 @@ MANAGED_TABLES = [
     # Phase 13E-B checkpoint 8a — single-link campaign-invitation onboarding
     # (migration 107)
     ("security", "invitation_onboarding_sessions"),
+    # Phase 13 navigation and settings redesign — user portal preferences
+    # (migration 109)
+    ("security", "user_portal_preferences"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

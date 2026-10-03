@@ -245,7 +245,7 @@ describe("QuestDetailPage — audience preview (Phase 13E-B manual-acceptance fi
                             })),
                         },
                     },
-                    reload: vi.fn(),
+                    reload: vi.fn(), refresh: vi.fn(),
                 }}
             >
                 <MemoryRouter initialEntries={["/app/test-campaign/quests/quest-a"]}>

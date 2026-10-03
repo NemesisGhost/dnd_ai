@@ -109,7 +109,7 @@ function renderAtCampaign() {
                     status: "authenticated",
                     bootstrap: sessionBootstrapFixture,
                 },
-                reload: vi.fn().mockResolvedValue(undefined),
+                reload: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined),
             }}
         >
             <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>
@@ -615,6 +615,7 @@ describe("CampaignAccessPage remove-member flow", () => {
                         bootstrap: sessionBootstrapFixture,
                     },
                     reload: reloadMock,
+                    refresh: vi.fn(),
                 }}
             >
                 <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>

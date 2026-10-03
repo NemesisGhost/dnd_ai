@@ -182,7 +182,13 @@ def test_full_activation_and_login_flow(
         assert session_body["user"]["user_id"] == login_response.json()["user_id"]
         assert session_body["csrf_token"]
         assert session_body["campaigns"] == []
-        assert session_body["selected_campaign_id"] is None
+        assert "selected_campaign_id" not in session_body
+        assert session_body["startup_campaign_id"] is None
+        assert session_body["campaign_preferences"] == {
+            "startup_mode": "resume_last_visited",
+            "preferred_campaign_id": None,
+            "last_visited_campaign_id": None,
+        }
         assert session_body["features"] == {
             "ask": False,
             "ai_summaries": False,

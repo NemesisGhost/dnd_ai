@@ -41,9 +41,7 @@ function ConnectedPanel({
   return (
     <CampaignContextPanel
       campaign={campaign}
-      campaigns={[campaign]}
       selectedCharacterId={getSelectedCharacterId(campaign.campaign_id)}
-      onSelectCampaign={() => { }}
       onSelectCharacter={(characterId) =>
         selectCharacter(campaign.campaign_id, characterId)
       }
@@ -87,7 +85,12 @@ const bootstrap: SessionBootstrap = {
   ...sessionBootstrapFixture,
   browser_session_id: "session-a",
   is_platform_administrator: false,
-  selected_campaign_id: "campaign-a",
+  startup_campaign_id: "campaign-a",
+  campaign_preferences: {
+    startup_mode: "resume_last_visited",
+    preferred_campaign_id: null,
+    last_visited_campaign_id: null,
+  },
   campaigns: [campaign],
 }
 
@@ -122,6 +125,7 @@ beforeEach(() => {
       bootstrap,
     },
     reload,
+    refresh: vi.fn(),
   })
 })
 
@@ -154,6 +158,7 @@ describe("SessionProvider perspective integration", () => {
         status: "loading",
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -176,6 +181,7 @@ describe("SessionProvider perspective integration", () => {
         bootstrap,
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -215,6 +221,7 @@ describe("SessionProvider perspective integration", () => {
         status: "loading",
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)
@@ -239,6 +246,7 @@ describe("SessionProvider perspective integration", () => {
         },
       },
       reload,
+      refresh: vi.fn(),
     })
 
     rerender(<TestPortal />)

@@ -63,6 +63,7 @@ beforeEach(() => {
             bootstrap: sessionBootstrapFixture,
         },
         reload: reloadSession,
+        refresh: vi.fn(),
     })
 })
 

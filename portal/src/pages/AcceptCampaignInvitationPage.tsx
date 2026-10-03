@@ -320,11 +320,13 @@ export function AcceptCampaignInvitationPage() {
             )
         }
 
-        // R-3: LoginPage's own Navigate to="/campaigns" needs no change —
-        // there is no return-URL to thread. A visitor who lands here with
-        // no onboarding cookie and no session simply signs in normally
-        // and, if they hold a raw token some other way, returns to this
-        // page to use the manual fallback below.
+        // R-3: LoginPage's own post-login redirect lands on /home (the
+        // landing resolver), not here — there is still no return-URL to
+        // thread here.
+        // A visitor who lands here with no onboarding cookie and no
+        // session simply signs in normally and, if they hold a raw token
+        // some other way, returns to this page to use the manual
+        // fallback below.
         if (sessionState.status !== "authenticated") {
             return <Navigate to="/login" replace />
         }

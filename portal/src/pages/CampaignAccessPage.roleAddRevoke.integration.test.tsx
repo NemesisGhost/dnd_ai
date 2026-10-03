@@ -98,7 +98,7 @@ function renderAtCampaign() {
                     status: "authenticated",
                     bootstrap: sessionBootstrapFixture,
                 },
-                reload: vi.fn().mockResolvedValue(undefined),
+                reload: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined),
             }}
         >
             <MemoryRouter initialEntries={[`/app/${CAMPAIGN_ID}/access`]}>

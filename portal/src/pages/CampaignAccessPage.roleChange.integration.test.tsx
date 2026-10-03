@@ -185,6 +185,7 @@ function renderAtCampaignA(reload: () => Promise<void>) {
                     bootstrap: sessionBootstrapFixture,
                 },
                 reload,
+                refresh: vi.fn(),
             }}
         >
             <MemoryRouter initialEntries={[`/app/${CAMPAIGN_A_ID}/access`]}>

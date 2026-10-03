@@ -265,6 +265,7 @@ from .security import (
     service_accounts,
     timeline_bootstrap_grants,
     user_activation_tokens,
+    user_portal_preferences,
     users,
 )
 
@@ -472,6 +473,7 @@ __all__ = [
     "timelines",
     "truth_statuses",
     "user_activation_tokens",
+    "user_portal_preferences",
     "users",
     "world_rulesets",
     "world_time_precisions",

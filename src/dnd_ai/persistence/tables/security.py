@@ -1,4 +1,4 @@
-"""Security tables — security schema (revisions 003, 080, 082, 087, 088).
+"""Security tables — security schema (revisions 003, 080, 082, 087, 088, 109).
 
 Part of the src/dnd_ai/persistence/tables package. See
 src/dnd_ai/persistence/tables/__init__.py for the metadata-authority note
@@ -1455,4 +1455,61 @@ Index(
     browser_sessions.c.user_id,
     browser_sessions.c.idle_expires_at,
     postgresql_where=browser_sessions.c.revoked_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# Portal preferences (revision 109)
+# ---------------------------------------------------------------------------
+
+user_portal_preferences = Table(
+    "user_portal_preferences",
+    metadata,
+    _uuid_pk("user_portal_preference_id"),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "preferred_campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="SET NULL"),
+        comment=(
+            'Non-null means startup mode "Always open this campaign"; null means "Resume '
+            'my last visited campaign". Never grants access: readers ignore it unless the '
+            "user currently has an active membership in that active campaign."
+        ),
+    ),
+    Column(
+        "last_visited_campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="SET NULL"),
+        comment=(
+            "The campaign the user most recently entered, recorded only after server-side "
+            "campaign authorization succeeded. Never grants access: readers ignore it "
+            "unless the user currently has an active membership in that active campaign."
+        ),
+    ),
+    *_timestamps(),
+    UniqueConstraint("user_id", name="ux_user_portal_preferences_user_id"),
+    schema="security",
+    comment=(
+        "Durable, user-scoped portal navigation preferences: the campaign startup "
+        "choice and the last-visited campaign (docs/UI_DESIGN.md §4.7). Belongs to "
+        "the platform user, not a browser session. Presentation state only: no "
+        "column grants, implies, or caches access, and no role or capability is "
+        "copied here."
+    ),
+)
+
+Index(
+    "ix_user_portal_preferences_preferred_campaign_id",
+    user_portal_preferences.c.preferred_campaign_id,
+    postgresql_where=user_portal_preferences.c.preferred_campaign_id.isnot(None),
+)
+Index(
+    "ix_user_portal_preferences_last_visited_campaign_id",
+    user_portal_preferences.c.last_visited_campaign_id,
+    postgresql_where=user_portal_preferences.c.last_visited_campaign_id.isnot(None),
 )

@@ -69,7 +69,7 @@ owner. See `login_endpoint`'s own docstring for the exact flow.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -559,12 +559,23 @@ _PHASE_12_FEATURES_ALL_DISABLED = SessionFeaturesResponse(
 )
 
 
+class CampaignPreferencesResponse(BaseModel):
+    """The caller's stored campaign-startup values, already filtered to the
+    campaigns currently listed in `campaigns` (docs/UI_DESIGN.md §4.7): a
+    stored ID that is no longer authorized is never returned."""
+
+    startup_mode: Literal["resume_last_visited", "preferred_campaign"]
+    preferred_campaign_id: uuid.UUID | None
+    last_visited_campaign_id: uuid.UUID | None
+
+
 class SessionBootstrapResponse(BaseModel):
     user: SessionUserResponse
     csrf_token: str
     browser_session_id: uuid.UUID | None
     is_platform_administrator: bool
-    selected_campaign_id: uuid.UUID | None
+    startup_campaign_id: uuid.UUID | None
+    campaign_preferences: CampaignPreferencesResponse
     campaigns: list[CampaignBootstrapResponse]
     features: SessionFeaturesResponse
 
@@ -578,8 +589,10 @@ def session_bootstrap_endpoint(
     §23.7 — Phase 13B blocker 2): current user, a fresh CSRF token read,
     the authenticating session id, and every active campaign membership
     with its roles, selectable character perspectives, and effective
-    capabilities, plus the (currently all-disabled) Phase 12 feature
-    manifest. Never a password hash, reset/activation token, or durable API
+    capabilities, the caller's authorization-filtered campaign-startup
+    preferences and server-computed `startup_campaign_id`
+    (docs/UI_DESIGN.md §4.2, §4.7), plus the (currently all-disabled) Phase
+    12 feature manifest. Never a password hash, reset/activation token, or durable API
     credential.
 
     Every authorization-sensitive field is recomputed from current database
@@ -612,7 +625,15 @@ def session_bootstrap_endpoint(
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
         is_platform_administrator=bootstrap.is_platform_administrator,
-        selected_campaign_id=bootstrap.selected_campaign_id,
+        startup_campaign_id=bootstrap.startup_campaign_id,
+        campaign_preferences=CampaignPreferencesResponse(
+            startup_mode=cast(
+                Literal["resume_last_visited", "preferred_campaign"],
+                bootstrap.campaign_preferences.startup_mode,
+            ),
+            preferred_campaign_id=bootstrap.campaign_preferences.preferred_campaign_id,
+            last_visited_campaign_id=bootstrap.campaign_preferences.last_visited_campaign_id,
+        ),
         campaigns=[
             CampaignBootstrapResponse(
                 campaign_id=campaign.campaign_id,

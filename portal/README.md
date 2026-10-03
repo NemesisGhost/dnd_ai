@@ -6,7 +6,7 @@ Vite, and React Router.
 ## Current status
 
 **Phases 13A, 13B, 13C, 13D, and 13E are complete and verified.** The six
-13D read-only screens (Home, World, Characters, Quests, Sessions, Knowledge)
+13D read-only screens (Campaign Home, World, Characters, Quests, Sessions, Knowledge)
 are wired to live campaign-scoped API endpoints, each behind a shared
 `*Boundary` component providing consistent loading, empty, denied
 (non-discoverable), error-with-retry, and background-refreshing states.
@@ -24,7 +24,11 @@ below. Deliberately not built: full preview-as-user/impersonation over
 every read screen (D-1's bounded substitute above covers this instead) and
 explicit membership reactivation outside invitation acceptance. 13F
 (Foundry connections/device UI), 13G (Phase 12 surfaces), and 13H (E2E
-coverage and production packaging) have not started.
+coverage and production packaging) have not started. The follow-up
+**navigation and settings redesign** (one persistent sidebar, simplified header,
+`/settings`, the `/home` landing resolver, and persisted campaign startup and
+last-visited preferences) is also delivered — see
+[Navigation and settings redesign](#navigation-and-settings-redesign).
 
 The portal currently includes:
 
@@ -38,8 +42,9 @@ The portal currently includes:
   scope, including browser Back/Forward navigation.
 - In-memory character-perspective selection, checked against the latest
   server-authorized perspective list after refresh; capabilities (e.g. the
-  Access nav item) come only from the bootstrap's per-campaign `capabilities`
-  list, never derived locally from role or perspective.
+  Access nav group and its Access Management/Invitations children) come
+  only from the bootstrap's per-campaign `capabilities` list, never derived
+  locally from role or perspective.
 - A Home dashboard showing the latest session, previous-session recap, and
   recent events (a narrower slice than Phase 13's full dashboard bullet —
   active quests, recent discoveries, relevant NPCs/factions, reminders, and
@@ -51,7 +56,7 @@ The portal currently includes:
 - A Knowledge screen filterable by view (across the documented knowledge
   views) and authorized party, with search and keyset pagination.
 - A visibly disabled Ask feature while the server manifest disables it.
-- Light/dark theme switching.
+- Theme selection on the Settings page (browser-local, applied before sign-in).
 - A live Access screen showing current members, roles, character
   relationships, resource grants of every target kind (both `allow` and
   `deny`), access groups, pending invitations, audit history, an
@@ -74,8 +79,10 @@ The portal currently includes:
 Navigating between pages within the same campaign preserves the provider
 and selected perspective. Changing campaign scope resets them.
 
-The campaign picker's Default campaign marker describes the server's
-bootstrap default, not a persisted last-visited preference.
+The campaign picker marks the campaign that **Opens at sign-in** (the
+user's fixed startup preference) and the **Last visited** campaign, both taken
+from the bootstrap's authorization-filtered `campaign_preferences`; see
+[Navigation and settings redesign](#navigation-and-settings-redesign).
 
 ## Prerequisites
 
@@ -171,9 +178,24 @@ Do not commit local database credentials or authentication secrets.
 
 ## Routes
 
-Public routes:
+The navigation and settings redesign (`docs/UI_DESIGN.md` §4-§5, `docs/PLAN.md`
+§23.6) is implemented; see
+[Navigation and settings redesign](#navigation-and-settings-redesign).
+`/` always redirects to `/login`; an authenticated visitor is
+then redirected again, from `/login`, to the post-login destination: a
+validated continuation destination carried in router history state — never the
+URL — when the visitor was redirected here from a protected route, the
+invitation Resume/Continue choice when an onboarding continuation is live, or
+otherwise `/home`, which resolves to a campaign or `/campaigns`. Logging out
+navigates explicitly to `/login` with no continuation state, so a different
+user signing in next always lands through `/home`. Unknown routes always show a
+not-found page; they never redirect to `/login`.
 
-- `/`
+Public routes (`PublicLayout`: identity chrome and, for a visitor who is,
+unusually, already authenticated, the profile menu — never the sidebar or any
+navigation):
+
+- `/` — redirects to `/login`.
 - `/login`
 - `/campaign-invitations/accept` — manual authenticated-acceptance form, and
   (Phase 13E checkpoints 8a-8d) the single-link onboarding landing page:
@@ -210,19 +232,30 @@ Public routes:
   atomically consumes the token, and a final `404` ends in the same generic
   state.
 
-Authenticated campaign selection:
+Authenticated global routes (`AuthenticatedAppLayout`: the single session
+gate for every route below, with the persistent sidebar, a header holding only
+branding and the profile menu — see `src/layouts/AuthenticatedAppLayout.tsx`):
 
-- `/campaigns`
-
-Authenticated, non-campaign-scoped routes (Phase 13E checkpoints 9-11b):
-
-- `/admin/accounts` — platform-account administration, gated on
-  `SessionBootstrap.is_platform_administrator` (never a campaign-scoped
-  `access.manage` grant).
+- `/home` — the landing resolver (`LandingRedirect`): renders nothing and
+  replaces itself with `/app/{startup_campaign_id}/home` or `/campaigns`. Still
+  the stable post-login default, brand link, and bookmark target.
+- `/settings` — Appearance (theme) and Campaign startup preferences.
+- `/campaigns` — the full campaign browser; marks the campaign that opens at
+  sign-in and the last visited one, and owns the zero-campaign empty state with
+  the accept-invitation link.
 - `/account` — self-service password change and own-session management, for
   any authenticated account.
+- `/platform/accounts` — platform-account administration, gated on
+  `SessionBootstrap.is_platform_administrator` (never a campaign-scoped
+  `access.manage` grant). A non-administrator sees the same not-found page
+  as an unknown route and triggers no account-list request.
+- `/admin/accounts` — kept as a redirect to `/platform/accounts` for
+  existing bookmarks; the backend endpoint itself is still
+  `/api/admin/accounts*`.
 
-Authenticated campaign routes:
+Authenticated campaign routes (nested under `/app/:campaignId`, gated by the
+same global session boundary plus `CampaignLayout`'s own authorized-campaign
+lookup):
 
 - `/app/:campaignId/home`
 - `/app/:campaignId/world`
@@ -237,6 +270,10 @@ Authenticated campaign routes:
 - `/app/:campaignId/ask` (placeholder — disabled pending Phase 12)
 - `/app/:campaignId/access` — live campaign access-management surface
   (13E-A/13E-B; see [Access management (13E)](#access-management-13e) below)
+- `/app/:campaignId/access/invitations` — the same Access section's
+  invitation-management tab (issuing, listing, and revoking pending
+  campaign invitations), its own route so a direct reload works and
+  neither tab fetches another tab's data
 - `/app/:campaignId/access/audit` — the same Access section's audit-history
   tab, its own route so a direct reload works and neither tab fetches the
   other's data
@@ -259,16 +296,21 @@ responsible for authorizing every resource request.
 - `src/components`: Interface components, including the `*Boundary`
   components (e.g. `WorldEntitiesBoundary`, `KnowledgeItemsBoundary`,
   `CampaignQuestsBoundary`) that turn a hook's fetch state into consistent
-  loading/empty/denied/error/refreshing UI for each screen.
+  loading/empty/denied/error/refreshing UI for each screen, plus the shared
+  header chrome (`PortalHeader`, `PortalFooter`, `ProfileMenu`, `ProfileAvatar`) and the persistent `PortalSidebar` with its
+  `CampaignHomeNavGroup` and `AccessNavGroup`.
 - `src/context`: Session and character-perspective contexts/providers.
 - `src/fixtures`: Test-only fixture data; never used outside tests.
 - `src/hooks`: Data-fetching hooks backing each boundary, plus session,
-  login, and perspective behavior.
-- `src/layouts`: Authentication/session boundaries and campaign layouts.
-- `src/pages`: Route-level screens (Home, World, Characters, Quests,
-  Sessions, Knowledge, Access, invitation acceptance/onboarding, Login,
-  admin accounts, self-service account, account activation, password
-  reset) and placeholders.
+  login, logout, and perspective behavior.
+- `src/layouts`: `PublicLayout` and `AuthenticatedAppLayout` (the shared
+  header/footer shells and the single authenticated-session gate), plus
+  `CampaignSessionBoundary`/`CampaignLayout`.
+- `src/pages`: Route-level screens (the `/home` `LandingRedirect`, Settings, World,
+  Characters, Quests, Sessions, Knowledge, Access, invitation
+  acceptance/onboarding, Login, admin accounts, self-service account,
+  account activation, password reset) and placeholders, including the
+  shared `NotFoundPage`.
 - `src/themes`: Light/dark theme context, provider, and selector.
 - `src/test`: Shared test initialization.
 - `src/types`: TypeScript representations of backend contracts.
@@ -296,6 +338,20 @@ grant. A null selection does not grant campaign-wide access.
 Foundry device authentication remains a separate boundary. The portal does
 not store Foundry device credentials.
 
+A successful login lands on `/home` (the landing resolver), or on a
+continuation destination carried in router history state (set only when a
+protected route redirected here) once that destination passes a same-origin,
+allowlisted-path check (`src/utils/postLoginDestination.ts`, which accepts
+`/home`, `/campaigns`, `/settings`, `/account`, `/platform/accounts`, and
+`/app/:campaignId/...`). Logging out calls `POST /auth/logout`,
+reloads session state, and then explicitly navigates to `/login` with no
+continuation state in the same synchronous step, so a later sign-in by a
+different person never lands back on the signed-out person's page. Revoking
+the current browser session from `/account` is the one case where the same
+person is returned to `/account` after signing back in, because that
+redirect goes through the ordinary protected-route continuation path rather
+than the explicit logout navigation.
+
 Backend endpoint availability does not mean that every account-management
 or authentication workflow has a completed portal screen.
 
@@ -317,6 +373,108 @@ activate their own local account, after which the invitation is accepted
 for that authenticated account. Acceptance creates or reactivates a
 campaign membership only; it does not assign roles or restore historical
 relationships, grants, or access-group membership.
+
+## Navigation and settings redesign
+
+The authoritative design is `docs/UI_DESIGN.md` §4-§4.7 and §5.2a; this is a
+summary for portal contributors. It is delivered (see verification below).
+
+- **One navigation system.** A persistent sidebar (`nav` "Main", `PortalSidebar`)
+  rendered by `AuthenticatedAppLayout` outside the session boundary on every
+  authenticated route — campaign pages, `/campaigns`, `/settings`, `/account`,
+  `/platform/accounts` — and never on public pages (`/login`, `/activate`,
+  `/reset-password`, `/campaign-invitations/accept`, public not-found). Expanded,
+  collapsed to an icon rail (the single boolean `dnd-ai-sidebar-collapsed` in
+  `localStorage`, so it survives the scope-keyed remount), or an accessible
+  drawer below 40rem opened from a header toggle (focus moves in, Tab is
+  trapped, Escape/backdrop/navigation closes it, the header stays above it). A
+  bootstrap refresh shows a busy frame (never stale campaigns); an unauthenticated
+  session removes it.
+- **Sidebar contents.** Campaign Home (a link to the resolved campaign plus a
+  separate "Choose campaign" disclosure listing only bootstrap-authorized
+  campaigns and **View all campaigns** → `/campaigns`), World, Characters,
+  Quests, Sessions, Knowledge, Ask (server feature manifest), and Access
+  (`access.manage`) → Access Management / Invitations / Audit History, with
+  the collapse control last. Campaign-specific links target the resolved
+  campaign (`resolveNavigationCampaign`: route campaign, else last visited, else
+  startup, each only if in the bootstrap); with none, no campaign link renders.
+- **Header.** Identity/brand (links to `/home`), the narrow-screen drawer
+  control, and the profile menu only.
+- **Profile menu.** Settings, Account & Security (`/account`), Platform
+  Accounts (platform administrators only), Log out.
+- **`/settings`.** Appearance (the existing theme selector; still
+  `localStorage`-backed so it applies before sign-in) and Campaign startup
+  (**Resume my last visited campaign** or **Always open this campaign**: an
+  authorized campaign, explicit Save), persisted server-side per user in
+  `security.user_portal_preferences`.
+- **`/home`.** No longer a dashboard: `LandingRedirect` replaces itself with
+  `/app/{startup_campaign_id}/home`, or `/campaigns` when the bootstrap
+  resolves no startup campaign (server precedence: one campaign → it; valid
+  fixed preference; valid last visited; else the list — never the first
+  campaign by default). Invitation and protected-route continuations still take
+  precedence on the login page.
+- **Last visited.** After `CampaignLayout` confirms a campaign against the
+  fresh bootstrap, `useRecordLastVisitedCampaign` sends
+  `PUT /api/auth/preferences/last-visited-campaign` (CSRF-protected, aborted on
+  change/unmount, failures silent, no reload). `GET /auth/session` never writes.
+- **Bootstrap.** `selected_campaign_id` was replaced by `startup_campaign_id`
+  and `campaign_preferences` (`startup_mode`, `preferred_campaign_id`,
+  `last_visited_campaign_id`), each ID returned only while authorized.
+
+Accepted limitations: last-visited writes are last-writer-wins across tabs; the
+theme is per browser; `/home` costs one extra bootstrap request before landing;
+the sidebar is a busy frame (not the campaign list) during each campaign-scope
+refresh; focus after route changes follows the existing documented gap D-4.
+
+## Navigation and settings redesign verification
+
+Automated (final run on this branch): `npm test` 1,504 tests in 229 files,
+`npm run lint`, and `npm run build` passed; backend `ruff format --check`,
+`ruff check`, `mypy src`, and `alembic check` were clean; `tests/unit` passed
+(570) except `test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`,
+which also fails on a clean tree because the local `.env` sets an extra
+allowed origin; `tests/database` + `tests/scenario` passed (4,112), after
+fixing a leak in the new API test that left committed active campaigns in the
+shared database. CI on this branch is still to be recorded.
+
+Live validation (48 checks, driven by headless Chrome against a real FastAPI
+process, PostgreSQL 18 migrated to revision 109, and the Vite dev server, using
+a throwaway database seeded with an administrator with three campaigns, a
+one-campaign player, a zero-campaign player, and a GM with `access.manage` in
+one campaign and plain membership in another):
+
+1. Login with three campaigns and no preferences lands on `/campaigns`; opening
+   a campaign, logging out and in resumes it; **Always open this campaign** then
+   lands on the chosen campaign; ending that membership makes the next landing
+   ignore it and never name it.
+2. One-campaign player lands on its Campaign Home; zero-campaign player lands on
+   the `/campaigns` empty state with the invitation link and a sidebar showing
+   only Choose a campaign / View all campaigns; non-administrators get the
+   not-found page at `/platform/accounts` and no Platform Accounts menu entry.
+3. The sidebar is present on `/campaigns`, `/settings`, `/account`,
+   `/platform/accounts`, and campaign pages with campaign links on the resolved
+   campaign, and absent on `/login`, `/nope`, `/campaign-invitations/accept`.
+4. Signed-out deep link returns to its original destination after login; `/home`
+   is replaced and Back never returns to it; the theme chosen on Settings
+   persists on `/login` after reload; the last-visited PUT carries
+   `X-CSRF-Token`.
+5. Campaign switching from the sidebar lands on the target Home with the
+   sidebar still present; Back/Forward across two campaigns each restore the
+   right route with only that campaign's context; the collapsed rail persists
+   across a campaign switch and reload.
+6. Access group lists three children in the GM campaign and is absent in the
+   player campaign; Ask is a disabled non-link.
+7. Widths 2560/1280/1024/768/390/320: no horizontal scroll; inline sidebar above
+   40rem, drawer below. The drawer opens with focus inside, traps Tab, closes on
+   Escape (focus back on the toggle), the backdrop, the header toggle, and
+   navigation. This run found and fixed a CSS cascade defect that left the
+   closed drawer visible at narrow widths.
+
+Not performed here: screen reader (NVDA) announcements of the Main landmark,
+disclosure states, and Settings status/alert regions; a per-theme keyboard
+focus-visibility review (light, dark, system); and the single-link invitation
+flow against the live stack (covered only by the automated integration suite,
+which asserts the Resume invitation / Continue choice precedes landing).
 
 ## Phase 13E verification
 
@@ -397,8 +555,6 @@ never renders them as visible text, only as React keys.
   removing individual group members;
 - adding and revoking a group-owned resource grant of any target kind and
   effect, identically to a direct grant;
-- issuing, listing, and revoking pending campaign invitations, with a
-  copyable single-link invitation (see below) alongside manual-entry;
 - explaining a selected member's effective access (`EffectiveAccessPanel`,
   one disclosure per member row: every capability held, with its role/
   relationship/grant sources, plus any active `deny`); and
@@ -414,13 +570,26 @@ never renders them as visible text, only as React keys.
   used exists. Every placement independently checks the same
   `access.manage` capability before fetching the campaign's member list.
 
+Issuing, listing, and revoking pending campaign invitations, with a
+copyable single-link invitation (see below) alongside manual-entry, is
+likewise its own sibling route — `/app/:campaignId/access/invitations` —
+rather than a section embedded in the management screen above. It shares
+the same `AccessTabNav` tab strip and the same `access.manage` gate as
+Access Management and Audit history; opening it never fetches the
+access-overview the management screen owns, and reloading the invitations
+URL directly works the same as navigating to it from either the tab strip
+or the sidebar's Access navigation group (which nests **Access
+Management** and **Invitations** under a single Access disclosure, the
+same pattern the profile menu uses for Platform Accounts — see
+`docs/UI_DESIGN.md` §4.3/§4.6).
+
 Reading campaign audit history, filterable by category and by actor
 (the actor list sourced from its own bounded, identically-authorized
 facet, `GET .../audit-history/actors` — never the complete access-overview
-response, and never a new account-directory query), is a sibling route
-rather than a panel on this same screen — `/app/:campaignId/access/audit`,
-with its own tab (`AccessTabNav`) shared with the management route above.
-Opening one tab never fetches the other's data, and reloading the audit
+response, and never a new account-directory query), is a third sibling
+route rather than a panel on this same screen — `/app/:campaignId/access/audit`,
+with its own tab (`AccessTabNav`) shared with the other two routes above.
+Opening one tab never fetches another tab's data, and reloading the audit
 URL directly works the same as navigating to it.
 
 The GM's copyable single-link invitation
@@ -432,8 +601,9 @@ invitation-authorized **Create account**, and accepts the invitation
 automatically after authentication. The accepted membership still receives
 no role or other access automatically — a GM configures that separately.
 
-Platform-account administration (`/admin/accounts`: create, issue a
-password-reset link, disable, reactivate, revoke all sessions) and
+Platform-account administration (`/platform/accounts`, with `/admin/accounts`
+kept as a redirect for existing bookmarks: create, issue a password-reset
+link, disable, reactivate, revoke all sessions) and
 self-service account management (`/account`: change own password, list and
 revoke own browser sessions) are separate, non-campaign-scoped pages — see
 [Routes](#routes) above.

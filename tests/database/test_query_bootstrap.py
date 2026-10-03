@@ -93,13 +93,16 @@ def _make_role_with_capabilities(
 # ---------------------------------------------------------------------------
 
 
-def test_no_campaign_membership_returns_empty_campaigns_and_null_selection(
+def test_no_campaign_membership_returns_empty_campaigns_and_null_startup(
     db_connection: Connection, user_id: uuid.UUID
 ) -> None:
     bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
     assert bootstrap.user_id == user_id
     assert bootstrap.campaigns == ()
-    assert bootstrap.selected_campaign_id is None
+    assert bootstrap.startup_campaign_id is None
+    assert bootstrap.campaign_preferences.startup_mode == "resume_last_visited"
+    assert bootstrap.campaign_preferences.preferred_campaign_id is None
+    assert bootstrap.campaign_preferences.last_visited_campaign_id is None
 
 
 def test_display_name_is_returned(db_connection: Connection) -> None:
@@ -228,7 +231,9 @@ def test_multiple_campaigns_are_returned_in_deterministic_order(
     bootstrap = get_session_bootstrap(db_connection, user_id=user_id)
 
     assert [c.campaign_name for c in bootstrap.campaigns] == ["A Campaign", "B Campaign"]
-    assert bootstrap.selected_campaign_id == campaign_a
+    # No valid preference: never the first alphabetical campaign.
+    assert bootstrap.startup_campaign_id is None
+    assert campaign_a in [c.campaign_id for c in bootstrap.campaigns]
 
 
 def test_ended_membership_is_excluded(
