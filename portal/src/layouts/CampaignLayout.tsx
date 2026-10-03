@@ -1,10 +1,4 @@
-import {
-  Link,
-  Outlet,
-  useNavigate,
-  useParams,
-} from "react-router"
-import { AppNavigation } from "../components/AppNavigation"
+import { Link, Outlet, useParams } from "react-router"
 import { CampaignContextPanel } from "../components/CampaignContextPanel"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
@@ -17,7 +11,6 @@ interface CampaignLayoutProps {
 
 export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   const { campaignId } = useParams<{ campaignId: string }>()
-  const navigate = useNavigate()
   const { getSelectedCharacterId, selectCharacter } = usePerspective()
 
   const campaign =
@@ -44,58 +37,21 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   }
 
   const activeCampaign = campaign
-  const showAccess = activeCampaign.capabilities.includes('access.manage')
   const selectedCharacterId = getSelectedCharacterId(activeCampaign.campaign_id)
 
-  function handleSelectCampaign(nextCampaignId: string): void {
-    if (nextCampaignId === activeCampaign.campaign_id) {
-      return
-    }
-
-    const targetCampaign =
-      bootstrap.campaigns.find(
-        (candidate) =>
-          candidate.campaign_id ===
-          nextCampaignId,
-      )
-
-    if (targetCampaign === undefined) {
-      return
-    }
-
-    selectCharacter(
-      targetCampaign.campaign_id,
-      null,
-    )
-
-    // Switching always enters the target's Campaign Home — section and
-    // detail preservation is removed (UI_DESIGN §4.5 deliberate change).
-    navigate(`/app/${targetCampaign.campaign_id}/home`)
-  }
-
   return (
-    <>
-      <AppNavigation
-        campaignId={activeCampaign.campaign_id}
-        askEnabled={bootstrap.features.ask}
-        showAccess={showAccess}
+    <main className="app-main campaign-workspace">
+      <CampaignContextPanel
+        campaign={activeCampaign}
+        selectedCharacterId={selectedCharacterId}
+        onSelectCharacter={(characterId) =>
+          selectCharacter(activeCampaign.campaign_id, characterId)
+        }
       />
 
-      <main className="app-main campaign-workspace">
-        <CampaignContextPanel
-          campaign={activeCampaign}
-          campaigns={bootstrap.campaigns}
-          selectedCharacterId={selectedCharacterId}
-          onSelectCampaign={handleSelectCampaign}
-          onSelectCharacter={(characterId) =>
-            selectCharacter(activeCampaign.campaign_id, characterId)
-          }
-        />
-
-        <div className="campaign-workspace__content">
-          <Outlet />
-        </div>
-      </main>
-    </>
+      <div className="campaign-workspace__content">
+        <Outlet />
+      </div>
+    </main>
   )
 }

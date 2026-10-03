@@ -41,9 +41,7 @@ function ConnectedPanel({
   return (
     <CampaignContextPanel
       campaign={campaign}
-      campaigns={[campaign]}
       selectedCharacterId={getSelectedCharacterId(campaign.campaign_id)}
-      onSelectCampaign={() => { }}
       onSelectCharacter={(characterId) =>
         selectCharacter(campaign.campaign_id, characterId)
       }

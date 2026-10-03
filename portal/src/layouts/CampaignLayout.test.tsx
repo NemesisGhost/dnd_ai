@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import {
   MemoryRouter,
   Route,
@@ -78,46 +78,12 @@ beforeEach(() => {
   })
 })
 
-describe("CampaignLayout campaign switching", () => {
-  it("enters the target Campaign Home from a detail route", () => {
-    renderAt("/app/mundivita/quests/quest-7")
-
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "secundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/secundivita/home",
-    )
-    expect(selectCharacter).toHaveBeenCalledWith("secundivita", null)
-  })
-
-  it("enters the target Campaign Home from a section route", () => {
+describe("CampaignLayout", () => {
+  it("renders no navigation of its own (the shell owns the sidebar)", () => {
     renderAt("/app/mundivita/home")
 
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "secundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/secundivita/home",
-    )
-  })
-
-  it("does not navigate when the active campaign is re-selected", () => {
-    renderAt("/app/mundivita/quests/quest-7")
-
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "mundivita" } },
-    )
-
-    expect(screen.getByTestId("location")).toHaveTextContent(
-      "/app/mundivita/quests/quest-7",
-    )
-    expect(selectCharacter).not.toHaveBeenCalled()
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument()
+    expect(screen.getAllByRole("main")).toHaveLength(1)
   })
 
   it("renders the workspace with the panel before the routed content", () => {
@@ -130,33 +96,6 @@ describe("CampaignLayout campaign switching", () => {
     expect(
       within(main).getByRole("heading", { name: "Campaign home" }),
     ).toBeInTheDocument()
-  })
-
-  it("ignores a campaign outside the authorized bootstrap list", () => {
-    renderAt(
-      "/app/mundivita/quests/quest-7",
-    )
-
-    fireEvent.change(
-      screen.getByRole("combobox", {
-        name: "Campaign",
-      }),
-      {
-        target: {
-          value: "campaign-unavailable",
-        },
-      },
-    )
-
-    expect(
-      screen.getByTestId("location"),
-    ).toHaveTextContent(
-      "/app/mundivita/quests/quest-7",
-    )
-
-    expect(
-      selectCharacter,
-    ).not.toHaveBeenCalled()
   })
 
   it("offers a non-disclosing Browse campaigns link for an unknown campaign", () => {

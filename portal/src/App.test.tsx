@@ -521,7 +521,7 @@ describe("portal routing", () => {
 
     expect(
       screen.queryByRole("navigation", {
-        name: "Campaign",
+        name: "Main",
       }),
     ).not.toBeInTheDocument()
   })
@@ -531,7 +531,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("navigation", {
-        name: "Campaign",
+        name: "Main",
       }),
     ).toBeInTheDocument()
 
@@ -563,18 +563,10 @@ describe("portal routing", () => {
     ).toHaveAttribute("aria-expanded", "false")
 
     expect(
-      within(
-        screen.getByRole("navigation", { name: "Campaign" }),
-      ).queryByRole("link", {
-        name: "Change campaign",
-      }),
-    ).not.toBeInTheDocument()
-
-    expect(
-      within(screen.getByRole("main")).getByRole("combobox", {
+      within(screen.getByRole("main")).queryByRole("combobox", {
         name: "Campaign",
       }),
-    ).toHaveValue("mundivita")
+    ).not.toBeInTheDocument()
 
     expect(
       screen.getByRole("heading", {
@@ -584,15 +576,18 @@ describe("portal routing", () => {
     ).toBeInTheDocument()
   })
 
-  it("offers a Browse all campaigns link in the context panel and a path back from a campaign route", () => {
+  it("offers View all campaigns beneath Campaign Home as a path back from a campaign route", () => {
     renderAppAt("/app/mundivita/quests")
 
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose campaign" }),
+    )
     expect(
-      screen.getByRole("link", { name: "Browse all campaigns" }),
+      screen.getByRole("link", { name: "View all campaigns" }),
     ).toHaveAttribute("href", "/campaigns")
 
     fireEvent.click(
-      screen.getByRole("link", { name: "Campaigns" }),
+      screen.getByRole("link", { name: "View all campaigns" }),
     )
 
     expect(
@@ -621,11 +616,11 @@ describe("portal routing", () => {
       }),
     ).toBeInTheDocument()
 
+    // The persistent sidebar stays, but never builds a link from the
+    // unauthorized route ID.
     expect(
-      screen.queryByRole("navigation", {
-        name: "Campaign",
-      }),
-    ).not.toBeInTheDocument()
+      screen.getByRole("navigation", { name: "Main" }).innerHTML,
+    ).not.toContain("not-a-real-campaign")
   })
 
   it("routes Characters to the selected character workspace", () => {

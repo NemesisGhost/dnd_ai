@@ -55,9 +55,7 @@ function renderPanel(
 ) {
   const props: ComponentProps<typeof CampaignContextPanel> = {
     campaign: baseCampaign,
-    campaigns: [baseCampaign, otherCampaign],
     selectedCharacterId: null,
-    onSelectCampaign: vi.fn(),
     onSelectCharacter: vi.fn(),
     ...overrides,
   }
@@ -127,35 +125,18 @@ describe("CampaignContextPanel", () => {
     ).toHaveTextContent("No timeline selected")
   })
 
-  it("lists every campaign and reports a change", () => {
-    const onSelectCampaign = vi.fn()
-    renderPanel({ onSelectCampaign })
+  it("shows the campaign as a read-only value with no campaign switcher", () => {
+    renderPanel()
 
-    const campaignSelect = screen.getByRole("combobox", {
-      name: "Campaign",
-    })
-    expect(campaignSelect).toHaveValue("campaign-secret-id")
+    const campaign = screen
+      .getByRole("heading", { name: "Campaign" })
+      .closest("section") as HTMLElement
+
+    expect(within(campaign).getByText("Mundivita")).toBeInTheDocument()
     expect(
-      within(campaignSelect).getAllByRole("option"),
-    ).toHaveLength(2)
-
-    fireEvent.change(campaignSelect, {
-      target: { value: "campaign-other-id" },
-    })
-
-    expect(onSelectCampaign).toHaveBeenCalledWith("campaign-other-id")
-  })
-
-  it("does not report a change when the current campaign is re-selected", () => {
-    const onSelectCampaign = vi.fn()
-    renderPanel({ onSelectCampaign })
-
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Campaign" }),
-      { target: { value: "campaign-secret-id" } },
-    )
-
-    expect(onSelectCampaign).not.toHaveBeenCalled()
+      screen.queryByRole("combobox", { name: "Campaign" }),
+    ).not.toBeInTheDocument()
+    expect(within(campaign).getByText("campaign_owner")).toBeInTheDocument()
   })
 
   it("reflects the selected character and reports perspective changes", () => {
@@ -231,12 +212,10 @@ describe("CampaignContextPanel", () => {
     expect(summary.closest("details")).toHaveAttribute("open")
   })
 
-  it("has a Browse all campaigns link to /campaigns and never shows raw ids", () => {
+  it("has no campaign browse link (the sidebar owns it) and never shows raw ids", () => {
     renderPanel({ selectedCharacterId: "character-a" })
 
-    expect(
-      screen.getByRole("link", { name: "Browse all campaigns" }),
-    ).toHaveAttribute("href", "/campaigns")
+    expect(screen.queryByRole("link")).not.toBeInTheDocument()
     expect(
       screen.queryByText("campaign-secret-id"),
     ).not.toBeInTheDocument()

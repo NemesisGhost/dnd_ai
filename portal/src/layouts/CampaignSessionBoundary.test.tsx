@@ -70,7 +70,7 @@ describe("CampaignSessionBoundary", () => {
     renderAt("/app/mundivita/home")
 
     expect(
-      screen.getByRole("navigation", { name: "Campaign" }),
+      screen.getByRole("navigation", { name: "Main" }),
     ).toBeInTheDocument()
 
     const main = screen.getByRole("main")
@@ -95,8 +95,8 @@ describe("CampaignSessionBoundary", () => {
     ).toHaveValue("character-ixamarra")
 
     expect(
-      within(main).getByRole("combobox", { name: "Campaign" }),
-    ).toHaveValue("mundivita")
+      within(main).queryByRole("combobox", { name: "Campaign" }),
+    ).not.toBeInTheDocument()
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {
@@ -107,7 +107,7 @@ describe("CampaignSessionBoundary", () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByRole("navigation", { name: "Campaign" }),
-    ).not.toBeInTheDocument()
+      screen.getByRole("navigation", { name: "Main" }).innerHTML,
+    ).not.toContain("not-a-real-campaign")
   })
 })
