@@ -676,6 +676,43 @@ a.app-header__title:focus-visible {
   display: none;
 }
 
+/* Collapsed rail: the Access children have no icon, so their
+   clipped labels would leave two blank links. Open the submenu as a
+   bounded flyout beside the rail with the labels shown; the group is the
+   positioning context so the flyout lines up with the Access button. */
+.app-navigation--collapsed .app-navigation__access-group {
+  position: relative;
+}
+
+.app-navigation--collapsed .app-navigation__submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 0.25rem);
+  z-index: 40;
+  width: max-content;
+  min-width: 12rem;
+  max-width: min(18rem, 60vw);
+  padding: 0.25rem;
+  background-color: var(--color-chrome-secondary);
+  border: 1px solid var(--color-chrome-muted);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.25rem 0.75rem var(--color-overlay);
+}
+
+.app-navigation--collapsed .app-navigation__submenu[hidden] {
+  display: none;
+}
+
+.app-navigation--collapsed .app-navigation__sublink .app-navigation__label {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
 .app-navigation__mobile-toggle,
 .app-navigation__backdrop {
   display: none;
