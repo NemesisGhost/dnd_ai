@@ -64,7 +64,7 @@ describe("ProfileMenu basics", () => {
     })
 
     expect(
-      screen.queryByRole("link", { name: "Your Account" }),
+      screen.queryByRole("link", { name: "Settings" }),
     ).not.toBeInTheDocument()
 
     fireEvent.click(button)
@@ -72,12 +72,19 @@ describe("ProfileMenu basics", () => {
     expect(button).toHaveAttribute("aria-expanded", "true")
     expect(button).toHaveAttribute(
       "aria-controls",
-      screen.getByRole("link", { name: "Your Account" })
+      screen.getByRole("link", { name: "Settings" })
         .closest("[id]")?.id,
     )
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/settings",
+    )
     expect(
-      screen.getByRole("link", { name: "Your Account" }),
-    ).toBeInTheDocument()
+      screen.getByRole("link", { name: "Account & Security" }),
+    ).toHaveAttribute("href", "/account")
+    expect(
+      screen.queryByRole("link", { name: "Your Account" }),
+    ).not.toBeInTheDocument()
   })
 
   it("never uses ARIA menu semantics", () => {
@@ -96,7 +103,7 @@ describe("ProfileMenu basics", () => {
 })
 
 describe("ProfileMenu focus and keyboard", () => {
-  it("focuses Your Account when opened", async () => {
+  it("focuses Settings when opened", async () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload: vi.fn(),
@@ -108,7 +115,7 @@ describe("ProfileMenu focus and keyboard", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("link", { name: "Your Account" }),
+        screen.getByRole("link", { name: "Settings" }),
       ).toHaveFocus()
     })
   })
@@ -124,12 +131,12 @@ describe("ProfileMenu focus and keyboard", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("link", { name: "Your Account" }),
+        screen.getByRole("link", { name: "Settings" }),
       ).toHaveFocus()
     })
 
     fireEvent.keyDown(
-      screen.getByRole("link", { name: "Your Account" }),
+      screen.getByRole("link", { name: "Settings" }),
       { key: "Escape" },
     )
 
@@ -167,7 +174,7 @@ describe("ProfileMenu focus and keyboard", () => {
       screen.getByRole("button", { name: /account menu/i }),
     )
 
-    const yourAccount = screen.getByRole("link", { name: "Your Account" })
+    const yourAccount = screen.getByRole("link", { name: "Settings" })
     const outside = screen.getByRole("button", { name: "Outside control" })
 
     fireEvent.focusOut(yourAccount, { relatedTarget: outside })
@@ -177,7 +184,7 @@ describe("ProfileMenu focus and keyboard", () => {
     ).toHaveAttribute("aria-expanded", "false")
   })
 
-  it("closes and navigates when Your Account is activated", () => {
+  it("closes and navigates when Settings is activated", () => {
     renderMenu({
       state: { status: "authenticated", bootstrap: sessionBootstrapFixture },
       reload: vi.fn(),
@@ -187,7 +194,7 @@ describe("ProfileMenu focus and keyboard", () => {
       screen.getByRole("button", { name: /account menu/i }),
     )
 
-    fireEvent.click(screen.getByRole("link", { name: "Your Account" }))
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }))
 
     expect(
       screen.getByRole("button", { name: /account menu/i }),

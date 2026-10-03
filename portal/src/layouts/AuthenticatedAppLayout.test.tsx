@@ -194,6 +194,9 @@ describe("AuthenticatedAppLayout", () => {
 
     expect(screen.getAllByRole("navigation", { name: "Main" })).toHaveLength(1)
     expect(
+      screen.queryByRole("navigation", { name: "Global" }),
+    ).not.toBeInTheDocument()
+    expect(
       screen.getByRole("button", { name: "Open navigation" }),
     ).toHaveAttribute("aria-controls", "main-navigation")
   })

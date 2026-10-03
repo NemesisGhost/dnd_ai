@@ -435,7 +435,7 @@ describe("portal routing", () => {
     ["/platform"],
     ["/home/extra"],
   ])(
-    "shows the not-found page with global navigation for the unknown route %s when authenticated",
+    "shows the not-found page without authenticated navigation for the unknown route %s",
     (path) => {
       renderAppAt(path)
 
@@ -444,7 +444,12 @@ describe("portal routing", () => {
       ).toBeInTheDocument()
 
       expect(
-        screen.getByRole("navigation", { name: "Global" }),
+        screen.queryByRole("navigation"),
+      ).not.toBeInTheDocument()
+
+      // The profile menu still identifies an authenticated visitor.
+      expect(
+        screen.getByRole("button", { name: /account menu/i }),
       ).toBeInTheDocument()
     },
   )
@@ -821,22 +826,21 @@ describe("portal routing", () => {
     )
   })
 
-  it("provides global appearance selection in the header", () => {
-    renderAppAt("/home")
+  it("has no theme selector or global navigation in the header", () => {
+    renderAppAt("/campaigns")
 
     const header = screen.getByRole("banner")
 
     expect(
-      within(header).getByRole("combobox", {
-        name: "Appearance",
-      }),
-    ).toHaveValue("system")
-
+      within(header).queryByRole("combobox", { name: "Appearance" }),
+    ).not.toBeInTheDocument()
+    expect(within(header).queryByRole("navigation")).not.toBeInTheDocument()
     expect(
-      within(header).getByText(
-        "Active theme: Hearthstone",
-      ),
-    ).toBeInTheDocument()
+      within(header).queryByRole("link", { name: "Home" }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(header).queryByRole("link", { name: "Campaigns" }),
+    ).not.toBeInTheDocument()
   })
 
   it("shows an accessible logout control in the authenticated chrome", () => {

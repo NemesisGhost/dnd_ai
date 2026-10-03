@@ -21,11 +21,7 @@ export function AuthenticatedAppLayout() {
 
   return (
     <div className="authenticated-shell">
-      <PortalHeader
-        navigation="always"
-        drawer={drawer}
-        drawerToggleRef={toggleRef}
-      />
+      <PortalHeader drawer={drawer} drawerToggleRef={toggleRef} />
 
       <div className="authenticated-shell__body">
         <PortalSidebar drawer={drawer} />

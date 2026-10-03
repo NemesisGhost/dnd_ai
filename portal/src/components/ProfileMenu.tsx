@@ -11,7 +11,7 @@ import { useLogout } from "../hooks/useLogout"
 import { deriveProfileAvatar } from "../utils/profileIdentity"
 import { ProfileAvatar } from "./ProfileAvatar"
 
-// The profile button and its popup (UI_DESIGN §4.3-4.4). A disclosure
+// The profile button and its popup (UI_DESIGN §4.3). A disclosure
 // (button + aria-expanded + aria-controls), deliberately not an ARIA
 // menu — the identity summary and Administration label are plain text,
 // which role="menu" would not allow as children, and Links/the Log out
@@ -81,7 +81,7 @@ export function ProfileMenu() {
     function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
         if (event.key === "Escape" && open) {
             // Handled here, not globally, so it cannot fight
-            // AppNavigation's own document-level Escape handler.
+            // the sidebar drawer's own document-level Escape handler.
             event.stopPropagation()
             closeAndFocusButton()
         }
@@ -158,10 +158,15 @@ export function ProfileMenu() {
                     <li>
                         <Link
                             ref={firstItemRef}
-                            to="/account"
+                            to="/settings"
                             onClick={handleItemActivated}
                         >
-                            Your Account
+                            Settings
+                        </Link>
+                    </li>
+                    <li>
+                        <Link to="/account" onClick={handleItemActivated}>
+                            Account &amp; Security
                         </Link>
                     </li>
                 </ul>
