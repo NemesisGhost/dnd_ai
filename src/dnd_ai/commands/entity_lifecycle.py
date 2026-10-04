@@ -40,14 +40,12 @@ from typing import Literal
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.domain.authoring import (
-    CampaignNotAuthorizedError,
     EntityReferencedError,
+    ReferenceNotPublishedError,
     StaleWriteError,
     SubtypeIncompleteError,
     SupersessionTargetInvalidError,
-    WorldNotAuthorizedError,
     normalize_reason,
 )
 from dnd_ai.domain.entity_lifecycle import (
@@ -66,11 +64,11 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.queries.content_preconditions import publish_blocked_reason, publish_reference_ids
 
-from ._shared import lifecycle_code
+from ._content import EntityNotFoundError as EntityNotFoundError
+from ._content import LockedContent, lock_authoring_scope, lock_entities
 
-_CANON_EDIT = "canon.edit"
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 OWNED_CASCADE: Literal["owned_cascade"] = "owned_cascade"
@@ -165,11 +163,6 @@ _BLOCKING_REFERENCES = tuple(
 )
 
 
-class EntityNotFoundError(DomainAuthorizationError):
-    """No such entity *in this campaign's world* — a nonexistent entity and one
-    belonging to another world are indistinguishable (fixed 404)."""
-
-
 @dataclass(frozen=True)
 class EntityTransitionResult:
     entity_id: uuid.UUID
@@ -186,96 +179,22 @@ class EntityTransitionResult:
     replacement: "EntityTransitionResult | None" = None
 
 
-@dataclass(frozen=True)
-class _LockedEntity:
-    entity_id: uuid.UUID
-    world_id: uuid.UUID
-    entity_type_id: uuid.UUID
-    entity_type_code: str
-    canonical_name: str
-    canon_status: str
-    lifecycle_status: str
-    row_version: int
-
-
-def _entity_type_code(connection: Connection, entity_type_id: uuid.UUID) -> str:
-    code = connection.execute(
-        text("SELECT code FROM core.entity_types WHERE entity_type_id = :t"), {"t": entity_type_id}
-    ).scalar()
-    assert isinstance(code, str)
-    return code
-
-
-def _canon_code(connection: Connection, canon_status_id: uuid.UUID) -> str:
-    code = connection.execute(
-        text("SELECT code FROM core.canon_statuses WHERE canon_status_id = :s"),
-        {"s": canon_status_id},
-    ).scalar()
-    assert isinstance(code, str)
-    return code
-
-
-def _lock_world_for_campaign(connection: Connection, *, campaign_id: uuid.UUID) -> uuid.UUID:
-    """The campaign's world, locked `FOR SHARE` (head of the lock order)."""
-    world_id = connection.execute(
+def _publish_reference_ids(
+    connection: Connection, *, world_id: uuid.UUID, entity_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Records the entity must see published before it can be published, read
+    without a lock so they can be locked in `entity_id` order with the target."""
+    type_code = connection.execute(
         text("""
-            SELECT t.world_id FROM campaign.campaigns c
-            JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
-            WHERE c.campaign_id = :c
+            SELECT et.code FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.entity_id = :e AND e.world_id = :w
         """),
-        {"c": campaign_id},
+        {"e": entity_id, "w": world_id},
     ).scalar()
-    if world_id is None:
-        raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
-    locked = connection.execute(
-        text("SELECT world_id FROM core.worlds WHERE world_id = :w FOR SHARE"), {"w": world_id}
-    ).scalar()
-    if locked is None:
-        raise WorldNotAuthorizedError(f"world {world_id} does not exist")
-    assert isinstance(world_id, uuid.UUID)
-    return world_id
-
-
-def _lock_entities(
-    connection: Connection, *, entity_ids: list[uuid.UUID], world_id: uuid.UUID
-) -> dict[uuid.UUID, _LockedEntity]:
-    """Lock the rows in `entity_id` order (the global order) and return those
-    that exist **in `world_id`**; foreign-world rows are locked but not
-    returned."""
-    rows = connection.execute(
-        text("""
-            SELECT e.entity_id, e.world_id, e.entity_type_id, e.canonical_name,
-                   e.canon_status_id, e.lifecycle_status_id, e.row_version
-            FROM core.entities e
-            WHERE e.entity_id = ANY(CAST(:ids AS uuid[]))
-            ORDER BY e.entity_id
-            FOR UPDATE OF e
-        """),
-        {"ids": entity_ids},
-    ).all()
-    locked: dict[uuid.UUID, _LockedEntity] = {}
-    for row in rows:
-        if row.world_id != world_id:
-            continue
-        locked[row.entity_id] = _LockedEntity(
-            entity_id=row.entity_id,
-            world_id=row.world_id,
-            entity_type_id=row.entity_type_id,
-            entity_type_code=_entity_type_code(connection, row.entity_type_id),
-            canonical_name=str(row.canonical_name),
-            canon_status=_canon_code(connection, row.canon_status_id),
-            lifecycle_status=lifecycle_code(connection, row.lifecycle_status_id),
-            row_version=int(row.row_version),
-        )
-    return locked
-
-
-def _require_canon_edit(
-    connection: Connection, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
-) -> None:
-    access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
-    if access is None or not access.has_capability(_CANON_EDIT):
-        raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
+    if not isinstance(type_code, str):
+        return []
+    return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
 def _prepare(
@@ -285,15 +204,39 @@ def _prepare(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
-) -> tuple[uuid.UUID, _LockedEntity]:
-    world_id = _lock_world_for_campaign(connection, campaign_id=campaign_id)
-    entity = _lock_entities(connection, entity_ids=[entity_id], world_id=world_id).get(entity_id)
+    action: str | None = None,
+) -> tuple[uuid.UUID, LockedContent]:
+    """Lock and authorize (scope, then entities in `entity_id` order: the target
+    `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
+    target to the campaign's world, and compare the version."""
+    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    world_id = scope.world_id
+    reference_ids = (
+        _publish_reference_ids(connection, world_id=world_id, entity_id=entity_id)
+        if action == PUBLISH
+        else []
+    )
+    locked = lock_entities(
+        connection, world_id=world_id, update_ids=[entity_id], share_ids=reference_ids
+    )
+    entity = locked.get(entity_id)
     if entity is None:
         raise EntityNotFoundError(f"entity {entity_id} is not in campaign {campaign_id}'s world")
-    _require_canon_edit(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     require_lifecycle_eligible(entity.entity_type_code)
     if entity.row_version != expected_row_version:
         raise StaleWriteError(f"entity {entity_id} is at {entity.row_version}")
+    if action == PUBLISH:
+        # The target is locked, so its references are now stable; lock any the
+        # unlocked read missed (rare: the entity was edited in between).
+        missing = [
+            r
+            for r in publish_reference_ids(
+                connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+            )
+            if r not in locked
+        ]
+        if missing:
+            lock_entities(connection, world_id=world_id, share_ids=missing)
     return world_id, entity
 
 
@@ -353,7 +296,7 @@ def _has_blocking_references(connection: Connection, *, entity_id: uuid.UUID) ->
 
 
 def _result(
-    entity: _LockedEntity,
+    entity: LockedContent,
     *,
     canon_status: str,
     lifecycle_status: str,
@@ -404,11 +347,19 @@ def _canon_transition(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=action,
     )
     require_transition(action, entity.canon_status, entity.lifecycle_status)
     target = target_canon_status(action, entity.canon_status)
     assert target is not None
     if action == PUBLISH:
+        if (
+            publish_blocked_reason(
+                connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+            )
+            is not None
+        ):
+            raise ReferenceNotPublishedError(f"entity {entity_id} refers to an unpublished record")
         _require_subtype_complete(
             connection, entity_id=entity_id, entity_type_id=entity.entity_type_id
         )
@@ -536,13 +487,15 @@ def supersede_entity(
     Nonexistent, other-world, wrong-type, and wrong-status replacements are the
     same `SupersessionTargetInvalidError`. References to the old entity keep
     resolving: nothing is moved, deleted, or rewritten."""
-    world_id = _lock_world_for_campaign(connection, campaign_id=campaign_id)
-    ids = sorted({entity_id, replacement_entity_id})
-    locked = _lock_entities(connection, entity_ids=ids, world_id=world_id)
+    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    locked = lock_entities(
+        connection,
+        world_id=scope.world_id,
+        update_ids=sorted({entity_id, replacement_entity_id}),
+    )
     entity = locked.get(entity_id)
     if entity is None:
         raise EntityNotFoundError(f"entity {entity_id} is not in campaign {campaign_id}'s world")
-    _require_canon_edit(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     require_lifecycle_eligible(entity.entity_type_code)
     if entity.row_version != expected_row_version:
         raise StaleWriteError(f"entity {entity_id} is at {entity.row_version}")

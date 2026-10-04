@@ -38,6 +38,7 @@ from dnd_ai.domain.entity_lifecycle import (
     evaluate_actions,
     is_lifecycle_eligible,
 )
+from dnd_ai.queries.content_preconditions import publish_blocked_reason
 
 REFERENCE_VISIBLE_CANON_STATUSES = ("canon", "superseded", "deprecated")
 
@@ -132,10 +133,14 @@ def get_entity_lifecycle(
     ).one_or_none()
     if row is None:
         return None
+    publish_reason = publish_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=str(row.entity_type_code)
+    )
     available, blocked = evaluate_actions(
         entity_type_code=str(row.entity_type_code),
         canon_status=str(row.canon_status),
         lifecycle_status=str(row.lifecycle_status),
+        extra_blocked={"publish": publish_reason} if publish_reason else None,
     )
     return EntityLifecycleView(
         entity_id=row.entity_id,

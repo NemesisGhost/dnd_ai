@@ -148,6 +148,44 @@ class SupersessionTargetInvalidError(SafeMessageError):
     safe_message = "The replacement is not valid for this record."
 
 
+class ContentNotEditableError(SafeMessageError):
+    """The definition's canon status or lifecycle does not allow editing
+    (`proposed`/`approved` records are under review, `rejected`/`superseded`
+    are closed, archived records are read-only). The specific reason is a
+    server-side detail; the portal gets it from `blocked_actions`."""
+
+    safe_status_code = 409
+    safe_error_code = "content_not_editable"
+    safe_message = "This record cannot be edited in its current state."
+
+
+class ReferenceNotPublishedError(SafeMessageError):
+    """A publish precondition failed: a record this definition refers to (its
+    parent, headquarters, origin, target, or subject) is not yet `canon`."""
+
+    safe_status_code = 409
+    safe_error_code = "reference_not_published"
+    safe_message = "A record this one depends on is not published yet."
+
+
+class ParentLocationInvalidError(SafeMessageError):
+    """The proposed parent location is nonexistent, in another world, not an
+    authorable place category, archived, rejected, or superseded -- all one
+    non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "parent_location_invalid"
+    safe_message = "The selected parent location is not valid."
+
+
+class LocationHierarchyCycleError(SafeMessageError):
+    """Re-parenting would make a location its own ancestor."""
+
+    safe_status_code = 409
+    safe_error_code = "location_hierarchy_cycle"
+    safe_message = "That parent would place the location inside itself."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

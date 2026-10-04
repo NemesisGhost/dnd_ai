@@ -74,6 +74,7 @@ from .invitation_onboarding import router as invitation_onboarding_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
 from .local_auth import router as local_auth_router
+from .location_authoring import router as location_authoring_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
 from .preview import router as preview_router
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(items_router)
     app.include_router(knowledge_router)
     app.include_router(local_auth_router)
+    app.include_router(location_authoring_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)
     app.include_router(preview_router)

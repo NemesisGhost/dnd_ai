@@ -83,6 +83,15 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
                 ),
                 {"w": world_id},
             )
+            for subtype in ("settlements", "buildings"):
+                column = "settlement_id" if subtype == "settlements" else "building_id"
+                cleanup.execute(
+                    text(
+                        f"DELETE FROM world.{subtype} WHERE {column} IN "
+                        "(SELECT entity_id FROM core.entities WHERE world_id = :w)"
+                    ),
+                    {"w": world_id},
+                )
             cleanup.execute(
                 text(
                     "DELETE FROM world.locations WHERE location_id IN "
@@ -91,6 +100,7 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
                 {"w": world_id},
             )
             cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
+            cleanup.execute(text("DELETE FROM core.sources WHERE world_id = :w"), {"w": world_id})
             cleanup.execute(
                 text("DELETE FROM security.world_memberships WHERE world_id = :w"), {"w": world_id}
             )
