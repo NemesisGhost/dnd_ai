@@ -78,6 +78,7 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     religion_invalid: "org-religion",
     species_not_available: "npc-species",
     origin_location_invalid: "npc-origin",
+    objective_target_invalid: "objective-target",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -121,4 +122,9 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
     origin_location_invalid: "The selected origin is not valid. Choose another.",
     character_has_user_relationships:
         "A player or account is linked to this character. Remove those links first.",
+    objective_target_invalid: "The selected objective target is not valid. Choose another.",
+    quest_has_progress:
+        "This quest already has progress recorded, so its structure cannot change. Wording can still be edited.",
+    quest_definition_incomplete:
+        "A quest needs at least one stage with an objective before it can be published.",
 }

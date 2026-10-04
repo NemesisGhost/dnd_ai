@@ -1,4 +1,6 @@
 import { useParams } from "react-router"
+import { questAuthoringPath } from "../api/questAuthoring"
+import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { QuestDetailBoundary } from "../components/QuestDetailBoundary"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { QuestDetailPage } from "./QuestDetailPage"
@@ -38,7 +40,16 @@ export function CampaignQuestDetailPage() {
             characterId={characterId}
         >
             {(quest) => (
-                <QuestDetailPage campaignId={campaignId} quest={quest} />
+                <>
+                    <QuestDetailPage campaignId={campaignId} quest={quest} />
+                    <AuthoringEditLink
+                        campaignId={campaignId}
+                        noun="quest"
+                        viewPath={questAuthoringPath(campaignId, questId)}
+                        editPath={`/app/${encodeURIComponent(campaignId)}/quests/${encodeURIComponent(questId)}/edit`}
+                        detail={quest}
+                    />
+                </>
             )}
         </QuestDetailBoundary>
     )

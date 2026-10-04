@@ -24,6 +24,7 @@ import {
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
 import { CreateNpcPage, EditNpcPage } from "./pages/NpcAuthoringPages"
+import { CreateQuestPage, EditQuestPage } from "./pages/QuestAuthoringPages"
 import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
@@ -265,6 +266,16 @@ function App() {
             <Route
               path="quests"
               element={<CampaignQuestsPage />}
+            />
+
+            <Route
+              path="quests/new"
+              element={<CreateQuestPage />}
+            />
+
+            <Route
+              path="quests/:questId/edit"
+              element={<EditQuestPage />}
             />
 
             <Route

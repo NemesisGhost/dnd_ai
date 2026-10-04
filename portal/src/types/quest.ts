@@ -2,6 +2,11 @@ export interface CampaignQuestListItem {
     quest_id: string
     name: string
     status_code: string | null
+    // Phase 15.1, present for editors: false for an authored definition no party
+    // has started, plus the definition's lifecycle so a draft shows as a draft.
+    tracked?: boolean
+    canon_status?: string | null
+    lifecycle_status?: string | null
 }
 
 export interface QuestObjective {
