@@ -680,3 +680,31 @@ describe("PortalSidebar drawer", () => {
         expect(last).toHaveFocus()
     })
 })
+
+describe("PortalSidebar Worlds link (Phase 14)", () => {
+    it("shows Worlds only when the server-computed global capability includes world.create", () => {
+        renderSidebar("/app/campaign-a/home", {
+            status: "authenticated",
+            bootstrap: makeBootstrap({ global_capabilities: ["world.create"] }),
+        })
+        expect(within(nav()).getByRole("link", { name: "Worlds" })).toHaveAttribute(
+            "href",
+            "/worlds",
+        )
+    })
+
+    it("does not show Worlds without the capability, and never infers it", () => {
+        renderSidebar("/app/campaign-a/home", {
+            status: "authenticated",
+            bootstrap: makeBootstrap({ global_capabilities: [] }),
+        })
+        expect(within(nav()).queryByRole("link", { name: "Worlds" })).not.toBeInTheDocument()
+    })
+
+    it("does not show Worlds when the bootstrap carries no global capabilities", () => {
+        const bootstrap = makeBootstrap()
+        delete bootstrap.global_capabilities
+        renderSidebar("/home", { status: "authenticated", bootstrap })
+        expect(within(nav()).queryByRole("link", { name: "Worlds" })).not.toBeInTheDocument()
+    })
+})

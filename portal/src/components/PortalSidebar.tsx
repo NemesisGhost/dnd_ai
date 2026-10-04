@@ -6,6 +6,7 @@ import {
   BookOpen,
   CalendarDays,
   Globe2,
+  Landmark,
   LayoutList,
   MessageCircleQuestion,
   PanelLeftClose,
@@ -208,6 +209,23 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 onSelectCampaign={selectCampaign}
                 onNavigate={close}
               />
+
+              {bootstrap.global_capabilities?.includes("world.create") && (
+                <li>
+                  <NavLink
+                    className={linkClassName}
+                    to="/worlds"
+                    title={collapsed ? "Worlds" : undefined}
+                    onClick={close}
+                  >
+                    <Landmark
+                      className="portal-sidebar__icon"
+                      aria-hidden="true"
+                    />
+                    <span className="portal-sidebar__label">Worlds</span>
+                  </NavLink>
+                </li>
+              )}
 
               {campaignPath === null || resolvedCampaign === null ? (
                 !collapsed && (

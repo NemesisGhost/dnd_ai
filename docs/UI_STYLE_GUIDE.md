@@ -411,6 +411,18 @@ Future world detail panels may include, when supplied and authorized:
 
 Different categories may omit irrelevant panels. Empty omitted panels must not imply hidden information exists.
 
+## 10a. Authoring forms, dialogs, and badges (Phase 14)
+
+Shared primitives live in `portal/src/components/authoring/` and are styled by `authoring.css` using the existing theme tokens only (`--color-danger`, `--color-warning-*`, `--color-focus`, …).
+
+- **Fields.** Label above the control, optional hint under the label, error under the control as plain words prefixed for screen readers ("Error: …"), never color alone. An invalid control gets a heavier border *and* the text. The character counter is a polite status shown only near the limit.
+- **Buttons.** Save/confirm is the primary (or danger) button; Cancel is the plain button; both are full width below 40rem. A pending Save is disabled, `aria-busy`, and relabelled ("Saving…").
+- **Error summary.** One focusable alert box above the form with a heading and a list of links to the failing fields; it takes focus on each failed submit.
+- **Messages.** Error and warning boxes pair an icon with text; a stale-write warning carries the "Load latest version" action and a read-only copy of the user's unsaved values.
+- **Dialog.** Native `<dialog>` with a backdrop from `--color-overlay`, max width 32rem, focus trap and Escape from the platform, initial focus on Cancel.
+- **Lifecycle badge.** A rounded pill with a decorative icon and a text label (Draft, In review, Approved, Canon, Superseded, Rejected, Archived). The label is the meaning; the icon and tint are decoration.
+- **Visually hidden text** uses the `.visually-hidden` utility (clipped, not `display: none`) so it is still read by assistive technology.
+
 ## 11. Knowledge standard
 
 ### 11.1 Collection cards

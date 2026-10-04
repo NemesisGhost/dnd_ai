@@ -28,6 +28,10 @@ import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
 import { SettingsPage } from "./pages/SettingsPage"
+import { WorldsPage } from "./pages/WorldsPage"
+import { CreateWorldPage } from "./pages/CreateWorldPage"
+import { WorldOverviewPage } from "./pages/WorldOverviewPage"
+import { EditWorldPage } from "./pages/EditWorldPage"
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -109,6 +113,26 @@ function App() {
           <Route
             path="/campaigns"
             element={<CampaignsRoute />}
+          />
+
+          <Route
+            path="/worlds"
+            element={<WorldsPage />}
+          />
+
+          <Route
+            path="/worlds/new"
+            element={<CreateWorldPage />}
+          />
+
+          <Route
+            path="/worlds/:worldId"
+            element={<WorldOverviewPage />}
+          />
+
+          <Route
+            path="/worlds/:worldId/edit"
+            element={<EditWorldPage />}
           />
 
           <Route

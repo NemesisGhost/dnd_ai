@@ -4,6 +4,7 @@ import { PortalHeader } from "../components/PortalHeader"
 import { PortalFooter } from "../components/PortalFooter"
 import { PortalSidebar } from "../components/PortalSidebar"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
+import { AnnouncerProvider } from "../components/authoring/AnnouncerProvider"
 import type { AuthenticatedOutletContext } from "./useAuthenticatedSession"
 
 // The authenticated application shell and the single session gate for
@@ -20,6 +21,7 @@ export function AuthenticatedAppLayout() {
   const { control: drawer, toggleRef } = useNavigationDrawer()
 
   return (
+    <AnnouncerProvider>
     <div className="authenticated-shell">
       <PortalHeader drawer={drawer} drawerToggleRef={toggleRef} />
 
@@ -41,5 +43,6 @@ export function AuthenticatedAppLayout() {
 
       <PortalFooter />
     </div>
+    </AnnouncerProvider>
   )
 }

@@ -65,6 +65,7 @@ Campaign Home  [Choose campaign ▾]   link to the resolved campaign's Home + se
   Authorized Campaign B
   Authorized Campaign C
   View all campaigns                  /campaigns
+Worlds                                global capability world.create (Phase 14)
 World
 Characters
 Quests
@@ -202,6 +203,13 @@ Preserve these authoritative behaviors:
 | `/app/:campaignId/access/invitations` | Invitations, gated by `access.manage` | Delivered |
 | `/app/:campaignId/access/audit` | Audit History, gated by `access.manage` | Delivered |
 | `/app/:campaignId/ask` | Ask, under its existing feature-readiness rules | Placeholder |
+| `/worlds` | Worlds the caller owns (Active/Archived filter); "Create world" gated by the bootstrap's `global_capabilities` | Delivered (Phase 14) |
+| `/worlds/new` | Create a world (rulesets, primary timeline); `?returnTo=/campaigns/new` resumes campaign setup | Delivered (Phase 14) |
+| `/worlds/:worldId` | World overview: details, rulesets, timeline lineage, managed campaigns, server-computed actions | Delivered (Phase 14) |
+| `/worlds/:worldId/edit` | Edit world name and description | Delivered (Phase 14) |
+| `/worlds/:worldId/timelines/new`, `/worlds/:worldId/timelines/:timelineId`, `…/edit`, `…/branch` | Timeline management and branching | Phase 14 (later checkpoint) |
+| `/campaigns/new?worldId&timelineId` | Three-step campaign setup | Phase 14 (later checkpoint) |
+| `/app/:campaignId/settings` | Campaign settings, archive; gated by `access.manage` | Phase 14 (later checkpoint) |
 
 Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, and `knowledge/:knowledgeItemId`. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 
@@ -480,6 +488,28 @@ Observer access is curated. Possible grants include:
 - selected event feed.
 
 Different observer groups may exist for a livestream audience, former players, collaborators, or invited guests. Observer membership does not inherit all player-visible information.
+
+### 5.11 Authoring patterns (Phase 14)
+
+Every authoring surface (worlds, timelines, campaign setup and settings, canon lifecycle) follows one set of patterns, implemented once in `portal/src/components/authoring/` and `portal/src/hooks/useAuthoring*.ts`. None of it is a form library or a state-management framework.
+
+**Server-authoritative.** Capabilities, selectors, available actions, and blocked reasons come from the server (`global_capabilities` in the bootstrap, `available_actions` / `blocked_actions` on read models, `GET /rulesets`, branch-point lists, replacement candidates). The portal never infers an entitlement, never optimistically assumes success, and never trusts a previous lookup for a write: the server re-checks authority at mutation time. A page keys its loaded record by URL, so a record is never shown under another record's route while the next one loads.
+
+**Forms.** Every control has a visible label, an optional hint, and a plain-text error; an invalid control carries `aria-invalid` and `aria-describedby`. Structural limits (required, trimmed length, set membership) are mirrored client-side so errors show before submit; the server never reports a field location, so domain failures reach a field only through a stable error `code` (`ruleset_not_available` → rulesets, `branch_point_invalid` → branch point, `supersession_target_invalid` → replacement). A form has an explicit **Save** and **Cancel**. After a failed submit an **error summary** (one `role="alert"`) takes focus and links each message to its field. Entered values survive every recoverable failure (validation, conflict, denial, network, server) and are never written to browser storage — an expired session loses them, which is an accepted limitation.
+
+**States.** Each page and mutation distinguishes loading, empty, denied (403), unavailable (404 — "does not exist or you cannot access it", never which), invalid (400/422), stale/conflict (409), pending, success, expired session (401 → re-authenticate), network, and server errors, each with safe copy, never raw response text. Retry (network/server) resubmits the same body with the **same Idempotency-Key**, so a lost response replays instead of duplicating; a changed body gets a new key.
+
+**Conflict.** A stale write (409 `stale_write`) explains that someone else changed the record and offers **Load latest version**: the form is replaced with the server's values and the user's previous unsaved values stay visible in a read-only panel (with "Re-apply my changes"), so nothing typed is lost. The old row version is never resubmitted.
+
+**Unsaved changes.** A dirty form holds in-app navigation that changes the path (a data router's blocker) and sets a `beforeunload` prompt; a query-string-only change (the setup wizard moving between steps) is not leaving. The prompt is a confirmation dialog ("Discard unsaved changes?"); a deliberate post-save redirect releases the guard first.
+
+**Confirmation.** Destructive or consequential actions (archive, restore, reactivate, delete draft, supersede) use a native modal `<dialog>`: labelled, described, initial focus on **Cancel**, Escape cancels, focus returns to the invoking control, and the confirm button carries its verb ("Archive world"). A failure renders **inside** the dialog, which closes only on success; an optional reason field is shown when the action takes one (required for restore and delete draft).
+
+**Focus and announcements.** On arrival at a page whose data has loaded, focus moves to its `<h1>`. A success message travels in navigation state and is announced through the shell's single polite live region **after** the destination's authoritative fetch resolves, so it survives the refetch that proves the write. After a write the destination refetches rather than reusing the pre-write record.
+
+**Identifiers.** Raw UUIDs are never rendered; records are named by their human-readable name, and an unlabeled record is described in words.
+
+**Layout.** Phone (< 40rem): one column, 16px gutters, full-width buttons, no horizontal page scroll. Desktop (≥ 64rem): the form column is capped at 40rem with an optional aside. Ultrawide (≥ 120rem): content is capped at 96rem and centered. A timeline lineage is an indented list whose only horizontal scroll is inside its own container. State is never conveyed by color alone (text plus icon).
 
 ## 6. GM workspace
 
