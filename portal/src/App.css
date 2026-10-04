@@ -619,6 +619,30 @@ a.app-header__title:focus-visible {
   background-color: transparent;
 }
 
+.portal-sidebar__sublink--disabled {
+  color: var(--color-chrome-muted);
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.portal-sidebar__sublink--disabled:hover {
+  color: var(--color-chrome-muted);
+  background-color: transparent;
+}
+
+/* Prerequisite text for a disabled entry, exposed through aria-describedby. */
+.portal-sidebar__reason {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Campaign Home group: the Campaign Home link and the disclosure button
    are separate controls on one row; the button is a compact chevron when a
    campaign resolves, or a full-width labelled row when none does. */

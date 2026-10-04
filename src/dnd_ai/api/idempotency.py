@@ -70,6 +70,16 @@ and reserves fresh. `complete_campaign_creation_request()` additionally
 records the resulting `campaign_id` directly on the row (not only inside
 `response_body`), so the campaign a reservation produced can be queried
 without parsing JSON.
+
+## Actor-scoped idempotency: `security.actor_idempotent_requests`
+
+World and timeline authoring commands (Phase 14, migration 112) have no
+campaign to key a `security.idempotent_requests` row against.
+`begin_actor_idempotent_request()`/`complete_actor_idempotent_request()` are
+the matching functions for `security.actor_idempotent_requests`, scoped to
+`(actor_user_id, idempotency_key)`; every concurrency and rollback guarantee
+above applies unchanged. Three stores therefore coexist, chosen by route
+scope (docs/DATABASE_CONVENTIONS.md §26.4).
 """
 
 import hashlib
@@ -307,5 +317,103 @@ def complete_campaign_creation_request(
             "body": json.dumps(response_body),
             "campaign": campaign_id,
             "id": campaign_creation_reservation_id,
+        },
+    )
+
+
+@dataclass(frozen=True)
+class ActorIdempotentReservation:
+    """This call is the first (and, for the duration of its transaction,
+    only) holder of the key — proceed with the command normally and call
+    `complete_actor_idempotent_request()` with its result before returning."""
+
+    actor_idempotent_request_id: uuid.UUID
+
+
+def begin_actor_idempotent_request(
+    connection: Connection,
+    *,
+    actor_user_id: uuid.UUID,
+    idempotency_key: str,
+    command_name: str,
+    payload: dict[str, Any],
+    correlation_id: str | None,
+) -> ActorIdempotentReservation | IdempotentReplay:
+    """Reserve `idempotency_key` for `actor_user_id`, or return the
+    already-completed response for a matching replay — the actor-scoped
+    counterpart to `begin_idempotent_request()` for commands with no campaign
+    (world and timeline authoring; migration 112's
+    `security.actor_idempotent_requests`). Same atomic `INSERT ... ON
+    CONFLICT DO NOTHING RETURNING` concurrency behavior, same
+    fingerprint-mismatch/incomplete-reservation `ConflictError` cases.
+
+    **Ordering contract for callers:** call this only *after* authorization
+    has resolved (the route's dependencies run first), so a caller who has
+    lost authority can never replay a stored response; and answer a replay
+    *before* any `expected_row_version` check, so a retried successful write
+    returns its original success rather than a false `stale_write`."""
+    fingerprint = compute_request_fingerprint(command_name=command_name, payload=payload)
+
+    reserved = connection.execute(
+        text("""
+            INSERT INTO security.actor_idempotent_requests
+                (actor_user_id, idempotency_key, request_fingerprint, correlation_id)
+            VALUES (:user, :key, :fingerprint, :correlation)
+            ON CONFLICT (actor_user_id, idempotency_key) DO NOTHING
+            RETURNING actor_idempotent_request_id
+        """),
+        {
+            "user": actor_user_id,
+            "key": idempotency_key,
+            "fingerprint": fingerprint,
+            "correlation": correlation_id,
+        },
+    ).one_or_none()
+    if reserved is not None:
+        return ActorIdempotentReservation(
+            actor_idempotent_request_id=reserved.actor_idempotent_request_id
+        )
+
+    existing = connection.execute(
+        text("""
+            SELECT request_fingerprint, response_status_code, response_body
+            FROM security.actor_idempotent_requests
+            WHERE actor_user_id = :user AND idempotency_key = :key
+        """),
+        {"user": actor_user_id, "key": idempotency_key},
+    ).one()
+
+    if existing.request_fingerprint != fingerprint:
+        raise ConflictError(
+            f"idempotency key {idempotency_key!r} was already used for a different "
+            "command or payload"
+        )
+    if existing.response_status_code is None or existing.response_body is None:
+        raise ConflictError(f"idempotency key {idempotency_key!r} names an incomplete reservation")
+    return IdempotentReplay(
+        response_status_code=existing.response_status_code,
+        response_body=existing.response_body,
+    )
+
+
+def complete_actor_idempotent_request(
+    connection: Connection,
+    *,
+    actor_idempotent_request_id: uuid.UUID,
+    response_status_code: int,
+    response_body: dict[str, Any],
+) -> None:
+    """Fill in the reserved row with the command's actual response, still
+    inside the reserving transaction."""
+    connection.execute(
+        text("""
+            UPDATE security.actor_idempotent_requests
+            SET response_status_code = :status, response_body = :body, completed_at = now()
+            WHERE actor_idempotent_request_id = :id
+        """),
+        {
+            "status": response_status_code,
+            "body": json.dumps(response_body),
+            "id": actor_idempotent_request_id,
         },
     )

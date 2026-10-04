@@ -7,9 +7,13 @@ const { reloadMock } = vi.hoisted(() => ({
     reloadMock: vi.fn(),
 }))
 
-vi.mock("../context/SessionContext", () => ({
-    useSession: () => ({ reload: reloadMock }),
-}))
+vi.mock("../context/SessionContext", async () => {
+    const { createContext } = await import("react")
+    return {
+        SessionContext: createContext(null),
+        useSession: () => ({ reload: reloadMock }),
+    }
+})
 
 interface Fixture {
     name: string

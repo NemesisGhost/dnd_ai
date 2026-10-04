@@ -110,6 +110,7 @@ from dnd_ai.commands.relationships import (
     _update_organization_status_impl,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.organization import get_organization_view
 from dnd_ai.queries.relationship import get_relationship_view
 
@@ -359,7 +360,7 @@ def get_relationship_endpoint(
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
         include_subjective=include_subjective,
-        visibility=resolve_world_entity_visibility(access),
+        visibility=resolve_world_entity_visibility(access, connection),
     )
 
     return RelationshipResponse(
@@ -508,6 +509,15 @@ def get_organization_endpoint(
         # and keeping this route in agreement with the Phase 13D World
         # Explorer list (`dnd_ai.api.world_explorer`), which excludes a
         # `campaign.view`-denied `entity_id` in SQL.
+        raise NotFoundError()
+    # Phase 14 draft/published separation: an unpublished (or deleted) lifecycle-
+    # managed organization is the same 404 for a caller without `canon.edit`.
+    if organization_id in lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=access.has_capability("canon.edit"),
+    ):
         raise NotFoundError()
 
     include_internal_description = access.has_capability(

@@ -65,13 +65,19 @@ Campaign Home  [Choose campaign ▾]   link to the resolved campaign's Home + se
   Authorized Campaign B
   Authorized Campaign C
   View all campaigns                  /campaigns
-World
+Worlds ▾                              disclosure; the single world group (Phase 14)
+  All worlds                          /worlds — always enabled
+  New world                           enabled by global capability world.create
+  World overview                      enabled when the route selects a server-confirmed world
+  Timelines                           /worlds/{id}/timelines — the world's authorized timelines
+  Timeline overview                   enabled only when a timeline is selected
+  Campaign world                      enabled when a campaign resolves; /app/{campaignId}/world
 Characters
 Quests
 Sessions
 Knowledge
 Ask                                   server feature manifest
-Access ▾                              disclosure; access.manage
+Access ▾                              disclosure; slot present if access.manage on any campaign
   Access Management
   Invitations
   Audit History
@@ -81,9 +87,11 @@ Collapse / expand navigation          always last
 
 Rules:
 
+- **One Worlds group.** There is no separate singular "World" item; the campaign world page is the group's "Campaign world" child. World overview and Timelines are enabled only for a world the server has confirmed (`WorkspaceHierarchyProvider`: only once `GET /worlds/{id}` succeeds for the route's world, or for the authorized route campaign's world — campaign membership alone never enables World navigation, per ADR 0014; the campaign page's own context panel still uses the bootstrap names); otherwise they stay in place, disabled with "Select a world first". Timeline overview is enabled only when a timeline is selected — a timeline route whose ID is in that world's authorized timelines, or the route campaign's timeline, in both cases only if that world response lists it — otherwise it stays disabled with "Select a timeline first". **Timelines is world-scoped:** it opens the collection of every timeline the server returns for the world, never just a campaign's timeline. An unknown route ID adds nothing and is never echoed. Disabled entries are non-links with `aria-disabled="true"`, no `href`, no active styling, and the neutral reason as their description; they keep icon, label, and position in expanded, collapsed, and drawer modes. "New world" follows `global_capabilities`, never a display role. The group starts open on a `/worlds` or campaign world route.
 - **Campaign choices** come only from the current authoritative session bootstrap (`campaigns`). The sidebar never invents, guesses, caches, or carries forward a campaign from a previous bootstrap, from browser storage, or from a stored preference. Selecting a different campaign clears that campaign's character-perspective selection (`useSelectCampaign`) and enters `/app/{campaignId}/home`. **View all campaigns** always links to `/campaigns`, the full campaign-selection route (§5.2).
-- **Campaign Home is a link plus a separate disclosure button**, never one control that is ambiguously both. The link (visible text "Campaign Home") navigates to the resolved campaign's Home; an adjacent button (accessible name "Choose campaign", `aria-expanded`, `aria-controls`) shows or hides the campaign list beneath it. When no campaign resolves, the link is absent and the disclosure button carries the visible text "Choose a campaign". The list starts open on `/campaigns` and closed elsewhere. The active campaign's entry carries `aria-current="true"`.
-- **Resolved campaign for campaign-specific links:** the route's `:campaignId` when it is in the current bootstrap's `campaigns`; otherwise `campaign_preferences.last_visited_campaign_id`; otherwise `startup_campaign_id` (§4.7); otherwise none. A route campaign ID that is not authorized is never used or echoed. With no resolved campaign, World/Characters/Quests/Sessions/Knowledge/Ask/Access are not rendered as links — the sidebar shows a short "Choose a campaign to see its pages" note instead — so no link ever contains a guessed ID.
+- **Campaign Home is a link plus a separate disclosure button**, never one control that is ambiguously both. The link (visible text "Campaign Home") navigates to the resolved campaign's Home; an adjacent button (accessible name "Choose campaign", `aria-expanded`, `aria-controls`) shows or hides the campaign list beneath it. When no campaign resolves, the link is replaced in the same slot by a disabled "Campaign Home" entry (see "Stable structure") and the disclosure button keeps its "Choose campaign" name. The list starts open on `/campaigns` and closed elsewhere. The active campaign's entry carries `aria-current="true"`.
+- **Resolved campaign for campaign-specific links:** the route's `:campaignId` when it is in the current bootstrap's `campaigns`; otherwise `campaign_preferences.last_visited_campaign_id`; otherwise `startup_campaign_id` (§4.7); otherwise none. A route campaign ID that is not authorized is never used or echoed. With no resolved campaign, Campaign Home/Campaign world/Characters/Quests/Sessions/Knowledge/Ask/Access are not rendered as links — they remain in place as disabled entries (see "Stable structure") — so no link ever contains a guessed ID.
+- **Stable structure.** Route context never adds, removes, or reorders sidebar entries; a missing prerequisite switches an entry to disabled instead. A disabled entry is never an anchor: it is a non-focusable element with the normal icon and label, `aria-disabled="true"`, no `aria-current`, muted styling, no navigation, and the prerequisite as its accessible description (`aria-describedby`) and tooltip (collapsed tooltips are "Label: reason"). Reasons are neutral — "Select a campaign first", "Select a world first", "No timeline available", "Not available for your account", "Unavailable for this campaign", or the server-provided feature reason for Ask — and never carry a name, ID, capability, or count. Capability-gated slots follow the caller, not the route: "New world" follows `global_capabilities`; the Access slot exists only for a caller with `access.manage` on at least one authorized campaign, and is enabled only when the resolved campaign grants it. The sidebar presents server-computed state and never grants access; the server remains the enforcement boundary.
 - **Ask** follows the server feature manifest exactly as before: a link only when `features.ask` is true, otherwise a visibly disabled item that is not a link and makes no request.
 - **Access** is a disclosure button (not a link) over **Access Management** (`/access`), **Invitations** (`/access/invitations`), and **Audit History** (`/access/audit`). The group is shown only when the resolved campaign's server-supplied `capabilities` include `access.manage` — the capability each of those routes' APIs already requires — and is never shown with no visible child. Hiding it is presentation only; each route and API re-authorizes. The Access page's own tab strip remains as page-local navigation.
 - **Collapse/expand** stays the last item. Collapsed, the sidebar is an icon rail: every item keeps an accessible name (visible label hidden, `title` shown), the campaign-list disclosure is replaced by a Campaign Home icon link (when a campaign resolves) and a rail **All campaigns** link to `/campaigns`, and activating the Access button in the rail opens its children as a bounded flyout beside the rail with their labels shown, so they stay keyboard-reachable. The collapsed/expanded choice is a per-viewer convenience persisted in browser storage (never authentication data), so it survives the scope-keyed remount.
@@ -108,18 +116,21 @@ App
         /account               AccountPage
         /platform/accounts     AdminAccountsPage (platform-authorized only)
         /app/:campaignId       CampaignSessionBoundary -> CampaignLayout
-                                 CampaignContextPanel (display + perspective selector)
+                                 WorkspaceFrame: <main> + HierarchyContextPanel
                                  Campaign page outlet
+        /worlds/*              WorldWorkspaceLayout
+                                 WorkspaceFrame: <main> + HierarchyContextPanel
+                                 World / Timelines / Timeline page outlet
     PortalFooter
 ```
 
-`AuthenticatedSessionBoundary` remains the single authenticated session gate. `CampaignSessionBoundary`/`CampaignLayout` own campaign-specific context and authorization — the authorized-campaign lookup, perspective wiring, the campaign-not-found state, and the last-visited update (§4.7) — but no longer own navigation. `CampaignContextPanel`'s Campaign section is display-only (name and roles): the sidebar's campaign list is the one campaign-selection control during campaign work, with `/campaigns` as the full browser.
+`AuthenticatedSessionBoundary` remains the single authenticated session gate. `CampaignSessionBoundary`/`CampaignLayout` own campaign-specific context and authorization — the authorized-campaign lookup, perspective wiring, the campaign-not-found state, and the last-visited update (§4.7) — but no longer own navigation. `WorkspaceHierarchyProvider` (mounted in `AuthenticatedAppLayout`, shared by the sidebar and the context panel) derives the selected world and timeline from the route and confirms them against server data; it stores nothing.
 
 ### 4.1 Reusable presentation system
 
 A small set of reusable `portal/src/components` primitives supports the screens below rather than each screen inventing its own layout. The exact component names may evolve, but their responsibilities remain separate:
 
-- **`CampaignContextPanel`** answers "what campaign context and viewing perspective am I using?" It is one compact, infobox-styled panel divided into four stacked sections — **World, Campaign, Timeline, Character**, in that order — each showing the current selection plus a few compact read-only detail rows for it. The hierarchy is causal: changing a higher selection repopulates the lower options and clears the lower selection. **World** is a read-only value and **Timeline** a disabled control until the backend exposes authorized worlds/timelines and their selection APIs; **Campaign** shows the current campaign and the user's roles (display-only: the sidebar's Campaign Home campaign list and `/campaigns` are the campaign-selection controls — §4, §4.5); **Character** reuses the established character-perspective context/selector and shows compact live character facts. The panel is presentation-oriented — the surrounding layout (`CampaignLayout`) owns the routing and perspective wiring. It collapses behind a native disclosure control on narrow screens and is meant for a right-hand column or the shared shell.
+- **`HierarchyContextPanel`** answers "where am I in World → Timeline → Campaign → Character, and which perspective am I using?" It is one compact, infobox-styled panel with four labelled sections — **World, Timeline, Campaign, Character**, in that order — rendered by `WorkspaceFrame` on every World and Campaign workspace page (`/worlds/*` through `WorldWorkspaceLayout`, `/app/:campaignId/*` through `CampaignLayout`), so it persists across All Worlds, World Overview, the Timelines collection, Timeline Overview, and Campaign pages. Selection is route-derived; the panel never stores it. Per page: All Worlds selects nothing; World Overview and the Timelines collection select the world; Timeline Overview selects world and timeline; a campaign page selects world, timeline, and campaign, with an optional authorized character perspective. Each level is a labelled `<select>` whose options come only from authoritative data — the worlds list (`GET /worlds`), the selected world's timelines (`GET /worlds/{id}`), and the session's authorized campaigns for that world and timeline. A level without such a list stays visible and disabled (`disabled` is exposed to assistive technology); the empty "No selection" placeholder is never a choice. Choosing an option only navigates, so lower levels clear because their routes unmount: changing the world clears timeline, campaign, and character; changing the timeline clears campaign and character; changing the campaign clears the previous campaign's perspective (`useSelectCampaign`) and uses only the new campaign's server-authorized default or explicit choice. While a newly chosen world is unconfirmed the panel shows no selection and no previous options. **Character perspectives are Campaign-membership and relationship scoped** — they come from the route campaign's bootstrap entry, never from World-scoped characters, and are not selectable outside a campaign. A route world or timeline the server does not authorize selects nothing and its ID is never rendered. It collapses behind a native disclosure control on narrow screens and sits in the right-hand column from 64rem.
 - **`InfoBox`** answers "what are the important facts about the entity on this page?" It is a generic, Wiki-style label/value panel (title, optional subtitle/image/status, label/value sections, related links) with no built-in knowledge of any entity type; per-entity wrappers (e.g. `CampaignInfoBox`) translate an authorized domain record into the generic model and are responsible for authorization-safe field selection.
 - **Collection-card primitives** answer "which authorized record should I open?" A responsive card grid presents concise, domain-mapped cards for world entities, knowledge, quests, campaigns, and other browsable collections. Cards use real links, expose only fields present in the audience-safe list contract, and do not fetch or imply inaccessible detail records.
 - **Detail-panel primitives** answer "how is this authorized record organized?" A full-page detail layout composes stat cards, semantic fact groups, compact lists or tables, and bounded panels under one page heading. Domain-specific wrappers decide which authorized fields belong in each panel; a generic primitive never reflects over an arbitrary API object.
@@ -172,7 +183,7 @@ Hiding a menu item is presentation only. The direct page route must enforce plat
 
 ### 4.5 Campaign discovery and switching
 
-The full `/campaigns` page provides complete authorized campaign browsing and selection with the fuller audience-safe information available for each campaign (§5.2). The sidebar's Campaign Home campaign list is the quick switcher during campaign work and always ends with **View all campaigns** (`/campaigns`); the sidebar is present on every authenticated route, so it is never the only way out of a selected campaign. The former `CampaignContextPanel` `<select>` switcher and its **Browse all campaigns** link are retired (§4).
+The full `/campaigns` page provides complete authorized campaign browsing and selection with the fuller audience-safe information available for each campaign (§5.2). The sidebar's Campaign Home campaign list is the quick switcher during campaign work and always ends with **View all campaigns** (`/campaigns`); the sidebar is present on every authenticated route, so it is never the only way out of a selected campaign. The former campaign-only context panel's switcher and its **Browse all campaigns** link are retired (§4); the hierarchy panel's Campaign selector lists only the authorized campaigns of the selected timeline.
 
 Preserve these authoritative behaviors:
 
@@ -202,6 +213,14 @@ Preserve these authoritative behaviors:
 | `/app/:campaignId/access/invitations` | Invitations, gated by `access.manage` | Delivered |
 | `/app/:campaignId/access/audit` | Audit History, gated by `access.manage` | Delivered |
 | `/app/:campaignId/ask` | Ask, under its existing feature-readiness rules | Placeholder |
+| `/worlds` | Worlds the caller owns (Active/Archived filter); "Create world" gated by the bootstrap's `global_capabilities` | Delivered (Phase 14) |
+| `/worlds/new` | Create a world (rulesets, primary timeline); `?returnTo=/campaigns/new` resumes campaign setup | Delivered (Phase 14) |
+| `/worlds/:worldId` | World overview: details, rulesets, timeline lineage, managed campaigns, server-computed actions | Delivered (Phase 14) |
+| `/worlds/:worldId/edit` | Edit world name and description | Delivered (Phase 14) |
+| `/worlds/:worldId/timelines` | World-scoped Timelines collection: every timeline the server returns for the world as a lineage, each linking to its detail route; loading, empty, denied/unavailable (non-disclosing), and retryable-error states | Delivered (Phase 14 navigation correction) |
+| `/worlds/:worldId/timelines/new`, `/worlds/:worldId/timelines/:timelineId`, `…/edit`, `…/branch` | Timeline management and branching; the branch form offers a labeled "latest" point or a moment from the server-provided branch-point list, and explains when only "latest" exists | Delivered (Phase 14) |
+| `/campaigns/new?worldId&timelineId` | Three-step campaign setup | Delivered (Phase 14) |
+| `/app/:campaignId/settings` | Campaign settings, archive; gated by `access.manage` | Delivered (Phase 14) |
 
 Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, and `knowledge/:knowledgeItemId`. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 
@@ -320,7 +339,11 @@ MVP presentation:
 
 World cards identify the entity's human-readable category/type, name, and authorized short summary. They do not infer containment, relationships, population, organization membership, visibility, or other details from identifiers or category codes. Converting a list to cards may proceed before detail support exists; a card becomes a detail link only after the server exposes a directly loadable, audience-safe detail contract for that category.
 
+**Canon lifecycle (Phase 14, delivered).** A member whose bootstrap lists `canon.edit` sees a *Show drafts and archived* checkbox on the World list (it adds `include_noncanon`/`include_archived`; the server ignores the flags for anyone else, so the checkbox is only an offer). Rows that are not active canon carry a text-and-icon badge (Draft, In review, Approved, Rejected, Superseded, Archived) and the badge status is part of the card link's accessible name. On a detail page of a lifecycle-managed type, the same members get a **Lifecycle** panel: the current status, exactly the actions in the server's `available_actions` (submit for review, return to draft, approve, reject, publish as canon, supersede, archive, restore, delete draft), and a plain-language list of the blocked ones. Submit for review is immediate; every other action confirms in a modal dialog, with an optional reason (archive, reject, return to draft) or a required one (restore, delete draft). Supersede offers replacement candidates from the server (same world and type, canon, not the record itself) and never guesses eligibility. A stale version keeps the dialog open with *Load latest version*; success refetches the lifecycle view and the detail, then announces the result; deleting a draft returns to the World list. Players and members without `canon.edit` send no lifecycle request and see no panel.
+
 Detail pages display only sections the user may access. They use bounded panels for the authorized overview, current state, containment, relationships, known history, related resources, and provenance supplied by the detail response. Irrelevant or unavailable panels are omitted without suggesting that hidden sections exist. The page distinguishes established canon, knowledge in the current perspective, rumor/belief, uncertainty, and source provenance only where the current contract deliberately exposes those distinctions.
+
+**Draft versus published (Phase 14).** Players see only published, active definitions in lists and search; archived and superseded definitions stay reachable from history (detail pages, relationship and event links) but are not offered in browse. A game master with `canon.edit` additionally sees, on lifecycle-managed definitions (places, organizations, religions), a lifecycle badge (Draft, In review, Approved, Canon, Superseded, Rejected, Archived — text plus icon, never color alone), a "Show drafts and archived" toggle that is backed by the URL and hidden for players, and a lifecycle panel that renders only the actions the server reports as available, with the server's reason for each blocked action. Restore and delete-draft require a reason; supersede offers only replacement candidates the server returns. After any transition the detail refetches rather than trusting its previous content.
 
 ### 5.5 Character workspace
 
@@ -479,6 +502,28 @@ Observer access is curated. Possible grants include:
 
 Different observer groups may exist for a livestream audience, former players, collaborators, or invited guests. Observer membership does not inherit all player-visible information.
 
+### 5.11 Authoring patterns (Phase 14)
+
+Every authoring surface (worlds, timelines, campaign setup and settings, canon lifecycle) follows one set of patterns, implemented once in `portal/src/components/authoring/` and `portal/src/hooks/useAuthoring*.ts`. None of it is a form library or a state-management framework.
+
+**Server-authoritative.** Capabilities, selectors, available actions, and blocked reasons come from the server (`global_capabilities` in the bootstrap, `available_actions` / `blocked_actions` on read models, `GET /rulesets`, branch-point lists, replacement candidates). The portal never infers an entitlement, never optimistically assumes success, and never trusts a previous lookup for a write: the server re-checks authority at mutation time. A page keys its loaded record by URL, so a record is never shown under another record's route while the next one loads.
+
+**Forms.** Every control has a visible label, an optional hint, and a plain-text error; an invalid control carries `aria-invalid` and `aria-describedby`. Structural limits (required, trimmed length, set membership) are mirrored client-side so errors show before submit; the server never reports a field location, so domain failures reach a field only through a stable error `code` (`ruleset_not_available` → rulesets, `branch_point_invalid` → branch point, `supersession_target_invalid` → replacement). A form has an explicit **Save** and **Cancel**. After a failed submit an **error summary** (one `role="alert"`) takes focus and links each message to its field. Entered values survive every recoverable failure (validation, conflict, denial, network, server) and are never written to browser storage — an expired session loses them, which is an accepted limitation.
+
+**States.** Each page and mutation distinguishes loading, empty, denied (403), unavailable (404 — "does not exist or you cannot access it", never which), invalid (400/422), stale/conflict (409), pending, success, expired session (401 → re-authenticate), network, and server errors, each with safe copy, never raw response text. Retry (network/server) resubmits the same body with the **same Idempotency-Key**, so a lost response replays instead of duplicating; a changed body gets a new key.
+
+**Conflict.** A stale write (409 `stale_write`) explains that someone else changed the record and offers **Load latest version**: the form is replaced with the server's values and the user's previous unsaved values stay visible in a read-only panel (with "Re-apply my changes"), so nothing typed is lost. The old row version is never resubmitted.
+
+**Unsaved changes.** A dirty form holds in-app navigation that changes the path (a data router's blocker) and sets a `beforeunload` prompt; a query-string-only change (the setup wizard moving between steps) is not leaving. The prompt is a confirmation dialog ("Discard unsaved changes?"); a deliberate post-save redirect releases the guard first.
+
+**Confirmation.** Destructive or consequential actions (archive, restore, reactivate, delete draft, supersede) use a native modal `<dialog>`: labelled, described, initial focus on **Cancel**, Escape cancels, focus returns to the invoking control, and the confirm button carries its verb ("Archive world"). A failure renders **inside** the dialog, which closes only on success; an optional reason field is shown when the action takes one (required for restore and delete draft).
+
+**Focus and announcements.** On arrival at a page whose data has loaded, focus moves to its `<h1>`. A success message travels in navigation state and is announced through the shell's single polite live region **after** the destination's authoritative fetch resolves, so it survives the refetch that proves the write. After a write the destination refetches rather than reusing the pre-write record.
+
+**Identifiers.** Raw UUIDs are never rendered; records are named by their human-readable name, and an unlabeled record is described in words.
+
+**Layout.** Phone (< 40rem): one column, 16px gutters, full-width buttons, no horizontal page scroll. Desktop (≥ 64rem): the form column is capped at 40rem with an optional aside. Ultrawide (≥ 120rem): content is capped at 96rem and centered. A timeline lineage is an indented list whose only horizontal scroll is inside its own container. State is never conveyed by color alone (text plus icon).
+
 ## 6. GM workspace
 
 ### 6.1 GM dashboard
@@ -503,6 +548,8 @@ Authorized GMs can:
 - compare timelines;
 - publish or reveal knowledge;
 - generate a visibility preview before applying disclosure changes.
+
+The shared canon-lifecycle controls for world records are delivered as described under §5.4 (Phase 14); proposal review, comparison and the other items above remain later phases.
 
 ### 6.3 Preview as user
 

@@ -97,9 +97,11 @@ never blocks or errors the page itself.
 | `character_relationship` | `grant_character_relationship`, `change_character_relationship`, `revoke_character_relationship` | `security.membership_character_relationships` |
 | `resource_grant` | `create_resource_grant`, `revoke_resource_grant` | `security.resource_grants` |
 | `invitation` | `create_campaign_invitation`, `accept_campaign_invitation`, `revoke_campaign_invitation`, `invitation_onboarding.complete`, `invitation_onboarding.register_accept` | `security.campaign_invitations` for the first/third; `security.campaign_memberships` for `accept_campaign_invitation`/`invitation_onboarding.complete`/`invitation_onboarding.register_accept` (see below) |
-| `campaign` | `create_campaign` | `campaign.campaigns` |
+| `campaign` | `create_campaign`, `update_campaign`, `archive_campaign`, `reactivate_campaign` | `campaign.campaigns` |
 | `access_group` | `create_access_group`, `update_access_group`, `deactivate_access_group`, `reactivate_access_group` | `security.access_groups` |
 | `access_group_membership` | `add_access_group_member`, `remove_access_group_member` | `security.access_group_memberships` |
+
+The Phase 14 campaign commands (`update_campaign`, `archive_campaign`, `reactivate_campaign`) are labelled "Campaign settings updated", "Campaign archived", and "Campaign reactivated". Like every other row, this surface never returns `changed_fields` (which holds the old and new name/description) or `reason`. World, timeline, and entity audit rows (`create_world`, `archive_timeline`, `publish_entity_as_canon`, …) exist in `audit.change_log` but have no read surface until Phase 15G.
 
 Every `command_name` value above is copied verbatim from the literal each
 command's own `dnd_ai.api.audit.record_change_log(...)` call site passes

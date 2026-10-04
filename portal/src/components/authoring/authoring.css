@@ -1,0 +1,398 @@
+/* Authoring patterns (docs/UI_DESIGN.md §5.11). Layout:
+   - phone (< 40rem): one column, 16px gutters, full-width buttons, no
+     horizontal page scroll;
+   - desktop (>= 64rem): the form column is capped at 40rem and an optional
+     aside sits to its right;
+   - ultrawide (>= 120rem): content is capped at 96rem and centered. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.authoring-page {
+  width: 100%;
+  max-width: 96rem;
+  margin: 0 auto;
+}
+
+.authoring-page__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.authoring-page__breadcrumb {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+}
+
+.authoring-page h1:focus {
+  outline: none;
+}
+
+.authoring-page h1:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.authoring-page__lead {
+  max-width: 40rem;
+  color: var(--color-text-muted);
+}
+
+.authoring-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  max-width: 40rem;
+}
+
+.authoring-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.authoring-field__label {
+  font-weight: 600;
+}
+
+.authoring-field__required {
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.authoring-field__hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.authoring-field__control {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.authoring-field--invalid .authoring-field__control {
+  border-color: var(--color-danger);
+  border-width: 2px;
+}
+
+.authoring-field__error {
+  margin: 0;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.authoring-field__counter {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.authoring-field__counter--over {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.authoring-radio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  align-items: start;
+}
+
+.authoring-radio .authoring-field__hint {
+  grid-column: 2;
+}
+
+.authoring-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.authoring-checklist label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.authoring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.authoring-button {
+  padding: 0.5rem 1rem;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.authoring-button:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+}
+
+.authoring-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.authoring-button--primary {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.authoring-button--primary:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.authoring-button--danger {
+  color: var(--color-primary-foreground);
+  background-color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.authoring-error-summary,
+.authoring-message {
+  padding: 0.75rem 1rem;
+  border-radius: 0.25rem;
+}
+
+.authoring-error-summary {
+  color: var(--color-danger);
+  background-color: var(--color-danger-background);
+  border: 1px solid var(--color-danger-border);
+}
+
+.authoring-error-summary:focus {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.authoring-error-summary__title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.authoring-message {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  max-width: 40rem;
+}
+
+.authoring-message p {
+  margin: 0 0 0.5rem;
+}
+
+.authoring-message--error {
+  color: var(--color-danger);
+  background-color: var(--color-danger-background);
+  border: 1px solid var(--color-danger-border);
+}
+
+.authoring-message--warning {
+  color: var(--color-warning);
+  background-color: var(--color-warning-background);
+  border: 1px solid var(--color-warning-border);
+}
+
+.authoring-message__icon {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.authoring-your-changes {
+  margin-top: 0.75rem;
+}
+
+.authoring-your-changes h2 {
+  font-size: 1rem;
+}
+
+.authoring-badge {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background-color: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.authoring-badge__icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.authoring-dialog {
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0;
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.5rem 2rem var(--color-shadow);
+}
+
+.authoring-dialog::backdrop {
+  background-color: var(--color-overlay);
+}
+
+.authoring-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.authoring-dialog__body h2,
+.authoring-dialog__body p {
+  margin: 0;
+}
+
+.authoring-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.authoring-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.authoring-list__item h2,
+.authoring-list__item h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.authoring-section {
+  margin-top: 1.5rem;
+}
+
+.authoring-section h2 {
+  font-size: 1.25rem;
+}
+
+.authoring-fact-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.authoring-fact-list dt {
+  font-weight: 600;
+}
+
+.authoring-fact-list dd {
+  margin: 0;
+}
+
+.authoring-tree {
+  margin: 0;
+  padding-left: 1.25rem;
+  list-style: none;
+}
+
+.authoring-tree .authoring-tree {
+  border-left: 2px solid var(--color-border);
+}
+
+.authoring-tree__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.authoring-note {
+  max-width: 40rem;
+  color: var(--color-text-muted);
+}
+
+.authoring-aside {
+  align-self: start;
+  padding: 1rem;
+  background-color: var(--color-surface-muted);
+  border-radius: 0.25rem;
+}
+
+.authoring-step-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.authoring-step-nav [aria-current="step"] {
+  font-weight: 700;
+}
+
+@media (max-width: 40rem) {
+  .authoring-actions {
+    flex-direction: column;
+  }
+
+  .authoring-actions .authoring-button {
+    width: 100%;
+  }
+
+  .authoring-fact-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 64rem) {
+  .authoring-page__layout--with-aside {
+    grid-template-columns: minmax(0, 40rem) minmax(16rem, 24rem);
+    gap: 2rem;
+  }
+}
+
+@media (min-width: 120rem) {
+  .authoring-page {
+    max-width: 96rem;
+  }
+}

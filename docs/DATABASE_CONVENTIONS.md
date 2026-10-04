@@ -1312,9 +1312,13 @@ Mutable API-facing records should include a revision number or use `updated_at` 
 
 A numeric `row_version` is preferred for high-conflict records.
 
+**Adopted mechanism (Phase 14, revision 111).** `core.worlds`, `campaign.timelines`, `campaign.campaigns`, and `core.entities` carry `row_version BIGINT NOT NULL DEFAULT 1 CHECK (row_version >= 1)`, incremented by the shared `core.bump_row_version()` `BEFORE UPDATE` trigger (a statement cannot choose its own value). Every authoring edit, archive, restore, reactivate, and lifecycle transition **requires** an `expected_row_version`; the command locks the row `FOR UPDATE`, compares, and raises `StaleWriteError` (HTTP 409, code `stale_write`) on mismatch. `updated_at` is not used as a token: concurrent waiters can write earlier timestamps and JSON round-trips lose precision. A new editable table that API clients can overwrite should adopt the same column, trigger, and `expected_row_version` contract rather than inventing another.
+
 ### 26.4 Idempotency
 
 External commands and integration messages should support idempotency keys.
+
+**Three stores, chosen by route scope (Phase 14):** `security.campaign_creation_reservations` (scope `(actor, key)`, `POST /campaigns` only), `security.idempotent_requests` (scope `(actor, campaign, key)`, every campaign-scoped command), and `security.actor_idempotent_requests` (scope `(actor, key)`, world and timeline commands). Reservation, command, audit, and completion share one transaction, so a failed attempt never consumes a key. Authorization runs *before* the idempotency lookup, so a caller who has lost authority cannot replay a stored response, and a replay is answered *before* any `expected_row_version` check so a retried successful write returns its original success rather than a false `stale_write`.
 
 ---
 

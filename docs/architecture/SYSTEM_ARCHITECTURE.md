@@ -212,6 +212,18 @@ Recommended command examples:
 - `CreateTimelineBranch`
 - `ApproveAiProposal`
 
+#### Authoring command conventions (Phase 14)
+
+Every authoring command (world, timeline, campaign settings, entity lifecycle) follows one shape, and none is generic table CRUD:
+
+- **Intent-specific.** One command per business intent (`archive_world`, `publish_entity_as_canon`), never `update_<table>`.
+- **Authority from the database, re-checked under lock.** The route resolves authority (`dnd_ai.api.world_access.require_world_capability`, `dnd_ai.api.access.require_campaign_capability`) from current database state; the command re-checks lifecycle and scope after taking its row locks and never trusts a prior lookup response.
+- **Scope-bound targets.** Every path- or body-supplied target is bound to the world/timeline/campaign it must belong to; a mismatch is the same non-disclosing 404 (or the same field-mapped 400) as a missing target.
+- **`expected_row_version`** on every edit, archive, restore, reactivate, and lifecycle transition; a mismatch raises `StaleWriteError` (409 `stale_write`). A no-op update writes, bumps, and audits nothing.
+- **Durable idempotency** (three stores — DATABASE_CONVENTIONS §26.4). Authorization first, replay second, version check third.
+- **Atomic and audited.** One request transaction covers authorization reads, idempotency reservation, the command, one `audit.change_log` row per durable record (sharing the request correlation ID), and idempotency completion.
+- **No generalized lifecycle.** Shared canon lifecycle applies only to the eligibility registry in `dnd_ai.domain.entity_lifecycle`; subtype-specific create commands arrive in Phase 15.
+
 ### 5.4 Domain layer
 
 Responsibilities:
@@ -283,6 +295,21 @@ sequenceDiagram
 ```
 
 External calls to AI providers, Discord or FoundryVTT should not normally occur inside the database transaction.
+
+### 7.1 Global lock order (Phase 14)
+
+Commands that lock more than one row take locks in this order, so two commands that share rows can never deadlock on each other:
+
+```text
+core.worlds
+  -> campaign.timelines          (parent before child; several timelines by timeline_id ascending)
+  -> security.timeline_bootstrap_grants
+  -> campaign.campaigns
+  -> security.*memberships
+  -> core.entities               (several entities by entity_id ascending)
+```
+
+Writers of a row take `FOR UPDATE`. A command that only needs a parent to *stay active* for its duration (create timeline, branch, create campaign, reactivate, entity transitions) takes `FOR SHARE` on the parent, which conflicts with the parent's `FOR UPDATE` archive. Idempotency reservation INSERTs happen first and touch only their own unique index, so they introduce no cycle. Deferred constraint triggers (world-owner and campaign access-manager retention) take their own `FOR UPDATE` at commit on the world/campaign row respectively; commands pre-check these invariants so callers get a classified 409 instead of a raw integrity failure.
 
 ## 8. Event-assisted state architecture
 
@@ -503,6 +530,8 @@ Required controls:
 - row-level security only where it provides clear value
 - audit logging for privileged changes
 - strict separation between model-provider credentials and client access
+
+World authority (Phase 14, [ADR 0014](../adr/0014-world-authoring-authority.md)) is a per-world membership resolved from the database on every request, separate from campaign roles and platform administration, and held only by human principals (local session or OIDC). Foundry device principals and machine principals are never granted authoring rights. Archived campaigns stop authorizing campaign routes except an explicit allow-list (settings read and reactivate).
 - `Secure`, `HttpOnly`, narrowly scoped authentication cookies and CSRF protection for cookie-authenticated mutations
 - reverse-proxy and/or application rate limiting for login and expensive AI endpoints
 - no direct public access to PostgreSQL or Uvicorn

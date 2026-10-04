@@ -86,6 +86,37 @@ stateDiagram-v2
 
 The diagram describes definition authority. Timeline events such as death or destruction do not normally move an entity from `canon` to `archived`.
 
+### 3.1 Accepted transitions (Phase 14)
+
+The shared commands implement exactly this table (`dnd_ai.domain.entity_lifecycle`), enforced by one pure policy that both the commands and the portal's `available_actions` / `blocked_actions` read model consult:
+
+| From | Action | To |
+|---|---|---|
+| draft | submit for review | proposed |
+| draft | reject (abandon) | rejected |
+| proposed | return to draft | draft |
+| proposed | approve | approved |
+| proposed | reject | rejected |
+| approved | publish | canon |
+| approved | return to draft | draft |
+| rejected | return to draft | draft |
+| canon | supersede (replacement `approved` or `canon`, same world and type) | superseded |
+| any canon status except proposed/approved | archive | lifecycle `archived` (canon status unchanged) |
+| lifecycle `archived` | restore (reason required) | lifecycle `active` (canon status unchanged; a superseded entity restores to superseded) |
+| draft or rejected, unreferenced | delete draft (reason required) | physically deleted |
+
+`deprecated` has no transitions yet. Every transition other than restore and delete requires lifecycle `active`. **Publish and restore require the subtype chain to be complete**, because the database verifies that a subtype row matches its entity's type but not that one exists. Approval and publish bind to the `row_version` the reviewer saw, so a draft edited after review cannot be approved by mistake. There is no separation of duties: the same `canon.edit` holder may author, approve, and publish (accepted limitation).
+
+### 3.2 Which records use canon lifecycle (eligibility registry)
+
+Canon lifecycle applies to `core.entities` *definitions* only, and only to the types in `ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES`: the place types (`location`, `settlement`, `building`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `realm`), the organization types (`organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`), and `religion`. Excluded types and why: characters and NPCs (archiving revokes relationship-derived capabilities; Phase 15C/16), events (own draft/recorded/voided/corrected machine; 15E), quests (definition vs progress; 15D), knowledge items (truth/knowledge semantics; 15E), item instances (instance/state; 15F), and dungeons/dungeon areas (structural-mutation guards; 15A). Worlds, timelines, and campaigns do **not** use canon lifecycle — they use only operational `active`/`archived`.
+
+**Adding a type to the registry is a reviewed change**: it must also extend read-side visibility gating (`dnd_ai.queries.entity_lifecycle.lifecycle_hidden_entity_ids` and the World Explorer) to every surface the type appears on, and its deletable-reference classification must be reviewed (§14). A catalog test fails when a new foreign key to a definition is unclassified.
+
+### 3.3 Read-side visibility
+
+A caller without `canon.edit` sees only published definitions in browse lists (`canon` and `active`); detail routes, relationship participants, and event participants/locations additionally resolve `superseded`, `deprecated`, and archived definitions so history stays referenceable. Drafts, proposals, approved-but-unpublished, and rejected definitions are the same 404 as a nonexistent record. A `canon.edit` caller sees everything (except deleted) in detail and may preview drafts and archived records in lists with `include_noncanon` / `include_archived`; those flags are ignored for everyone else.
+
 ## 4. Creation workflow
 
 All entity creation should occur through an application command or database function that performs the full class-table inheritance chain in one transaction.
@@ -267,6 +298,17 @@ flowchart LR
     E2 -. not inherited .-> B
 ```
 
+### 9.1 Branch creation through `create_timeline_branch` (Phase 14)
+
+The branch command offers exactly two kinds of branch point:
+
+- **`existing_world_time`** — the world time of a *recorded* event in `campaign.effective_events(parent)` (inherited ancestor history counts). It must not precede the parent's own branch point: `effective_events` caps each ancestor at the *next timeline down's* branch point, so branching earlier than one's parent's branch point would let the child see ancestor events newer than its own branch point.
+- **`latest`** — "branch from the present state of the parent's history". Creates a new narrative `core.world_times` row (no calendar or year, a required label) with `sort_key` one past everything the parent can see (never before the parent's own branch point). On an event-less timeline that is `sort_key = 0`, so a brand-new world can branch without SQL.
+
+Nonexistent, other-world, not-in-history, and draft-event-only world times are the same `branch_point_invalid` error. `branch_event_id` stays NULL in Phase 14 (attaching a causal event arrives with event authoring, Phase 15E). The parent timeline and its world must be active; a new branch is never primary. Lineage (`parent_timeline_id`, `branch_world_time_id`) is immutable after creation.
+
+**Inheritance is by world-time position**, exactly as `effective_events` computes it: a parent event recorded *later* at a world time at or before the branch point is pre-branch history by definition and is inherited. Branch-point options expose only world-time labels, never event names or IDs.
+
 ## 10. AI-generated entities and changes
 
 AI generation follows a proposal lifecycle.
@@ -352,6 +394,8 @@ Restoration requires:
 
 Restoring an archived entity does not automatically reverse timeline-state events.
 
+Phase 14 implements restoration as `restore_entity`: `canon.edit`, a required reason, the legal-transition check, and subtype-chain completeness; canon status is unchanged and `archived_at` is cleared. Archive is `archive_entity`; it is refused while an entity is in review (`proposed`/`approved`) — reject or return it to draft first.
+
 ## 14. Physical deletion
 
 Physical deletion is exceptional.
@@ -362,6 +406,8 @@ Allowed cases:
 - failed test fixture
 - data that must be removed for legal or security reasons
 - administrative cleanup before production use
+
+Phase 14 implements the first case as `delete_draft_entity`: only a never-canon (`draft`/`rejected`) entity with a reason, and only when nothing references it. What counts as a reference is the reviewed `ENTITY_REFERENCE_CLASSIFICATION` (`dnd_ai.commands.entity_lifecycle`): the subtype chain, names, and tags are owned and go with the definition; any other foreign key (events, relationships, grants, state, children) blocks the deletion with `entity_referenced`. The audit row survives the delete.
 
 Deletion constraints:
 
@@ -433,6 +479,8 @@ Changing what a character believes does not change the claim's objective truth s
 
 All write commands should support an idempotency key when invoked by external integrations or asynchronous workers.
 
+**Adopted in Phase 14.** Optimistic concurrency uses a numeric `row_version` on worlds, timelines, campaigns, and entities (DATABASE_CONVENTIONS §26.3); every edit, archive, restore, reactivate, and lifecycle transition carries an `expected_row_version` and a stale write is HTTP 409 `stale_write`. Idempotency uses three stores chosen by route scope (§26.4); replay is answered before the version check so a retried success is not reported as stale.
+
 Concurrency rules:
 
 - Use optimistic version columns on mutable current-state rows.
@@ -473,6 +521,23 @@ Every lifecycle transition should record:
 12. Every current-state transition has a cause or explicit administrative source.
 
 ## 21. Service commands
+
+### 21.1 Accepted Phase 14 commands
+
+Delivered commands (each intent-specific, `expected_row_version`-guarded, idempotent, and audited; see [SYSTEM_ARCHITECTURE.md §5.3](architecture/SYSTEM_ARCHITECTURE.md)). **Built** unless marked **Planned**:
+
+| Command | Status |
+|---|---|
+| `create_world` (world, allow-listed rulesets and default, owner membership, primary timeline — one transaction) | Built |
+| `update_world`, `archive_world`, `restore_world` | Built |
+| `claim_unowned_world` (trusted infrastructure only, never over HTTP) | Built |
+| `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |
+| `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Built |
+| `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Built (eligible types only; see §3.2) |
+
+Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.
+
+### 21.2 Recommended lifecycle commands (design catalog)
 
 Recommended lifecycle commands:
 

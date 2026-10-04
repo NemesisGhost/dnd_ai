@@ -7,6 +7,10 @@ interface WorldPageProps {
     query: string
     onQueryChange: (query: string) => void
     onCategoryChange: (category: WorldCategory | null) => void
+    // Offered only to canon.edit holders; players never see the toggle.
+    canPreviewHidden?: boolean
+    showHidden?: boolean
+    onShowHiddenChange?: (value: boolean) => void
     children: ReactNode
 }
 
@@ -30,6 +34,9 @@ export function WorldPage({
     query,
     onQueryChange,
     onCategoryChange,
+    canPreviewHidden = false,
+    showHidden = false,
+    onShowHiddenChange,
     children,
 }: WorldPageProps) {
     const searchInputId = useId()
@@ -85,6 +92,20 @@ export function WorldPage({
                         ))}
                     </select>
                 </div>
+                {canPreviewHidden ? (
+                    <div className="world-page__field">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={showHidden}
+                                onChange={(event) =>
+                                    onShowHiddenChange?.(event.currentTarget.checked)
+                                }
+                            />{" "}
+                            Show drafts and archived
+                        </label>
+                    </div>
+                ) : null}
             </div>
 
             {children}

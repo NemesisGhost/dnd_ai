@@ -261,6 +261,7 @@ EXPECTED_TABLES = {
     "security": [
         "security.access_group_memberships",
         "security.access_groups",
+        "security.actor_idempotent_requests",
         "security.browser_sessions",
         "security.campaign_creation_reservations",
         "security.campaign_invitations",
@@ -284,6 +285,8 @@ EXPECTED_TABLES = {
         "security.user_activation_tokens",
         "security.user_portal_preferences",
         "security.users",
+        "security.world_memberships",
+        "security.world_roles",
     ],
 }
 

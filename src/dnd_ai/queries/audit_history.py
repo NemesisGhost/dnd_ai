@@ -168,7 +168,15 @@ _INVITATION_TABLE_COMMANDS: tuple[str, ...] = (
     "create_campaign_invitation",
     "revoke_campaign_invitation",
 )
-_CAMPAIGN_TABLE_COMMANDS: tuple[str, ...] = ("create_campaign",)
+_CAMPAIGN_TABLE_COMMANDS: tuple[str, ...] = (
+    "create_campaign",
+    # Phase 14: campaign settings and lifecycle. record_id is the campaign
+    # row, so the same campaign-resolving join applies. `changed_fields` and
+    # `reason` are never selected or returned by this query.
+    "update_campaign",
+    "archive_campaign",
+    "reactivate_campaign",
+)
 # Phase 13E-B checkpoint 6. Grouped separately from _GRANT_TABLE_COMMANDS
 # even though both concern access groups: these resolve against
 # security.access_groups/.access_group_memberships directly (the record_id
@@ -249,6 +257,9 @@ _ACTION_LABEL_BY_COMMAND: dict[str, str] = {
     "invitation_onboarding.complete": "Invitation onboarding completed",
     "invitation_onboarding.register_accept": "Invitation accepted (new account)",
     "create_campaign": "Campaign created",
+    "update_campaign": "Campaign settings updated",
+    "archive_campaign": "Campaign archived",
+    "reactivate_campaign": "Campaign reactivated",
     "create_access_group": "Access group created",
     "update_access_group": "Access group updated",
     "deactivate_access_group": "Access group deactivated",

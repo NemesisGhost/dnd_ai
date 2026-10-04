@@ -221,9 +221,30 @@ from datetime import timedelta
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.authoring import (
+    CampaignNotAuthorizedError,
+    StaleWriteError,
+    normalize_description,
+    normalize_name,
+    normalize_reason,
+)
+from dnd_ai.domain.authoring_policy import (
+    CAMPAIGN_ARCHIVE,
+    CAMPAIGN_REACTIVATE,
+    CAMPAIGN_UPDATE,
+    TIMELINE_CREATE_CAMPAIGN,
+    WORLD_CREATE_CAMPAIGN,
+    campaign_blocked_reason,
+    raise_for_reason,
+    timeline_blocked_reason,
+    world_blocked_reason,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.world_authority import CAMPAIGN_CREATE
+from dnd_ai.queries.world_authority import resolve_world_authority
 
-from ._shared import lookup_id
+from ._shared import lifecycle_code, lookup_id
 
 _CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
 _ACCESS_MANAGE_CAPABILITY_CODE = "access.manage"
@@ -323,6 +344,8 @@ def grant_timeline_bootstrap(
 @dataclass(frozen=True)
 class _TimelineAuthorization:
     world_id: uuid.UUID
+    world_status: str
+    timeline_status: str
     # Set only on the first-campaign (grant-consuming) path; None on the
     # reuse (access.manage) path, which never touches a bootstrap grant.
     bootstrap_grant_id: uuid.UUID | None
@@ -341,12 +364,47 @@ def _authorize_timeline_reuse(
     an unclaimed timeline, and otherwise requires an active `access.
     manage` membership in at least one existing campaign already on it."""
     world_id = connection.execute(
-        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline FOR UPDATE"),
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :timeline"),
         {"timeline": timeline_id},
     ).scalar()
     if world_id is None:
         raise TimelineNotAuthorizedError(f"timeline {timeline_id} does not exist")
     assert isinstance(world_id, uuid.UUID)
+
+    # Global lock order (docs/architecture/SYSTEM_ARCHITECTURE.md §7.1): the
+    # world `FOR SHARE` (it conflicts with `archive_world`'s `FOR UPDATE`, so the
+    # world cannot be archived underneath a campaign being created), then the
+    # timeline `FOR UPDATE` (bootstrap-grant serialization, below). Each is
+    # locked as a bare row and its status resolved by a separate query — a JOIN
+    # inside a locking statement can silently drop the row after a concurrent
+    # UPDATE (see dnd_ai.commands._shared.lifecycle_code).
+    world_status_id = connection.execute(
+        text("SELECT lifecycle_status_id FROM core.worlds WHERE world_id = :w FOR SHARE"),
+        {"w": world_id},
+    ).scalar()
+    timeline_status_id = connection.execute(
+        text(
+            "SELECT lifecycle_status_id FROM campaign.timelines "
+            "WHERE timeline_id = :timeline FOR UPDATE"
+        ),
+        {"timeline": timeline_id},
+    ).scalar()
+    if world_status_id is None or timeline_status_id is None:
+        raise TimelineNotAuthorizedError(f"timeline {timeline_id} does not exist")
+    world_status = lifecycle_code(connection, world_status_id)
+    timeline_status = lifecycle_code(connection, timeline_status_id)
+
+    # Path A (Phase 14): world authority. `campaign.create` is held by an active
+    # world owner; no bootstrap grant is looked up or consumed, and the owner
+    # gets no membership in campaigns they did not create.
+    authority = resolve_world_authority(connection, user_id=creator_user_id, world_id=world_id)
+    if authority is not None and authority.has_capability(CAMPAIGN_CREATE):
+        return _TimelineAuthorization(
+            world_id=world_id,
+            world_status=world_status,
+            timeline_status=timeline_status,
+            bootstrap_grant_id=None,
+        )
 
     already_used = connection.execute(
         text("SELECT EXISTS (SELECT 1 FROM campaign.campaigns WHERE timeline_id = :timeline)"),
@@ -373,13 +431,35 @@ def _authorize_timeline_reuse(
                 f"{timeline_id}"
             )
         assert isinstance(grant_id, uuid.UUID)
-        return _TimelineAuthorization(world_id=world_id, bootstrap_grant_id=grant_id)
+        return _TimelineAuthorization(
+            world_id=world_id,
+            world_status=world_status,
+            timeline_status=timeline_status,
+            bootstrap_grant_id=grant_id,
+        )
 
+    # Path B: an `access.manage` holder in an existing campaign on the timeline.
+    # A campaign's lifecycle must be revalidated *under lock*: the campaigns are
+    # locked `FOR SHARE` (bare rows, in id order, after the world and timeline
+    # locks above — the global order), which waits for an in-flight archive
+    # (`FOR UPDATE`) and, under READ COMMITTED, makes the entitlement query
+    # below see its committed result. Archived/deleted campaigns retain their
+    # memberships and roles by design, so they must never authorize reuse.
+    connection.execute(
+        text(
+            "SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :timeline "
+            "ORDER BY campaign_id FOR SHARE"
+        ),
+        {"timeline": timeline_id},
+    ).all()
     is_entitled = connection.execute(
         text("""
             SELECT EXISTS (
                 SELECT 1
                 FROM campaign.campaigns c
+                JOIN core.lifecycle_statuses cls
+                    ON cls.lifecycle_status_id = c.lifecycle_status_id
+                   AND cls.code NOT IN ('archived', 'deleted')
                 JOIN security.campaign_memberships cm ON cm.campaign_id = c.campaign_id
                 JOIN security.membership_statuses ms
                     ON ms.membership_status_id = cm.membership_status_id
@@ -409,7 +489,12 @@ def _authorize_timeline_reuse(
             f"user {creator_user_id} holds no active access.manage membership in any existing "
             f"campaign on timeline {timeline_id}"
         )
-    return _TimelineAuthorization(world_id=world_id, bootstrap_grant_id=None)
+    return _TimelineAuthorization(
+        world_id=world_id,
+        world_status=world_status,
+        timeline_status=timeline_status,
+        bootstrap_grant_id=None,
+    )
 
 
 def _check_ruleset_allowed(
@@ -445,10 +530,30 @@ def create_campaign(
     membership, atomically. See this module's docstring for the full
     reasoning, including why `timeline_id`/`ruleset_version_id` are
     pre-checked before anything is written."""
+    clean_name = normalize_name(name)
+    clean_description = normalize_description(description)
     authorization = _authorize_timeline_reuse(
         connection, timeline_id=timeline_id, creator_user_id=creator_user_id
     )
     world_id = authorization.world_id
+    # Lifecycle is checked only *after* authorization, so an unauthorized
+    # caller learns nothing about a world or timeline being archived.
+    for blocked in (
+        world_blocked_reason(
+            WORLD_CREATE_CAMPAIGN,
+            lifecycle_status=authorization.world_status,
+            has_blocking_campaigns=False,
+        ),
+        timeline_blocked_reason(
+            TIMELINE_CREATE_CAMPAIGN,
+            world_status="active",
+            timeline_status=authorization.timeline_status,
+            is_primary=False,
+            has_blocking_campaigns=False,
+        ),
+    ):
+        if blocked is not None:
+            raise_for_reason(blocked, f"campaign creation blocked on timeline {timeline_id}")
     _check_ruleset_allowed(connection, world_id=world_id, ruleset_version_id=ruleset_version_id)
 
     active_lifecycle_status_id = lookup_id(
@@ -468,8 +573,8 @@ def create_campaign(
         """),
         {
             "timeline": timeline_id,
-            "name": name,
-            "description": description,
+            "name": clean_name,
+            "description": clean_description,
             "status": active_lifecycle_status_id,
             "ruleset_version": ruleset_version_id,
         },
@@ -541,4 +646,257 @@ def create_campaign(
         campaign_id=campaign_id,
         campaign_membership_id=campaign_membership_id,
         world_id=world_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: settings, archive, reactivate
+# ---------------------------------------------------------------------------
+#
+# `update_campaign`, `archive_campaign`, and `reactivate_campaign` all require
+# `access.manage` in the campaign, re-resolved *under the campaign row lock*
+# (the route dependency is only the first check), and an
+# `expected_row_version`. A failure to find the campaign or to hold the
+# capability is one non-disclosing error. Archiving stops the campaign from
+# authorizing (`dnd_ai.api.access.require_campaign_capability`) and from being
+# listed by the session bootstrap; memberships, roles, grants, invitations, and
+# device credentials are deliberately untouched, so reactivation restores
+# everything exactly as it was.
+
+
+@dataclass(frozen=True)
+class CampaignMutationResult:
+    campaign_id: uuid.UUID
+    world_id: uuid.UUID
+    row_version: int
+    lifecycle_status: str
+    changed: bool
+    previous_lifecycle_status: str | None = None
+    changed_fields: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class _LockedCampaign:
+    name: str
+    description: str | None
+    row_version: int
+    lifecycle_status: str
+    timeline_id: uuid.UUID
+
+
+def _lock_campaign_for_manage(
+    connection: Connection, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> _LockedCampaign:
+    row = connection.execute(
+        text("""
+            SELECT c.name, c.description, c.row_version, c.lifecycle_status_id, c.timeline_id
+            FROM campaign.campaigns c
+            WHERE c.campaign_id = :c
+            FOR UPDATE OF c
+        """),
+        {"c": campaign_id},
+    ).one_or_none()
+    if row is None:
+        raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
+    access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
+    if access is None or not access.has_capability(_ACCESS_MANAGE_CAPABILITY_CODE):
+        raise CampaignNotAuthorizedError(
+            f"user {actor_user_id} lacks access.manage on {campaign_id}"
+        )
+    return _LockedCampaign(
+        name=str(row.name),
+        description=row.description,
+        row_version=int(row.row_version),
+        lifecycle_status=lifecycle_code(connection, row.lifecycle_status_id),
+        timeline_id=row.timeline_id,
+    )
+
+
+def _world_of_timeline(connection: Connection, timeline_id: uuid.UUID) -> uuid.UUID:
+    world_id = connection.execute(
+        text("SELECT world_id FROM campaign.timelines WHERE timeline_id = :t"), {"t": timeline_id}
+    ).scalar()
+    assert isinstance(world_id, uuid.UUID)
+    return world_id
+
+
+def _set_campaign_lifecycle(
+    connection: Connection, *, campaign_id: uuid.UUID, status_code: str
+) -> int:
+    new_version = connection.execute(
+        text("""
+            UPDATE campaign.campaigns
+            SET lifecycle_status_id =
+                (SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = :code)
+            WHERE campaign_id = :c RETURNING row_version
+        """),
+        {"code": status_code, "c": campaign_id},
+    ).scalar()
+    assert isinstance(new_version, int)
+    return new_version
+
+
+def _require_campaign_action(
+    connection: Connection,
+    *,
+    action: str,
+    campaign_id: uuid.UUID,
+    campaign: _LockedCampaign,
+    world_status: str = "active",
+    timeline_status: str = "active",
+) -> None:
+    reason = campaign_blocked_reason(
+        action,
+        campaign_status=campaign.lifecycle_status,
+        world_status=world_status,
+        timeline_status=timeline_status,
+        has_access_manager=(
+            action != CAMPAIGN_REACTIVATE
+            or bool(
+                connection.execute(
+                    text("SELECT security.campaign_has_access_manager(:c)"), {"c": campaign_id}
+                ).scalar()
+            )
+        ),
+    )
+    if reason is not None:
+        raise_for_reason(reason, f"{action} blocked for campaign {campaign_id}: {reason}")
+
+
+def update_campaign(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_row_version: int,
+    name: str,
+    description: str | None,
+) -> CampaignMutationResult:
+    """Replace the campaign's editable settings (name, description). A no-op
+    writes, bumps, and audits nothing. Timeline and ruleset version are not
+    editable (the timeline is schema-immutable; ruleset upgrades are Phase 19)."""
+    clean_name = normalize_name(name)
+    clean_description = normalize_description(description)
+    campaign = _lock_campaign_for_manage(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id
+    )
+    world_id = _world_of_timeline(connection, campaign.timeline_id)
+    if campaign.row_version != expected_row_version:
+        raise StaleWriteError(f"campaign {campaign_id} is at {campaign.row_version}")
+    _require_campaign_action(
+        connection, action=CAMPAIGN_UPDATE, campaign_id=campaign_id, campaign=campaign
+    )
+    changed: dict[str, object] = {}
+    if clean_name != campaign.name:
+        changed["name"] = {"from": campaign.name, "to": clean_name}
+    if clean_description != campaign.description:
+        changed["description"] = {"from": campaign.description, "to": clean_description}
+    if not changed:
+        return CampaignMutationResult(
+            campaign_id=campaign_id,
+            world_id=world_id,
+            row_version=campaign.row_version,
+            lifecycle_status=campaign.lifecycle_status,
+            changed=False,
+        )
+    new_version = connection.execute(
+        text(
+            "UPDATE campaign.campaigns SET name = :n, description = :d "
+            "WHERE campaign_id = :c RETURNING row_version"
+        ),
+        {"n": clean_name, "d": clean_description, "c": campaign_id},
+    ).scalar()
+    assert isinstance(new_version, int)
+    return CampaignMutationResult(
+        campaign_id=campaign_id,
+        world_id=world_id,
+        row_version=new_version,
+        lifecycle_status=campaign.lifecycle_status,
+        changed=True,
+        changed_fields=changed,
+    )
+
+
+def archive_campaign(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_row_version: int,
+    reason: str | None = None,
+) -> CampaignMutationResult:
+    """Archive an active campaign. Does not touch memberships, roles, grants,
+    invitations, or device credentials."""
+    normalize_reason(reason)
+    campaign = _lock_campaign_for_manage(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id
+    )
+    world_id = _world_of_timeline(connection, campaign.timeline_id)
+    if campaign.row_version != expected_row_version:
+        raise StaleWriteError(f"campaign {campaign_id} is at {campaign.row_version}")
+    _require_campaign_action(
+        connection, action=CAMPAIGN_ARCHIVE, campaign_id=campaign_id, campaign=campaign
+    )
+    new_version = _set_campaign_lifecycle(
+        connection, campaign_id=campaign_id, status_code="archived"
+    )
+    return CampaignMutationResult(
+        campaign_id=campaign_id,
+        world_id=world_id,
+        row_version=new_version,
+        lifecycle_status="archived",
+        changed=True,
+        previous_lifecycle_status="active",
+    )
+
+
+def reactivate_campaign(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    expected_row_version: int,
+) -> CampaignMutationResult:
+    """Reactivate an archived campaign. Requires an active world and timeline
+    and a surviving non-expiring `access.manage` holder (pre-checked so a
+    campaign whose only manager's role has expired is a classified 409, not a
+    commit-time integrity failure). Lock order: world, timeline (both `FOR
+    SHARE`), then the campaign `FOR UPDATE`."""
+    timeline_id = connection.execute(
+        text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
+        {"c": campaign_id},
+    ).scalar()
+    if timeline_id is None:
+        raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
+    world_id = _world_of_timeline(connection, timeline_id)
+    world_status_id = connection.execute(
+        text("SELECT lifecycle_status_id FROM core.worlds WHERE world_id = :w FOR SHARE"),
+        {"w": world_id},
+    ).scalar()
+    timeline_status_id = connection.execute(
+        text("SELECT lifecycle_status_id FROM campaign.timelines WHERE timeline_id = :t FOR SHARE"),
+        {"t": timeline_id},
+    ).scalar()
+    assert world_status_id is not None and timeline_status_id is not None
+    campaign = _lock_campaign_for_manage(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id
+    )
+    if campaign.row_version != expected_row_version:
+        raise StaleWriteError(f"campaign {campaign_id} is at {campaign.row_version}")
+    _require_campaign_action(
+        connection,
+        action=CAMPAIGN_REACTIVATE,
+        campaign_id=campaign_id,
+        campaign=campaign,
+        world_status=lifecycle_code(connection, world_status_id),
+        timeline_status=lifecycle_code(connection, timeline_status_id),
+    )
+    new_version = _set_campaign_lifecycle(connection, campaign_id=campaign_id, status_code="active")
+    return CampaignMutationResult(
+        campaign_id=campaign_id,
+        world_id=world_id,
+        row_version=new_version,
+        lifecycle_status="active",
+        changed=True,
+        previous_lifecycle_status="archived",
     )

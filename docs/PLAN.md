@@ -1222,7 +1222,7 @@ Use constraints and triggers for local invariants. Use service-layer validation 
 
 ## 22. World/campaign-data import implementation
 
-World/campaign-data import is deferred until Phase 14, after canonical API commands and application services exist. It handles world-building and campaign-premise documents; locations, factions, organizations, religions, and lore; NPCs and relationships; character backgrounds; quests and rewards; session notes and transcripts; timelines and historical events; items, ownership, inventory, and treasure; discoveries, beliefs, secrets, knowledge, summaries, and current state. It is distinct from the Phase 12 rules/reference corpus.
+World/campaign-data import is deferred until Phase 18, after canonical API commands and application services exist. It handles world-building and campaign-premise documents; locations, factions, organizations, religions, and lore; NPCs and relationships; character backgrounds; quests and rewards; session notes and transcripts; timelines and historical events; items, ownership, inventory, and treasure; discoveries, beliefs, secrets, knowledge, summaries, and current state. It is distinct from the Phase 12 rules/reference corpus.
 
 Implement later:
 
@@ -1273,7 +1273,7 @@ Historical session notes require explicit separation between described historica
 
 When reliable causal history cannot be reconstructed, use an explicitly identified initial-state or reconciliation command with provenance. Do not fabricate an event merely to make history appear complete.
 
-Phase 14 starts with a small campaign packet containing one world-building document, one quest description, and one set of session notes. One input format is sufficient initially. AI-assisted and deterministic extraction are both allowed, but all extracted content remains untrusted until validation and approval. A general PDF, DOCX, spreadsheet, transcript, or OCR framework is outside the initial scope.
+Phase 18 starts with a small campaign packet containing one world-building document, one quest description, and one set of session notes. One input format is sufficient initially. AI-assisted and deterministic extraction are both allowed, but all extracted content remains untrusted until validation and approval. A general PDF, DOCX, spreadsheet, transcript, or OCR framework is outside the initial scope.
 
 ---
 
@@ -1407,7 +1407,7 @@ The MVP includes:
 - an on-demand assistant for campaign summaries, details, rules questions, and GM preparation using authorized structured queries and cited rules/reference passages
 - observer views built from explicitly published or granted resources
 - GM tools for canon browsing, preparation, visibility preview, user/account activation, password-reset initiation, campaign invitations, role assignment, user-character relationships, resource grants, Foundry connection/device management, and audit history
-- Phase 15 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
+- Phase 18 campaign-import review, editing, match resolution, approval, rejection, and promotion surfaces
 
 The detailed interaction design, screen specifications, and authorization matrix are maintained in [UI_DESIGN.md](UI_DESIGN.md). The plan defines delivery boundaries; that document defines the product experience. UI implementation proceeds in small, individually runnable increments; authorship changes at 13E (§2.9 — owner-authored through 13D, Claude Code-authored from 13E, with owner manual validation before each closeout). A large generated scaffold or an unrestricted content-management platform remains outside the Phase 13 workflow either way.
 
@@ -1440,11 +1440,18 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 8 | Complete | Relationships, organizations, businesses, governments, and religions | None |
 | 9 | Complete | Items, inventory, encounters, and integration persistence contracts | Live Foundry adapter belongs to Phase 11 |
 | 10 | Complete | FastAPI boundary, optional OIDC bearer verification, authorization, commands, queries, auditing, idempotency, Compose API service, verified vertical-slice exit scenario | Local password/session and Foundry device credential work is additive Phase 11/13 work, not a reopening of the verified domain/API foundation |
-| 11 | Partially implemented; 11R pairing/authentication delivered | Per-user pairing codes, per-device credentials, short-lived scoped access, bounded adapter routes, combat/state synchronization, client module, CORS/HTTPS hardening, and automated E2E coverage are implemented. The legacy `FoundrySystem` credential is rejected and previously issued keys are revoked. | Perform the documented licensed live Foundry v13 verification and record the result in `docs/PHASE11_VERIFICATION.md` |
-| 12 | Partially implemented | Rules/reference corpus, AI agent/context/proposal schema, one NPC-conversation use case with two proposal kinds (`reveal_knowledge`, `advance_quest_objective`), audience-aware synthesis service, OpenAI-compatible provider with a local-model path | Real-provider smoke verification and `docs/PHASE12_VERIFICATION.md` |
-| 13 | Partially implemented | 13A (UI foundation) merged. 13B backend delivered: local accounts/activation/password reset, Argon2id passwords, opaque PostgreSQL browser sessions, CSRF/Origin enforcement, rate limiting, the authoritative `/auth/session` bootstrap contract (user, campaigns/roles/perspectives/capabilities, feature manifest), administrative account disable/reactivate/revoke-all-sessions, and durable local-auth/session security auditing; external OIDC bearer compatibility made optional in every environment, including production. 13C delivered and verified: the portal replaced fixture identity data with the live bootstrap contract, adding campaign selection and explicit character perspective with capabilities sourced only from the bootstrap. 13D implemented: live campaign-scoped Home, World, Characters, Quests (list/detail), Sessions (list/detail), and Knowledge screens with consistent loading/empty/denied/error/refreshing states. A 13D acceptance review found four defects, since corrected: Character Sheet skipped the entity-targeted `campaign.view` deny gate Detail/Inventory already enforced (fixed by reusing the same `access.has_capability(..., entity_id=character_id)` check, with a PostgreSQL regression test asserting Detail/Sheet/Inventory/World-search agree); the portal had no logout affordance (added a `POST /auth/logout` client and an accessible logout control in the portal chrome); the persistent portal banner used `<h1>`, double-heading every route (demoted to non-heading chrome text; each route keeps its own single `<h1>`); and this status line overstated 13D as fully "delivered and verified." See `docs/DEVELOPMENT.md`'s definition of done for the verification this correction was run against. **13E complete** (checkpoints 0, 8a-16 — see `docs/PHASE13E_ACCESS_CONTRACT.md` and `docs/PHASE13E_VERIFICATION.md` for the full delivered contract and evidence): single-link campaign-invitation onboarding (register-or-sign-in then auto-accept); platform-account administration (list, create, activate, reset, disable/reactivate, revoke sessions) plus self-service password/session management; every resource-grant target kind and the `deny` effect; a per-member effective-access explanation; a per-resource (quest/knowledge) audience preview for a selected member; and an actor filter plus the onboarding categories on the campaign audit history. Explicit 13E limitations, not oversights: full preview-as-user/impersonation (Option A) was never built — 13E ships the bounded effective-access explanation plus per-resource preview instead, by owner decision D-1; explicit membership reactivation outside invitation acceptance remains absent by design (§3e's own "re-add, never reactivate in place" position); every 13E surface stays human-portal-only, with no Foundry-adapter or AI-proposal path added for any of it. | 13F (Foundry device-management/pairing UI), 13G (Phase 12 feature gates), and 13H (E2E coverage and packaging) remain; Phase 12-dependent surfaces stay disabled until that phase closes |
-| 14 | Partially implemented | PostgreSQL/API Compose services and local development topology | Production UI/worker/reverse-proxy packaging, secrets, monitoring, backup/restore and rollback hardening |
-| 15 | Not started | — | Controlled world and campaign-data import |
+| 11 | Foundation delivered; remaining work reassigned | Existing Foundry backend/module retained; live acceptance and portal UI move to Phase 21 |
+| 12 | Foundation delivered; remaining work reassigned | Existing AI/context/proposal foundation retained; product surfaces and real-provider acceptance move to Phase 20 |
+| 13 | Complete | Portal foundation, campaign reads, account/settings, invitations, and access management |
+| **14** | **In progress** | **Shared authoring kernel plus world/timeline/campaign setup** (design decisions: [ADR 0014](adr/0014-world-authoring-authority.md)) |
+| **15** | Planned | **Game Master world, campaign, and session authoring** |
+| **16** | Planned | **Player character authoring, notes, theories, contributions, and collaboration** |
+| **17** | Planned | **Standalone-product acceptance and self-hosted production packaging** |
+| 18 | Planned | Session intelligence and controlled world/campaign import |
+| 19 | Planned | Rules-aware character, creature, and encounter expansion |
+| 20 | Planned | Grounded GM/player assistance and structured NPC scenes |
+| 21 | Planned | Foundry/VTT, bots, transcription, MCP, and other integrations |
+| 22 | Deferred | Hosted/paid offering and demonstrated-need scale work |
 
 ### 24.0 Verification policy
 
@@ -1945,6 +1952,8 @@ Do not create a general-purpose document-ingestion or vector-search framework fo
 
 ### Phase 13: Web portal MVP and same-origin packaging
 
+**Roadmap revision (2026-10-03).** Phase 13 is closed as the portal/read/access foundation. Its unfinished 13F (Foundry device UI), 13G (AI surfaces), and 13H (acceptance/E2E/packaging) increments moved to Phases 21, 20, and 17 respectively under the authoring-first roadmap; the increment table below is retained as history.
+
 **Status: Partially implemented.** Implemented: the API, optional bearer-token verification, authorization, audience-filtered query contracts, the partially implemented Phase 12 services, and — as of the Phase 13B backend-readiness correction — local application authentication, the secure browser-session boundary (§23.4), the authoritative session-bootstrap contract, administrative account lifecycle (disable/reactivate/revoke-all-sessions), and durable local-auth/session security auditing. The hybrid Foundry pairing model's own migration/adapter changes are decided here and delivered under Phase 11R (§23.5); its device-management **UI** remains. 13A's owner-authored React portal shell merged first (fixture data only). A 13D backend-readiness audit (`docs/PHASE13D_BACKEND_READINESS.md`) found the Home/Characters/Quests screens' backend contracts already sufficient and added the two concrete gaps blocking the rest: session read endpoints (`GET /campaigns/{campaign_id}/sessions` list/`{session_id}` detail — previously only the GM-only `end_session` write existed) and a campaign quest list (`GET /campaigns/{campaign_id}/quests`, the read-only `get_quest_view` detail route already existed but nothing could enumerate a campaign's tracked quests); World-explorer and Knowledge-screen browsing then received their read backend on the `phase13d/world-knowledge-read-api` branch (`docs/PHASE13D_BACKEND_READINESS.md` §10): a keyset-pagination convention (`dnd_ai.api.pagination`), a unified type-filtered/text-searchable World Explorer `GET /campaigns/{id}/world/search` plus typed detail routes for religions, item instances, historical events, and generic locations (with containment breadcrumbs), a relationship list, an audience-filtered Knowledge-screen list `GET /campaigns/{id}/knowledge?view=` across the six documented views, and additive `/auth/session` fields (world identity per campaign; the authorized parties per character perspective). The pre-existing organization-, dungeon-area-, and knowledge-item detail routes were hardened with a targeted `campaign.view` deny check so list and detail eligibility agree. No migration. A subsequent workstream (`docs/PHASE13D_CHARACTER_SHEET_BACKEND.md`) closed the Characters screen's own remaining gap: `GET /campaigns/{campaign_id}/characters/{character_id}/sheet` exposes the active-build mechanical sheet (`campaign.character_state.character_build_id`-resolved, never a caller-supplied or newest build) — class levels, ability scores, the complete skill/saving-throw list, other proficiencies, features, spellcasting with independent known/prepared spells, and languages/senses/movements — with D&D 5e derived calculations (ability modifiers, proficiency bonus, skill/saving-throw bonuses, spell attack/DC) computed by a new `dnd_ai.domain.character_calculations` service and gated to rulesets it explicitly recognizes. A pre-merge review correction to that same workstream fixed the sheet endpoint's active-build resolution on a branched timeline with no local `campaign.character_state` row: it now inherits the parent's build as of the branch point (via `dnd_ai.queries.character_build_resolution`, built on the existing `campaign.effective_events()` branch-aware history function) instead of falsely reporting "no active build," while still never leaking a parent build change made after the branch — see `docs/PHASE13D_CHARACTER_SHEET_BACKEND.md` §2.1 for the resolution order and its one remaining documented limitation (administrative, event-less build changes are not yet fully branch-safe).
 
 **13D closed COMPLETE WITH EXPLICIT LIMITATIONS** — reviewed commit `5bd6fd5efac64b07e5d452687ffaa010b2583a6b`, confirmed by CI run [`35148055021`](https://github.com/NemesisGhost/dnd_ai/actions/runs/35148055021) (603 portal tests, 147 focused backend tests); 13D's accepted limitations (documented in `docs/PHASE13D_BACKEND_READINESS.md`/`docs/PHASE13D_CHARACTER_SHEET_BACKEND.md`) carry forward rather than being re-litigated. **13E (GM access tools) is now in progress.** See `docs/PHASE13E_ACCESS_CONTRACT.md` for the full access-management contract inventory (existing read/mutation endpoints, capability/principal boundaries, and what remains undelivered). Its first increment, 13E-A, replaces the Access screen's placeholder with a read-only campaign access overview: `GET /campaigns/{campaign_id}/access-overview` (capability `access.manage`, `dnd_ai.api.access_overview` over `dnd_ai.queries.access_overview`) returns every currently open membership in the campaign with its active roles, current character relationships, and explicit membership-targeted resource grants, each with human-readable labels; the response DTO still carries opaque membership/character/role/grant identifiers where record identity requires one, but the Access page itself renders only the human-readable fields, never an identifier as visible text (identifiers are used only as React keys). Deliberately deferred to a later 13E increment: access-group-targeted grants, account-wide (platform) lifecycle status, pending invitations, non-character grant-target display identity, and every mutation (role/relationship/grant creation or revocation, invitations, account lifecycle, preview-as-user) — 13E-A is read-only. **13E-A is now merged and complete. 13E-B (GM access mutations) is in progress**; its first checkpoint adds exactly one mutation — changing an existing campaign member's role assignment (`POST /campaigns/{campaign_id}/memberships/roles/{membership_role_id}/change`, capability `access.manage`, `dnd_ai.api.memberships` over `dnd_ai.commands.memberships.change_membership_role`) — atomically revoking the targeted role assignment and inserting a new one (never a bulk replace, since a membership may hold multiple simultaneous roles), enforcing the same access-manager-retention invariant `revoke_membership_role` already enforced, self-change permitted subject to that same invariant, one `audit.change_log` row per change, and an `assignable_roles` read-contract addition on the access-overview response so the portal never hardcodes which roles it may offer. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full contract. Everything else 13E-B will eventually need — adding/removing a member, bare role add/revoke, character-relationship and resource-grant mutations, invitations, account lifecycle, preview-as-user — remains undelivered. **A correction pass on this same checkpoint** closed a gap in the initial cut: the command now also rejects an expired assignment, an ended/non-active membership, an inactive current or new role (all before any write, with real PostgreSQL row-locking against a concurrent deactivation), and a same-role no-op (422, checked before any write so it can never consume an `Idempotency-Key`); the portal now generates and sends that header itself, one key per logical edit; and the campaign `access.manage` retention invariant's concurrency-safety under real racing transactions is now covered by dedicated PostgreSQL regression tests (`tests/database/test_membership_role_concurrency.py`). See `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the corrected contract in full. **13E-B checkpoint 2 (complete role-assignment management for existing members) is complete.** It adds the two remaining single-role mutations for an *existing* campaign membership — never a membership add/remove, invitation, relationship, grant, preview-as-user, Foundry, or AI change: `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/roles` (`assign_membership_role`, pre-existing route, hardened) now additionally rejects an ended/non-active membership or a platform-disabled target account (`MembershipNotActiveError`, 409) and an inactive candidate role (`RoleNotUsableByCampaignError`, extended to check `is_active`, not scope alone), with `FOR UPDATE` row locks on the target membership, its owning user row, and the candidate role closing the same class of eligibility-check/write races `change_membership_role` already closed for its own targets; and `POST /campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke` (`revoke_membership_role`, pre-existing route) now accepts an `Idempotency-Key` and returns `200`/`MembershipRoleResponse` instead of a bodyless `204`, so a replayed or plain-retried revoke can no longer write a second `audit.change_log` row for one real revocation — the command itself returns whether it actually revoked anything (`RevokeMembershipRoleResult.revoked`), and the route's audit write is conditioned on it. Both routes keep the identical `access.manage` capability, non-disclosing 404/409 shapes, and campaign `access.manage` retention invariant every other mutation in this section already established; self-revocation is permitted subject to that same invariant, exactly like self-change. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3b/§3c for the full contracts and `tests/database/test_membership_role_concurrency.py` for the added PostgreSQL regression coverage (assign vs. membership-ending/role-deactivation/account-disablement, revoke vs. revoke same-row and different-management-row retention races). **13E-B checkpoint 3 (add an existing account to a campaign; end an existing membership) is complete.** It adds the last two membership-lifecycle mutations this section's own scope covers — never account creation, invitations, membership reactivation, character-relationship/resource-grant changes, access-group grants, account disablement/reactivation, audit-history UI, preview-as-user, Foundry, or AI: `GET /campaigns/{campaign_id}/eligible-accounts` (new; `dnd_ai.queries.access_overview.find_eligible_campaign_account`) resolves an existing account by its exact local login name for the portal's account-selection step — deliberately exact-match rather than directory-style search, so `access.manage` can never be used to enumerate the platform's account list; `POST /campaigns/{campaign_id}/memberships` (`create_campaign_membership`, pre-existing route, hardened and renamed in effect to `add_campaign_member`) now requires an initial `role_id` and atomically creates both the membership and its first role assignment, rejecting a non-active target campaign, a platform-disabled or nonexistent target account, and an inactive/cross-scope role, all before any write, with `FOR UPDATE` locks on the campaign, account, and role rows; and the new `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/end` (`end_campaign_membership`) closes an existing membership and gives every one of its active roles the same disposition `revoke_membership_role` already gives a single one, subject to the identical access-manager retention invariant every other mutation in this section enforces, with self-removal permitted on the same terms as self-change/self-revocation. Two `audit.change_log` rows are written per successful add (one per inserted table); one per actual removal (a harmless, unaudited no-op on an already-ended target, mirroring `revoke_membership_role`'s own contract). See `docs/PHASE13E_ACCESS_CONTRACT.md` §3d/§3e/§3f for the full contracts and `tests/database/test_membership_lifecycle_concurrency.py` for the added PostgreSQL regression coverage (add vs. add/campaign-deactivation/role-deactivation/account-disablement, removal vs. removal/role-change same-row races, and the two-manager/self-removal retention races under real barrier-coordinated concurrency). **13E-B's character-relationship-management checkpoint (add a character relationship to an existing membership; change an existing relationship's type; revoke a character relationship) is complete.** It adds direct human-to-character relationship management for an existing active campaign member — never resource grants (a broader six-target/two-grantee model, explicitly deferred to a separate future increment), access-group grants, campaign invitations, or membership/role changes beyond preserving checkpoints 1-3: `POST /campaigns/{campaign_id}/memberships/{campaign_membership_id}/character-relationships` (`grant_character_relationship`, pre-existing Phase 10 route, hardened) now additionally rejects an ended/non-active membership or platform-disabled account (`MembershipNotActiveError`, 409), an inactive or cross-world character (folded into the existing `TargetNotInCampaignWorldError`, 404), and an inactive relationship type (new `RelationshipTypeNotActiveError`, 404) — none of these was checked before; the new `POST /campaigns/{campaign_id}/character-relationships/{id}/change` (`change_character_relationship`) atomically revokes one active relationship assignment and inserts a new one with a different type (never a bulk replace, mirroring `change_membership_role`'s identical shape), rejecting a same-type no-op (422) and a not-currently-active target (`CharacterRelationshipNotActiveError`, 409); and `POST /campaigns/{campaign_id}/character-relationships/{id}/revoke` (`revoke_character_relationship`, pre-existing route) now accepts an `Idempotency-Key` and returns `200`/`CharacterRelationshipResponse` instead of a bodyless `204`, closing the identical duplicate-audit gap checkpoint 2 already closed for role revocation. A character relationship carries no campaign-wide `access.manage` capability, so none of these three mutations enforces (or needs) the access-manager retention invariant the role/membership mutations above do. The access-overview response gained two read-contract additions, `assignable_characters`/`assignable_relationship_types` (`dnd_ai.queries.access_overview.list_assignable_campaign_characters`/`.list_assignable_character_relationship_types`), so the portal's Add/Change controls never hardcode or guess either assignable set. Revocation and type changes take effect on the very next `GET /auth/session` bootstrap with no code change needed there — `dnd_ai.queries.bootstrap.get_session_bootstrap` already re-resolves `AccessContext.character_capabilities` fresh on every call — proven by the pre-existing, unmodified `tests/database/test_query_bootstrap.py` perspective-revocation tests. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3g/§3h/§3i/§3j for the full contracts and `tests/database/test_character_relationship_concurrency.py` for the added PostgreSQL regression coverage (grant vs. grant/membership-ending/character-deactivation/relationship-type-deactivation, change vs. relationship-type-deactivation, and change/revoke same-row races). The portal Access page gained matching Add/Change-type/Revoke controls per character relationship, following the identical persistent-announcement/server-authoritative-choices/deliberate-confirmation pattern the role controls already established. **A checkpoint-4 correction pass closed three verified defects in this checkpoint.** (1) `grant_character_relationship`/`change_character_relationship` did not check campaign lifecycle status at all, so a campaign could be deactivated after `require_campaign_capability` had already authorized the request but before either mutation committed; both now lock `campaign.campaigns FOR UPDATE` and require it to currently be `active` (reusing `dnd_ai.commands.memberships.CampaignNotActiveError`, 409), locked *after* the target row rather than before it to avoid a new deadlock class against the deferred `security.assert_campaign_retains_access_manager()` trigger every role mutation already relies on — `revoke_character_relationship` deliberately keeps no such check, so cleanup stays possible on an inactive campaign. (2) `end_campaign_membership` revoked a membership's roles but left its character relationships untouched, so `dnd_ai.commands.campaign_invitations._activate_or_create_membership`'s own reactivation of the *same* membership row later silently restored the departed member's old character capabilities with no new grant and no new audit entry; it now revokes every unrevoked relationship in the same transaction, recorded in `EndCampaignMembershipResult`/the audit row's `changed_fields` alongside the role ids. (3) `dnd_ai.domain.access.resolve_access_context`, the access overview, and `change_character_relationship`'s own eligibility check all ignored `effective_from_world_time_id`/`effective_to_world_time_id` entirely, so a fully fictional-time-bounded relationship was treated as unbounded/always-current; all three now require `effective_to_world_time_id IS NULL` before treating a relationship as current — the same "current record" rule `campaign.party_memberships`/`world.organization_memberships`/`world.employment_relationships` already use, applied here since this schema tracks no "current fictional now" a bounded window could otherwise be compared against (fail-closed, not an invented client-authoritative clock). See `docs/PHASE13E_ACCESS_CONTRACT.md` §3h/§3i/§3j and §3f for the corrected contracts, and `tests/database/test_character_relationship_concurrency.py` (campaign-deactivation-vs-grant/change), `tests/database/test_api_access_grants.py`, `tests/database/test_api_membership_lifecycle.py`, `tests/database/test_api_campaign_invitations.py`, `tests/database/test_query_bootstrap.py`, `tests/database/test_api_access_overview.py`, and `tests/database/test_api_characters.py` for the added regression coverage (14 new backend tests; 3622 `tests/database` total). **A follow-up review correction closed one remaining defect in the same checkpoint:** `change_character_relationship` had not been hardened to the same target-eligibility boundary `grant_character_relationship` already enforces — it locked/rechecked the relationship, its owning membership, the campaign, and the candidate new type, but never the membership's owning user account or the relationship's own existing character, so an access manager could durably change a relationship's type while its account was platform-disabled or its character archived, and reactivating either afterward could expose the changed grant with no new authorization check having actually passed. Fixed by extending `change_character_relationship`'s own eligibility check with the identical two conditions `grant_character_relationship` already requires — the owning account currently platform-active, the character currently active and still in the campaign's own world (`expected_world_id`, a new required argument resolved server-side from the caller's authorized timeline, never client-supplied) — both folded into the same non-disclosing `CharacterRelationshipNotActiveError` (409) this command already raises for every other "no longer eligible" cause, locked last in the same relationship/membership-then-campaign-then-user-then-character-then-type order `grant_character_relationship` uses. `dnd_ai.domain.access.resolve_access_context` and the access overview are hardened the same pass so a character deactivated *after* a relationship was granted or changed stops being authorization-effective on the very next request, not merely at grant/change time — `revoke_character_relationship` remains deliberately unchecked against account, character, membership, or campaign lifecycle, so cleanup stays possible regardless. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3h/§3i for the corrected contract, and `tests/database/test_character_relationship_concurrency.py` (account-disablement/character-deactivation-vs-change blocking proofs), `tests/database/test_api_access_grants.py` (both-orderings rejection/idempotency coverage), `tests/database/test_query_bootstrap.py`, `tests/database/test_api_access_overview.py`, and `tests/database/test_api_characters.py` for the added regression coverage. **13E-B checkpoint 5 (direct resource-grant management) is complete.** It hardens the pre-existing `security.resource_grants` schema/resolver/commands/routes (Phase 10) to the same "currently true" eligibility bar the earlier checkpoints established, adds a server-authoritative delegation policy this codebase had none of before (`dnd_ai.domain.access.RESOURCE_GRANT_CAPABILITY_CATALOG`, derived from this codebase's own actual capability-check call sites: `character.*` codes valid only for a `character_id` target, `campaign.view`/`canon.edit` valid for the other five target kinds, `access.manage`/`import.approve`/`rules_source.manage` excluded from every target kind entirely), and wires the portal's own "Direct resource access" section to it, scoped to character targets only (the one target kind with an existing safe display/search contract — the other five, and access-group-targeted grants, remain backend-supported but are deliberately omitted from the portal this checkpoint, documented rather than silently claimed complete). `create_resource_grant` now additionally rejects an ended/non-active grantee membership or platform-disabled owning account (`MembershipNotActiveError`, 409), a non-active campaign (`CampaignNotActiveError`, 409), a target that is not currently active (folded into the existing `TargetNotInCampaignWorldError`/`SessionNotInCampaignError`, 404 — covering both the five entity-rooted target kinds and `campaign.sessions`' own lifecycle status), and a capability that does not exist, is deactivated, or is not a valid pairing for the target kind (new `ResourceGrantCapabilityNotGrantableError`, 404) — none of these was checked before; `revoke_resource_grant_endpoint` now accepts an `Idempotency-Key` and returns `200`/`ResourceGrantResponse` instead of a bodyless `204`, closing the identical duplicate-audit gap earlier checkpoints already closed for role/relationship revocation; `end_campaign_membership` now also revokes every active resource grant a membership holds, closing the identical silent-reactivation gap checkpoint 4 closed for character relationships; and `dnd_ai.domain.access.resolve_access_context`/the access overview now both exclude a resource grant whose own target is no longer active, the same generalization applied to resource grants. No change endpoint exists or is planned — a resource grant's several independently-changeable fields have no single unambiguous "this is what changed" audit story the way a character relationship's single-field type change does, so revoke-plus-add (both already hardened, audited, and idempotent) is the deliberate replacement. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full contract and `tests/database/test_resource_grant_concurrency.py` (create vs. create/membership-ending/account-disablement/campaign-deactivation/target-deactivation/capability-deactivation, two-concurrent-revokes) plus the extended `tests/database/test_api_access_grants.py`, `test_access_resolution.py`, `test_api_access_overview.py`, `test_api_membership_lifecycle.py`, and `test_api_campaign_invitations.py` for the added regression coverage. **A checkpoint-5 correction pass closed four verified defects in this checkpoint.** (1) `end_campaign_membership` closed a departed member's direct resource grants but left their `security.access_group_memberships` rows untouched, so `resolve_access_context`'s own group-membership subquery kept treating them as still belonging to every access group they had joined, and `_activate_or_create_membership`'s reactivation of the *same* membership row later silently restored every group-derived grant with no new grant and no new audit entry; `end_campaign_membership` now also closes (`removed_at = now()`, never deletes) every one of the ending membership's currently open `access_group_memberships` rows in the same transaction, recorded in `EndCampaignMembershipResult.removed_access_group_membership_ids`/the audit row's `changed_fields`, leaving the group's own grant row and any other member's link to it untouched. (2) `create_resource_grant_endpoint`/`revoke_resource_grant_endpoint`'s audit rows carried no `changed_fields` at all, so a reviewer could see *that* a grant changed but not *what* it was; both now record a bounded, non-free-form payload (grantee kind/id, target kind/id, capability code, `allow`/`deny` effect) — created from the already-validated request body for create, and from `RevokeResourceGrantResult`'s own new fields (read server-side from the locked grant row, never re-derived from caller input) for revoke — never the free-form `reason` text. (3) `RESOURCE_GRANT_CAPABILITY_CATALOG` advertised `character.discover` for a `character_id` target even though its only deployed authorization consumer resolves that capability's *baseline* with no resource target at all, making a resource-scoped grant of it promise a capability this codebase has no real, standalone target-aware consumer for; it is now excluded from the catalog (documented in that constant's own docstring), and `create_resource_grant` rejects that pairing with the same 404 every other nonexistent/deactivated/incompatible capability code gets. (4) `RevokeResourceGrant`'s portal wording ("Revoke access"/"This access may disappear immediately") was allow-oriented even though the overview can render a backend-created `deny` grant, whose revocation *restores* access rather than removing it; the trigger label, accessible group label, confirmation text, and pending/success status are now effect-aware — a `deny` grant's controls read "Remove denial"/explain that access may be restored from another role, relationship, group, or allow grant, never that access may disappear — with no deny-creation UI added. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the corrected contract, and `tests/database/test_api_membership_lifecycle.py`, `tests/database/test_api_campaign_invitations.py`, `tests/database/test_api_access_grants.py`, `tests/database/test_resource_grant_concurrency.py`, `portal/src/pages/AccessPage.test.tsx`, and `portal/src/pages/CampaignAccessPage.resourceGrant.integration.test.tsx` for the added regression coverage. **13E-B checkpoint 6 (campaign access-group management) is complete.** It delivers the complete safe lifecycle the existing `security.access_groups`/`.access_group_memberships` schema (revision 080) supports, previously read-only (by `dnd_ai.domain.access.resolve_access_context`'s group-membership subquery and checkpoint 5's own group-grantee resource grants) but with no command anywhere able to create, list, deactivate, reactivate, or manage the membership of a group itself: `dnd_ai.commands.access_groups.create_access_group`/`update_access_group`/`deactivate_access_group`/`reactivate_access_group`/`add_access_group_member`/`remove_access_group_member`, exposed over six new `dnd_ai.api.access_groups` routes, all gated `access.manage`. A group had no operational-lifecycle column at all before this checkpoint; a new migration (revision 105) adds `security.access_groups.lifecycle_status_id`, referencing the same shared `core.lifecycle_statuses` lookup every other long-lived entity in this schema already uses, rather than a bespoke boolean — `create_access_group` sets it to `active`, `deactivate_access_group`/`reactivate_access_group` move it to/from `archived`, the identical archive/restore pattern `docs/ENTITY_LIFECYCLE.md` §12/§13 already documents. Deactivating a group closes every one of its open memberships and revokes every active resource grant it owns in the same transaction as the status change, so group-derived access disappears on the very next request; reactivating a group only ever flips that one column back — it never reopens a membership or un-revokes a grant, so a reactivated group starts empty and powerless until an explicit new add-member/grant call re-populates it, matching this checkpoint's own explicit safety requirement. Group-owned resource grants continue through the existing `create_resource_grant`/`revoke_resource_grant` routes (checkpoint 5), unchanged in shape, but hardened this checkpoint to also lock the grantee group's row and require it currently be active (`AccessGroupNotActiveError`, 409) — the identical "currently true" bar every other grantee/target/capability check in that command already applies. `dnd_ai.domain.access.resolve_access_context`'s own group-membership subquery and the access-overview's own group-grant query are hardened the same pass to re-check group status on every read, defense in depth beyond `deactivate_access_group`'s own cleanup. The access-overview response gains `access_groups[]` (`dnd_ai.queries.access_overview.list_campaign_access_groups`) — every group in the campaign, both active and archived, each with its currently open members and currently active, group-owned grants; no separate "eligible members" endpoint exists, since the portal's group-add control reuses the overview's own existing member list, filtered client-side to currently active members, with the server independently re-validating eligibility at mutation time regardless. Audit-history (delivered independently of this checkpoint sequence, between checkpoint 5 and this one) gains two new categories, `access_group` and `access_group_membership`, both resolved by reusing the existing `grantee_access_group_id`/`grantee_group_name` and `target_user_id`/`target_user_display_name` columns the `resource_grant`/`membership` categories already resolve through, rather than adding new ones — a rename's `change_summary` reuses `previous_status`/`new_status` the same way `change_membership_role` already does for a role code, applied here to a group's own name. The portal gained a new "Access groups" section on the Access page: create/edit/deactivate/reactivate controls, a server-authoritative member picker, and the identical character-target-only `allow`-grant workflow §3k's member-target grants already established, reused rather than duplicated — no portal support for a non-character target kind or a `deny`-effect create, matching checkpoint 5's own scope limitation. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3l for the full contract, `docs/architecture/DATABASE_MODEL.md` §19.5 and `docs/AUDIT_HISTORY_API.md` §2 for the updated schema/audit-history documentation, `tests/database/test_api_access_groups.py` for the mutation/read/audit coverage, and `tests/database/test_access_group_concurrency.py` for the added PostgreSQL concurrency regression coverage (duplicate-name create/rename races, add-member vs. group-deactivation/membership-ending/account-disablement, two-concurrent-additions, two-concurrent-removals-serialize, group-grant-create vs. group-deactivation, group-deactivation vs. grant-revocation, and two-concurrent-deactivations/reactivations-serialize). Not manually validated against the dev fixture as part of this checkpoint — see `docs/PHASE13E_ACCESS_CONTRACT.md`'s own checkpoint-6 manual-validation section for what a future pass should cover. Deferred, unchanged: invitations, non-character/deny access-group grants, account lifecycle, preview-as-user, Foundry, and AI mutations. **A checkpoint-6 correction pass closed three verified defects in this checkpoint.** (1) `security.access_groups.name`/`.description` had no application-layer length bound beyond the pre-existing `ck_access_groups_name_length` CHECK, and the create/update audit rows recorded the raw request body's `description` rather than the command's own normalized (trimmed, blank-to-`NULL`) value; a new migration (revision 106) adds `ck_access_groups_description_length` (1-2000 characters when present), `dnd_ai.commands.access_groups` gains matching `ACCESS_GROUP_NAME_MAX_LENGTH`/`ACCESS_GROUP_DESCRIPTION_MAX_LENGTH` constants and pre-checks (`AccessGroupNameTooLongError`/`AccessGroupDescriptionTooLongError`), `dnd_ai.api.access_groups`'s request models gain matching Pydantic `Field(max_length=...)` validation, and both audit-writing endpoints now record the command's own normalized `description`. (2) The access-overview's per-member response exposed campaign-membership status but not whether the owning account was platform-active, so the portal's "Add member to group" selector offered a membership `add_access_group_member` would always reject (its account platform-disabled); the read contract gains one minimal, narrowly-scoped boolean, `account_is_active` (`CampaignMemberView`/`CampaignMemberSummaryResponse`, never the raw status code, login name, email, or identity subject), and the portal's group-add selector now filters on it — the backend's own lock/revalidation is unchanged. (3) `deactivate_access_group_endpoint` wrote every removed membership id and revoked grant id into `changed_fields` verbatim, an unbounded JSONB payload sized by however many dependents the group happened to own; it now records a bounded summary per list (`count`/`sample_ids` capped at 20/`sample_truncated`) — full transactional cleanup is unaffected, only the audit representation is bounded, proven by a regression test with more dependents than the cap. See `docs/PHASE13E_ACCESS_CONTRACT.md` §3/§3l for the corrected contracts and `tests/database/test_api_access_groups.py`/`portal/src/pages/AccessPage.test.tsx` for the added regression coverage. **A second correction pass fixed a production-deployment defect in revision 106 itself** (the migration the first correction pass above added): it originally added `ck_access_groups_description_length` immediately, unconditionally validating — but revisions 080 through 105 enforced no bound on `description` at all, so any database that already had real `security.access_groups` rows by the time `106` runs could carry an empty string or a description longer than 2000 characters, either of which would abort the `105`->`106` upgrade outright with only a generic, unhelpful `CheckViolation`. `106` now applies an explicit legacy-data policy before adding the constraint: a read-only precondition check (mirroring `103_login_failure_audit_action`'s own conditional-downgrade precedent) blocks the migration with a deliberate `RuntimeError` naming the affected `access_group_id`(s) if any description already exceeds 2000 characters — it is never silently truncated, since no authoritative document in this repository approves that as a data policy; an empty-string description is backfilled to `NULL`, retroactively applying the exact normalization `create_access_group`/`update_access_group` already guarantee going forward, destroying no text. The constraint itself is now added `NOT VALID` and validated separately (`VALIDATE CONSTRAINT`), so validating pre-existing rows takes only a `SHARE UPDATE EXCLUSIVE` lock rather than blocking concurrent reads/writes for a full-table scan. See `database/migrations/versions/106_access_group_desc_length.py`'s own "Production-safety correction" docstring section for the full policy and `tests/database/test_access_group_description_length_migration.py` for the added migration regression coverage (legacy-data precondition at 105, blocked-then-resolved-then-retried upgrade, empty/valid-description normalization, the final constraint's rejection of a new invalid direct write, and downgrade/re-upgrade). **A third correction pass fixed a remaining migration-concurrency defect in that same revision:** the second pass above still ran the over-length preflight *before* `ADD CONSTRAINT ... NOT VALID`, leaving a rolling-deployment race where an old application instance or direct writer could commit an invalid (empty or over-2000-character) description *after* the preflight ran clean but *before* the constraint's lock was taken — `VALIDATE CONSTRAINT` would then fail with a generic `CheckViolation`, bypassing the actionable error the second pass had just added. `106` now installs `ADD CONSTRAINT ... NOT VALID` *first*: its brief `ACCESS EXCLUSIVE` lock waits for any writer already in flight to commit or roll back before the preflight (now second) runs, so that writer's outcome is always visible by the time the preflight checks it, and any writer that starts after the lock is taken is itself queued behind this migration's own transaction and rejected by the constraint the instant it is allowed to proceed — the empty-string backfill and `VALIDATE CONSTRAINT` remain the third and fourth steps, in that order, since `VALIDATE CONSTRAINT` would otherwise fail on a legacy `''`. See `database/migrations/versions/106_access_group_desc_length.py`'s own "Concurrency guarantee" docstring section for the full reasoning and `tests/database/test_access_group_description_length_migration.py`'s two new two-connection concurrency tests (using the `SET LOCAL lock_timeout` deterministic-blocking idiom already established in `tests/database/test_membership_role_concurrency.py`) for the added regression coverage, proving both that a committed-during-lock-wait invalid write is caught by the preflight and that a write queued behind constraint installation is rejected once unblocked.
@@ -1995,61 +2004,582 @@ Exit criteria:
 - When Phase 12 capabilities are disabled, their surfaces are visibly unavailable and issue no Phase 12 requests; when enabled, the same portal activates them from the server-provided manifest.
 - The project owner can build, run, explain, and continue maintaining each delivered UI increment without depending on generated production UI code.
 
-### Phase 14: Local production deployment and hardening
+### Phase 14: Shared authoring kernel and campaign setup
 
-**Status: Partially implemented.** PostgreSQL, migration, and API containers plus the local Compose network exist. Remaining: UI and worker packaging; local-auth/session and Foundry-device production configuration; reverse-proxy ingress; production secrets and observability; backup/restore automation; deployment rollback; and the production-readiness evidence below.
+**Status: Implemented; local verification green, final-head CI pending** (branch `phase14/authoring-kernel`). Mark complete only after a green CI run. World authority is a per-world membership, not an inference from campaign roles — see [ADR 0014](adr/0014-world-authoring-authority.md). Delivery evidence: [PHASE14_VERIFICATION.md](PHASE14_VERIFICATION.md). A navigation/hierarchy correction (stable Worlds group, world-scoped Timelines collection, persistent hierarchy context panel) follows manual acceptance findings; its manual verification is still pending.
 
-Deliver:
+**Goal:** Establish the production write model and let a GM create the minimum viable campaign without SQL or seed scripts.
 
-- Docker Compose for UI, API/Uvicorn, PostgreSQL, required workers/jobs, and reverse-proxy integration; no separate identity-provider container is required;
-- production multi-stage Dockerfiles and `.dockerignore` files that produce minimal, non-root runtime images, with dependencies pinned and images tagged immutably to a release and Git commit;
-- an explicitly recorded mini-PC CPU architecture and a build/release path that produces compatible images (including a multi-platform build when development/CI and production architectures differ);
-- a version-controlled `compose.yaml` with health checks, dependency readiness, persistent named volumes, external secret/configuration inputs, and a one-off migration service using the same application image as the API/worker where practical;
-- private networking with no public PostgreSQL port and no direct Uvicorn exposure;
-- preferred same-origin `world` UI plus `/api/*`, separate Foundry routing, No-IP updates, and automatic HTTPS;
-- secure cookies, CSRF, login/activation/reset/pairing/token/AI rate limits, Argon2id cost configuration, external secrets, health/restart policies, log rotation, disk monitoring, and Foundry-safe resource guidance;
-- database and uploaded-file onsite/offsite backups, restore testing, upgrade, rollback, and disaster recovery, including local credential/session/device records and documented one-command deployment and application-image rollback procedures that preserve the prior image and account for schema compatibility; and
-- end-to-end local verification of Phase 10 authentication, authorization, and the vertical slice.
+#### 14.1 Domain command foundation
 
-Exact hostnames remain a deployment-time decision. Foundry and D&D AI retain separate data, authentication, configuration, lifecycle, and backups. The detailed acceptance gate is [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#production-readiness-gate).
+Implement and document reusable command policies for:
 
-Exit criteria:
+- create, revise, archive, restore, and—where the domain supports it—supersede;
+- draft, in-review, approved, canon, superseded, and archived canon states;
+- optimistic or row-lock concurrency appropriate to each aggregate;
+- idempotent browser retries;
+- provenance and source attachment;
+- audit records that distinguish creation, content revision, lifecycle transition, and state change;
+- validation previews that do not mutate data;
+- non-disclosing target resolution;
+- bulk commands only where they are atomic, bounded, and meaningfully auditable.
 
-- A clean checkout can build the production images and deploy the complete D&D AI stack on the recorded mini-PC architecture using the documented command without editing tracked files on the host.
-- The deployed containers run as non-root where the upstream service permits it, become healthy through Compose, retain database and uploaded data across container replacement, and run migrations as an explicit one-off deployment step rather than as an uncontrolled API-startup side effect.
-- An immutable prior application release can be selected and restored with the documented rollback command; the procedure is exercised against a compatible schema or, when a schema rollback is required, against the matching verified database restore point.
+Do not introduce a generic entity mutation endpoint that can write arbitrary subtype data.
 
-### Phase 15: World and campaign-data import
+#### 14.2 Initial command catalog
 
-**Status: Not started.** Implemented dependencies: canonical domain commands and audit infrastructure. Remaining: retained source ingestion, staged proposals, matching/review workflows, idempotent promotion, and portal review surfaces below.
+At minimum, provide supported commands for:
 
-World/campaign-data import begins only after canonical API commands and application services exist. Its representative campaign packet and controlled staging and promotion flow are defined in [§22](#22-worldcampaign-data-import-implementation). Complete application-command coverage for every proposal type in that packet is an entry or implementation requirement; the importer cannot bypass a missing command.
+- `CreateWorld`, `UpdateWorld`, `ArchiveWorld`, `RestoreWorld`;
+- `CreateTimeline`, `UpdateTimeline`, `CreateTimelineBranch`, `ArchiveTimeline`;
+- `CreateCampaign`, `UpdateCampaign`, `ArchiveCampaign`, `ReactivateCampaign`;
+- `CreateEntityDraft`, `SubmitEntityForReview`, `ApproveEntity`, `PublishEntityAsCanon`, `SupersedeEntity`, `ArchiveEntity`, `RestoreEntity`, `DeleteDraftEntity`;
+- safe source/provenance attachment;
+- campaign ruleset and world/timeline selection using existing authorized records.
 
-Deliver:
+Commands should be split by aggregate when subtype-specific invariants make a generic command unsafe.
 
-- source/hash retention and source-location provenance for one world-building document, one quest description, and one set of session notes
-- staged entity, relationship, event, knowledge, and resulting-state proposals
-- entity matching, ambiguity handling, deduplication, canon-conflict detection, and resumable GM review
-- editable individual or grouped approval and rejection decisions
-- atomic, idempotent promotion through approved application commands using normal validation and authorization
-- historical-event reconstruction or an explicitly identified initial-state reconciliation when causal history is impractical
-- portal review surfaces integrated with the Phase 13 GM workspace for proposal editing, entity-match resolution, conflict review, approval, rejection, progress, and resumable promotion
+#### 14.3 Campaign setup workflow
 
-Exit criteria:
+The portal must guide an authorized GM through:
 
-- The representative packet is retained with hashes and source-location provenance, and extraction produces staged entities, relationships, events, knowledge, and state proposals.
-- Existing entities match without silent duplicates; ambiguous matches require GM resolution, and canon conflicts are presented for review.
-- The GM can edit, approve, and reject individual or grouped proposals; rejected proposals leave canonical state unchanged.
-- Approved proposals invoke application commands and create valid canonical records, atomically where required.
-- Partially reviewed work resumes safely, and reprocessing the same source does not duplicate canonical effects.
-- Session notes produce appropriate historical events and resulting state or an explicitly identified initial-state reconciliation without fabricated history.
-- Every accepted canonical effect is traceable to its source, review decision, application command, and result.
-- No client, extractor, campaign import staging process, or AI component writes directly to canonical domain tables.
-- Only authorized import reviewers can view or act on proposals, and proposal details do not leak through ordinary player or observer portal views.
+1. Create or select a world.
+2. Create or select an initial timeline.
+3. Create the campaign and select its ruleset/version.
+4. Establish the initial campaign owner/manager membership.
+5. Configure campaign name, description, current timeline, and basic defaults.
+6. Arrive at an empty but usable Campaign Home with clear next actions.
+
+The workflow must support cancellation and recovery without leaving invisible half-created objects. Multi-object setup should use an explicit transaction or a resumable draft, not a chain of untracked partial writes.
+
+#### 14.4 Reusable portal authoring patterns
+
+Create owner-authored, accessible patterns for:
+
+- create/edit forms;
+- field-level and form-level validation;
+- unsaved-change warnings;
+- save, cancel, retry, conflict, denied, and unavailable states;
+- archive/restore confirmations;
+- lifecycle badges and provenance presentation;
+- server-authoritative option lists;
+- draft preview versus published view;
+- narrow and ultrawide layouts;
+- keyboard and screen-reader operation.
+
+Avoid a broad form framework or new state-management dependency unless repeated implementation proves a concrete need.
+
+#### 14.5 Development-data conversion
+
+Begin replacing direct-insert development scripts with builders that call the same commands used by the portal. Direct SQL remains acceptable for immutable reference seeds and migration-owned lookup data, not for authored campaign content.
+
+#### 14.6 Phase 14 exit criteria
+
+Phase 14 is complete when:
+
+- a new GM can create a world, timeline, and campaign through the portal;
+- a timeline branch can be created through a supported command;
+- canon lifecycle transitions are enforced and audited;
+- archived records stop appearing or authorizing as documented and can be restored where allowed;
+- concurrency, idempotency, CSRF, Origin, authorization, and non-disclosure tests pass;
+- development fixtures for the new aggregates use commands rather than direct content inserts;
+- API contracts and portal workflows are documented;
+- local PostgreSQL verification and final-head CI are green.
+
+---
+
+### Phase 15: Game Master authoring and campaign operations
+
+**Goal:** Let a GM create and operate the campaign's canonical content entirely in the web application.
+
+Implement in independently verifiable increments. Each increment includes commands, read models, portal workflows, authorization, audit, temporal behavior, and tests.
+
+#### 15A. World structure and places
+
+- Locations, location hierarchy, realms, routes, and travel metadata.
+- Dungeon definitions, areas, connections, features, hazards, and interactables.
+- World-level entities that do not yet require a specialized subtype.
+- Safe reparenting, cycle prevention, and timeline-aware state where applicable.
+- Map/image attachment metadata only if a current storage contract exists; do not invent a binary-asset platform inside this phase.
+
+#### 15B. Organizations, factions, religions, governments, and businesses
+
+- Create and maintain organization definitions and subtype data.
+- Memberships, offices, affiliations, and public/hidden attributes.
+- Timeline-scoped organization state and relationships.
+- Explicit visibility and knowledge controls for player-facing information.
+
+#### 15C. Characters and NPCs
+
+- Create player characters, NPCs, and other supported character kinds.
+- Maintain identity, names, species, size, appearance, biography, affiliations, and campaign participation.
+- Maintain active character builds using the currently supported rules content.
+- Maintain timeline state such as location, hit points, conditions, resources, and inventory through intent-specific commands.
+- Add NPC detail/simulation level and a minimal portrayal profile needed for consistent human-authored play.
+- Keep identity/build/state/portrayal as separate write boundaries.
+- Do not require Foundry synchronization.
+
+#### 15D. Quests and narrative planning
+
+- Create, revise, archive, and restore quest definitions.
+- Author stages, objectives, dependencies, participants, locations, rewards, and visibility.
+- Record quest activation, progress, completion, failure, and correction as temporal state changes.
+- Preserve definition versus runtime-state separation.
+- Support GM-private planning text separately from player-visible quest knowledge.
+
+#### 15E. Sessions, events, knowledge, and corrections
+
+- Schedule, start, update, complete, and archive sessions.
+- Record events and attach participants, locations, causes, effects, and world time.
+- Correct or void events without erasing historical provenance.
+- Create and revise knowledge items, claims, beliefs, rumors, discoveries, and audience grants.
+- Record what a character, party, NPC, faction, or public audience learned, from whom, and when.
+- Provide a manual session-log workflow that can update campaign state without an importer or AI.
+
+#### 15F. Items, inventory, treasure, and encounters
+
+- Create item definitions and instances supported by the current model.
+- Transfer, equip, consume, damage, restore, and archive item instances through auditable commands.
+- Maintain character and party inventory without VTT synchronization.
+- Create and run the currently modelled encounter/combat records through the portal where the backend contract is complete.
+- Treat advanced creature construction and party-risk analysis as Phase 19 work.
+
+#### 15G. Canon review and history
+
+- Provide queues and filters for drafts, in-review records, approved records, and archived records.
+- Show provenance, prior versions, supersession, and the actor responsible for transitions.
+- Let authorized GMs compare revisions before approval.
+- Ensure published player views never expose draft or GM-only fields.
+
+#### 15.8 GM authoring exit scenario
+
+Using only a clean deployment and the portal, a GM must be able to:
+
+1. Create a world, timeline, and campaign.
+2. Create two locations, an organization, an NPC, a player character, an item, a quest, and a session.
+3. Invite a player and establish the intended character relationship.
+4. Record the character acquiring the item and meeting the NPC.
+5. Record a discovery and quest progress during the session.
+6. Complete the session and view the resulting timeline, quest, character, and knowledge state.
+7. Correct one mistaken event while preserving the original audit/provenance trail.
+8. Archive and restore an authored record without exposing it while archived.
+
+No SQL, seed script, importer, Foundry, or AI provider may be used.
+
+#### 15.9 Phase 15 exit criteria
+
+- Every entity used in the GM exit scenario has supported create and maintenance commands.
+- All portal write options come from server-authoritative catalogs and capabilities.
+- State changes are temporal where the model requires history.
+- Definition edits do not silently rewrite historical state.
+- Cross-world, cross-timeline, and cross-campaign requests are rejected without disclosure.
+- Audit and provenance identify real changes without storing reusable secrets.
+- The same commands are suitable for later import and integration clients.
+- Focused tests, full suites, migrations, lint, types, build, and final-head CI pass.
+
+---
+
+### Phase 16: Player authoring, contribution, and collaboration
+
+**Goal:** Let players maintain their permitted character and campaign material while preserving GM authority, private-player boundaries, and canon separation.
+
+#### 16A. Character-owned authoring
+
+For characters the player is authorized to control:
+
+- maintain portrayal guidance, personality, ideals, bonds, flaws, goals, fears, loyalties, boundaries, speech patterns, and player notes;
+- propose editable biography and presentation fields according to campaign policy;
+- maintain prepared/selected options where the current rules contract supports them;
+- submit build or advancement proposals for GM approval when a direct player commit is not allowed;
+- preview changes before submission;
+- preserve advancement and approval history.
+
+The full option engine, broad rules catalog, and rich advancement analysis belong to Phase 19. Phase 16 must not pretend unsupported rules content is complete.
+
+#### 16B. Notes, bookmarks, and theories
+
+Players can:
+
+- bookmark visible campaign records;
+- write private notes;
+- create theories and mark suspicions;
+- associate notes with characters, NPCs, factions, quests, locations, events, sessions, items, and knowledge;
+- submit corrections or possible duplicate-entity reports to the GM;
+- distinguish private material, shared material, character belief, and approved canon visually and structurally.
+
+Add `Theory` to the authoritative domain vocabulary: a theory is player-owned, is not canon, is not automatically character belief, and is never included in GM or NPC AI context unless explicitly shared through an approved path.
+
+#### 16C. Player-private collaboration
+
+Add the planned collaboration domain before building its UI. It must support:
+
+- private notes;
+- selected-player or party discussions attached to campaign records;
+- character-group discussions;
+- material explicitly shared with the GM;
+- immutable snapshots when private content is submitted or shared;
+- clear participant and visibility rules;
+- retention and revocation behavior.
+
+GM-role users must not be able to access player-private material through supported APIs, portal screens, search, exports, previews, or AI context. For self-hosted deployments, documentation must state that the machine/database administrator can inspect stored data; the product promises application-level role privacy, not secrecy from the host administrator.
+
+#### 16D. Player session contributions
+
+- Players may submit their own session notes, corrections, discoveries, and proposed facts.
+- Submissions remain player-owned proposals until an authorized GM accepts, edits, rejects, or classifies them.
+- Multiple accounts of the same session may coexist.
+- Approved material uses the same Phase 15 commands as manual GM authoring.
+- Rejection does not delete the player's private source unless the player requests deletion and retention rules allow it.
+
+This is manual contribution, not automated session-note extraction; automated matching and extraction belong to Phase 18.
+
+#### 16E. Player campaign experience
+
+Enhance the player dashboard with authored and permitted information:
+
+- latest approved recap;
+- relevant character and campaign events;
+- active quests and objectives;
+- recent NPCs and locations;
+- newly learned facts;
+- unresolved decisions;
+- pending character proposals;
+- bookmarks, notes, theories, and shared discussions.
+
+#### 16.6 Phase 16 exit scenario
+
+Using only the portal, a player must be able to:
+
+1. Accept an invitation or sign in to an existing membership.
+2. Select an authorized character.
+3. Update permitted portrayal/profile content.
+4. Create a private note and theory attached to a visible quest.
+5. Share a snapshot with selected players while keeping later edits private.
+6. Submit a correction or session contribution to the GM.
+7. Review the status of that submission.
+8. Confirm that another player, a GM-role user, campaign search, and GM-facing preview cannot access unshared private material.
+
+#### 16.7 Phase 16 exit criteria
+
+- Player-owned content has explicit ownership, audience, provenance, and lifecycle.
+- Private content is excluded by backend authorization, not frontend hiding.
+- GM review never converts material into canon without a deliberate command.
+- Player character mutations are limited to authorized characters and fields.
+- Shared snapshots are immutable and later private edits do not change them.
+- Context-building tests prove private material is excluded from unauthorized AI purposes.
+- Manual accessibility and privacy scenarios pass in addition to automated tests.
+
+---
+
+### Phase 17: Standalone-product acceptance and self-hosted packaging
+
+**Goal:** Close the standalone web application before adding import, expanded AI, or new integration work.
+
+#### 17.1 Browser acceptance
+
+Add browser E2E coverage for the critical standalone paths:
+
+- install/bootstrap and first administrator;
+- account activation and password reset;
+- invitation registration/sign-in continuation;
+- campaign setup;
+- GM authoring exit scenario;
+- player authoring exit scenario;
+- access revocation taking effect on the next request;
+- session expiry, logout, and recovery;
+- draft/canon/private-content non-disclosure;
+- conflict, retry, and interrupted-request behavior.
+
+#### 17.2 Accessibility and responsive acceptance
+
+Verify with automated and manual evidence:
+
+- keyboard-only operation;
+- screen-reader names, landmarks, live regions, and focus management;
+- reduced-motion and theme behavior;
+- narrow mobile, standard desktop, and ultrawide layouts;
+- persistent navigation and authoring forms;
+- tables/cards that reflow without losing information or controls;
+- no color-only status communication.
+
+#### 17.3 Production packaging
+
+Complete the self-hosted topology:
+
+- built portal assets;
+- API service;
+- PostgreSQL 18;
+- worker service if queued work exists;
+- reverse proxy and HTTPS termination contract;
+- same-origin routing for portal, `/api`, and `/auth`;
+- secret injection and rotation guidance;
+- health/readiness checks;
+- startup migration procedure;
+- structured logs and bounded audit retention;
+- backup, restore, and rollback runbooks;
+- release/version metadata;
+- upgrade verification from the previous supported release.
+
+#### 17.4 Standalone completion gate
+
+Phase 17 closes only when a clean home-network/self-hosted deployment can perform the entire GM and player loops without optional integrations. Record exact browser, viewport, assistive-technology, backup/restore, Compose, migration, and final-head CI evidence in `docs/PHASE17_VERIFICATION.md`.
+
+At this milestone the product is considered independently functional.
+
+---
+
+### Phase 18: Session intelligence and controlled import
+
+**Goal:** Add import as an accelerator over verified manual authoring, never as the only way to create campaign content.
+
+#### 18A. Source intake and staging
+
+- Pasted text, uploaded text documents, recaps, transcripts from external services, and structured exports.
+- Immutable original source, ownership, checksum, licensing/permission metadata, and provenance.
+- Separate reference-corpus ingestion from campaign-data import.
+- No native speech-to-text service.
+
+#### 18B. Session-note intelligence
+
+- Entity and mention matching.
+- Events, claims, discoveries, relationships, quest changes, inventory changes, injuries, conditions, and world-time extraction.
+- Contradiction, timeline, canon, and knowledge-conflict detection.
+- Multiple source accounts for one session.
+- Confidence and supporting-passage presentation.
+
+#### 18C. Reviewable change sets
+
+- Accept, edit, reject, merge, split, defer, and rematch proposals.
+- Preview exact changes and affected audiences before promotion.
+- Keep truth, knowledge, belief, and player theory separate.
+- Require a human decision for canon changes.
+
+#### 18D. Promotion through authoring commands
+
+- Every promoted record invokes the Phase 14–16 command that manual authoring uses.
+- Promotion is idempotent, auditable, resumable, and safe under partial failure.
+- Imported content retains source passage and batch provenance.
+- Rejected or deferred proposals remain inspectable without becoming effective state.
+
+#### 18E. Broader world/campaign import
+
+After session-note promotion is proven, add campaign documents and structured exports using the same staging and review machinery.
+
+#### 18.6 Exit criteria
+
+- A session import can produce a fully reviewed change set and promote it without direct domain-table inserts.
+- Promotion and equivalent manual authoring produce the same effective state and audit semantics.
+- Invalid, duplicated, conflicting, or unauthorized proposals cannot partially alter canon.
+- Source ownership and audience restrictions flow to derived artifacts.
+- Exact provenance remains available after promotion.
+
+---
+
+### Phase 19: Rules-aware character, creature, and encounter expansion
+
+**Goal:** Make authoring mechanically trustworthy for the supported ruleset without attempting to reproduce every commercial rulebook.
+
+#### 19.1 Rules content and policy
+
+- Expand the legally usable SRD/open-content catalog for the chosen ruleset/version.
+- Preserve source and license metadata.
+- Support campaign allow lists, house rules, custom content, and GM grants.
+- Complete legal/policy review before any private commercial source-import feature.
+- Keep PostgreSQL full-text search as the baseline; add embeddings only when measured retrieval quality requires them.
+
+#### 19.2 Character advancement
+
+- Detect available advancement.
+- Calculate permitted choices from authorized sources.
+- Enforce prerequisites and mutually exclusive choices.
+- Preview derived statistics before commit.
+- Support player submission and GM approval where configured.
+- Preserve advancement history and explain why each option is available.
+
+#### 19.3 Creature model decision and implementation
+
+Before implementation, record an ADR choosing between:
+
+- character-based monsters with explicit simulation/detail levels; or
+- separate creature templates plus world instances.
+
+Then provide creature authoring, validation, abilities, actions, defenses, and provenance consistent with that decision.
+
+#### 19.4 Encounter analysis
+
+- Party-specific analysis using actual characters, resources, environment, objectives, and action economy.
+- Treat challenge rating as one input, not a sufficient answer.
+- Show assumptions and uncertainty.
+- Keep final encounter and ruling authority with the GM.
+
+---
+
+### Phase 20: Grounded assistance and structured NPC scenes
+
+**Goal:** Enable AI only after the standalone data, authoring, audience, and review paths are complete.
+
+#### 20.1 Close the existing Phase 12 foundation
+
+- Real-provider smoke verification.
+- Local-model path verification.
+- Provider failure, timeout, cancellation, and retry behavior.
+- Feature-manifest enablement only after each surface passes its own gate.
+- `docs/PHASE20_VERIFICATION.md` records exact model/provider evidence without making a provider mandatory for normal application startup.
+
+#### 20.2 Grounded user surfaces
+
+- Cited campaign questions over permitted knowledge.
+- GM briefs and preparation copilot.
+- Player/character-specific recaps.
+- Rules and character explanation assistant.
+- Character-aware player advisor.
+- NPC portrayal assistance based on approved portrayal profiles.
+
+Each surface declares its purpose and assembles a purpose-specific context. GM secrets, player-private collaboration, unrevealed facts, later-timeline facts, and unauthorized sources are excluded before prompting.
+
+#### 20.3 Structured live scenes
+
+- Scene participants and context.
+- Player intent/action declarations.
+- Rules/check recommendations.
+- GM-confirmed DCs, rolls, and outcomes.
+- NPC portrayal without hidden-context leakage.
+- Proposed consequences reviewed before canon/state changes.
+
+AI never silently changes canon or chooses a player character's action.
+
+---
+
+### Phase 21: Integrations and adapters
+
+**Goal:** Let external tools use the independently functional platform without becoming alternate sources of truth.
+
+#### 21A. FoundryVTT
+
+- Complete licensed Foundry v13 acceptance for the existing module.
+- Add portal pairing, device listing, rotation, and revocation UI.
+- Map supported Foundry documents/actions to canonical backend commands.
+- Define conflict ownership for simultaneous portal and Foundry edits.
+- Preserve independently paired client/device credentials and in-memory short-lived access tokens.
+- Never require Foundry for campaign creation, character maintenance, session logging, or play.
+
+#### 21B. Other VTT and import/export adapters
+
+- Add adapters only against stable backend commands.
+- Each adapter declares supported round-trip fields and loss behavior.
+- Imported external IDs are metadata, not authorization.
+
+#### 21C. Bots, messaging, MCP, and transcription providers
+
+- Discord or other bots use scoped service/client identities.
+- MCP exposes bounded tools, not raw database access.
+- External transcription services submit text plus provenance to Phase 18 intake.
+- No integration receives a broader audience than the human or service principal it represents.
+
+---
+
+### Phase 22: Hosted offering and demonstrated-need expansion
+
+This phase remains optional until the standalone self-hosted product is stable and there is demonstrated demand.
+
+Potential work includes:
+
+- tenant boundaries and hosted operations;
+- billing and subscription management;
+- managed secrets and backups;
+- hosted-worker scaling;
+- support and abuse workflows;
+- privacy and legal controls for hosted player-private content;
+- additional rulesets;
+- vector retrieval if measured needs justify it;
+- native mobile clients;
+- additional model providers.
+
+Hosted work must not weaken self-hosting or create a second domain model.
+
+---
+
+### 16. Authoring ownership and approval matrix
+
+| Content/action | Player default | GM/access-manager default | Canon effect |
+|---|---|---|---|
+| World, timeline, campaign settings | View if authorized | Direct authoring | Immediate after valid command |
+| Locations, organizations, NPCs, items | View permitted projection | Draft/review/publish | Only published/approved content is canon |
+| Quest definitions and hidden planning | View permitted projection | Direct authoring with lifecycle | Definition and progress remain separate |
+| Sessions and events | Submit contribution where allowed | Record/correct/void | Event command controls effective state |
+| Character identity/profile | Propose or edit allowed fields | Configure policy/approve | Field and campaign policy dependent |
+| Character mechanical build | Submit proposal by default | Approve or directly manage | Only validated approved build becomes active |
+| Character timeline state | Declare/request where allowed | Apply authoritative change | Temporal state change |
+| Player notes/bookmarks/theories | Owner-controlled | No access unless shared | Never canon by default |
+| Player-private discussions | Participant-controlled | No access unless shared | Never canon by default |
+| Corrections/session contributions | Submit | Accept/edit/reject | Canon only through matching domain command |
+| Imported or AI-proposed changes | Review only if assigned | Accept/edit/reject | Never automatic canon |
+
+Campaign policy may delegate more authority, but the server must calculate that policy and expose explicit capabilities. The portal may not infer write permission from display roles.
+
+---
+
+### 17. Cross-cutting delivery requirements
+
+Every authoring increment must address the following before it is accepted.
+
+#### 17.1 Security and authorization
+
+- Current database state determines identity, membership, capability, resource scope, and audience.
+- Cookie-authenticated mutations require CSRF and allowed Origin.
+- Local, external OIDC, Foundry, machine, and future bot principals remain distinct.
+- Writes repeat eligibility checks; they do not trust prior lookup responses.
+- Target IDs are bound to the route's world/timeline/campaign.
+- Unauthorized resources are not disclosed through validation details.
+
+#### 17.2 Data integrity and history
+
+- Use explicit transaction boundaries and consistent lock order.
+- Preserve temporal rows rather than overwriting history when the domain requires it.
+- Corrections and voids do not silently delete consequential history.
+- Commands that span aggregates either commit atomically or use a documented resumable workflow.
+- Database constraints remain the final backstop for invariants.
+
+#### 17.3 Idempotency and concurrency
+
+- Retryable create/transition commands support durable idempotency.
+- Idempotency fingerprints include every effect-determining value and actor scope.
+- Conflicting concurrent edits produce deliberate outcomes.
+- Real PostgreSQL concurrency tests cover credible races, especially lifecycle transitions and state changes.
+
+#### 17.4 Audit and provenance
+
+- Every real security-sensitive or canon-changing mutation produces a bounded durable audit record.
+- No-op retries do not duplicate audit history.
+- Audit metadata excludes credentials, CSRF values, invitation/reset/session tokens, private note content, and unnecessary personal data.
+- Provenance connects authored or promoted content to its human, source, import batch, or proposal without becoming an authorization shortcut.
+
+#### 17.5 UX and accessibility
+
+- Loading, empty, denied, invalid, conflict, stale, interrupted, and recoverable-error states are deliberate.
+- Forms retain safe user input after recoverable failures.
+- Destructive or history-changing operations require clear confirmation.
+- Focus moves predictably into confirmations and back on cancellation.
+- Success messages survive the authoritative refetch that proves the write.
+- Stale data is never shown as the result of a newer selection or audience.
+- Mobile, standard desktop, and ultrawide layouts are verified.
+
+#### 17.6 Testing and evidence
+
+- Unit tests cover pure policy and mapping logic.
+- PostgreSQL tests cover command/query behavior and constraints.
+- API tests cover authentication, authorization, CSRF/Origin, error shape, idempotency, audit, and non-disclosure.
+- Portal tests cover user behavior through the real component/hook/client path.
+- Browser E2E covers critical cross-page workflows.
+- Manual evidence covers accessibility and responsive behavior where automation is insufficient.
+- A final-head green CI run is required before phase closure.
+
+---
+
 
 ### Later phases: demonstrated-need expansion
 
-After revised Phase 14 passes, perform a bounded AWS-retirement workstream: inventory resources; take final snapshots/logical exports; migrate retained data; verify local restoration, extensions, roles, migrations, vertical slice, proxy authentication/authorization, and backups; obtain explicit teardown approval; remove resources through existing infrastructure as code; and confirm recurring charges stop. Until then RDS and other AWS assets are transitional infrastructure and must not be deleted. AWS-to-local replication and hybrid production are not normal architecture.
+After revised Phase 17 passes, perform a bounded AWS-retirement workstream: inventory resources; take final snapshots/logical exports; migrate retained data; verify local restoration, extensions, roles, migrations, vertical slice, proxy authentication/authorization, and backups; obtain explicit teardown approval; remove resources through existing infrastructure as code; and confirm recurring charges stop. Until then RDS and other AWS assets are transitional infrastructure and must not be deleted. AWS-to-local replication and hybrid production are not normal architecture.
 
 Broader AI, simulation, economy, administration, performance optimization, additional reference-source and campaign-import formats, OCR, embeddings, bulk campaign-review tools, broader import automation, and Discord integration follow only when demonstrated need exists. Defer AWS application infrastructure, hybrid production, continuously polling workers without a workload, comprehensive embeddings/RAG, broad economy or NPC simulation, administration beyond the bounded portal/import review, generalized import frameworks, and premature performance optimization. A VPS or AWS move requires measured availability, bandwidth, capacity, security, recovery, or maintenance justification.
 
@@ -2106,7 +2636,7 @@ Test command and query behavior through the application boundary, including auth
 
 ### 26.3 Scenario tests
 
-Use dungeon and quest scenarios to validate cross-domain behavior. The Phase 10 scenario includes GM, player, and observer access with shared characters and facts. Phase 12 adds narrow authorized rules-source retrieval and audience-aware synthesis; Phase 13 adds portal navigation and non-disclosure; Phase 14 adds the representative campaign-packet review and promotion scenario. Focus on application behavior and acceptance criteria without building a generalized UI/document test harness or duplicating earlier database invariants.
+Use dungeon and quest scenarios to validate cross-domain behavior. The Phase 10 scenario includes GM, player, and observer access with shared characters and facts. Phase 12 adds narrow authorized rules-source retrieval and audience-aware synthesis; Phase 13 adds portal navigation and non-disclosure; Phase 18 adds the representative campaign-packet review and promotion scenario. Focus on application behavior and acceptance criteria without building a generalized UI/document test harness or duplicating earlier database invariants.
 
 ### 26.4 Property-based tests
 
@@ -2512,8 +3042,8 @@ The additional obligations in this section begin when the corresponding deployab
 | Phase 11 (Foundry MVP) | The FoundryVTT-facing surface, exercised end-to-end against the live API in `dev` |
 | Phase 12 (Narrow AI/NPC MVP) | Deliberate one-provider smoke verification for NPC and audience-aware assistant behavior only; normal automated tests use no live provider |
 | Phase 13 (Web portal MVP) | Versioned static React portal plus FastAPI local authentication/server-side sessions and Foundry pairing/device management; GM, player, assistant-GM, and observer flows exercised without durable browser-readable credentials |
-| Phase 14 (Local production hardening) | Compose, local PostgreSQL, reverse proxy, No-IP/HTTPS, backup/restore, security and operational controls verified end to end |
-| Phase 15 (World and campaign-data import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
+| Phase 17 (Standalone acceptance and local production hardening) | Compose, local PostgreSQL, reverse proxy, No-IP/HTTPS, backup/restore, security and operational controls verified end to end |
+| Phase 18 (Session intelligence and controlled import) | Portal import-review surface plus one representative campaign packet promoted through GM-approved application commands; compute selected for the actual batch shape |
 
 A phase is not done when its code merges; it is done when its deployables are running in `dev` and the phase's tests pass against them. Local development remains the inner loop for the code inside those deployables ([§24.0](#240-verification-policy)), but there is no local substitute for the deployment itself.
 
@@ -2535,6 +3065,6 @@ The application project contains the React UI, FastAPI under Uvicorn, PostgreSQL
 
 Local user credentials, activation/reset state, browser sessions, Foundry connections, pairing codes, device credentials, short-lived access-token records, and revocation state live in PostgreSQL under the security/integration boundaries defined above. Raw passwords and raw tokens are never stored. Any server-only pepper, signing key, or encryption key selected during implementation is supplied through a mounted secret and backed up separately from ordinary data.
 
-Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 11R replaces the superseded Foundry authentication layer. Phase 13 packages React for the same `world` origin and adds local login/server-side sessions plus Foundry pairing/device administration. Phase 14 integrates Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
+Phase 10 containerizes the portable API and validates local PostgreSQL. Phase 11R replaces the superseded Foundry authentication layer. Phase 13 packages React for the same `world` origin and adds local login/server-side sessions plus Foundry pairing/device administration. Phase 17 integrates Compose, reverse proxy, No-IP, automatic TLS, secure cookies/CSRF, rate limits, backups/restores, health/restart policies, log/disk/resource controls, upgrades, rollback, disaster recovery, and end-to-end local verification. See [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
 
 AWS RDS remains available as an optional, no-longer-CI-verified path regardless of whether this plan is ever built ([ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)); nothing here requires tearing it down.

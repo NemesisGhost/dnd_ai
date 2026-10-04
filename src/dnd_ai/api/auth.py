@@ -859,7 +859,7 @@ def get_authenticated_user_id(
     return AuthenticatedPrincipal(user_id=user_id, auth_method=OIDC_AUTH_METHOD)
 
 
-_HUMAN_AUTH_METHODS = frozenset({OIDC_AUTH_METHOD, LOCAL_SESSION_AUTH_METHOD})
+HUMAN_AUTH_METHODS = frozenset({OIDC_AUTH_METHOD, LOCAL_SESSION_AUTH_METHOD})
 
 
 def require_human_user_id(
@@ -885,9 +885,9 @@ def require_human_user_id(
     Renamed from `require_oidc_user_id` (Phase 11R workstream C): that name
     stopped describing what this function actually checks the moment
     workstream A/B added `LOCAL_SESSION_AUTH_METHOD` as a second accepted
-    method — see `_HUMAN_AUTH_METHODS` immediately above, which this
+    method — see `HUMAN_AUTH_METHODS` immediately above, which this
     function's own logic is named after. No behavior changed, only the
     name — every call site is updated in the same change."""
-    if principal.auth_method not in _HUMAN_AUTH_METHODS:
+    if principal.auth_method not in HUMAN_AUTH_METHODS:
         raise ForbiddenError()
     return principal.user_id

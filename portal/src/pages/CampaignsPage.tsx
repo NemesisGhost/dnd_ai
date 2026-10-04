@@ -1,4 +1,5 @@
 import { Link } from "react-router"
+import { ArchivedCampaignsSection } from "../components/ArchivedCampaignsSection"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 interface CampaignsPageProps {
@@ -8,6 +9,14 @@ interface CampaignsPageProps {
 export function CampaignsPage({
   bootstrap,
 }: CampaignsPageProps) {
+  const canCreate =
+    bootstrap.global_capabilities?.includes("world.create") === true
+  const createLink = canCreate ? (
+    <p>
+      <Link to="/campaigns/new">Create campaign</Link>
+    </p>
+  ) : null
+
   if (bootstrap.campaigns.length === 0) {
     return (
       <main className="app-main">
@@ -22,6 +31,8 @@ export function CampaignsPage({
               Accept a campaign invitation
             </Link>
           </p>
+          {createLink}
+          {canCreate && <ArchivedCampaignsSection />}
         </section>
       </main>
     )
@@ -32,6 +43,7 @@ export function CampaignsPage({
       <section className="placeholder-page">
         <h1>Campaigns</h1>
         <p>Select a campaign to continue.</p>
+        {createLink}
 
         <ul className="campaign-selection__list">
           {bootstrap.campaigns.map((campaign) => (
@@ -61,6 +73,7 @@ export function CampaignsPage({
             </li>
           ))}
         </ul>
+        {canCreate && <ArchivedCampaignsSection />}
       </section>
     </main>
   )

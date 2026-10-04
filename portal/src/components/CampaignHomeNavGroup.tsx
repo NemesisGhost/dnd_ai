@@ -3,6 +3,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Link, NavLink, useLocation } from "react-router"
 import { ChevronDown, House, LayoutList } from "lucide-react"
 import type { CampaignContext } from "../types/bootstrap"
+import { DisabledNavItem } from "./DisabledNavItem"
+import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
 
 interface CampaignHomeNavGroupProps {
   campaigns: CampaignContext[]
@@ -79,8 +81,8 @@ export function CampaignHomeNavGroup({
     // separate link to the complete list; the disclosure needs labels.
     return (
       <>
-        {resolvedCampaign !== null && (
-          <li>
+        <li>
+          {resolvedCampaign !== null ? (
             <NavLink
               end
               className={homeLinkClassName}
@@ -91,8 +93,15 @@ export function CampaignHomeNavGroup({
               <House className="portal-sidebar__icon" aria-hidden="true" />
               <span className="portal-sidebar__label">Campaign Home</span>
             </NavLink>
-          </li>
-        )}
+          ) : (
+            <DisabledNavItem
+              icon={House}
+              label="Campaign Home"
+              reason={SELECT_CAMPAIGN_FIRST}
+              collapsed={collapsed}
+            />
+          )}
+        </li>
         <li>
           <NavLink
             end
@@ -116,7 +125,7 @@ export function CampaignHomeNavGroup({
       onKeyDown={handleKeyDown}
     >
       <div className="portal-sidebar__row">
-        {resolvedCampaign !== null && (
+        {resolvedCampaign !== null ? (
           <NavLink
             end
             className={homeLinkClassName}
@@ -126,26 +135,23 @@ export function CampaignHomeNavGroup({
             <House className="portal-sidebar__icon" aria-hidden="true" />
             <span className="portal-sidebar__label">Campaign Home</span>
           </NavLink>
+        ) : (
+          <DisabledNavItem
+            icon={House}
+            label="Campaign Home"
+            reason={SELECT_CAMPAIGN_FIRST}
+            collapsed={collapsed}
+          />
         )}
         <button
           ref={buttonRef}
           type="button"
-          className={
-            resolvedCampaign === null
-              ? "portal-sidebar__link"
-              : "portal-sidebar__link portal-sidebar__link--icon-only"
-          }
+          className="portal-sidebar__link portal-sidebar__link--icon-only"
           aria-expanded={open}
           aria-controls={listId}
-          aria-label={resolvedCampaign === null ? undefined : "Choose campaign"}
+          aria-label="Choose campaign"
           onClick={() => setOpen((current) => !current)}
         >
-          {resolvedCampaign === null && (
-            <>
-              <House className="portal-sidebar__icon" aria-hidden="true" />
-              <span className="portal-sidebar__label">Choose a campaign</span>
-            </>
-          )}
           <ChevronDown
             className={
               open

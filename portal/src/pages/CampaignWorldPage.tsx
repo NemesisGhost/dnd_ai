@@ -5,6 +5,7 @@ import {
 import {
     useParams,
 } from "react-router"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import {
     WorldEntitiesBoundary,
 } from "../components/WorldEntitiesBoundary"
@@ -38,6 +39,10 @@ function CampaignWorldContent({
         useState("")
     const [cursor, setCursor] =
         useState<string | null>(null)
+    const [showHidden, setShowHidden] = useState(false)
+    // The toggle is offered from the bootstrap's capability list; the server
+    // re-checks and ignores the flags for anyone without canon.edit.
+    const canPreviewHidden = useCampaignCapability(campaignId, "canon.edit")
 
     useEffect(() => {
         if (searchInputValue === debouncedQuery) {
@@ -65,12 +70,19 @@ function CampaignWorldContent({
             query={searchInputValue}
             onCategoryChange={handleCategoryChange}
             onQueryChange={setSearchInputValue}
+            canPreviewHidden={canPreviewHidden}
+            showHidden={showHidden && canPreviewHidden}
+            onShowHiddenChange={(value) => {
+                setShowHidden(value)
+                setCursor(null)
+            }}
         >
             <WorldEntitiesBoundary
                 campaignId={campaignId}
                 category={category}
                 query={debouncedQuery}
                 cursor={cursor}
+                includeHidden={showHidden && canPreviewHidden}
             >
                 {(page, refreshing) => (
                     <WorldEntityList

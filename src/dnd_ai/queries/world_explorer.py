@@ -231,6 +231,8 @@ class WorldEntityCard:
     name: str
     summary: str | None
     name_sort: str
+    canon_status: str
+    lifecycle_status: str
 
 
 def _escape_like(term: str) -> str:
@@ -289,9 +291,12 @@ def search_world_entities(
     rows = connection.execute(
         text(f"""
             SELECT e.entity_id, e.canonical_name, e.summary, et.code AS entity_type_code,
-                   lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort
+                   lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort,
+                   cs.code AS canon_status, lst.code AS lifecycle_status
             FROM core.entities e
             JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+            JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
             LEFT JOIN narrative.events ev ON ev.event_id = e.entity_id
             LEFT JOIN narrative.event_statuses es
                    ON es.event_status_id = ev.event_status_id
@@ -345,6 +350,8 @@ def search_world_entities(
             name=row["canonical_name"],
             summary=row["summary"],
             name_sort=row["name_sort"],
+            canon_status=row["canon_status"],
+            lifecycle_status=row["lifecycle_status"],
         )
         for row in rows
     )

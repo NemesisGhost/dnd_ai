@@ -119,6 +119,7 @@ def require_campaign_capability(
     *,
     allow_foundry_access: bool = False,
     foundry_scope: str | None = None,
+    allow_archived_campaign: bool = False,
 ) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
@@ -128,6 +129,15 @@ def require_campaign_capability(
     a caller-supplied timeline — matching `resolve_access_context`'s own
     scope rule; no route built on this dependency accepts a `timeline_id`
     from the request.
+
+    `allow_archived_campaign` (Phase 14): by default a campaign whose
+    lifecycle is `archived` or `deleted` does not authorize *any* route —
+    it is a `NotFoundError`, indistinguishable from a campaign the caller has no
+    access to, so archiving genuinely stops the campaign working (reads,
+    commands, and Foundry-enabled routes alike). Only `GET .../settings` and
+    `POST .../reactivate` pass `True`; a route-registry test pins that exact
+    set. `pending`/`inactive` keep their existing behavior because only
+    fixtures produce them.
 
     `allow_foundry_access` (Phase 11R workstream C) gates whether a
     `FOUNDRY_ACCESS_AUTH_METHOD`-authenticated request may use this route at
@@ -177,6 +187,12 @@ def require_campaign_capability(
         if access is None:
             raise NotFoundError()
 
+        if not allow_archived_campaign and access.campaign_lifecycle_status in (
+            "archived",
+            "deleted",
+        ):
+            raise NotFoundError()
+
         if is_foundry_access and campaign_id != principal.campaign_id:
             # Indistinguishable from "no active membership" — a paired
             # connection for one campaign must not be able to learn that a
@@ -201,6 +217,7 @@ def require_campaign_capability(
 
     _dependency.allow_foundry_access = allow_foundry_access  # type: ignore[attr-defined]
     _dependency.foundry_scope = foundry_scope  # type: ignore[attr-defined]
+    _dependency.allow_archived_campaign = allow_archived_campaign  # type: ignore[attr-defined]
     return _dependency
 
 

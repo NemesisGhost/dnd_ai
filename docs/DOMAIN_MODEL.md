@@ -141,6 +141,8 @@ A world owns:
 
 A world does not directly contain mutable campaign state. Mutable state belongs to timelines.
 
+**World authority (Phase 14, [ADR 0014](adr/0014-world-authoring-authority.md)).** Who may *author* a world is a separate concept from campaign membership and from platform administration. A user holds the `world_owner` role on a world through an open, active `security.world_memberships` row; the closed set of world capabilities that role carries (`world.view`, `world.manage`, `timeline.manage`, `campaign.create`) lives in application code, not in `security.capabilities`. Any active human principal may create a world (global capability `world.create`) and becomes its first owner; Foundry device principals and machine principals never hold authority. World authority is never inferred from campaign roles, and owning a world grants no campaign membership or campaign reads. A world created before the ownership model has no owner and cannot be authored until an operator claims it. Worlds are archived and restored, never deleted; archiving is refused while any non-archived campaign exists on its timelines.
+
 ### 4.2 Entity
 
 An **Entity** is the universal identity record for a significant world object.
@@ -253,9 +255,13 @@ A timeline may:
 
 A timeline inherits parent history only up to the branch point.
 
+Timelines are created and branched through authoring commands (Phase 14; [ENTITY_LIFECYCLE.md §9.1](ENTITY_LIFECYCLE.md)). A branch point is either an existing world time in the parent's effective history or a labeled "latest" point; lineage is immutable once created, and a primary timeline cannot be archived. Archiving a timeline is refused while a non-archived campaign uses it and does not affect child branches.
+
 ### 5.2 Campaign
 
 A **Campaign** is an organized game running within one timeline.
+
+**Creation and lifecycle (Phase 14).** A campaign is created by (A) an active world owner (world capability `campaign.create`, no bootstrap grant), (B) a caller who already holds `access.manage` in a campaign on the same timeline, or (C) a caller holding a live bootstrap grant for an unclaimed timeline. Whatever the path, the creator becomes the campaign's first `campaign_owner`; a world owner receives no membership in campaigns they did not create. Creation is refused for an archived world or timeline, checked only *after* authorization so an unauthorized caller learns nothing about lifecycle. Settings (name, description) are edited with `update_campaign`. `archive_campaign` takes a campaign out of service: it stops authorizing every campaign route except reading its settings and reactivating it, drops out of the session bootstrap, and refuses invitation acceptance, while memberships, roles, grants, and invitations stay untouched. `reactivate_campaign` restores it exactly as it was, provided its world and timeline are active and a non-expiring `access.manage` holder survives.
 
 A campaign includes:
 

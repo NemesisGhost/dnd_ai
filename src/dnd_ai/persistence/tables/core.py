@@ -98,6 +98,17 @@ worlds = Table(
             "world allows (rules.world_rulesets) — enforced by trigger."
         ),
     ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
     UniqueConstraint("slug", name="ux_worlds_slug"),
     schema="core",
     comment=(
@@ -356,6 +367,28 @@ entities = Table(
             "than deleted (docs/ENTITY_LIFECYCLE.md §12)."
         ),
     ),
+    Column(
+        "superseded_by_entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="RESTRICT"),
+        comment=(
+            "The entity that replaced this one when it was superseded (docs/ENTITY_LIFECYCLE.md "
+            "§16.4). Set only together with canon_status = superseded, to an entity of the same "
+            "world and entity type, and write-once. NULL for every entity that has not been "
+            "superseded through the supersede_entity command."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
     schema="core",
     comment=(
         "Stable identity for important world objects, and the root of the class-table "
@@ -376,6 +409,11 @@ Index("ix_entities_lifecycle_status_id", entities.c.lifecycle_status_id)
 Index("ix_entities_source_id", entities.c.source_id)
 Index("ix_entities_created_by_user_id", entities.c.created_by_user_id)
 Index("ix_entities_world_id_canonical_name", entities.c.world_id, entities.c.canonical_name)
+Index(
+    "ix_entities_superseded_by_entity_id",
+    entities.c.superseded_by_entity_id,
+    postgresql_where=entities.c.superseded_by_entity_id.isnot(None),
+)
 
 # ---------------------------------------------------------------------------
 # core — names and tags (revision 005)

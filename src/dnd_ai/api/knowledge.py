@@ -198,7 +198,7 @@ def _resolve_related_id_redaction(
             list(entity_candidates),
             world_id=world_id,
             timeline_id=timeline_id,
-            visibility=resolve_world_entity_visibility(access),
+            visibility=resolve_world_entity_visibility(access, connection),
         )
         if entity_candidates
         else frozenset()

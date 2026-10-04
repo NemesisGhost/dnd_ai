@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { EntityLifecyclePanel } from "./EntityLifecyclePanel"
 import { useWorldDetail } from "../hooks/useWorldDetail"
 import PlaceholderPage from "../pages/PlaceholderPage"
 
@@ -72,7 +73,16 @@ export function WorldEntityDetailBoundary<T>({
         )
     }
 
-    return <>{children(state.detail)}</>
+    return (
+        <>
+            {children(state.detail)}
+            <EntityLifecyclePanel
+                campaignId={campaignId}
+                entityId={entityId}
+                onChanged={retry}
+            />
+        </>
+    )
 }
 
 function capitalize(value: string): string {

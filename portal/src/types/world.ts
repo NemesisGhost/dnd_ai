@@ -12,6 +12,10 @@ export interface WorldEntityCard {
     entity_type_code: string
     name: string
     summary: string | null
+    // Present from the server; anything other than canon/active is a preview
+    // row only a canon.edit holder asked for.
+    canon_status?: string
+    lifecycle_status?: string
 }
 
 export interface WorldEntityPage {
@@ -24,6 +28,8 @@ export interface WorldEntitySearchParameters {
     query: string
     cursor?: string | null
     limit?: number
+    // GM preview: also list drafts, superseded and archived records.
+    includeHidden?: boolean
 }
 
 // World categories with an independently loadable, audience-safe detail

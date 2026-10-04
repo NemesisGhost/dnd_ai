@@ -5,21 +5,25 @@ import type { LucideIcon } from "lucide-react"
 import {
   BookOpen,
   CalendarDays,
-  Globe2,
   LayoutList,
   MessageCircleQuestion,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
+  ShieldCheck,
   Users,
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
+import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
+import { DisabledNavItem } from "./DisabledNavItem"
+import { SELECT_CAMPAIGN_FIRST } from "./navigationReasons"
+import { WorldsNavGroup } from "./WorldsNavGroup"
 
 interface NavigationItem {
   path: string
@@ -27,9 +31,9 @@ interface NavigationItem {
   icon: LucideIcon
 }
 
-// Campaign Home is rendered by CampaignHomeNavGroup.
+// Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
+// lives under the Worlds group (WorldsNavGroup).
 const campaignNavigationItems: NavigationItem[] = [
-  { path: "world", label: "World", icon: Globe2 },
   { path: "characters", label: "Characters", icon: Users },
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
@@ -64,6 +68,10 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const routeCampaignId = routeMatch?.params.campaignId
   const [collapsed, toggleCollapsed] = useSidebarCollapsed()
   const selectCampaign = useSelectCampaign(routeCampaignId)
+  // World and timeline context come from the route-derived hierarchy, which
+  // confirms them against server data (WorkspaceHierarchyProvider) — never a
+  // raw route ID.
+  const { authoringWorldId, authoringTimelineId } = useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -209,74 +217,111 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 onNavigate={close}
               />
 
-              {campaignPath === null || resolvedCampaign === null ? (
-                !collapsed && (
-                  <li className="portal-sidebar__note">
-                    Choose a campaign to see its pages.
-                  </li>
-                )
-              ) : (
-                <>
-                  {campaignNavigationItems.map((item) => {
-                    const Icon = item.icon
-                    return (
-                      <li key={item.path}>
-                        <NavLink
-                          className={linkClassName}
-                          to={`${campaignPath}/${item.path}`}
-                          title={collapsed ? item.label : undefined}
-                          onClick={close}
-                        >
-                          <Icon
-                            className="portal-sidebar__icon"
-                            aria-hidden="true"
-                          />
-                          <span className="portal-sidebar__label">
-                            {item.label}
-                          </span>
-                        </NavLink>
-                      </li>
-                    )
-                  })}
+              <WorldsNavGroup
+                activeWorldId={authoringWorldId}
+                activeTimelineId={authoringTimelineId}
+                campaignWorldPath={
+                  campaignPath === null ? null : `${campaignPath}/world`
+                }
+                canCreateWorld={
+                  bootstrap.global_capabilities?.includes("world.create") ===
+                  true
+                }
+                collapsed={collapsed}
+                onNavigate={close}
+              />
 
-                  <li>
-                    {bootstrap.features.ask ? (
+              {campaignNavigationItems.map((item) => {
+                const Icon = item.icon
+                return (
+                  <li key={item.path}>
+                    {campaignPath === null ? (
+                      <DisabledNavItem
+                        icon={Icon}
+                        label={item.label}
+                        reason={SELECT_CAMPAIGN_FIRST}
+                        collapsed={collapsed}
+                      />
+                    ) : (
                       <NavLink
                         className={linkClassName}
-                        to={`${campaignPath}/ask`}
-                        title={collapsed ? "Ask" : undefined}
+                        to={`${campaignPath}/${item.path}`}
+                        title={collapsed ? item.label : undefined}
                         onClick={close}
                       >
-                        <MessageCircleQuestion
+                        <Icon
                           className="portal-sidebar__icon"
                           aria-hidden="true"
                         />
-                        <span className="portal-sidebar__label">Ask</span>
+                        <span className="portal-sidebar__label">
+                          {item.label}
+                        </span>
                       </NavLink>
-                    ) : (
-                      <span
-                        className="portal-sidebar__link portal-sidebar__link--disabled"
-                        aria-disabled="true"
-                        title="Unavailable until Phase 12 is verified"
-                      >
-                        <MessageCircleQuestion
-                          className="portal-sidebar__icon"
-                          aria-hidden="true"
-                        />
-                        <span className="portal-sidebar__label">Ask</span>
-                      </span>
                     )}
                   </li>
+                )
+              })}
 
-                  {resolvedCampaign.capabilities.includes("access.manage") && (
-                    <AccessNavGroup
-                      campaignPath={campaignPath}
-                      collapsed={collapsed}
-                      onNavigate={close}
+              <li>
+                {campaignPath === null ? (
+                  <DisabledNavItem
+                    icon={MessageCircleQuestion}
+                    label="Ask"
+                    reason={SELECT_CAMPAIGN_FIRST}
+                    collapsed={collapsed}
+                  />
+                ) : bootstrap.features.ask ? (
+                  <NavLink
+                    className={linkClassName}
+                    to={`${campaignPath}/ask`}
+                    title={collapsed ? "Ask" : undefined}
+                    onClick={close}
+                  >
+                    <MessageCircleQuestion
+                      className="portal-sidebar__icon"
+                      aria-hidden="true"
                     />
-                  )}
-                </>
-              )}
+                    <span className="portal-sidebar__label">Ask</span>
+                  </NavLink>
+                ) : (
+                  <DisabledNavItem
+                    icon={MessageCircleQuestion}
+                    label="Ask"
+                    reason="Unavailable until Phase 12 is verified"
+                    collapsed={collapsed}
+                  />
+                )}
+              </li>
+
+              {/* The slot exists for anyone who can manage access on at least
+                  one authorized campaign (a fact about the caller, stable
+                  across routes); the group is usable only on a campaign that
+                  grants it. */}
+              {bootstrap.campaigns.some((campaign) =>
+                campaign.capabilities.includes("access.manage"),
+              ) &&
+                (campaignPath !== null &&
+                resolvedCampaign?.capabilities.includes("access.manage") ===
+                  true ? (
+                  <AccessNavGroup
+                    campaignPath={campaignPath}
+                    collapsed={collapsed}
+                    onNavigate={close}
+                  />
+                ) : (
+                  <li>
+                    <DisabledNavItem
+                      icon={ShieldCheck}
+                      label="Access"
+                      reason={
+                        campaignPath === null
+                          ? SELECT_CAMPAIGN_FIRST
+                          : "Unavailable for this campaign"
+                      }
+                      collapsed={collapsed}
+                    />
+                  </li>
+                ))}
             </>
           )}
 

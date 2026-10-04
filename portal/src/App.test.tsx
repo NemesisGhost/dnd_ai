@@ -568,11 +568,13 @@ describe("portal routing", () => {
       }),
     ).toHaveAttribute("aria-expanded", "false")
 
+    // The hierarchy context panel lists the authorized campaigns of the
+    // route's world and timeline.
     expect(
-      within(screen.getByRole("main")).queryByRole("combobox", {
+      within(screen.getByRole("main")).getByRole("combobox", {
         name: "Campaign",
       }),
-    ).not.toBeInTheDocument()
+    ).toHaveValue("mundivita")
 
     expect(
       screen.getByRole("heading", {
@@ -937,7 +939,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("link", {
-        name: "World",
+        name: "Campaign world",
       }),
     ).toHaveAttribute("aria-current", "page")
 
@@ -948,6 +950,7 @@ describe("portal routing", () => {
       null,
       "",
       null,
+      false,
     )
 
     expect(

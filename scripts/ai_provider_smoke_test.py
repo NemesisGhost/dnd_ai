@@ -120,9 +120,18 @@ def _create_fixture(connection: Connection) -> _Fixture:
     factories.py's own tested shape exactly (make_world/make_timeline/
     make_character/make_party/... — this script cannot import that test-only
     module, so the same schema requirements are reproduced here instead).
-    Entirely disposable — every row's name/content below says so."""
+    Entirely disposable — every row's name/content below says so.
+
+    Deliberately NOT built through the Phase 14 authoring commands: this is a
+    throwaway provider-call fixture, not dev data a person logs in to. It needs
+    a throwaway ruleset (never in a production allow-list) and a `pending`
+    campaign (which `create_campaign` cannot produce), and no user exists to be
+    a world owner. Every direct world/timeline/campaign insert below is marked
+    `phase14-direct-insert: allowed` for the guard in
+    tests/unit/test_scripts_no_phase14_direct_inserts.py."""
     world_id = connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (disposable provider-smoke fixture)
             INSERT INTO core.worlds (name, slug, lifecycle_status_id)
             VALUES ('AI Provider Smoke Test World', :slug, :status)
             RETURNING world_id
@@ -136,6 +145,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
 
     timeline_id = connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (disposable provider-smoke fixture)
             INSERT INTO campaign.timelines (world_id, name, is_primary, lifecycle_status_id)
             VALUES (:world, 'Smoke Test Timeline', true, :status)
             RETURNING timeline_id
@@ -180,6 +190,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     ).scalar()
     assert isinstance(ruleset_version_id, uuid.UUID)
     connection.execute(
+        # phase14-direct-insert: allowed (throwaway ruleset)
         text("INSERT INTO rules.world_rulesets (world_id, ruleset_id) VALUES (:w, :r)"),
         {"w": world_id, "r": ruleset_id},
     )
@@ -195,6 +206,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
 
     campaign_id = connection.execute(
         text("""
+            -- phase14-direct-insert: allowed (a pending campaign create_campaign cannot make)
             INSERT INTO campaign.campaigns
                 (timeline_id, name, lifecycle_status_id, ruleset_version_id)
             VALUES (:timeline, 'AI Provider Smoke Test Campaign', :status, :ruleset_version)

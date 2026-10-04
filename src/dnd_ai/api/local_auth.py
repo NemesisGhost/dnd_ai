@@ -97,11 +97,17 @@ from dnd_ai.commands.local_auth import (
 from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.passwords import MAX_PASSWORD_LENGTH
 from dnd_ai.domain.rate_limit import RateLimiter
+from dnd_ai.domain.world_authority import HUMAN_GLOBAL_CAPABILITIES
 from dnd_ai.queries.accounts import ACCOUNT_LIST_KEYSET, list_platform_accounts
 from dnd_ai.queries.bootstrap import get_session_bootstrap
 
 from .audit import record_change_log
-from .auth import get_authenticated_user_id, require_allowed_origin, require_human_user_id
+from .auth import (
+    HUMAN_AUTH_METHODS,
+    get_authenticated_user_id,
+    require_allowed_origin,
+    require_human_user_id,
+)
 from .client_address import resolve_client_ip
 from .cookies import session_cookie_name, session_cookie_set_kwargs
 from .correlation import get_request_correlation_id
@@ -574,6 +580,10 @@ class SessionBootstrapResponse(BaseModel):
     csrf_token: str
     browser_session_id: uuid.UUID | None
     is_platform_administrator: bool
+    # Server-computed global (not campaign-scoped) capabilities — currently
+    # `world.create` for a human principal (docs/adr/0014). The portal gates
+    # world-authoring entry points on this and never infers it.
+    global_capabilities: list[str] = Field(default_factory=list)
     startup_campaign_id: uuid.UUID | None
     campaign_preferences: CampaignPreferencesResponse
     campaigns: list[CampaignBootstrapResponse]
@@ -625,6 +635,9 @@ def session_bootstrap_endpoint(
         csrf_token=csrf_token or "",
         browser_session_id=principal.local_session_id,
         is_platform_administrator=bootstrap.is_platform_administrator,
+        global_capabilities=(
+            sorted(HUMAN_GLOBAL_CAPABILITIES) if principal.auth_method in HUMAN_AUTH_METHODS else []
+        ),
         startup_campaign_id=bootstrap.startup_campaign_id,
         campaign_preferences=CampaignPreferencesResponse(
             startup_mode=cast(

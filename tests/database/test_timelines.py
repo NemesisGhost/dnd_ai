@@ -185,11 +185,10 @@ def test_two_worlds_may_each_have_a_primary_timeline(db_connection: Connection) 
 def test_a_timeline_cannot_be_its_own_parent(
     db_connection: Connection, world_id: uuid.UUID
 ) -> None:
-    """Rejected — by the trigger's cycle walk rather than by
-    ck_timelines_no_self_parent, because a BEFORE trigger runs ahead of CHECK
-    evaluation and a self-parent is the shortest possible cycle. Both are real
-    defences; the assertion accepts either so the test does not become a
-    statement about evaluation order.
+    """Since revision 111 lineage is immutable, so the UPDATE route to a
+    self-parent is closed outright (the immutability trigger sorts ahead of
+    the cycle walk). The INSERT route is still the cycle walk's and
+    ck_timelines_no_self_parent's job — see test_a_timeline_inserted_as_its_own_parent_is_rejected.
     """
     timeline = make_timeline(db_connection, world_id, is_primary=True)
     branch_time = make_world_time(db_connection, world_id, 500)
@@ -203,13 +202,39 @@ def test_a_timeline_cannot_be_its_own_parent(
             """),
             {"t": timeline, "bt": branch_time},
         )
+    assert "immutable" in str(exc.value)
+
+
+def test_a_timeline_inserted_as_its_own_parent_is_rejected(
+    db_connection: Connection, world_id: uuid.UUID
+) -> None:
+    branch_time = make_world_time(db_connection, world_id, 500)
+    own_id = uuid.uuid4()
+
+    with pytest.raises(CONSTRAINT_ERRORS) as exc:
+        db_connection.execute(
+            text("""
+                INSERT INTO campaign.timelines
+                    (timeline_id, world_id, name, parent_timeline_id, branch_world_time_id,
+                     lifecycle_status_id)
+                VALUES (:id, :w, 'Self', :id, :bt,
+                        (SELECT lifecycle_status_id FROM core.lifecycle_statuses
+                         WHERE code = 'active'))
+            """),
+            {"id": own_id, "w": world_id, "bt": branch_time},
+        )
     message = str(exc.value)
-    assert "cycle" in message or "ck_timelines_no_self_parent" in message
+    assert (
+        "cycle" in message or "ck_timelines_no_self_parent" in message or "foreign key" in message
+    )
 
 
-def test_a_longer_parent_cycle_is_rejected(db_connection: Connection, world_id: uuid.UUID) -> None:
-    """The CHECK only catches self-parenting. A → B → A needs the trigger,
-    and an undetected cycle would make Phase 6's history walk loop forever."""
+def test_a_longer_parent_cycle_cannot_be_formed_by_update(
+    db_connection: Connection, world_id: uuid.UUID
+) -> None:
+    """A -> B -> A would make Phase 6's history walk loop forever. Since
+    revision 111 a root cannot gain a parent by UPDATE, so the cycle is
+    structurally unreachable rather than caught by the trigger's walk."""
     branch_time = make_world_time(db_connection, world_id, 500)
     first = make_timeline(db_connection, world_id, name="A", is_primary=True)
     second = make_timeline(
@@ -229,4 +254,4 @@ def test_a_longer_parent_cycle_is_rejected(db_connection: Connection, world_id: 
             """),
             {"p": second, "bt": branch_time, "t": first},
         )
-    assert "cycle" in str(exc.value)
+    assert "immutable" in str(exc.value)

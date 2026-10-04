@@ -129,9 +129,10 @@ def begin_invitation_onboarding(
             text("""
                 SELECT ci.campaign_invitation_id, ci.campaign_id, ci.accepted_by_user_id,
                        ci.revoked_at, (ci.expires_at <= now()) AS expired, ci.expires_at,
-                       c.name AS campaign_display_name
+                       c.name AS campaign_display_name, cls.code AS campaign_status
                 FROM security.campaign_invitations ci
                 JOIN campaign.campaigns c ON c.campaign_id = ci.campaign_id
+                JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = c.lifecycle_status_id
                 WHERE ci.invitation_token_hash = :hash
             """),
             {"hash": invitation_token_hash},
@@ -144,6 +145,7 @@ def begin_invitation_onboarding(
         or invitation["accepted_by_user_id"] is not None
         or invitation["revoked_at"] is not None
         or invitation["expired"]
+        or invitation["campaign_status"] in ("archived", "deleted")
     ):
         raise OnboardingNotAvailableError(
             f"invitation token hash {invitation_token_hash} is not onboardable "
@@ -224,10 +226,11 @@ def _select_onboarding_session_sql(*, lock: bool) -> str:
                ios.csrf_token AS onboarding_csrf_token,
                ci.campaign_id, ci.accepted_by_user_id, ci.revoked_at,
                (ci.expires_at <= now()) AS invitation_expired, ci.expires_at AS invitation_expires_at,
-               c.name AS campaign_display_name
+               c.name AS campaign_display_name, cls.code AS campaign_status
         FROM security.invitation_onboarding_sessions ios
         JOIN security.campaign_invitations ci ON ci.campaign_invitation_id = ios.campaign_invitation_id
         JOIN campaign.campaigns c ON c.campaign_id = ci.campaign_id
+        JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = c.lifecycle_status_id
         WHERE ios.onboarding_token_hash = :hash
         {"FOR UPDATE OF ios, ci" if lock else ""}
     """
@@ -270,6 +273,7 @@ def _validate_onboarding_row(
         or row["accepted_by_user_id"] is not None
         or row["revoked_at"] is not None
         or row["invitation_expired"]
+        or row["campaign_status"] in ("archived", "deleted")
     ):
         raise OnboardingNotAvailableError(
             f"onboarding session {row['invitation_onboarding_session_id']} is not consumable"
