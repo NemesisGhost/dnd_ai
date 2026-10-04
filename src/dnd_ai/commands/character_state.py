@@ -65,7 +65,7 @@ from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.domain.errors import DomainAuthorizationError
 
-from ._shared import validate_session_campaign
+from ._shared import require_state_targetable, validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
 
@@ -113,6 +113,7 @@ def _assert_character_in_world(
             f"character {character_id} does not exist in world {world_id} "
             f"(actual world: {character_world_id})"
         )
+    require_state_targetable(connection, character_id)
 
 
 # ---------------------------------------------------------------------------

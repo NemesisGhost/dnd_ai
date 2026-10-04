@@ -215,6 +215,30 @@ class ReligionInvalidError(SafeMessageError):
     safe_message = "The selected religion is not valid."
 
 
+class SpeciesNotAvailableError(SafeMessageError):
+    """The species is nonexistent, not canon, or drawn from a ruleset the world
+    does not allow -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "species_not_available"
+    safe_message = "The selected species is not available in this world."
+
+
+class OriginLocationInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "origin_location_invalid"
+    safe_message = "The selected origin location is not valid."
+
+
+class CharacterHasUserRelationshipsError(SafeMessageError):
+    """An NPC cannot be archived while a player or account is linked to it:
+    archiving would silently revoke the capabilities that link grants."""
+
+    safe_status_code = 409
+    safe_error_code = "character_has_user_relationships"
+    safe_message = "A player or account is linked to this character."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

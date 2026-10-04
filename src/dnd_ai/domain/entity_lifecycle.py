@@ -67,13 +67,14 @@ ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES: frozenset[str] = frozenset(
         "political_faction",
         # Beliefs
         "religion",
+        # Characters (Phase 15.1 NPC identity; player characters stay excluded)
+        "npc",
     }
 )
 
 # Deliberately excluded, each for a model reason (docs/PLAN.md Phase 14, D5).
 ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES: dict[str, str] = {
-    "character": "archiving revokes relationship-derived capabilities; PC identity is Phase 16",
-    "npc": "NPC authoring is Phase 15C",
+    "character": "archiving revokes relationship-derived capabilities; PC identity is Phase 16 (an NPC archive is guarded instead)",
     "player_character": "PC identity and build approval are Phase 16",
     "event": "has its own draft/recorded/voided/corrected status machine (Phase 15E)",
     "quest": "definition versus progress semantics (Phase 15D)",
@@ -88,10 +89,10 @@ ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES: dict[str, str] = {
 # definition is published (`canon`) and operational (`active`). Phase 15.1 makes
 # drafts routine, so a draft or archived definition must not become reachable
 # through movement, reveal, advancement, transfer, or event participation. The
-# lifecycle-eligible types are included now; `npc`, `quest`, and
+# lifecycle-eligible types are included (that now includes `npc`); `quest` and
 # `knowledge_item` are included from the checkpoint that lets a GM create them.
 STATE_TARGET_GUARDED_TYPE_CODES: frozenset[str] = frozenset(
-    ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES | {"npc", "quest", "knowledge_item"}
+    ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES | {"quest", "knowledge_item"}
 )
 
 

@@ -19,7 +19,7 @@ from dnd_ai.domain.organization_authoring import (
     OrganizationKind,
     organization_kind,
 )
-from dnd_ai.queries.content_preconditions import publish_blocked_reason
+from dnd_ai.queries.content_preconditions import type_specific_blocks
 
 _SUBTYPE_TABLES: dict[str, tuple[str, str]] = {
     "business": ("world.businesses", "business_id"),
@@ -122,14 +122,14 @@ def get_organization_authoring(
             typed[descriptor.name] = None if sub is None else getattr(sub, descriptor.name)
     if kind.organization_type is None:
         typed["organization_type"] = str(row.organization_type)
-    publish_reason = publish_blocked_reason(
+    extra_blocked = type_specific_blocks(
         connection, entity_id=organization_id, entity_type_code=kind.code
     )
     available, blocked = evaluate_content_actions(
         entity_type_code=kind.code,
         canon_status=str(row.canon_status),
         lifecycle_status=str(row.lifecycle_status),
-        extra_blocked={"publish": publish_reason} if publish_reason else None,
+        extra_blocked=extra_blocked or None,
     )
     return OrganizationAuthoringView(
         organization_id=organization_id,

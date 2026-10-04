@@ -59,7 +59,7 @@ from sqlalchemy import Connection, Engine, text
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import SessionNotInCampaignError as SessionNotInCampaignError
-from ._shared import lookup_id
+from ._shared import lookup_id, require_state_targetable
 from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
@@ -183,6 +183,7 @@ def _start_encounter_impl(
     Validates session_id/campaign_id agreement (_validate_session_campaign)
     before inserting anything — see that function's own docstring."""
     _validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
+    require_state_targetable(connection, location_id, *participant_entity_ids)
 
     encounter_id = connection.execute(
         text("""

@@ -20,7 +20,7 @@ from dnd_ai.domain.content_authoring import (
     location_category,
 )
 from dnd_ai.domain.entity_lifecycle import BlockedAction
-from dnd_ai.queries.content_preconditions import publish_blocked_reason
+from dnd_ai.queries.content_preconditions import type_specific_blocks
 
 
 @dataclass(frozen=True)
@@ -80,14 +80,14 @@ def get_location_authoring(
     ).one_or_none()
     if row is None or row.type_code not in AUTHORABLE_LOCATION_CATEGORIES:
         return None
-    publish_reason = publish_blocked_reason(
+    extra_blocked = type_specific_blocks(
         connection, entity_id=location_id, entity_type_code=str(row.type_code)
     )
     available, blocked = evaluate_content_actions(
         entity_type_code=str(row.type_code),
         canon_status=str(row.canon_status),
         lifecycle_status=str(row.lifecycle_status),
-        extra_blocked={"publish": publish_reason} if publish_reason else None,
+        extra_blocked=extra_blocked or None,
     )
     parent = (
         None

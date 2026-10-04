@@ -109,6 +109,7 @@ from sqlalchemy import Connection
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.queries.character import get_character_view
 from dnd_ai.queries.character_sheet import get_character_sheet_view
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.inventory import get_inventory_view
 
 from ._shared import timeline_world_id
@@ -341,6 +342,23 @@ class CharacterSheetResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _require_published_character(
+    connection: Connection, access: AccessContext, character_id: uuid.UUID
+) -> None:
+    """A draft, proposed, approved, or rejected NPC definition is the same 404
+    as a nonexistent character for anyone without `canon.edit` (Phase 15.1);
+    archived and superseded ones stay readable so history stays referenceable.
+    Player characters are not lifecycle-managed and are unaffected."""
+    hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=access.has_capability("canon.edit"),
+    )
+    if character_id in hidden:
+        raise NotFoundError()
+
+
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}",
     response_model=CharacterResponse,
@@ -388,6 +406,7 @@ def get_character_endpoint(
         # detail routes were hardened the same way
         # (docs/PHASE13D_BACKEND_READINESS.md §4.2, §10.8).
         raise NotFoundError()
+    _require_published_character(connection, access, character_id)
 
     include_full = resolve_character_view_tier(access, character_id=character_id)
 
@@ -454,6 +473,7 @@ def get_character_inventory_endpoint(
         # detail route honors — a subresource of a character the caller may
         # not see must itself be indistinguishable from nonexistent.
         raise NotFoundError()
+    _require_published_character(connection, access, character_id)
 
     if not resolve_character_view_tier(access, character_id=character_id):
         # The summary tier alone is not enough to see inventory contents —
@@ -514,6 +534,7 @@ def get_character_sheet_endpoint(
         # nonexistent, even when the caller separately holds canon.edit or
         # character.view_full.
         raise NotFoundError()
+    _require_published_character(connection, access, character_id)
 
     if not resolve_character_view_tier(access, character_id=character_id):
         # The summary tier alone is not enough to see the mechanical sheet

@@ -20,6 +20,7 @@ from dnd_ai.domain.content_authoring import (
 from dnd_ai.domain.organization_authoring import ORGANIZATION_ENTITY_TYPE_CODES
 
 REFERENCE_NOT_PUBLISHED = "reference_not_published"
+CHARACTER_HAS_USER_RELATIONSHIPS = "character_has_user_relationships"
 
 
 def publish_reference_ids(
@@ -35,6 +36,13 @@ def publish_reference_ids(
         ).scalar()
         if parent is not None:
             ids.append(parent)
+    elif entity_type_code == "npc":
+        origin = connection.execute(
+            text("SELECT origin_location_id FROM character.characters WHERE character_id = :e"),
+            {"e": entity_id},
+        ).scalar()
+        if origin is not None:
+            ids.append(origin)
     elif entity_type_code in ORGANIZATION_ENTITY_TYPE_CODES:
         row = connection.execute(
             text("""
@@ -74,3 +82,47 @@ def publish_blocked_reason(
         ):
             return REFERENCE_NOT_PUBLISHED
     return None
+
+
+def archive_blocked_reason(
+    connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
+) -> str | None:
+    """Type-specific archive blocks. An NPC that a player or account is linked to
+    through a current `security.membership_character_relationships` row cannot be
+    archived: `resolve_access_context` stops honoring a relationship to an archived
+    character, so archiving would silently revoke what the link grants."""
+    if entity_type_code != "npc":
+        return None
+    linked = connection.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1 FROM security.membership_character_relationships mcr
+                WHERE mcr.character_id = :e
+                  AND mcr.revoked_at IS NULL
+                  AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
+                  AND mcr.effective_to_world_time_id IS NULL
+            )
+        """),
+        {"e": entity_id},
+    ).scalar()
+    return CHARACTER_HAS_USER_RELATIONSHIPS if linked else None
+
+
+def type_specific_blocks(
+    connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
+) -> dict[str, str]:
+    """`{action: reason}` for every lifecycle action this type blocks beyond the
+    shared state table. The read models pass it to the pure action evaluation;
+    the commands call the individual reasons above, so the two cannot differ."""
+    blocks: dict[str, str] = {}
+    publish = publish_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=entity_type_code
+    )
+    if publish is not None:
+        blocks["publish"] = publish
+    archive = archive_blocked_reason(
+        connection, entity_id=entity_id, entity_type_code=entity_type_code
+    )
+    if archive is not None:
+        blocks["archive"] = archive
+    return blocks

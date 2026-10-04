@@ -41,6 +41,7 @@ from typing import Literal
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import (
+    CharacterHasUserRelationshipsError,
     EntityReferencedError,
     ReferenceNotPublishedError,
     StaleWriteError,
@@ -64,7 +65,11 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
-from dnd_ai.queries.content_preconditions import publish_blocked_reason, publish_reference_ids
+from dnd_ai.queries.content_preconditions import (
+    archive_blocked_reason,
+    publish_blocked_reason,
+    publish_reference_ids,
+)
 
 from ._content import EntityNotFoundError as EntityNotFoundError
 from ._content import LockedContent, lock_authoring_scope, lock_entities
@@ -105,7 +110,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "item_ownership", "owner_entity_id"): BLOCKING,
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
-    ("character", "characters", "character_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,
     ("integration", "sync_state", "target_entity_id"): BLOCKING,
@@ -153,6 +157,28 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "organizations", "parent_organization_id"): BLOCKING,
     ("character", "character_religious_affiliations", "religion_id"): BLOCKING,
     ("world", "religious_organizations", "religion_id"): BLOCKING,
+    # --- Phase 15.1: NPC identity (an NPC is a character) ----------------------
+    # The NPC's own identity rows go with a deleted draft ...
+    ("character", "characters", "character_id"): OWNED_CASCADE,
+    ("character", "npcs", "npc_id"): OWNED_CASCADE,
+    ("character", "character_descriptions", "character_id"): OWNED_CASCADE,
+    ("character", "character_languages", "character_id"): OWNED_CASCADE,
+    ("character", "character_movements", "character_id"): OWNED_CASCADE,
+    ("character", "character_senses", "character_id"): OWNED_CASCADE,
+    # ... anything historical, mechanical, or access-granting blocks it.
+    ("ai", "context_requests", "requesting_character_id"): BLOCKING,
+    ("campaign", "character_conditions", "character_id"): BLOCKING,
+    ("campaign", "character_location_history", "character_id"): BLOCKING,
+    ("campaign", "character_resources", "character_id"): BLOCKING,
+    ("campaign", "character_state", "character_id"): BLOCKING,
+    ("campaign", "character_state", "transformed_into_id"): BLOCKING,
+    ("campaign", "item_attunements", "character_id"): BLOCKING,
+    ("character", "character_builds", "character_id"): BLOCKING,
+    ("character", "character_religious_affiliations", "character_id"): BLOCKING,
+    ("character", "player_characters", "player_character_id"): BLOCKING,
+    ("knowledge", "character_expertise", "character_id"): BLOCKING,
+    ("security", "membership_character_relationships", "character_id"): BLOCKING,
+    ("security", "resource_grants", "character_id"): BLOCKING,
 }
 
 for _schema, _table, _column in ENTITY_REFERENCE_CLASSIFICATION:
@@ -585,6 +611,13 @@ def archive_entity(
         expected_row_version=expected_row_version,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
+    if (
+        archive_blocked_reason(
+            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+        )
+        is not None
+    ):
+        raise CharacterHasUserRelationshipsError(f"entity {entity_id} is linked to a user")
     new_version = _set_lifecycle(connection, entity_id, "archived", archived=True)
     return _result(
         entity,

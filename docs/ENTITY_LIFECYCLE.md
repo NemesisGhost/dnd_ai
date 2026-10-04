@@ -109,7 +109,7 @@ The shared commands implement exactly this table (`dnd_ai.domain.entity_lifecycl
 
 ### 3.2 Which records use canon lifecycle (eligibility registry)
 
-Canon lifecycle applies to `core.entities` *definitions* only, and only to the types in `ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES`: the place types (`location`, `settlement`, `building`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `realm`), the organization types (`organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`), and `religion`. Excluded types and why: characters and NPCs (archiving revokes relationship-derived capabilities; Phase 15C/16), events (own draft/recorded/voided/corrected machine; 15E), quests (definition vs progress; 15D), knowledge items (truth/knowledge semantics; 15E), item instances (instance/state; 15F), and dungeons/dungeon areas (structural-mutation guards; 15A). Worlds, timelines, and campaigns do **not** use canon lifecycle — they use only operational `active`/`archived`.
+Canon lifecycle applies to `core.entities` *definitions* only, and only to the types in `ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES`: the place types (`location`, `settlement`, `building`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `realm`), the organization types (`organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`), and `religion`. Excluded types and why: bare characters and player characters (archiving revokes relationship-derived capabilities; Phase 16; **NPCs joined the registry in Phase 15.1** with an archive guard while a user is linked), events (own draft/recorded/voided/corrected machine; 15E), quests (definition vs progress; 15D), knowledge items (truth/knowledge semantics; 15E), item instances (instance/state; 15F), and dungeons/dungeon areas (structural-mutation guards; 15A). Worlds, timelines, and campaigns do **not** use canon lifecycle — they use only operational `active`/`archived`.
 
 **Adding a type to the registry is a reviewed change**: it must also extend read-side visibility gating (`dnd_ai.queries.entity_lifecycle.lifecycle_hidden_entity_ids` and the World Explorer) to every surface the type appears on, and its deletable-reference classification must be reviewed (§14). A catalog test fails when a new foreign key to a definition is unclassified.
 
@@ -549,7 +549,7 @@ Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-autho
 |---|---|
 | `create_location`, `update_location` (ten place categories; reparent with cycle prevention) | Built (backend) |
 | `create_organization` / `update_organization` (six kinds, parent/headquarters/religion references, hierarchy-cycle prevention), `create_religion`, `update_religion` | Built (backend) |
-| `create_npc`, `update_npc` (identity only) | Planned (CP5) |
+| `create_npc`, `update_npc` (identity only; archive guarded while a user is linked) | Built (backend) |
 | `create_quest`, `update_quest`, `add_quest_stage`, `update_quest_stage`, `reorder_quest_stages`, `remove_quest_stage`, `add_quest_objective`, `update_quest_objective`, `remove_quest_objective` | Planned (CP6) |
 | `create_knowledge_item`, `update_knowledge_item` | Planned (CP7) |
 | Campaign operations: sessions, events, timeline state, progress, reveal, relationships | Deferred to Phase 15.2 |
