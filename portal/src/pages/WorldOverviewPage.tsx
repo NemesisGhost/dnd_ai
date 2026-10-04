@@ -1,20 +1,14 @@
-import { useState } from "react"
 import type { RefObject } from "react"
 import { Link, useParams } from "react-router"
 import { archiveWorld, restoreWorld, worldPath } from "../api/worlds"
-import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
-import { LifecycleBadge, MutationStatusMessage } from "../components/authoring/feedback"
+import { TransitionControls } from "../components/authoring/TransitionControls"
+import { LifecycleBadge } from "../components/authoring/feedback"
 import { TimelineTree } from "../components/TimelineTree"
-import { useAnnounce } from "../components/authoring/announcer"
-import { useSession } from "../context/SessionContext"
-import { useAuthoringMutation } from "../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import { usePageArrival } from "../hooks/usePageArrival"
-import type { TransitionRequest, WorldDetail, WorldMutationResponse } from "../types/worldAuthoring"
-import { ERROR_CODE_MESSAGE, validateReason } from "../utils/authoringValidation"
+import type { WorldDetail } from "../types/worldAuthoring"
+import { ERROR_CODE_MESSAGE } from "../utils/authoringValidation"
 import "../components/authoring/authoring.css"
-
-type PendingAction = "archive" | "restore" | null
 
 // A world's overview: details, its timelines as a lineage, the campaigns the
 // caller manages on it, and the actions the *server* says are available. A
@@ -76,12 +70,6 @@ interface WorldOverviewProps {
 }
 
 function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
-    const announce = useAnnounce()
-    const { reload } = useSession()
-    const [pendingAction, setPendingAction] = useState<PendingAction>(null)
-    const [reason, setReason] = useState("")
-    const [reasonError, setReasonError] = useState<string | null>(null)
-
     const available = new Set(world.available_actions)
     // A transition blocked only because the record is in the wrong state is
     // obvious from the state itself; every other reason is worth explaining.
@@ -89,46 +77,6 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
         (b) => b.reason !== "lifecycle_transition_not_allowed",
     )
     const primary = world.timelines.find((t) => t.is_primary)
-
-    const mutation = useAuthoringMutation<TransitionRequest, WorldMutationResponse>({
-        scopeKey: `${pendingAction ?? "none"}:${world.world_id}`,
-        request: (body, ctx) =>
-            pendingAction === "restore"
-                ? restoreWorld(world.world_id, body, ctx)
-                : archiveWorld(world.world_id, body, ctx),
-        onSuccess: async () => {
-            const message = pendingAction === "restore" ? "World restored" : "World archived"
-            await refetch()
-            setPendingAction(null)
-            setReason("")
-            announce(message)
-        },
-    })
-
-    function openDialog(action: Exclude<PendingAction, null>) {
-        mutation.reset()
-        setReason("")
-        setReasonError(null)
-        setPendingAction(action)
-    }
-
-    function closeDialog() {
-        setPendingAction(null)
-    }
-
-    function confirm() {
-        const error = validateReason(reason, false)
-        setReasonError(error)
-        if (error) {
-            return
-        }
-        mutation.submit({
-            expected_row_version: world.row_version,
-            reason: reason.trim() === "" ? null : reason.trim(),
-        })
-    }
-
-    const error = mutation.status.kind === "error" ? mutation.status.error : null
 
     return (
         <>
@@ -164,24 +112,17 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                         New campaign
                     </Link>
                 ) : null}
-                {available.has("archive") ? (
-                    <button
-                        type="button"
-                        className="authoring-button"
-                        onClick={() => openDialog("archive")}
-                    >
-                        Archive world
-                    </button>
-                ) : null}
-                {available.has("restore") ? (
-                    <button
-                        type="button"
-                        className="authoring-button"
-                        onClick={() => openDialog("restore")}
-                    >
-                        Restore world
-                    </button>
-                ) : null}
+                <TransitionControls
+                    noun="world"
+                    scopeId={world.world_id}
+                    rowVersion={world.row_version}
+                    availableActions={world.available_actions}
+                    archive={(body, ctx) => archiveWorld(world.world_id, body, ctx)}
+                    restore={(body, ctx) => restoreWorld(world.world_id, body, ctx)}
+                    refetch={refetch}
+                    archiveDescription="An archived world is read-only until it is restored. Its timelines and campaigns are not changed, and it cannot be archived while it has active campaigns."
+                    restoreDescription="The world becomes editable again. Its timelines and campaigns are not changed."
+                />
             </div>
 
             {blockedReasons.length > 0 ? (
@@ -237,51 +178,6 @@ function WorldOverview({ world, headingRef, refetch }: WorldOverviewProps) {
                 )}
             </section>
 
-            <ConfirmDialog
-                open={pendingAction !== null}
-                title={pendingAction === "restore" ? "Restore this world?" : "Archive this world?"}
-                description={
-                    pendingAction === "restore"
-                        ? "The world becomes editable again. Its timelines and campaigns are not changed."
-                        : "An archived world is read-only until it is restored. Its timelines and campaigns are not changed, and it cannot be archived while it has active campaigns."
-                }
-                confirmLabel={pendingAction === "restore" ? "Restore world" : "Archive world"}
-                onConfirm={confirm}
-                onCancel={closeDialog}
-                pending={mutation.status.kind === "pending"}
-                reason={{
-                    label: "Reason (optional)",
-                    required: false,
-                    value: reason,
-                    onChange: setReason,
-                    error: reasonError,
-                }}
-                error={
-                    error === null ? null : error.kind === "stale" ? (
-                        <div role="alert" className="authoring-message authoring-message--warning">
-                            <p>
-                                Someone else changed this world. Reload it to see the latest version.
-                            </p>
-                            <button
-                                type="button"
-                                className="authoring-button"
-                                onClick={() => {
-                                    mutation.reset()
-                                    void refetch()
-                                }}
-                            >
-                                Load latest version
-                            </button>
-                        </div>
-                    ) : (
-                        <MutationStatusMessage
-                            error={error}
-                            onRetry={mutation.retry}
-                            onCheckSession={reload}
-                        />
-                    )
-                }
-            />
         </>
     )
 }

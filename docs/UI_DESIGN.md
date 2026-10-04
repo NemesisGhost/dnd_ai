@@ -207,7 +207,7 @@ Preserve these authoritative behaviors:
 | `/worlds/new` | Create a world (rulesets, primary timeline); `?returnTo=/campaigns/new` resumes campaign setup | Delivered (Phase 14) |
 | `/worlds/:worldId` | World overview: details, rulesets, timeline lineage, managed campaigns, server-computed actions | Delivered (Phase 14) |
 | `/worlds/:worldId/edit` | Edit world name and description | Delivered (Phase 14) |
-| `/worlds/:worldId/timelines/new`, `/worlds/:worldId/timelines/:timelineId`, `…/edit`, `…/branch` | Timeline management and branching | Phase 14 (later checkpoint) |
+| `/worlds/:worldId/timelines/new`, `/worlds/:worldId/timelines/:timelineId`, `…/edit`, `…/branch` | Timeline management and branching; the branch form offers a labeled "latest" point or a moment from the server-provided branch-point list, and explains when only "latest" exists | Delivered (Phase 14) |
 | `/campaigns/new?worldId&timelineId` | Three-step campaign setup | Phase 14 (later checkpoint) |
 | `/app/:campaignId/settings` | Campaign settings, archive; gated by `access.manage` | Phase 14 (later checkpoint) |
 

@@ -32,6 +32,10 @@ import { WorldsPage } from "./pages/WorldsPage"
 import { CreateWorldPage } from "./pages/CreateWorldPage"
 import { WorldOverviewPage } from "./pages/WorldOverviewPage"
 import { EditWorldPage } from "./pages/EditWorldPage"
+import { CreateTimelinePage } from "./pages/CreateTimelinePage"
+import { TimelinePage } from "./pages/TimelinePage"
+import { EditTimelinePage } from "./pages/EditTimelinePage"
+import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
 
 function CampaignsRoute() {
   const { bootstrap } = useAuthenticatedSession()
@@ -133,6 +137,26 @@ function App() {
           <Route
             path="/worlds/:worldId/edit"
             element={<EditWorldPage />}
+          />
+
+          <Route
+            path="/worlds/:worldId/timelines/new"
+            element={<CreateTimelinePage />}
+          />
+
+          <Route
+            path="/worlds/:worldId/timelines/:timelineId"
+            element={<TimelinePage />}
+          />
+
+          <Route
+            path="/worlds/:worldId/timelines/:timelineId/edit"
+            element={<EditTimelinePage />}
+          />
+
+          <Route
+            path="/worlds/:worldId/timelines/:timelineId/branch"
+            element={<CreateTimelineBranchPage />}
           />
 
           <Route
