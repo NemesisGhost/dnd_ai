@@ -4,6 +4,7 @@ import uuid
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.entity_lifecycle import STATE_TARGET_GUARDED_TYPE_CODES
 from dnd_ai.domain.errors import DomainAuthorizationError
 
 
@@ -48,6 +49,53 @@ def lifecycle_code(connection: Connection, lifecycle_status_id: uuid.UUID) -> st
     ).scalar()
     assert isinstance(code, str)
     return code
+
+
+class EntityNotTargetableError(DomainAuthorizationError):
+    """A state-changing command named a definition that is not published and
+    active (a draft, a proposal, a rejected or superseded record, or an
+    archived one). Indistinguishable from a nonexistent record (fixed 404), so
+    a player-facing call can never confirm that an unpublished definition
+    exists."""
+
+
+def require_state_targetable(connection: Connection, *entity_ids: uuid.UUID | None) -> None:
+    """Refuse any named entity of a lifecycle-guarded type
+    (`STATE_TARGET_GUARDED_TYPE_CODES`) that is not `canon` and `active`.
+
+    The rows are locked `FOR SHARE` in `entity_id` order (the global order), so
+    an archive or a canon-status change, which takes `FOR UPDATE`, cannot
+    interleave between this check and the state write that follows. Status codes
+    are resolved by separate queries, never a JOIN inside the locking statement
+    (see `lifecycle_code`). Entities of other types, and ids that do not exist,
+    are not this guard's concern: the command's own binding checks handle them.
+    """
+    ids = sorted({entity_id for entity_id in entity_ids if entity_id is not None})
+    if not ids:
+        return
+    rows = connection.execute(
+        text("""
+            SELECT e.entity_id, e.entity_type_id, e.canon_status_id, e.lifecycle_status_id
+            FROM core.entities e
+            WHERE e.entity_id = ANY(CAST(:ids AS uuid[]))
+            ORDER BY e.entity_id
+            FOR SHARE OF e
+        """),
+        {"ids": ids},
+    ).all()
+    for row in rows:
+        type_code = connection.execute(
+            text("SELECT code FROM core.entity_types WHERE entity_type_id = :t"),
+            {"t": row.entity_type_id},
+        ).scalar()
+        if type_code not in STATE_TARGET_GUARDED_TYPE_CODES:
+            continue
+        canon_code = connection.execute(
+            text("SELECT code FROM core.canon_statuses WHERE canon_status_id = :s"),
+            {"s": row.canon_status_id},
+        ).scalar()
+        if canon_code != "canon" or lifecycle_code(connection, row.lifecycle_status_id) != "active":
+            raise EntityNotTargetableError(f"entity {row.entity_id} is not a published definition")
 
 
 class SessionNotInCampaignError(DomainAuthorizationError):

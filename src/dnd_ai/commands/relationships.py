@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id, validate_session_campaign
+from ._shared import lookup_id, require_state_targetable, validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
 
@@ -153,6 +153,7 @@ def _evolve_relationship_reaction_impl(
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
 
     world_id = _relationship_world(connection, relationship_id)
+    require_state_targetable(connection, perspective_holder_entity_id)
     _lock_relationship(connection, relationship_id)
 
     existing = _lock_relationship_state(
@@ -391,6 +392,7 @@ def _update_organization_status_impl(
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
 
     world_id = _organization_world(connection, organization_id)
+    require_state_targetable(connection, organization_id)
     _lock_organization(connection, organization_id)
 
     existing = _lock_organization_state(

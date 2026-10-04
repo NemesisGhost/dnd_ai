@@ -38,7 +38,11 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import validate_campaign_party, validate_session_campaign
+from ._shared import (
+    require_state_targetable,
+    validate_campaign_party,
+    validate_session_campaign,
+)
 from .events import EventParticipant, _insert_event_row
 
 
@@ -123,6 +127,7 @@ def _reveal_knowledge_to_party_impl(
     validate_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
 
     world_id = _lock_knowledge_item(connection, knowledge_item_id)
+    require_state_targetable(connection, knowledge_item_id)
     existing = _lock_party_knowledge(
         connection, timeline_id=timeline_id, party_id=party_id, knowledge_item_id=knowledge_item_id
     )

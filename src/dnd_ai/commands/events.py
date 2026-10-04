@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import lookup_id, validate_session_campaign
+from ._shared import lookup_id, require_state_targetable, validate_session_campaign
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,7 @@ def _insert_event_row(
     standalone record_event() command below is a thin wrapper that owns its
     own transaction for a caller with no other work to combine it with.
     """
+    require_state_targetable(connection, *(p.entity_id for p in participants))
     # Resolve every lookup code before writing anything, so an unknown code
     # fails clean rather than after a partial insert (still rolled back
     # either way, but this avoids relying on that for the common typo case).
