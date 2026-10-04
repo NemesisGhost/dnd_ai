@@ -470,6 +470,8 @@ Definition statuses may include:
 - superseded wording
 - rejected claim
 
+Phase 15.1 authors the *definition* (the claim) as a lifecycle-managed `knowledge_item` draft; publishing it makes it visible in audience-filtered reads, and an unpublished claim is the same non-disclosing "not found" to anyone without `canon.edit`. Who knows or believes it is per-knower state, written only by the reveal and belief commands (Phase 15.2), which take the claim's entity row `FOR SHARE` so they serialize against a statement edit.
+
 Per-knower states may include:
 
 - unaware
@@ -551,7 +553,7 @@ Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-autho
 | `create_organization` / `update_organization` (six kinds, parent/headquarters/religion references, hierarchy-cycle prevention), `create_religion`, `update_religion` | Built (backend) |
 | `create_npc`, `update_npc` (identity only; archive guarded while a user is linked) | Built (backend) |
 | `create_quest`, `update_quest`, `add_quest_stage`, `update_quest_stage`, `reorder_quest_stages`, `remove_quest_stage`, `add_quest_objective`, `update_quest_objective`, `remove_quest_objective` (definition aggregate; structure freezes once progress exists) | Built (backend) |
-| `create_knowledge_item`, `update_knowledge_item` | Planned (CP7) |
+| `create_knowledge_item`, `update_knowledge_item` (the claim only: statement, type, truth status, sensitivity, optional subject; statement, type, and subject freeze once any knower, party, discovery, public-knowledge, version, or event-effect row refers to the claim, with `knowledge_already_known`; truth status and sensitivity stay editable and audited) | Built (backend) |
 | Campaign operations: sessions, events, timeline state, progress, reveal, relationships | Deferred to Phase 15.2 |
 
 Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.

@@ -79,6 +79,7 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     species_not_available: "npc-species",
     origin_location_invalid: "npc-origin",
     objective_target_invalid: "objective-target",
+    knowledge_subject_invalid: "knowledge-subject",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -123,6 +124,9 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
     character_has_user_relationships:
         "A player or account is linked to this character. Remove those links first.",
     objective_target_invalid: "The selected objective target is not valid. Choose another.",
+    knowledge_subject_invalid: "The selected subject is not valid. Choose another.",
+    knowledge_already_known:
+        "Someone already knows this claim, so its statement, type, and subject cannot change. Truth and sensitivity can still be edited; for a change in meaning, create a replacement claim.",
     quest_has_progress:
         "This quest already has progress recorded, so its structure cannot change. Wording can still be edited.",
     quest_definition_incomplete:

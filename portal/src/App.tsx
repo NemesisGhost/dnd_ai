@@ -23,6 +23,7 @@ import {
   CreateOrganizationPage,
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
+import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
 import { CreateNpcPage, EditNpcPage } from "./pages/NpcAuthoringPages"
 import { CreateQuestPage, EditQuestPage } from "./pages/QuestAuthoringPages"
 import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
@@ -299,8 +300,18 @@ function App() {
             />
 
             <Route
+              path="knowledge/new"
+              element={<CreateKnowledgePage />}
+            />
+
+            <Route
               path="knowledge/:knowledgeItemId"
               element={<CampaignKnowledgeDetailPage />}
+            />
+
+            <Route
+              path="knowledge/:knowledgeItemId/edit"
+              element={<EditKnowledgePage />}
             />
 
             <Route

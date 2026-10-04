@@ -105,6 +105,8 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "quest_stages",
         "quest_participants",
         "quest_outcomes",
+        # Phase 15.1: a knowledge claim's own row.
+        "knowledge_items",
     }
     assert all(v in (OWNED_CASCADE, BLOCKING) for v in ENTITY_REFERENCE_CLASSIFICATION.values())
 

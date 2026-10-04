@@ -26,6 +26,8 @@ from dnd_ai.commands.entity_lifecycle import (
     publish_entity_as_canon,
     submit_entity_for_review,
 )
+from dnd_ai.commands.knowledge import _reveal_knowledge_to_party_impl
+from dnd_ai.commands.knowledge_definitions import create_knowledge_item, update_knowledge_item
 from dnd_ai.commands.locations import create_location, update_location
 from dnd_ai.commands.memberships import revoke_membership_role
 from dnd_ai.commands.organizations import create_organization, update_organization
@@ -42,6 +44,7 @@ from dnd_ai.domain.authoring import (
     CampaignNotAuthorizedError,
     EntityReferencedError,
     HeadquartersLocationInvalidError,
+    KnowledgeAlreadyKnownError,
     LocationHierarchyCycleError,
     OrganizationHierarchyCycleError,
     ParentLocationInvalidError,
@@ -54,7 +57,7 @@ from tests.database.test_authoring_concurrency import (
     _purge_user_worlds,
     _wait_until_blocked,
 )
-from tests.factories import make_user, make_world_time
+from tests.factories import make_campaign_party, make_party, make_user, make_world_time
 
 pytestmark = pytest.mark.database
 
@@ -804,8 +807,20 @@ def test_a_structural_edit_waits_for_an_in_flight_first_progress_write_and_is_re
     q = _published_quest(fx)
     out = race(fx.engine, _advance(fx, q), _remove_objective(fx, q), ENTITY_LOCK)
     assert isinstance(out["error"], QuestHasProgressError)
-    assert fx.count("SELECT count(*) FROM narrative.quest_objectives") == 1
-    assert fx.count("SELECT count(*) FROM campaign.objective_state") == 1
+    assert (
+        fx.count(
+            "SELECT count(*) FROM narrative.quest_objectives WHERE quest_stage_id = :s",
+            s=q.stage_id,
+        )
+        == 1
+    )
+    assert (
+        fx.count(
+            "SELECT count(*) FROM campaign.objective_state WHERE quest_objective_id = :o",
+            o=q.objective_id,
+        )
+        == 1
+    )
 
 
 def test_a_first_progress_write_waits_for_an_in_flight_structural_edit_and_finds_it_gone(
@@ -815,8 +830,17 @@ def test_a_first_progress_write_waits_for_an_in_flight_structural_edit_and_finds
     out = race(fx.engine, _remove_objective(fx, q), _advance(fx, q), ENTITY_LOCK)
     assert isinstance(out["error"], ValueError)
     assert "does not exist" in str(out["error"])
-    assert fx.count("SELECT count(*) FROM campaign.objective_state") == 0
-    assert fx.count("SELECT count(*) FROM narrative.events WHERE event_id IS NOT NULL") == 0
+    assert (
+        fx.count(
+            "SELECT count(*) FROM campaign.objective_state WHERE quest_objective_id = :o",
+            o=q.objective_id,
+        )
+        == 0
+    )
+    assert (
+        fx.count("SELECT count(*) FROM narrative.events WHERE timeline_id = :t", t=q.timeline_id)
+        == 0
+    )
 
 
 def test_two_editors_of_the_same_quest_serialize_and_the_second_is_stale(fx: Fixture) -> None:
@@ -837,3 +861,119 @@ def test_two_editors_of_the_same_quest_serialize_and_the_second_is_stale(fx: Fix
 
     out = race(fx.engine, rename, rename, ENTITY_LOCK)
     assert isinstance(out["error"], StaleWriteError)
+
+
+# --- knowledge claims ----------------------------------------------------------------------------
+
+
+@dataclass
+class CommittedClaim:
+    knowledge_item_id: uuid.UUID
+    version: int
+    party_id: uuid.UUID
+    timeline_id: uuid.UUID
+    world_time_id: uuid.UUID
+
+
+def _published_claim(fx: Fixture) -> CommittedClaim:
+    with fx.engine.begin() as c:
+        claim = create_knowledge_item(
+            c,
+            campaign_id=fx.campaign_id,
+            actor_user_id=fx.owner,
+            statement="The duke is a vampire.",
+            knowledge_type="secret",
+            truth_status="true",
+            sensitivity="secret",
+        )
+        timeline = c.execute(
+            text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
+            {"c": fx.campaign_id},
+        ).scalar()
+        party = make_party(c, fx.world_id)
+        make_campaign_party(c, fx.campaign_id, party)
+        when = make_world_time(c, fx.world_id, 10)
+    for command in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
+        with fx.engine.begin() as c:
+            command(
+                c,
+                campaign_id=fx.campaign_id,
+                entity_id=claim.entity_id,
+                actor_user_id=fx.owner,
+                expected_row_version=fx.version(claim.entity_id),
+            )
+    return CommittedClaim(
+        knowledge_item_id=claim.entity_id,
+        version=fx.version(claim.entity_id),
+        party_id=party,
+        timeline_id=timeline,
+        world_time_id=when,
+    )
+
+
+def _reveal(fx_campaign: uuid.UUID, c: CommittedClaim) -> Callable[[Connection], Any]:
+    return lambda conn: _reveal_knowledge_to_party_impl(
+        conn,
+        knowledge_item_id=c.knowledge_item_id,
+        party_id=c.party_id,
+        timeline_id=c.timeline_id,
+        world_time_id=c.world_time_id,
+        campaign_id=fx_campaign,
+    )
+
+
+def _reword(fx: Fixture, c: CommittedClaim) -> Callable[[Connection], Any]:
+    return lambda conn: update_knowledge_item(
+        conn,
+        campaign_id=fx.campaign_id,
+        knowledge_item_id=c.knowledge_item_id,
+        actor_user_id=fx.owner,
+        expected_row_version=c.version,
+        statement="The duke is a werewolf.",
+        knowledge_type="secret",
+        truth_status="true",
+        sensitivity="secret",
+    )
+
+
+def _statement(fx: Fixture, c: CommittedClaim) -> str:
+    with fx.engine.connect() as conn:
+        value = conn.execute(
+            text(
+                "SELECT canonical_statement FROM knowledge.knowledge_items "
+                "WHERE knowledge_item_id = :k"
+            ),
+            {"k": c.knowledge_item_id},
+        ).scalar()
+    assert isinstance(value, str)
+    return value
+
+
+def test_a_reword_waits_for_an_in_flight_first_reveal_and_is_then_refused(fx: Fixture) -> None:
+    c = _published_claim(fx)
+    out = race(fx.engine, _reveal(fx.campaign_id, c), _reword(fx, c), ENTITY_LOCK)
+    assert isinstance(out["error"], KnowledgeAlreadyKnownError)
+    assert _statement(fx, c) == "The duke is a vampire."
+    assert (
+        fx.count(
+            "SELECT count(*) FROM campaign.party_knowledge WHERE knowledge_item_id = :k",
+            k=c.knowledge_item_id,
+        )
+        == 1
+    )
+
+
+def test_a_first_reveal_waits_for_an_in_flight_reword_and_reveals_the_new_statement(
+    fx: Fixture,
+) -> None:
+    c = _published_claim(fx)
+    out = race(fx.engine, _reword(fx, c), _reveal(fx.campaign_id, c), ENTITY_LOCK)
+    assert "error" not in out
+    assert _statement(fx, c) == "The duke is a werewolf."
+    assert (
+        fx.count(
+            "SELECT count(*) FROM campaign.party_knowledge WHERE knowledge_item_id = :k",
+            k=c.knowledge_item_id,
+        )
+        == 1
+    )

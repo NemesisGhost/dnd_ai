@@ -120,7 +120,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("knowledge", "entity_knowledge", "knower_entity_id"): BLOCKING,
     ("knowledge", "information_transfers", "recipient_entity_id"): BLOCKING,
     ("knowledge", "item_identification", "knower_entity_id"): BLOCKING,
-    ("knowledge", "knowledge_items", "knowledge_item_id"): BLOCKING,
     ("knowledge", "knowledge_items", "subject_entity_id"): BLOCKING,
     ("knowledge", "party_discoveries", "knower_entity_id"): BLOCKING,
     ("narrative", "encounter_participants", "participant_entity_id"): BLOCKING,
@@ -157,6 +156,18 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "organizations", "parent_organization_id"): BLOCKING,
     ("character", "character_religious_affiliations", "religion_id"): BLOCKING,
     ("world", "religious_organizations", "religion_id"): BLOCKING,
+    # --- Phase 15.1: knowledge-item definitions -------------------------------
+    # The claim's own row goes with a deleted draft; anything that records who
+    # knows it, or refers to it from history, blocks the delete.
+    ("knowledge", "knowledge_items", "knowledge_item_id"): OWNED_CASCADE,
+    ("campaign", "party_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "entity_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "party_discoveries", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "public_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "knowledge_versions", "knowledge_item_id"): BLOCKING,
+    ("narrative", "event_effects", "target_knowledge_item_id"): BLOCKING,
+    ("narrative", "quest_rewards", "reward_knowledge_item_id"): BLOCKING,
+    ("security", "resource_grants", "knowledge_item_id"): BLOCKING,
     # --- Phase 15.1: quest definitions ----------------------------------------
     # A quest's own definition rows go with a deleted draft; recorded progress,
     # grants, and the objectives' event references block it.

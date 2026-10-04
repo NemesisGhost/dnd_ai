@@ -267,6 +267,26 @@ class ObjectiveTargetInvalidError(SafeMessageError):
     safe_message = "The selected objective target is not valid."
 
 
+class KnowledgeAlreadyKnownError(SafeMessageError):
+    """Someone already knows, believes, or has discovered this claim, so its
+    statement, type, or subject cannot change: that would silently rewrite what
+    they learned. Truth status and sensitivity stay editable; a change of meaning
+    is a replacement claim."""
+
+    safe_status_code = 409
+    safe_error_code = "knowledge_already_known"
+    safe_message = "This claim is already known by someone, so its statement cannot change."
+
+
+class KnowledgeSubjectInvalidError(SafeMessageError):
+    """The subject is nonexistent, in another world, of a type a claim cannot be
+    about, archived, rejected, or superseded -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "knowledge_subject_invalid"
+    safe_message = "The selected subject is not valid."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

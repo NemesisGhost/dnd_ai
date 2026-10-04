@@ -122,6 +122,31 @@ class ContentSetup:
         assert isinstance(value, int)
         return value
 
+    def quest_stage_count(self) -> int:
+        """Quest stages in this setup's world only: the database may hold other
+        committed worlds' quests, so a table-wide count is not a stable assertion."""
+        value = self.connection.execute(
+            text(
+                "SELECT count(*) FROM narrative.quest_stages qs "
+                "JOIN core.entities e ON e.entity_id = qs.quest_id WHERE e.world_id = :w"
+            ),
+            {"w": self.world_id},
+        ).scalar()
+        assert isinstance(value, int)
+        return value
+
+    def quest_objective_count(self) -> int:
+        value = self.connection.execute(
+            text(
+                "SELECT count(*) FROM narrative.quest_objectives qo "
+                "JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id "
+                "JOIN core.entities e ON e.entity_id = qs.quest_id WHERE e.world_id = :w"
+            ),
+            {"w": self.world_id},
+        ).scalar()
+        assert isinstance(value, int)
+        return value
+
     def set_status(
         self, entity_id: str, canon: str | None = None, lifecycle: str | None = None
     ) -> None:

@@ -44,6 +44,16 @@ def publish_reference_ids(
         ).scalar()
         if origin is not None:
             ids.append(origin)
+    elif entity_type_code == "knowledge_item":
+        subject = connection.execute(
+            text(
+                "SELECT subject_entity_id FROM knowledge.knowledge_items "
+                "WHERE knowledge_item_id = :e"
+            ),
+            {"e": entity_id},
+        ).scalar()
+        if subject is not None:
+            ids.append(subject)
     elif entity_type_code == "quest":
         ids.extend(
             connection.execute(

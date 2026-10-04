@@ -165,11 +165,11 @@ def test_ineligible_types_are_refused(ctx: Ctx, kind: str) -> None:
     if kind == "character":
         target = make_character(ctx.connection, ctx.world.world_id, name="Hero")
     else:
-        quest_type = ctx.connection.execute(
-            text("SELECT entity_type_id FROM core.entity_types WHERE code = 'knowledge_item'")
+        event_type = ctx.connection.execute(
+            text("SELECT entity_type_id FROM core.entity_types WHERE code = 'event'")
         ).scalar()
         target = make_entity(
-            ctx.connection, ctx.world.world_id, quest_type, "K", canon_status_code="draft"
+            ctx.connection, ctx.world.world_id, event_type, "E", canon_status_code="draft"
         )
     with pytest.raises(LifecycleNotSupportedError):
         ctx.call(cmd.submit_entity_for_review, target)

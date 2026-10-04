@@ -259,7 +259,7 @@ def test_remove_stage_deletes_its_objectives_and_audits_once(s: ContentSetup) ->
     stage_id = quest["stages"][0]["quest_stage_id"]
     removed = post(s, quest, f"/stages/{stage_id}/remove", {}).json()
     assert removed["stages"] == []
-    assert s.count("narrative.quest_objectives") == 0
+    assert s.quest_objective_count() == 0
     row = s.audit("remove_quest_stage")[0]
     assert row.action == "deleted" and row.changed_fields["objectives_removed"] == 1
 
@@ -318,10 +318,10 @@ def test_add_update_and_remove_an_objective(s: ContentSetup) -> None:
 def test_invalid_objective_bodies_write_nothing(s: ContentSetup, extra: dict) -> None:
     quest = add_stage(s, create_quest(s))
     stage_id = quest["stages"][0]["quest_stage_id"]
-    before = s.count("narrative.quest_objectives")
+    before = s.quest_objective_count()
     response = post(s, quest, f"/stages/{stage_id}/objectives", objective_body(**extra))
     assert response.status_code in (400, 422)
-    assert s.count("narrative.quest_objectives") == before
+    assert s.quest_objective_count() == before
 
 
 def test_unusable_targets_share_one_code(s: ContentSetup) -> None:
@@ -535,7 +535,7 @@ def test_a_draft_quest_deletes_with_its_definition_but_not_once_tracked(s: Conte
         key=s.gm.fresh_key(),
     )
     assert deleted.status_code == 200
-    assert s.count("narrative.quest_stages") == 0 and s.count("narrative.quest_objectives") == 0
+    assert s.quest_stage_count() == 0 and s.quest_objective_count() == 0
     tracked = with_progress(s)
     blocked = s.gm.post(
         s.lifecycle(tracked["quest_id"], "/delete-draft"),
@@ -641,7 +641,7 @@ def test_replay_returns_the_stored_response_and_a_changed_body_conflicts(s: Cont
     first = s.gm.post(quest_url(s, quest, "/stages"), body, key="stage-1")
     replay = s.gm.post(quest_url(s, quest, "/stages"), body, key="stage-1")
     assert first.status_code == replay.status_code == 200 and first.json() == replay.json()
-    assert len(s.audit("add_quest_stage")) == 1 and s.count("narrative.quest_stages") == 1
+    assert len(s.audit("add_quest_stage")) == 1 and s.quest_stage_count() == 1
     conflict = s.gm.post(quest_url(s, quest, "/stages"), {**body, "name": "Other"}, key="stage-1")
     assert conflict.status_code == 409
 

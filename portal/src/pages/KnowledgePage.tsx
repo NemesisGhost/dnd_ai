@@ -1,6 +1,8 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
+import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AuthorizedParty } from "../types/bootstrap"
 import type { KnowledgeView } from "../types/knowledge"
 
@@ -41,6 +43,7 @@ export function KnowledgePage({
     onPartyChange,
     children,
 }: KnowledgePageProps) {
+    const canAuthor = useCampaignCapability(campaignId, "canon.edit")
     const viewSelectId = useId()
     const searchInputId = useId()
     const partySelectId = useId()
@@ -50,6 +53,17 @@ export function KnowledgePage({
     return (
         <section aria-labelledby="knowledge-heading">
             <h1 id="knowledge-heading">Knowledge</h1>
+
+            {canAuthor ? (
+                <p className="authoring-page__actions-row">
+                    <Link
+                        className="authoring-button"
+                        to={`/app/${encodeURIComponent(campaignId)}/knowledge/new`}
+                    >
+                        New claim
+                    </Link>
+                </p>
+            ) : null}
 
             <AudiencePreviewSection campaignId={campaignId} resourceType="knowledge_item" />
 

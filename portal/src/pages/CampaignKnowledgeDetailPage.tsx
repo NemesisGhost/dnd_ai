@@ -1,6 +1,8 @@
 import { useEffect } from "react"
 import { useParams, useSearchParams } from "react-router"
+import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { KnowledgeDetailBoundary } from "../components/KnowledgeDetailBoundary"
+import { knowledgeAuthoringPath } from "../api/knowledgeAuthoring"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { KnowledgeDetailPage } from "./KnowledgeDetailPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -67,7 +69,16 @@ export function CampaignKnowledgeDetailPage() {
             partyId={partyId}
         >
             {(item) => (
-                <KnowledgeDetailPage campaignId={campaignId} item={item} />
+                <>
+                    <KnowledgeDetailPage campaignId={campaignId} item={item} />
+                    <AuthoringEditLink
+                        campaignId={campaignId}
+                        noun="claim"
+                        viewPath={knowledgeAuthoringPath(campaignId, knowledgeItemId)}
+                        editPath={`/app/${encodeURIComponent(campaignId)}/knowledge/${encodeURIComponent(knowledgeItemId)}/edit`}
+                        detail={item}
+                    />
+                </>
             )}
         </KnowledgeDetailBoundary>
     )

@@ -53,8 +53,8 @@ def test_targets_are_a_closed_set_of_in_scope_definitions() -> None:
     assert OBJECTIVE_TARGET_TYPE_CODES.isdisjoint(
         {"quest", "dungeon", "dungeon_area", "event", "character"}
     )
-    # Everything but a knowledge item is already lifecycle-managed.
-    assert {"knowledge_item"} == OBJECTIVE_TARGET_TYPE_CODES - ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES
+    # Every target type is lifecycle-managed, so a draft target is never reachable by players.
+    assert OBJECTIVE_TARGET_TYPE_CODES <= ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES
 
 
 def test_structure_fields_are_the_ones_whose_change_rewrites_progress() -> None:
