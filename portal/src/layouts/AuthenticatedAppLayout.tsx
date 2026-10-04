@@ -4,6 +4,7 @@ import { PortalHeader } from "../components/PortalHeader"
 import { PortalFooter } from "../components/PortalFooter"
 import { PortalSidebar } from "../components/PortalSidebar"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
+import { WorkspaceHierarchyProvider } from "../context/WorkspaceHierarchyProvider"
 import { AnnouncerProvider } from "../components/authoring/AnnouncerProvider"
 import type { AuthenticatedOutletContext } from "./useAuthenticatedSession"
 
@@ -16,12 +17,14 @@ import type { AuthenticatedOutletContext } from "./useAuthenticatedSession"
 // scope-keyed remount, and disappears only when the session is actually
 // unauthenticated (the sidebar renders nothing then).
 //
-// Each page renders its own <main>; the shell adds none.
+// Pages render their own <main>, except World and Campaign workspace pages,
+// whose <main> (with the hierarchy context panel) is WorkspaceFrame.
 export function AuthenticatedAppLayout() {
   const { control: drawer, toggleRef } = useNavigationDrawer()
 
   return (
     <AnnouncerProvider>
+    <WorkspaceHierarchyProvider>
     <div className="authenticated-shell">
       <PortalHeader drawer={drawer} drawerToggleRef={toggleRef} />
 
@@ -43,6 +46,7 @@ export function AuthenticatedAppLayout() {
 
       <PortalFooter />
     </div>
+    </WorkspaceHierarchyProvider>
     </AnnouncerProvider>
   )
 }

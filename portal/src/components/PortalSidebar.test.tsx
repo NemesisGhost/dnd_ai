@@ -9,6 +9,9 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CharacterPerspectiveContext } from "../context/CharacterPerspectiveContext"
 import { SessionContext } from "../context/SessionContext"
+import { WorkspaceHierarchyProvider } from "../context/WorkspaceHierarchyProvider"
+import { installMockServer } from "../test/authoringHarness"
+import type { MockServer } from "../test/authoringHarness"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../hooks/useSidebarCollapsed"
 import { useNavigationDrawer } from "../hooks/useNavigationDrawer"
@@ -84,10 +87,12 @@ function renderSidebar(
                 }}
             >
                 <MemoryRouter initialEntries={[path]}>
-                    <Routes>
-                        <Route path="*" element={<Harness />} />
-                    </Routes>
-                    <LocationProbe />
+                    <WorkspaceHierarchyProvider>
+                        <Routes>
+                            <Route path="*" element={<Harness />} />
+                        </Routes>
+                        <LocationProbe />
+                    </WorkspaceHierarchyProvider>
                 </MemoryRouter>
             </CharacterPerspectiveContext.Provider>
         </SessionContext.Provider>,
@@ -106,13 +111,29 @@ function nav() {
     return screen.getByRole("navigation", { name: "Main" })
 }
 
+const worldDetail = {
+    world_id: "world-a",
+    name: "World A",
+    timelines: [
+        { timeline_id: "timeline-a", name: "Timeline A" },
+        { timeline_id: "timeline-b", name: "Timeline B" },
+    ],
+}
+
+let server: MockServer
+
 beforeEach(() => {
     selectCharacter.mockReset()
     window.localStorage.clear()
+    // Only world-a is authorized; any other world ID is an unmocked request,
+    // which the stub fails — the same observable outcome as a 404.
+    server = installMockServer()
+    server.on("GET", "/worlds/world-a", { body: worldDetail })
 })
 
 afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
 })
 
 describe("PortalSidebar destinations", () => {
@@ -769,32 +790,72 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         ).toHaveAttribute("href", "/worlds/world-a")
         expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
             "href",
-            "/worlds/world-a/timelines/timeline-a",
+            "/worlds/world-a/timelines",
         )
+        expect(
+            within(nav()).getByRole("link", { name: "Timeline overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
     })
 
-    it("starts open and marks the active route on a timeline route", () => {
+    it("starts open and marks only Timeline overview active on a timeline route", async () => {
         renderSidebar("/worlds/world-a/timelines/timeline-a", withWorld())
 
         expect(within(nav()).getByRole("button", { name: "Worlds" })).toHaveAttribute(
             "aria-expanded",
             "true",
         )
-        expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
+        const overview = await within(nav()).findByRole("link", {
+            name: "Timeline overview",
+        })
+        expect(overview).toHaveAttribute("aria-current", "page")
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).not.toHaveAttribute(
             "aria-current",
-            "page",
         )
         expect(
             within(nav()).getByRole("link", { name: "World overview" }),
         ).not.toHaveAttribute("aria-current")
     })
 
-    it("marks the overview active on the world route", () => {
+    it("marks Timelines active on the collection route and disables Timeline overview", async () => {
+        renderSidebar("/worlds/world-a/timelines", withWorld())
+
+        expect(
+            await within(nav()).findByRole("link", { name: "Timelines" }),
+        ).toHaveAttribute("aria-current", "page")
+        expect(disabledEntry("Timeline overview")).toHaveAccessibleDescription(
+            "Select a timeline first",
+        )
+    })
+
+    it("enables World overview for an authorized world that has no campaign of the caller", async () => {
+        renderSidebar("/worlds/world-a", authenticated(makeBootstrap()))
+
+        expect(
+            await within(nav()).findByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+    })
+
+    it("marks the overview active on the world route", async () => {
         renderSidebar("/worlds/world-a", withWorld())
 
         expect(
-            within(nav()).getByRole("link", { name: "World overview" }),
+            await within(nav()).findByRole("link", { name: "World overview" }),
         ).toHaveAttribute("aria-current", "page")
+    })
+
+    it("keeps Timeline overview disabled for a timeline the world does not authorize", async () => {
+        renderSidebar("/worlds/world-a/timelines/ghost-timeline", withWorld())
+
+        await within(nav()).findByRole("link", { name: "World overview" })
+        expect(disabledEntry("Timeline overview")).toBeInTheDocument()
+        expect(nav().innerHTML).not.toContain("ghost-timeline")
+    })
+
+    it("does not request a world on routes that name none", () => {
+        renderSidebar("/campaigns", withWorld())
+        renderSidebar("/worlds/new", withWorld())
+
+        expect(server.calls).toEqual([])
     })
 
     it("never exposes navigation for an unknown or unauthorized world ID", () => {
@@ -915,13 +976,17 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
     it("shows World overview and Timelines as disabled on All worlds, leaking nothing", () => {
         renderSidebar("/worlds", withWorld())
 
-        for (const label of ["World overview", "Timelines"]) {
+        for (const label of ["World overview", "Timelines", "Timeline overview"]) {
             const entry = disabledEntry(label)
             expect(entry.tagName).not.toBe("A")
             expect(entry).toHaveAttribute("aria-disabled", "true")
             expect(entry).not.toHaveAttribute("aria-current")
             expect(entry).not.toHaveAttribute("href")
-            expect(entry).toHaveAccessibleDescription("Select a world first")
+            expect(entry).toHaveAccessibleDescription(
+                label === "Timeline overview"
+                    ? "Select a timeline first"
+                    : "Select a world first",
+            )
             expect(within(nav()).queryByRole("link", { name: label })).toBeNull()
         }
         expect(within(nav()).getByRole("link", { name: "All worlds" })).toBeEnabled()
@@ -930,15 +995,15 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
         }
     })
 
-    it("enables World overview and Timelines for an authorized world", () => {
+    it("enables World overview and Timelines for an authorized world", async () => {
         renderSidebar("/worlds/world-a", withWorld())
 
         expect(
-            within(nav()).getByRole("link", { name: "World overview" }),
+            await within(nav()).findByRole("link", { name: "World overview" }),
         ).toHaveAttribute("href", "/worlds/world-a")
         expect(
             within(nav()).getByRole("link", { name: "Timelines" }),
-        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
+        ).toHaveAttribute("href", "/worlds/world-a/timelines")
     })
 
     it("keeps New world disabled without the server capability, never overriding it", () => {

@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react"
 import { useSession } from "../context/SessionContext"
+import { useWorkspaceHierarchy } from "../context/WorkspaceHierarchyContext"
 import { useSelectCampaign } from "../hooks/useSelectCampaign"
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed"
 import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
@@ -65,9 +66,12 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const { state } = useSession()
   const routeMatch = useMatch("/app/:campaignId/*")
   const routeCampaignId = routeMatch?.params.campaignId
-  const worldRouteMatch = useMatch("/worlds/:worldId/*")
   const [collapsed, toggleCollapsed] = useSidebarCollapsed()
   const selectCampaign = useSelectCampaign(routeCampaignId)
+  // World and timeline context come from the route-derived hierarchy, which
+  // confirms them against server data (WorkspaceHierarchyProvider) — never a
+  // raw route ID.
+  const { activeWorldId, activeTimelineId } = useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -151,28 +155,6 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
       : undefined
   const campaignPath =
     resolvedCampaign === null ? null : `/app/${resolvedCampaign.campaign_id}`
-
-  // World context comes only from worlds the bootstrap already authorizes:
-  // an authorized world route, else the authorized route campaign's world. A
-  // raw route world ID that is not in the bootstrap exposes nothing.
-  const authorizedRouteCampaign = bootstrap?.campaigns.find(
-    (campaign) => campaign.campaign_id === authorizedRouteCampaignId,
-  )
-  const routeWorldId = worldRouteMatch?.params.worldId
-  const activeWorldId =
-    routeWorldId !== undefined &&
-    bootstrap?.campaigns.some((campaign) => campaign.world_id === routeWorldId)
-      ? routeWorldId
-      : (authorizedRouteCampaign?.world_id ?? null)
-  const activeTimelineCampaign =
-    activeWorldId === null
-      ? undefined
-      : resolvedCampaign?.world_id === activeWorldId
-        ? resolvedCampaign
-        : bootstrap?.campaigns.find(
-            (campaign) => campaign.world_id === activeWorldId,
-          )
-  const activeTimelineId = activeTimelineCampaign?.timeline_id ?? null
 
   const toggleLabel = collapsed ? "Expand navigation" : "Collapse navigation"
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose

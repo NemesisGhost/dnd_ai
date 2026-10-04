@@ -6,13 +6,14 @@ import type {
 import { NavLink, useLocation } from "react-router"
 import { ChevronDown, Landmark } from "lucide-react"
 import { DisabledNavItem } from "./DisabledNavItem"
-import { SELECT_WORLD_FIRST } from "./navigationReasons"
+import { SELECT_TIMELINE_FIRST, SELECT_WORLD_FIRST } from "./navigationReasons"
 
 interface WorldsNavGroupProps {
   // The one world whose routes are nested, already verified against the
   // authorized bootstrap by the caller, or null. Never a raw route ID.
   activeWorldId: string | null
-  // The timeline of the resolved campaign when it belongs to the active world.
+  // The timeline the route selects (a timeline route, or the route campaign's
+  // timeline), already confirmed against authorized data, or null.
   activeTimelineId: string | null
   // The resolved campaign's world page, when a campaign resolves to this world.
   campaignWorldPath: string | null
@@ -202,10 +203,11 @@ export function WorldsNavGroup({
           )}
         </li>
         <li>
-          {worldPath !== null && activeTimelineId !== null ? (
+          {worldPath !== null ? (
             <NavLink
+              end
               className={subLinkClassName}
-              to={`${worldPath}/timelines/${activeTimelineId}`}
+              to={`${worldPath}/timelines`}
               onClick={handleChildActivated}
             >
               <span className="portal-sidebar__label">Timelines</span>
@@ -213,9 +215,24 @@ export function WorldsNavGroup({
           ) : (
             <DisabledNavItem
               label="Timelines"
-              reason={
-                worldPath === null ? SELECT_WORLD_FIRST : "No timeline available"
-              }
+              reason={SELECT_WORLD_FIRST}
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {worldPath !== null && activeTimelineId !== null ? (
+            <NavLink
+              className={subLinkClassName}
+              to={`${worldPath}/timelines/${activeTimelineId}`}
+              onClick={handleChildActivated}
+            >
+              <span className="portal-sidebar__label">Timeline overview</span>
+            </NavLink>
+          ) : (
+            <DisabledNavItem
+              label="Timeline overview"
+              reason={SELECT_TIMELINE_FIRST}
               collapsed={collapsed}
             />
           )}
