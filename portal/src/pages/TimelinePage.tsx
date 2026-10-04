@@ -18,12 +18,14 @@ export function TimelinePage() {
     const headingRef = usePageArrival(state.kind === "ready")
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
                     {" / "}
-                    <Link to={`/worlds/${worldId}`}>World</Link>
+                    <Link to={`/worlds/${worldId}`}>World overview</Link>
+                    {" / "}
+                    <Link to={`/worlds/${worldId}/timelines`}>Timelines</Link>
                 </p>
                 {state.kind === "loading" ? (
                     <>
@@ -57,7 +59,7 @@ export function TimelinePage() {
                     />
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

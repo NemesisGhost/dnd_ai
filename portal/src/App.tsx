@@ -36,6 +36,8 @@ import { CampaignSetupPage } from "./pages/CampaignSetupPage"
 import { CampaignSettingsPage } from "./pages/CampaignSettingsPage"
 import { CreateTimelinePage } from "./pages/CreateTimelinePage"
 import { TimelinePage } from "./pages/TimelinePage"
+import { TimelinesPage } from "./pages/TimelinesPage"
+import { WorldWorkspaceLayout } from "./layouts/WorldWorkspaceLayout"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
 import { CreateTimelineBranchPage } from "./pages/CreateTimelineBranchPage"
 
@@ -126,45 +128,52 @@ function App() {
             element={<CampaignSetupPage />}
           />
 
-          <Route
-            path="/worlds"
-            element={<WorldsPage />}
-          />
+          <Route element={<WorldWorkspaceLayout />}>
+            <Route
+              path="/worlds"
+              element={<WorldsPage />}
+            />
 
-          <Route
-            path="/worlds/new"
-            element={<CreateWorldPage />}
-          />
+            <Route
+              path="/worlds/new"
+              element={<CreateWorldPage />}
+            />
 
-          <Route
-            path="/worlds/:worldId"
-            element={<WorldOverviewPage />}
-          />
+            <Route
+              path="/worlds/:worldId"
+              element={<WorldOverviewPage />}
+            />
 
-          <Route
-            path="/worlds/:worldId/edit"
-            element={<EditWorldPage />}
-          />
+            <Route
+              path="/worlds/:worldId/edit"
+              element={<EditWorldPage />}
+            />
 
-          <Route
-            path="/worlds/:worldId/timelines/new"
-            element={<CreateTimelinePage />}
-          />
+            <Route
+              path="/worlds/:worldId/timelines"
+              element={<TimelinesPage />}
+            />
 
-          <Route
-            path="/worlds/:worldId/timelines/:timelineId"
-            element={<TimelinePage />}
-          />
+            <Route
+              path="/worlds/:worldId/timelines/new"
+              element={<CreateTimelinePage />}
+            />
 
-          <Route
-            path="/worlds/:worldId/timelines/:timelineId/edit"
-            element={<EditTimelinePage />}
-          />
+            <Route
+              path="/worlds/:worldId/timelines/:timelineId"
+              element={<TimelinePage />}
+            />
 
-          <Route
-            path="/worlds/:worldId/timelines/:timelineId/branch"
-            element={<CreateTimelineBranchPage />}
-          />
+            <Route
+              path="/worlds/:worldId/timelines/:timelineId/edit"
+              element={<EditTimelinePage />}
+            />
+
+            <Route
+              path="/worlds/:worldId/timelines/:timelineId/branch"
+              element={<CreateTimelineBranchPage />}
+            />
+          </Route>
 
           <Route
             path="/platform/accounts"
