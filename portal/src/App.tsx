@@ -17,6 +17,8 @@ import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
+import { CreateLocationPage } from "./pages/CreateLocationPage"
+import { EditLocationPage } from "./pages/EditLocationPage"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
@@ -202,6 +204,16 @@ function App() {
             <Route
               path="world"
               element={<CampaignWorldPage />}
+            />
+
+            <Route
+              path="world/location/new"
+              element={<CreateLocationPage />}
+            />
+
+            <Route
+              path="world/location/:entityId/edit"
+              element={<EditLocationPage />}
             />
 
             <Route

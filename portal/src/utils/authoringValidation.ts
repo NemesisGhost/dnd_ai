@@ -70,6 +70,8 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     ruleset_not_available: "rulesets",
     branch_point_invalid: "branch-point",
     supersession_target_invalid: "replacement",
+    parent_location_invalid: "location-parent",
+    location_hierarchy_cycle: "location-parent",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -99,4 +101,9 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
         "This kind of record is not managed through lifecycle actions.",
     entity_referenced: "This record is referenced elsewhere and cannot be deleted.",
     subtype_incomplete: "This record is missing required details.",
+    content_not_editable: "This record cannot be edited in its current state.",
+    reference_not_published: "A record this one depends on is not published yet.",
+    parent_location_invalid: "The selected parent location is not valid. Choose another.",
+    location_hierarchy_cycle:
+        "That parent would place the location inside itself. Choose a different parent.",
 }

@@ -76,6 +76,16 @@ function CampaignWorldContent({
                 setShowHidden(value)
                 setCursor(null)
             }}
+            createLinks={
+                canPreviewHidden
+                    ? [
+                          {
+                              label: "New location",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
+                          },
+                      ]
+                    : []
+            }
         >
             <WorldEntitiesBoundary
                 campaignId={campaignId}

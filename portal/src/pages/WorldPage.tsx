@@ -1,5 +1,6 @@
 import { useId } from "react"
 import type { ReactNode } from "react"
+import { Link } from "react-router"
 import type { WorldCategory } from "../types/world"
 
 interface WorldPageProps {
@@ -11,6 +12,9 @@ interface WorldPageProps {
     canPreviewHidden?: boolean
     showHidden?: boolean
     onShowHiddenChange?: (value: boolean) => void
+    // Creation entry points, offered only to canon.edit holders. The server
+    // re-checks on every request; these links only decide what to offer.
+    createLinks?: readonly { label: string; to: string }[]
     children: ReactNode
 }
 
@@ -37,6 +41,7 @@ export function WorldPage({
     canPreviewHidden = false,
     showHidden = false,
     onShowHiddenChange,
+    createLinks = [],
     children,
 }: WorldPageProps) {
     const searchInputId = useId()
@@ -45,6 +50,16 @@ export function WorldPage({
     return (
         <section aria-labelledby="world-heading">
             <h1 id="world-heading">World</h1>
+
+            {createLinks.length > 0 ? (
+                <nav aria-label="Create world content" className="authoring-page__actions-row">
+                    {createLinks.map((link) => (
+                        <Link key={link.to} to={link.to} className="authoring-button">
+                            {link.label}
+                        </Link>
+                    ))}
+                </nav>
+            ) : null}
 
             <div
                 className="world-page__filters"
