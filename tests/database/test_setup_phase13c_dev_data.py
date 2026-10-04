@@ -2179,3 +2179,123 @@ def test_phase13e_script_output_never_contains_the_dev_password(
 
     combined_output = "\n".join(summary.lines + summary.report + summary.access_report)
     assert _TEST_DEV_PASSWORD not in combined_output
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: world, timelines, and campaigns come from the production commands.
+# ---------------------------------------------------------------------------
+
+
+def _owner_memberships(connection: Connection, world_id: uuid.UUID) -> list[uuid.UUID]:
+    rows = connection.execute(
+        text("""
+            SELECT wm.user_id FROM security.world_memberships wm
+            JOIN security.world_roles wr ON wr.world_role_id = wm.world_role_id
+            WHERE wm.world_id = :w AND wr.code = 'world_owner'
+        """),
+        {"w": world_id},
+    ).scalars()
+    return list(rows)
+
+
+def test_fresh_database_creates_the_world_through_create_world(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    world_id = db_connection.execute(
+        text("SELECT world_id FROM core.worlds WHERE name = 'Phase13C Dev World'")
+    ).scalar_one()
+    assert _owner_memberships(db_connection, world_id) == [user_id]
+
+    # create_world also made the primary timeline and the allowed ruleset.
+    primary = (
+        db_connection.execute(
+            text("SELECT name FROM campaign.timelines WHERE world_id = :w AND is_primary"),
+            {"w": world_id},
+        )
+        .scalars()
+        .all()
+    )
+    assert primary == ["Phase13C Primary Timeline"]
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM rules.world_rulesets WHERE world_id = :w"), {"w": world_id}
+        ).scalar_one()
+        == 1
+    )
+
+    # Campaigns were created under world-owner authority: no bootstrap grant.
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM security.timeline_bootstrap_grants")
+        ).scalar_one()
+        == 0
+    )
+    # The commands' own audit rows, attributed to the user.
+    actions = db_connection.execute(
+        text("""
+            SELECT command_name, table_name FROM audit.change_log
+            WHERE world_id = :w AND command_name IN ('create_world', 'create_timeline')
+            ORDER BY command_name, table_name
+        """),
+        {"w": world_id},
+    ).all()
+    assert [tuple(r) for r in actions] == [
+        ("create_timeline", "timelines"),
+        ("create_timeline", "timelines"),
+        ("create_world", "timelines"),
+        ("create_world", "world_memberships"),
+        ("create_world", "worlds"),
+    ]
+
+
+def test_legacy_unowned_world_is_claimed_not_duplicated(db_connection: Connection) -> None:
+    user_id = _make_local_account(db_connection)
+    legacy = make_world(db_connection, "phase13c-dev-world", name="Phase13C Dev World")
+    assert _owner_memberships(db_connection, legacy) == []
+
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    assert (
+        db_connection.execute(
+            text("SELECT count(*) FROM core.worlds WHERE name = 'Phase13C Dev World'")
+        ).scalar_one()
+        == 1
+    )
+    assert _owner_memberships(db_connection, legacy) == [user_id]
+    assert (
+        db_connection.execute(
+            text(
+                "SELECT count(*) FROM campaign.campaigns c "
+                "JOIN campaign.timelines t ON t.timeline_id = c.timeline_id "
+                "WHERE t.world_id = :w"
+            ),
+            {"w": legacy},
+        ).scalar_one()
+        == 2
+    )
+
+
+def test_rerun_creates_no_world_timeline_membership_or_audit_rows(
+    db_connection: Connection,
+) -> None:
+    user_id = _make_local_account(db_connection)
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+
+    def counts() -> tuple[int, int, int, int]:
+        def one(sql: str) -> int:
+            return int(db_connection.execute(text(sql)).scalar_one())
+
+        return (
+            one("SELECT count(*) FROM core.worlds"),
+            one("SELECT count(*) FROM campaign.timelines"),
+            one("SELECT count(*) FROM security.world_memberships"),
+            one(
+                "SELECT count(*) FROM audit.change_log "
+                "WHERE command_name IN ('create_world', 'create_timeline')"
+            ),
+        )
+
+    before = counts()
+    _run(db_connection, user_id=user_id, dev_password=_TEST_DEV_PASSWORD)
+    assert counts() == before

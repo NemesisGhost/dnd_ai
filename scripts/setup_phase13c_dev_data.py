@@ -408,6 +408,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from claim_world_ownership import claim_world
 from sqlalchemy import Connection, create_engine, text
 from sqlalchemy.engine import make_url
 
@@ -420,7 +421,7 @@ from dnd_ai.commands.access_grants import (
     grant_character_relationship,
     revoke_resource_grant,
 )
-from dnd_ai.commands.campaigns import create_campaign, grant_timeline_bootstrap
+from dnd_ai.commands.campaigns import create_campaign
 from dnd_ai.commands.local_auth import (
     _activate_local_account_impl,
     _create_local_account_impl,
@@ -428,6 +429,8 @@ from dnd_ai.commands.local_auth import (
     normalize_login_name,
 )
 from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
+from dnd_ai.commands.timelines import create_timeline
+from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
 from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.domain.passwords import PasswordPolicyError, validate_password_policy
@@ -450,6 +453,7 @@ _WORLD_SLUG = "phase13c-dev-world"
 _WORLD_NAME = "Phase13C Dev World"
 _FIXTURE_DESCRIPTION = "Phase 13C portal live-verification fixture. Not real campaign content."
 
+_PRIMARY_TIMELINE_NAME = "Phase13C Primary Timeline"
 _TIMELINE_A_NAME = "Phase13C Timeline A"
 _TIMELINE_B_NAME = "Phase13C Timeline B"
 
@@ -1739,34 +1743,84 @@ def _resolve_user(connection: Connection, user_id: uuid.UUID) -> _UserInfo:
     )
 
 
-def _get_or_create_world(connection: Connection, summary: _Summary) -> uuid.UUID:
-    existing = connection.execute(
+def _find_world(connection: Connection) -> uuid.UUID | None:
+    """The fixture world: by its legacy fixed slug, else by its (distinctive)
+    name — worlds made through `create_world` get a server-generated slug."""
+    by_slug = connection.execute(
         text("SELECT world_id FROM core.worlds WHERE slug = :slug"), {"slug": _WORLD_SLUG}
     ).scalar()
-    if existing is not None:
-        assert isinstance(existing, uuid.UUID)
-        summary.add(created=False, label=f"world {_WORLD_NAME!r}", record_id=existing)
-        return existing
-
-    active_status = lookup_id(
-        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
+    if by_slug is not None:
+        assert isinstance(by_slug, uuid.UUID)
+        return by_slug
+    by_name = (
+        connection.execute(
+            text("SELECT world_id FROM core.worlds WHERE name = :name ORDER BY world_id"),
+            {"name": _WORLD_NAME},
+        )
+        .scalars()
+        .all()
     )
-    world_id = connection.execute(
-        text("""
-            INSERT INTO core.worlds (name, slug, description, lifecycle_status_id)
-            VALUES (:name, :slug, :description, :status)
-            RETURNING world_id
-        """),
-        {
-            "name": _WORLD_NAME,
-            "slug": _WORLD_SLUG,
-            "description": _FIXTURE_DESCRIPTION,
-            "status": active_status,
-        },
-    ).scalar()
-    assert isinstance(world_id, uuid.UUID)
-    summary.add(created=True, label=f"world {_WORLD_NAME!r}", record_id=world_id)
-    return world_id
+    if len(by_name) > 1:
+        raise SystemExit(
+            f"{len(by_name)} worlds are named {_WORLD_NAME!r}; refusing to guess which is the fixture."
+        )
+    return by_name[0] if by_name else None
+
+
+def _get_or_create_world(
+    connection: Connection, summary: _Summary, *, user: _UserInfo, ruleset_id: uuid.UUID
+) -> tuple[uuid.UUID, bool]:
+    """Create the world through the real `create_world` command (allowed
+    ruleset, default, the user's `world_owner` membership, and the primary
+    timeline in one transaction). A legacy world made by an earlier version of
+    this script has no owner: it is claimed for `user` with the same trusted
+    command `scripts/claim_world_ownership.py` uses, never overridden."""
+    existing = _find_world(connection)
+    if existing is not None:
+        summary.add(created=False, label=f"world {_WORLD_NAME!r}", record_id=existing)
+        has_membership = connection.execute(
+            text("SELECT EXISTS (SELECT 1 FROM security.world_memberships WHERE world_id = :w)"),
+            {"w": existing},
+        ).scalar()
+        if not has_membership:
+            claimed = claim_world(connection, world_id=existing, user_id=user.user_id)
+            # Printed, not added to the summary: the summary's line count must be
+            # identical on every run (the idempotency tests compare it).
+            print(
+                f"Claimed legacy world {existing} for {user.display_name!r} "
+                f"(world_membership_id={claimed.world_membership_id})."
+            )
+        return existing, False
+
+    result = create_world(
+        connection,
+        creator_user_id=user.user_id,
+        name=_WORLD_NAME,
+        description=_FIXTURE_DESCRIPTION,
+        ruleset_ids=[ruleset_id],
+        default_ruleset_id=ruleset_id,
+        primary_timeline_name=_PRIMARY_TIMELINE_NAME,
+    )
+    for schema, table, record_id in (
+        ("core", "worlds", result.world_id),
+        ("security", "world_memberships", result.world_membership_id),
+        ("campaign", "timelines", result.primary_timeline_id),
+    ):
+        record_change_log(
+            connection,
+            change_action_code=_CREATED_CHANGE_ACTION,
+            schema_name=schema,
+            table_name=table,
+            record_id=record_id,
+            entity_id=None,
+            world_id=result.world_id,
+            actor_user_id=user.user_id,
+            correlation_id=None,
+            command_name="create_world",
+            event_id=None,
+        )
+    summary.add(created=True, label=f"world {_WORLD_NAME!r}", record_id=result.world_id)
+    return result.world_id, True
 
 
 def _get_ruleset(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
@@ -1796,9 +1850,23 @@ def _get_ruleset(connection: Connection) -> tuple[uuid.UUID, uuid.UUID]:
     return ruleset_id, ruleset_version_id
 
 
+# Phase 15 marker: direct insert kept ONLY to repair a legacy world created before
+# `create_world` existed; a world made by this script already has the association.
 def _ensure_world_ruleset(
-    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, ruleset_id: uuid.UUID
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    ruleset_id: uuid.UUID,
+    created_with_world: bool,
 ) -> None:
+    if created_with_world:
+        # `create_world` made the allow-list entry and the default in its own
+        # transaction; report it as created on this run.
+        summary.add(
+            created=True, label="world/ruleset association", record_id=f"{world_id}/{ruleset_id}"
+        )
+        return
     existing = connection.execute(
         text(
             "SELECT 1 FROM rules.world_rulesets WHERE world_id = :world AND ruleset_id = :ruleset"
@@ -1811,6 +1879,7 @@ def _ensure_world_ruleset(
         )
         return
     connection.execute(
+        # phase14-direct-insert: allowed (legacy-world repair only)
         text("INSERT INTO rules.world_rulesets (world_id, ruleset_id) VALUES (:world, :ruleset)"),
         {"world": world_id, "ruleset": ruleset_id},
     )
@@ -1827,7 +1896,12 @@ def _ensure_world_ruleset(
 
 
 def _get_or_create_timeline(
-    connection: Connection, summary: _Summary, *, world_id: uuid.UUID, name: str
+    connection: Connection,
+    summary: _Summary,
+    *,
+    world_id: uuid.UUID,
+    name: str,
+    user: _UserInfo,
 ) -> uuid.UUID:
     existing = connection.execute(
         text("SELECT timeline_id FROM campaign.timelines WHERE world_id = :world AND name = :name"),
@@ -1838,20 +1912,24 @@ def _get_or_create_timeline(
         summary.add(created=False, label=f"timeline {name!r}", record_id=existing)
         return existing
 
-    active_status = lookup_id(
-        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
+    result = create_timeline(
+        connection, world_id=world_id, actor_user_id=user.user_id, name=name, description=None
     )
-    timeline_id = connection.execute(
-        text("""
-            INSERT INTO campaign.timelines (world_id, name, is_primary, lifecycle_status_id)
-            VALUES (:world, :name, false, :status)
-            RETURNING timeline_id
-        """),
-        {"world": world_id, "name": name, "status": active_status},
-    ).scalar()
-    assert isinstance(timeline_id, uuid.UUID)
-    summary.add(created=True, label=f"timeline {name!r}", record_id=timeline_id)
-    return timeline_id
+    record_change_log(
+        connection,
+        change_action_code=_CREATED_CHANGE_ACTION,
+        schema_name="campaign",
+        table_name="timelines",
+        record_id=result.timeline_id,
+        entity_id=None,
+        world_id=world_id,
+        actor_user_id=user.user_id,
+        correlation_id=None,
+        command_name="create_timeline",
+        event_id=None,
+    )
+    summary.add(created=True, label=f"timeline {name!r}", record_id=result.timeline_id)
+    return result.timeline_id
 
 
 def _ensure_relationship_type_capabilities(connection: Connection, summary: _Summary) -> None:
@@ -1920,7 +1998,7 @@ def _get_or_create_campaign(
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """Returns (campaign_id, campaign_membership_id) for `user` in the named
     campaign on `timeline_id`, creating it (via the real `create_campaign`
-    command, after issuing the real `grant_timeline_bootstrap` entitlement)
+    command under the user's world-owner authority — no bootstrap grant)
     only if no campaign with this fixture's exact name already exists on
     this timeline."""
     existing_campaign_id = connection.execute(
@@ -1949,7 +2027,6 @@ def _get_or_create_campaign(
         )
         return existing_campaign_id, membership_id
 
-    grant_timeline_bootstrap(connection, timeline_id=timeline_id, granted_to_user_id=user.user_id)
     result = create_campaign(
         connection,
         timeline_id=timeline_id,
@@ -5954,15 +6031,23 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
 
     ruleset_id, ruleset_version_id = _get_ruleset(connection)
 
-    world_id = _get_or_create_world(connection, summary)
-    _ensure_world_ruleset(connection, summary, world_id=world_id, ruleset_id=ruleset_id)
+    world_id, world_created = _get_or_create_world(
+        connection, summary, user=user, ruleset_id=ruleset_id
+    )
+    _ensure_world_ruleset(
+        connection,
+        summary,
+        world_id=world_id,
+        ruleset_id=ruleset_id,
+        created_with_world=world_created,
+    )
     _ensure_relationship_type_capabilities(connection, summary)
 
     timeline_a_id = _get_or_create_timeline(
-        connection, summary, world_id=world_id, name=_TIMELINE_A_NAME
+        connection, summary, world_id=world_id, name=_TIMELINE_A_NAME, user=user
     )
     timeline_b_id = _get_or_create_timeline(
-        connection, summary, world_id=world_id, name=_TIMELINE_B_NAME
+        connection, summary, world_id=world_id, name=_TIMELINE_B_NAME, user=user
     )
 
     campaign_a_id, campaign_a_membership_id = _get_or_create_campaign(

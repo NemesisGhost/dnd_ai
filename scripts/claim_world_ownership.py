@@ -110,8 +110,8 @@ def _run(engine: Engine, args: argparse.Namespace) -> int:
             worlds = list_unowned_worlds(connection)
         if not worlds:
             print("No unowned worlds.")
-        for world_id, slug, name in worlds:
-            print(f"{slug}\t{name}\t{world_id}")
+        for listed_id, slug, name in worlds:
+            print(f"{slug}\t{name}\t{listed_id}")
         return 0
 
     if not args.world_slug or not args.login_name:
