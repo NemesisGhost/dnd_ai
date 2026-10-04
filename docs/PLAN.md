@@ -2006,7 +2006,7 @@ Exit criteria:
 
 ### Phase 14: Shared authoring kernel and campaign setup
 
-**Status: In progress** (branch `phase14/authoring-kernel`). World authority is a per-world membership, not an inference from campaign roles — see [ADR 0014](adr/0014-world-authoring-authority.md). Delivery evidence is recorded in `PHASE14_VERIFICATION.md` when the phase closes.
+**Status: Implemented; local verification green, final-head CI pending** (branch `phase14/authoring-kernel`). Mark complete only after a green CI run. World authority is a per-world membership, not an inference from campaign roles — see [ADR 0014](adr/0014-world-authoring-authority.md). Delivery evidence: [PHASE14_VERIFICATION.md](PHASE14_VERIFICATION.md).
 
 **Goal:** Establish the production write model and let a GM create the minimum viable campaign without SQL or seed scripts.
 
