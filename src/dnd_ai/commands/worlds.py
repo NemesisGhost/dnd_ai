@@ -57,7 +57,7 @@ from dnd_ai.domain.world_authority import (
 from dnd_ai.queries.world_authority import resolve_world_authority
 from dnd_ai.queries.worlds import world_has_blocking_campaigns
 
-from ._shared import lookup_id
+from ._shared import lifecycle_code, lookup_id
 from .timelines import insert_root_timeline
 
 MAX_ALLOWED_RULESETS = 10
@@ -236,9 +236,8 @@ def _lock_world_for_manage(
     lock. Every failure is the same non-disclosing error."""
     row = connection.execute(
         text("""
-            SELECT w.row_version, w.name, w.description, ls.code AS lifecycle_code
+            SELECT w.row_version, w.name, w.description, w.lifecycle_status_id
             FROM core.worlds w
-            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = w.lifecycle_status_id
             WHERE w.world_id = :w
             FOR UPDATE OF w
         """),
@@ -254,7 +253,7 @@ def _lock_world_for_manage(
             row_version=int(row.row_version),
             name=str(row.name),
             description=row.description,
-            lifecycle_status=str(row.lifecycle_code),
+            lifecycle_status=lifecycle_code(connection, row.lifecycle_status_id),
         ),
         authority,
     )

@@ -267,6 +267,17 @@ flowchart LR
     E2 -. not inherited .-> B
 ```
 
+### 9.1 Branch creation through `create_timeline_branch` (Phase 14)
+
+The branch command offers exactly two kinds of branch point:
+
+- **`existing_world_time`** — the world time of a *recorded* event in `campaign.effective_events(parent)` (inherited ancestor history counts). It must not precede the parent's own branch point: `effective_events` caps each ancestor at the *next timeline down's* branch point, so branching earlier than one's parent's branch point would let the child see ancestor events newer than its own branch point.
+- **`latest`** — "branch from the present state of the parent's history". Creates a new narrative `core.world_times` row (no calendar or year, a required label) with `sort_key` one past everything the parent can see (never before the parent's own branch point). On an event-less timeline that is `sort_key = 0`, so a brand-new world can branch without SQL.
+
+Nonexistent, other-world, not-in-history, and draft-event-only world times are the same `branch_point_invalid` error. `branch_event_id` stays NULL in Phase 14 (attaching a causal event arrives with event authoring, Phase 15E). The parent timeline and its world must be active; a new branch is never primary. Lineage (`parent_timeline_id`, `branch_world_time_id`) is immutable after creation.
+
+**Inheritance is by world-time position**, exactly as `effective_events` computes it: a parent event recorded *later* at a world time at or before the branch point is pre-branch history by definition and is inherited. Branch-point options expose only world-time labels, never event names or IDs.
+
 ## 10. AI-generated entities and changes
 
 AI generation follows a proposal lifecycle.
@@ -483,7 +494,7 @@ Delivered commands (each intent-specific, `expected_row_version`-guarded, idempo
 | `create_world` (world, allow-listed rulesets and default, owner membership, primary timeline — one transaction) | Built |
 | `update_world`, `archive_world`, `restore_world` | Built |
 | `claim_unowned_world` (trusted infrastructure only, never over HTTP) | Built |
-| `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Planned (Phase 14, later checkpoint) |
+| `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |
 | `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Planned (Phase 14, later checkpoint) |
 | `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Planned (Phase 14, later checkpoint) |
 

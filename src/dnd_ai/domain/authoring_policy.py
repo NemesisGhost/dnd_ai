@@ -110,3 +110,64 @@ def world_actions(
             a, lifecycle_status=lifecycle_status, has_blocking_campaigns=has_blocking_campaigns
         ),
     )
+
+
+# --- Timeline -------------------------------------------------------------------
+
+TIMELINE_UPDATE = "update"
+TIMELINE_ARCHIVE = "archive"
+TIMELINE_RESTORE = "restore"
+TIMELINE_CREATE_BRANCH = "create_branch"
+TIMELINE_CREATE_CAMPAIGN = "create_campaign"
+TIMELINE_ACTIONS = (
+    TIMELINE_UPDATE,
+    TIMELINE_ARCHIVE,
+    TIMELINE_RESTORE,
+    TIMELINE_CREATE_BRANCH,
+    TIMELINE_CREATE_CAMPAIGN,
+)
+
+
+def timeline_blocked_reason(
+    action: str,
+    *,
+    world_status: str,
+    timeline_status: str,
+    is_primary: bool,
+    has_blocking_campaigns: bool,
+) -> str | None:
+    """Why `action` is not legal on this timeline, or `None`. The world being
+    archived dominates every action: an archived world is read-only except
+    for restoring the world itself."""
+    if action not in TIMELINE_ACTIONS:
+        raise ValueError(f"unknown timeline action {action!r}")
+    if world_status != "active":
+        return WORLD_ARCHIVED
+    if action == TIMELINE_RESTORE:
+        return None if timeline_status == "archived" else TRANSITION_NOT_ALLOWED
+    if action == TIMELINE_ARCHIVE:
+        if timeline_status != "active":
+            return TRANSITION_NOT_ALLOWED
+        if is_primary:
+            return PRIMARY_TIMELINE_NOT_ARCHIVABLE
+        return TIMELINE_HAS_ACTIVE_CAMPAIGNS if has_blocking_campaigns else None
+    return None if timeline_status == "active" else TIMELINE_ARCHIVED
+
+
+def timeline_actions(
+    *,
+    world_status: str,
+    timeline_status: str,
+    is_primary: bool,
+    has_blocking_campaigns: bool,
+) -> tuple[list[str], list[BlockedAction]]:
+    return _evaluate(
+        TIMELINE_ACTIONS,
+        lambda a: timeline_blocked_reason(
+            a,
+            world_status=world_status,
+            timeline_status=timeline_status,
+            is_primary=is_primary,
+            has_blocking_campaigns=has_blocking_campaigns,
+        ),
+    )

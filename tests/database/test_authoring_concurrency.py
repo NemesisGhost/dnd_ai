@@ -19,8 +19,14 @@ from sqlalchemy import Engine, text
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
+from dnd_ai.commands.timelines import (
+    LatestPoint,
+    archive_timeline,
+    create_timeline,
+    create_timeline_branch,
+)
 from dnd_ai.commands.worlds import update_world
-from dnd_ai.domain.authoring import StaleWriteError
+from dnd_ai.domain.authoring import StaleWriteError, TimelineArchivedError
 from tests.builders import dnd5e_ids, make_authored_world
 from tests.factories import make_user, oidc_principal
 
@@ -203,3 +209,115 @@ def test_two_concurrent_create_world_requests_with_one_key_create_one_world(
         ).scalar()
     assert worlds == 1
     assert audits == 3
+
+
+# --- Race 2: archive_timeline vs create_timeline_branch -------------------------------
+
+
+def _committed_side_timeline(engine: Engine, owner: uuid.UUID):  # type: ignore[no-untyped-def]
+    with engine.begin() as setup:
+        world = make_authored_world(setup, owner_user_id=owner, name="Race Timeline World")
+        side = create_timeline(
+            setup,
+            world_id=world.world_id,
+            actor_user_id=owner,
+            name="Side",
+            description=None,
+        )
+    return world, side
+
+
+def _branch_from(engine: Engine, world, parent: uuid.UUID, owner: uuid.UUID, out: dict) -> None:  # type: ignore[no-untyped-def]
+    with engine.begin() as connection:
+        try:
+            create_timeline_branch(
+                connection,
+                world_id=world.world_id,
+                parent_timeline_id=parent,
+                actor_user_id=owner,
+                name="Racing Branch",
+                description=None,
+                branch_point=LatestPoint(label="race"),
+            )
+            out["result"] = "branched"
+        except TimelineArchivedError:
+            out["result"] = "timeline_archived"
+
+
+def test_a_branch_waits_for_an_in_flight_archive_and_is_then_refused(
+    postgres_engine: Engine, committed_owner: uuid.UUID
+) -> None:
+    world, side = _committed_side_timeline(postgres_engine, committed_owner)
+    archiver = postgres_engine.connect()
+    tx = archiver.begin()
+    archive_timeline(
+        archiver,
+        world_id=world.world_id,
+        timeline_id=side.timeline_id,
+        actor_user_id=committed_owner,
+        expected_row_version=side.row_version,
+    )
+    out: dict[str, object] = {}
+    thread = threading.Thread(
+        target=_branch_from, args=(postgres_engine, world, side.timeline_id, committed_owner, out)
+    )
+    thread.start()
+    _wait_until_blocked(postgres_engine, "query LIKE '%FOR SHARE OF t%'")
+    tx.commit()
+    archiver.close()
+    thread.join(timeout=15)
+
+    assert out["result"] == "timeline_archived"
+    with postgres_engine.connect() as verify:
+        branches = verify.execute(
+            text("SELECT count(*) FROM campaign.timelines WHERE name = 'Racing Branch'")
+        ).scalar()
+    assert branches == 0
+
+
+def test_an_archive_waits_for_an_in_flight_branch_and_leaves_it_intact(
+    postgres_engine: Engine, committed_owner: uuid.UUID
+) -> None:
+    world, side = _committed_side_timeline(postgres_engine, committed_owner)
+    brancher = postgres_engine.connect()
+    tx = brancher.begin()
+    create_timeline_branch(
+        brancher,
+        world_id=world.world_id,
+        parent_timeline_id=side.timeline_id,
+        actor_user_id=committed_owner,
+        name="Racing Branch",
+        description=None,
+        branch_point=LatestPoint(label="race"),
+    )
+    out: dict[str, object] = {}
+
+    def archive() -> None:
+        with postgres_engine.begin() as connection:
+            archive_timeline(
+                connection,
+                world_id=world.world_id,
+                timeline_id=side.timeline_id,
+                actor_user_id=committed_owner,
+                expected_row_version=side.row_version,
+            )
+            out["result"] = "archived"
+
+    thread = threading.Thread(target=archive)
+    thread.start()
+    _wait_until_blocked(postgres_engine, "query LIKE '%FOR UPDATE OF t%'")
+    tx.commit()
+    brancher.close()
+    thread.join(timeout=15)
+
+    assert out["result"] == "archived"
+    with postgres_engine.connect() as verify:
+        rows = verify.execute(
+            text("""
+                SELECT t.name, ls.code FROM campaign.timelines t
+                JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = t.lifecycle_status_id
+                WHERE t.world_id = :w AND t.name IN ('Side', 'Racing Branch') ORDER BY t.name
+            """),
+            {"w": world.world_id},
+        ).all()
+    assert [(r.name, r.code) for r in rows] == [("Racing Branch", "active"), ("Side", "archived")]

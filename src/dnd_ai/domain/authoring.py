@@ -152,6 +152,11 @@ class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 
 
+class TimelineNotFoundError(DomainAuthorizationError):
+    """No such timeline *in this world* — a nonexistent timeline and one that
+    belongs to a different world are indistinguishable (fixed 404)."""
+
+
 class WorldAlreadyClaimedError(ValueError):
     """`claim_unowned_world` refused: the world has (or ever had) a
     membership row. Raised only to trusted infrastructure (a script), never

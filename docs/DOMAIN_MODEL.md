@@ -255,6 +255,8 @@ A timeline may:
 
 A timeline inherits parent history only up to the branch point.
 
+Timelines are created and branched through authoring commands (Phase 14; [ENTITY_LIFECYCLE.md §9.1](ENTITY_LIFECYCLE.md)). A branch point is either an existing world time in the parent's effective history or a labeled "latest" point; lineage is immutable once created, and a primary timeline cannot be archived. Archiving a timeline is refused while a non-archived campaign uses it and does not affect child branches.
+
 ### 5.2 Campaign
 
 A **Campaign** is an organized game running within one timeline.

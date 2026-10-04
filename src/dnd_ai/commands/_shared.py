@@ -33,6 +33,23 @@ def lookup_id(
     return value
 
 
+def lifecycle_code(connection: Connection, lifecycle_status_id: uuid.UUID) -> str:
+    """The `core.lifecycle_statuses.code` for an id.
+
+    Authoring commands lock a row with `SELECT ... FOR UPDATE/SHARE` and then
+    resolve its status code with *this* separate query, never with a JOIN inside
+    the locking statement: under READ COMMITTED a waiter that wakes after a
+    concurrent UPDATE re-checks the locked row's quals against its **new**
+    version but joins against the **old** lookup row, so a JOIN on a changed
+    status column silently makes the just-locked row disappear."""
+    code = connection.execute(
+        text("SELECT code FROM core.lifecycle_statuses WHERE lifecycle_status_id = :id"),
+        {"id": lifecycle_status_id},
+    ).scalar()
+    assert isinstance(code, str)
+    return code
+
+
 class SessionNotInCampaignError(DomainAuthorizationError):
     """Raised by `_validate_session_campaign()` when a supplied `session_id`
     does not resolve to a `campaign.sessions` row belonging exactly to the
