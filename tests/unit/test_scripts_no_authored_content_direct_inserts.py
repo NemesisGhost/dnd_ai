@@ -1,11 +1,13 @@
 """Guard: operator scripts must create Phase 14-owned records (worlds,
-timelines, campaigns, world memberships, a world's allowed rulesets) through
-the production commands, not raw SQL.
+timelines, campaigns, world memberships, a world's allowed rulesets) and
+Phase 15.1-authored world content (locations, organizations, religions, NPCs,
+quests, knowledge claims) through the production commands, not raw SQL.
 
-A deliberate exception carries the marker `phase14-direct-insert: allowed` on
-the same statement (or the comment line directly above it) with a stated
-reason. Immutable seeds and Phase 15+ domains (entities, quests, sessions, …)
-are out of scope, so only the five Phase 14 tables are checked.
+A deliberate exception carries the marker `phase14-direct-insert: allowed` (or,
+for authored content, `authored-content-direct-insert: allowed`) on the same
+statement or the comment line directly above it, with a stated reason. Immutable
+seeds and the Phase 15.2 domains (sessions, events, timeline state, knowledge
+state) are out of scope.
 """
 
 import re
@@ -18,9 +20,26 @@ _TABLES = (
     "campaign.campaigns",
     "security.world_memberships",
     "rules.world_rulesets",
+    # Phase 15.1 authored content.
+    "world.locations",
+    "world.settlements",
+    "world.buildings",
+    "world.organizations",
+    "world.governments",
+    "world.businesses",
+    "world.military_units",
+    "world.political_factions",
+    "world.religious_organizations",
+    "world.religions",
+    "character.npcs",
+    "narrative.quests",
+    "narrative.quest_stages",
+    "narrative.quest_objectives",
+    "knowledge.knowledge_items",
 )
 _INSERT = re.compile(r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _TABLES) + r")\b", re.I)
-_MARKER = "phase14-direct-insert: allowed"
+_MARKERS = ("phase14-direct-insert: allowed", "authored-content-direct-insert: allowed")
+_MARKER = _MARKERS[0]
 
 
 def _violations(source: str) -> list[tuple[int, str]]:
@@ -33,12 +52,12 @@ def _violations(source: str) -> list[tuple[int, str]]:
         # The marker may sit on this line or on either of the two lines above
         # (a SQL comment inside the statement, or a Python comment before it).
         window = lines[max(0, index - 2) : index + 1]
-        if not any(_MARKER in candidate for candidate in window):
+        if not any(marker in candidate for candidate in window for marker in _MARKERS):
             found.append((index + 1, match.group(1)))
     return found
 
 
-def test_no_script_inserts_phase14_records_directly_without_a_marker() -> None:
+def test_no_script_inserts_guarded_records_directly_without_a_marker() -> None:
     problems = {
         path.name: _violations(path.read_text(encoding="utf-8"))
         for path in sorted(_SCRIPTS.glob("*.py"))
@@ -59,3 +78,13 @@ def test_the_guard_detects_an_unmarked_insert_and_accepts_a_marked_one() -> None
         == []
     )
     assert _violations('text("INSERT INTO core.entities (x) VALUES (1)")') == []
+    assert _violations('text("INSERT INTO world.locations (x) VALUES (1)")') == [
+        (1, "world.locations")
+    ]
+    assert (
+        _violations(
+            "# authored-content-direct-insert: allowed (disposable)\n"
+            'text("INSERT INTO knowledge.knowledge_items (x) VALUES (1)")'
+        )
+        == []
+    )

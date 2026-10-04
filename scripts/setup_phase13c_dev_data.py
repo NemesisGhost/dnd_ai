@@ -3572,7 +3572,9 @@ def _get_or_create_quest(
     ).scalar()
     assert isinstance(entity_id, uuid.UUID)
     connection.execute(
-        text("INSERT INTO narrative.quests (quest_id) VALUES (:id)"), {"id": entity_id}
+        # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
+        text("INSERT INTO narrative.quests (quest_id) VALUES (:id)"),
+        {"id": entity_id},
     )
     summary.add(created=True, label=f"quest {name!r}", record_id=entity_id)
     return entity_id
@@ -3618,6 +3620,7 @@ def _ensure_quest_stage(
     if not existing:
         stage_id = connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 INSERT INTO narrative.quest_stages
                     (quest_id, name, sequence_number, stage_type, description)
                 VALUES (:quest, :name, :seq, :type, :description)
@@ -3703,6 +3706,7 @@ def _ensure_quest_objective(
     if not existing:
         objective_id = connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 INSERT INTO narrative.quest_objectives
                     (quest_stage_id, objective_type_id, name, requirement_level, completion_mode,
                      visibility_policy, description, quantity_required)
@@ -4838,16 +4842,19 @@ def _ensure_location_tree(
             entity_type_code=fixture.entity_type_code,
         )
         connection.execute(
+            # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
             text("INSERT INTO world.locations (location_id, parent_location_id) VALUES (:l, :p)"),
             {"l": location_id, "p": parent_location_id},
         )
         if fixture.entity_type_code == "settlement":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 text("INSERT INTO world.settlements (settlement_id, population) VALUES (:l, :pop)"),
                 {"l": location_id, "pop": fixture.population},
             )
         elif fixture.entity_type_code == "building":
             connection.execute(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 text("INSERT INTO world.buildings (building_id, building_use) VALUES (:l, :u)"),
                 {"l": location_id, "u": fixture.building_use},
             )
@@ -4949,6 +4956,7 @@ def _ensure_npc(
         ),
         {"c": npc_id, "s": species_id, "size": _CHARACTER_SIZE_CATEGORY},
     )
+    # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
     connection.execute(text("INSERT INTO character.npcs (npc_id) VALUES (:c)"), {"c": npc_id})
     summary.add(created=True, label=f"NPC {_NPC_NAME!r}", record_id=npc_id)
     return npc_id
@@ -4980,6 +4988,7 @@ def _ensure_organization(
     )
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
             INSERT INTO world.organizations
                 (organization_id, organization_type_id, headquarters_location_id,
                  public_description, internal_description)
@@ -5026,6 +5035,7 @@ def _ensure_government(
     if already is None:
         connection.execute(
             text(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 "INSERT INTO world.governments (government_id, government_form) VALUES (:id, :form)"
             ),
             {"id": org_id, "form": _GOVERNMENT_FORM},
@@ -5052,6 +5062,7 @@ def _ensure_religion(
     )
     connection.execute(
         text(
+            # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
             "INSERT INTO world.religions (religion_id, pantheon_structure) VALUES (:id, :structure)"
         ),
         {"id": religion_id, "structure": _RELIGION_PANTHEON},
@@ -5085,6 +5096,7 @@ def _ensure_religious_organization(
     if already is None:
         connection.execute(
             text(
+                # authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
                 "INSERT INTO world.religious_organizations (religious_organization_id, religion_id) "
                 "VALUES (:id, :religion)"
             ),
@@ -5393,6 +5405,7 @@ def _get_or_create_knowledge_item(
     )
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (Phase 13C fixture; replaced in 15.2)
             INSERT INTO knowledge.knowledge_items
                 (knowledge_item_id, knowledge_type_id, truth_status_id, canonical_statement,
                  sensitivity, subject_entity_id)
