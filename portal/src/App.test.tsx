@@ -937,7 +937,7 @@ describe("portal routing", () => {
 
     expect(
       screen.getByRole("link", {
-        name: "World",
+        name: "Campaign world",
       }),
     ).toHaveAttribute("aria-current", "page")
 

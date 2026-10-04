@@ -65,8 +65,12 @@ Campaign Home  [Choose campaign ▾]   link to the resolved campaign's Home + se
   Authorized Campaign B
   Authorized Campaign C
   View all campaigns                  /campaigns
-Worlds                                global capability world.create (Phase 14)
-World
+Worlds ▾                              disclosure; the single world group (Phase 14)
+  All worlds                          /worlds
+  New world                           global capability world.create
+  World overview                      only for a world the bootstrap authorizes
+  Timeline                            that world's timeline, same condition
+  Campaign world                      /app/{campaignId}/world
 Characters
 Quests
 Sessions
@@ -82,9 +86,10 @@ Collapse / expand navigation          always last
 
 Rules:
 
+- **One Worlds group.** There is no separate singular "World" item; the campaign world page is the group's "Campaign world" child. World and timeline children appear only for a world ID already present in the session bootstrap (the route's world, else the route campaign's world); an unknown route world ID adds nothing and is never echoed. "New world" follows `global_capabilities`, never a display role. The group starts open on a `/worlds` or campaign world route.
 - **Campaign choices** come only from the current authoritative session bootstrap (`campaigns`). The sidebar never invents, guesses, caches, or carries forward a campaign from a previous bootstrap, from browser storage, or from a stored preference. Selecting a different campaign clears that campaign's character-perspective selection (`useSelectCampaign`) and enters `/app/{campaignId}/home`. **View all campaigns** always links to `/campaigns`, the full campaign-selection route (§5.2).
 - **Campaign Home is a link plus a separate disclosure button**, never one control that is ambiguously both. The link (visible text "Campaign Home") navigates to the resolved campaign's Home; an adjacent button (accessible name "Choose campaign", `aria-expanded`, `aria-controls`) shows or hides the campaign list beneath it. When no campaign resolves, the link is absent and the disclosure button carries the visible text "Choose a campaign". The list starts open on `/campaigns` and closed elsewhere. The active campaign's entry carries `aria-current="true"`.
-- **Resolved campaign for campaign-specific links:** the route's `:campaignId` when it is in the current bootstrap's `campaigns`; otherwise `campaign_preferences.last_visited_campaign_id`; otherwise `startup_campaign_id` (§4.7); otherwise none. A route campaign ID that is not authorized is never used or echoed. With no resolved campaign, World/Characters/Quests/Sessions/Knowledge/Ask/Access are not rendered as links — the sidebar shows a short "Choose a campaign to see its pages" note instead — so no link ever contains a guessed ID.
+- **Resolved campaign for campaign-specific links:** the route's `:campaignId` when it is in the current bootstrap's `campaigns`; otherwise `campaign_preferences.last_visited_campaign_id`; otherwise `startup_campaign_id` (§4.7); otherwise none. A route campaign ID that is not authorized is never used or echoed. With no resolved campaign, Campaign world/Characters/Quests/Sessions/Knowledge/Ask/Access are not rendered as links — the sidebar shows a short "Choose a campaign to see its pages" note instead — so no link ever contains a guessed ID.
 - **Ask** follows the server feature manifest exactly as before: a link only when `features.ask` is true, otherwise a visibly disabled item that is not a link and makes no request.
 - **Access** is a disclosure button (not a link) over **Access Management** (`/access`), **Invitations** (`/access/invitations`), and **Audit History** (`/access/audit`). The group is shown only when the resolved campaign's server-supplied `capabilities` include `access.manage` — the capability each of those routes' APIs already requires — and is never shown with no visible child. Hiding it is presentation only; each route and API re-authorizes. The Access page's own tab strip remains as page-local navigation.
 - **Collapse/expand** stays the last item. Collapsed, the sidebar is an icon rail: every item keeps an accessible name (visible label hidden, `title` shown), the campaign-list disclosure is replaced by a Campaign Home icon link (when a campaign resolves) and a rail **All campaigns** link to `/campaigns`, and activating the Access button in the rail opens its children as a bounded flyout beside the rail with their labels shown, so they stay keyboard-reachable. The collapsed/expanded choice is a per-viewer convenience persisted in browser storage (never authentication data), so it survives the scope-keyed remount.

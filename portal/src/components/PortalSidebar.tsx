@@ -5,8 +5,6 @@ import type { LucideIcon } from "lucide-react"
 import {
   BookOpen,
   CalendarDays,
-  Globe2,
-  Landmark,
   LayoutList,
   MessageCircleQuestion,
   PanelLeftClose,
@@ -21,6 +19,7 @@ import type { NavigationDrawerControl } from "../hooks/useNavigationDrawer"
 import { resolveNavigationCampaign } from "../utils/resolveNavigationCampaign"
 import { AccessNavGroup } from "./AccessNavGroup"
 import { CampaignHomeNavGroup } from "./CampaignHomeNavGroup"
+import { WorldsNavGroup } from "./WorldsNavGroup"
 
 interface NavigationItem {
   path: string
@@ -28,9 +27,9 @@ interface NavigationItem {
   icon: LucideIcon
 }
 
-// Campaign Home is rendered by CampaignHomeNavGroup.
+// Campaign Home is rendered by CampaignHomeNavGroup; the campaign world page
+// lives under the Worlds group (WorldsNavGroup).
 const campaignNavigationItems: NavigationItem[] = [
-  { path: "world", label: "World", icon: Globe2 },
   { path: "characters", label: "Characters", icon: Users },
   { path: "quests", label: "Quests", icon: ScrollText },
   { path: "sessions", label: "Sessions", icon: CalendarDays },
@@ -63,6 +62,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const { state } = useSession()
   const routeMatch = useMatch("/app/:campaignId/*")
   const routeCampaignId = routeMatch?.params.campaignId
+  const worldRouteMatch = useMatch("/worlds/:worldId/*")
   const [collapsed, toggleCollapsed] = useSidebarCollapsed()
   const selectCampaign = useSelectCampaign(routeCampaignId)
   const navigationRef = useRef<HTMLElement>(null)
@@ -149,6 +149,28 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   const campaignPath =
     resolvedCampaign === null ? null : `/app/${resolvedCampaign.campaign_id}`
 
+  // World context comes only from worlds the bootstrap already authorizes:
+  // an authorized world route, else the authorized route campaign's world. A
+  // raw route world ID that is not in the bootstrap exposes nothing.
+  const authorizedRouteCampaign = bootstrap?.campaigns.find(
+    (campaign) => campaign.campaign_id === authorizedRouteCampaignId,
+  )
+  const routeWorldId = worldRouteMatch?.params.worldId
+  const activeWorldId =
+    routeWorldId !== undefined &&
+    bootstrap?.campaigns.some((campaign) => campaign.world_id === routeWorldId)
+      ? routeWorldId
+      : (authorizedRouteCampaign?.world_id ?? null)
+  const activeTimelineCampaign =
+    activeWorldId === null
+      ? undefined
+      : resolvedCampaign?.world_id === activeWorldId
+        ? resolvedCampaign
+        : bootstrap?.campaigns.find(
+            (campaign) => campaign.world_id === activeWorldId,
+          )
+  const activeTimelineId = activeTimelineCampaign?.timeline_id ?? null
+
   const toggleLabel = collapsed ? "Expand navigation" : "Collapse navigation"
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
 
@@ -210,22 +232,19 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
                 onNavigate={close}
               />
 
-              {bootstrap.global_capabilities?.includes("world.create") && (
-                <li>
-                  <NavLink
-                    className={linkClassName}
-                    to="/worlds"
-                    title={collapsed ? "Worlds" : undefined}
-                    onClick={close}
-                  >
-                    <Landmark
-                      className="portal-sidebar__icon"
-                      aria-hidden="true"
-                    />
-                    <span className="portal-sidebar__label">Worlds</span>
-                  </NavLink>
-                </li>
-              )}
+              <WorldsNavGroup
+                activeWorldId={activeWorldId}
+                activeTimelineId={activeTimelineId}
+                campaignWorldPath={
+                  campaignPath === null ? null : `${campaignPath}/world`
+                }
+                canCreateWorld={
+                  bootstrap.global_capabilities?.includes("world.create") ===
+                  true
+                }
+                collapsed={collapsed}
+                onNavigate={close}
+              />
 
               {campaignPath === null || resolvedCampaign === null ? (
                 !collapsed && (

@@ -94,6 +94,10 @@ function renderSidebar(
     )
 }
 
+function openWorlds() {
+    fireEvent.click(within(nav()).getByRole("button", { name: "Worlds" }))
+}
+
 function authenticated(bootstrap: SessionBootstrap): SessionBootstrapState {
     return { status: "authenticated", bootstrap }
 }
@@ -117,7 +121,6 @@ describe("PortalSidebar destinations", () => {
 
         const expected: Array<[string, string]> = [
             ["Campaign Home", "/app/campaign-a/home"],
-            ["World", "/app/campaign-a/world"],
             ["Characters", "/app/campaign-a/characters"],
             ["Quests", "/app/campaign-a/quests"],
             ["Sessions", "/app/campaign-a/sessions"],
@@ -131,6 +134,16 @@ describe("PortalSidebar destinations", () => {
         }
     })
 
+    it("nests the campaign world page under Worlds, not as its own item", () => {
+        renderSidebar("/app/campaign-a/home")
+        openWorlds()
+
+        expect(
+            within(nav()).getByRole("link", { name: "Campaign world" }),
+        ).toHaveAttribute("href", "/app/campaign-a/world")
+        expect(within(nav()).queryByRole("link", { name: "World" })).toBeNull()
+    })
+
     it("marks the active route with aria-current", () => {
         renderSidebar("/app/campaign-a/quests")
 
@@ -139,7 +152,7 @@ describe("PortalSidebar destinations", () => {
             "page",
         )
         expect(
-            within(nav()).getByRole("link", { name: "World" }),
+            within(nav()).getByRole("link", { name: "Characters" }),
         ).not.toHaveAttribute("aria-current")
     })
 
@@ -203,10 +216,10 @@ describe("PortalSidebar campaign resolution", () => {
             authenticated(makeBootstrap({ startup_campaign_id: "campaign-a" })),
         )
 
-        expect(within(nav()).getByRole("link", { name: "World" })).toHaveAttribute(
-            "href",
-            "/app/campaign-a/world",
-        )
+        openWorlds()
+        expect(
+            within(nav()).getByRole("link", { name: "Campaign world" }),
+        ).toHaveAttribute("href", "/app/campaign-a/world")
     })
 
     it("never builds a link from an unauthorized route campaign", () => {
@@ -216,17 +229,17 @@ describe("PortalSidebar campaign resolution", () => {
         )
 
         expect(nav().innerHTML).not.toContain("ghost-campaign")
-        expect(within(nav()).getByRole("link", { name: "World" })).toHaveAttribute(
-            "href",
-            "/app/campaign-a/world",
-        )
+        openWorlds()
+        expect(
+            within(nav()).getByRole("link", { name: "Campaign world" }),
+        ).toHaveAttribute("href", "/app/campaign-a/world")
     })
 
     it("omits campaign-specific links and explains why with no resolvable campaign", () => {
         renderSidebar("/campaigns")
 
         expect(
-            within(nav()).queryByRole("link", { name: "World" }),
+            within(nav()).queryByRole("link", { name: "Campaign world" }),
         ).not.toBeInTheDocument()
         expect(within(nav()).queryByText("Ask")).not.toBeInTheDocument()
         expect(
@@ -496,7 +509,7 @@ describe("PortalSidebar session states", () => {
         expect(
             within(nav()).getByRole("button", { name: "Collapse navigation" }),
         ).toBeInTheDocument()
-        expect(within(nav()).queryByRole("link", { name: "World" })).toBeNull()
+        expect(within(nav()).queryByRole("link", { name: "Campaign world" })).toBeNull()
         expect(nav().innerHTML).not.toContain("Alpha Campaign")
         expect(nav().innerHTML).not.toContain("campaign-a")
     })
@@ -644,7 +657,7 @@ describe("PortalSidebar drawer", () => {
         renderSidebar("/app/campaign-a/home")
         openDrawer()
 
-        fireEvent.click(within(nav()).getByRole("link", { name: "World" }))
+        fireEvent.click(within(nav()).getByRole("link", { name: "Characters" }))
 
         expect(nav()).not.toHaveClass("portal-sidebar--mobile-open")
     })
@@ -681,30 +694,149 @@ describe("PortalSidebar drawer", () => {
     })
 })
 
-describe("PortalSidebar Worlds link (Phase 14)", () => {
-    it("shows Worlds only when the server-computed global capability includes world.create", () => {
-        renderSidebar("/app/campaign-a/home", {
-            status: "authenticated",
-            bootstrap: makeBootstrap({ global_capabilities: ["world.create"] }),
-        })
-        expect(within(nav()).getByRole("link", { name: "Worlds" })).toHaveAttribute(
+describe("PortalSidebar Worlds group (Phase 14)", () => {
+    const world = { world_id: "world-a", timeline_id: "timeline-a" }
+    const withWorld = (overrides: Partial<SessionBootstrap> = {}) =>
+        authenticated(
+            makeBootstrap({
+                campaigns: [{ ...first, ...world }, second],
+                ...overrides,
+            }),
+        )
+
+    it("renders exactly one top-level Worlds group and no singular World item", () => {
+        renderSidebar("/app/campaign-a/home")
+
+        expect(within(nav()).getAllByRole("button", { name: "Worlds" })).toHaveLength(1)
+        expect(within(nav()).queryByRole("link", { name: "Worlds" })).toBeNull()
+        expect(within(nav()).queryByRole("link", { name: "World" })).toBeNull()
+        expect(within(nav()).queryByRole("button", { name: "World" })).toBeNull()
+    })
+
+    it("communicates expanded state and keeps the collection reachable", () => {
+        renderSidebar("/campaigns")
+        const button = within(nav()).getByRole("button", { name: "Worlds" })
+        expect(button).toHaveAttribute("aria-expanded", "false")
+
+        fireEvent.click(button)
+
+        expect(button).toHaveAttribute("aria-expanded", "true")
+        expect(
+            within(nav()).getByRole("link", { name: "All worlds" }),
+        ).toHaveAttribute("href", "/worlds")
+    })
+
+    it("shows the group with the collection even for a user with no worlds or campaigns", () => {
+        renderSidebar("/campaigns", authenticated(makeBootstrap({ campaigns: [] })))
+        openWorlds()
+
+        expect(within(nav()).getByRole("link", { name: "All worlds" })).toBeInTheDocument()
+        expect(within(nav()).queryByRole("link", { name: "World overview" })).toBeNull()
+        expect(within(nav()).queryByRole("link", { name: "Campaign world" })).toBeNull()
+    })
+
+    it("shows creation only when the server-computed capability allows it", () => {
+        const { unmount } = renderSidebar(
+            "/campaigns",
+            authenticated(makeBootstrap({ global_capabilities: ["world.create"] })),
+        )
+        openWorlds()
+        expect(
+            within(nav()).getByRole("link", { name: "New world" }),
+        ).toHaveAttribute("href", "/worlds/new")
+        unmount()
+
+        renderSidebar(
+            "/campaigns",
+            authenticated(makeBootstrap({ global_capabilities: [] })),
+        )
+        openWorlds()
+        expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
+    })
+
+    it("does not infer creation when the bootstrap carries no global capabilities", () => {
+        const bootstrap = makeBootstrap()
+        delete bootstrap.global_capabilities
+        renderSidebar("/campaigns", authenticated(bootstrap))
+        openWorlds()
+        expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
+    })
+
+    it("nests the active world's overview and timeline routes on a campaign route", () => {
+        renderSidebar("/app/campaign-a/home", withWorld())
+        openWorlds()
+
+        expect(
+            within(nav()).getByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+        expect(within(nav()).getByRole("link", { name: "Timeline" })).toHaveAttribute(
             "href",
-            "/worlds",
+            "/worlds/world-a/timelines/timeline-a",
         )
     })
 
-    it("does not show Worlds without the capability, and never infers it", () => {
-        renderSidebar("/app/campaign-a/home", {
-            status: "authenticated",
-            bootstrap: makeBootstrap({ global_capabilities: [] }),
-        })
-        expect(within(nav()).queryByRole("link", { name: "Worlds" })).not.toBeInTheDocument()
+    it("starts open and marks the active route on a timeline route", () => {
+        renderSidebar("/worlds/world-a/timelines/timeline-a", withWorld())
+
+        expect(within(nav()).getByRole("button", { name: "Worlds" })).toHaveAttribute(
+            "aria-expanded",
+            "true",
+        )
+        expect(within(nav()).getByRole("link", { name: "Timeline" })).toHaveAttribute(
+            "aria-current",
+            "page",
+        )
+        expect(
+            within(nav()).getByRole("link", { name: "World overview" }),
+        ).not.toHaveAttribute("aria-current")
     })
 
-    it("does not show Worlds when the bootstrap carries no global capabilities", () => {
-        const bootstrap = makeBootstrap()
-        delete bootstrap.global_capabilities
-        renderSidebar("/home", { status: "authenticated", bootstrap })
-        expect(within(nav()).queryByRole("link", { name: "Worlds" })).not.toBeInTheDocument()
+    it("marks the overview active on the world route", () => {
+        renderSidebar("/worlds/world-a", withWorld())
+
+        expect(
+            within(nav()).getByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("aria-current", "page")
+    })
+
+    it("never exposes navigation for an unknown or unauthorized world ID", () => {
+        renderSidebar("/worlds/ghost-world/timelines/ghost-timeline", withWorld())
+
+        expect(nav().innerHTML).not.toContain("ghost-world")
+        expect(nav().innerHTML).not.toContain("ghost-timeline")
+        expect(within(nav()).queryByRole("link", { name: "World overview" })).toBeNull()
+        expect(within(nav()).queryByRole("link", { name: "Timeline" })).toBeNull()
+    })
+
+    it("keeps an accessible name and tooltip on the collapsed icon", () => {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
+        renderSidebar("/campaigns")
+
+        const button = within(nav()).getByRole("button", { name: "Worlds" })
+        expect(button).toHaveAttribute("title", "Worlds")
+    })
+
+    it("closes with Escape and returns focus to the Worlds button", () => {
+        renderSidebar("/campaigns")
+        const button = within(nav()).getByRole("button", { name: "Worlds" })
+        fireEvent.click(button)
+
+        fireEvent.keyDown(within(nav()).getByRole("link", { name: "All worlds" }), {
+            key: "Escape",
+        })
+
+        expect(button).toHaveAttribute("aria-expanded", "false")
+        expect(button).toHaveFocus()
+    })
+
+    it("leaves the Campaign group unchanged", () => {
+        renderSidebar("/app/campaign-a/home", withWorld())
+
+        expect(
+            within(nav()).getByRole("link", { name: "Campaign Home" }),
+        ).toHaveAttribute("href", "/app/campaign-a/home")
+        expect(
+            within(nav()).getByRole("button", { name: "Choose campaign" }),
+        ).toBeInTheDocument()
     })
 })
