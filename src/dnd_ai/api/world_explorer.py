@@ -23,13 +23,18 @@ idempotency key, no `audit.change_log` row, no mutation.
 """
 
 import uuid
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.entity_lifecycle import (
+    EntityStatusSummary,
+    get_entity_status_summary,
+    lifecycle_hidden_entity_ids,
+)
 from dnd_ai.queries.world_explorer import (
     ENTITY_SEARCH_KEYSET,
     RELATIONSHIP_KEYSET,
@@ -114,7 +119,7 @@ def resolve_world_character_visibility(access: AccessContext) -> CharacterVisibi
     )
 
 
-def _campaign_view_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UUID]:
+def _grant_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UUID]:
     """Every entity the caller holds a `campaign.view` deny for — resolved
     across both the `entity_id` and `event_id` grant target columns, since
     an event is an entity and a deny may be recorded against either."""
@@ -123,19 +128,52 @@ def _campaign_view_denied_entity_ids(access: AccessContext) -> frozenset[uuid.UU
     return entity_denied | event_denied
 
 
-def resolve_world_entity_visibility(access: AccessContext) -> WorldEntityVisibility:
+def _campaign_view_denied_entity_ids(
+    access: AccessContext, connection: Connection
+) -> frozenset[uuid.UUID]:
+    """Reference-mode denied set: grant denies plus the lifecycle-managed
+    entities the caller may not reference at all (draft/proposed/approved/
+    rejected definitions for a caller without `canon.edit`; deleted ones for
+    everyone). Used by every detail route and participant projection, so
+    archived and superseded definitions stay referenceable from history while
+    unpublished drafts never leak (docs/PLAN.md Phase 14, D6)."""
+    return _grant_denied_entity_ids(access) | lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=access.has_capability(_GM_CAPABILITY),
+    )
+
+
+def resolve_world_entity_visibility(
+    access: AccessContext, connection: Connection
+) -> WorldEntityVisibility:
     """The full discoverability bundle for the caller — the same inputs
     `search_world_entities` applies, packaged so a *second* consumer (the
     relationship list and detail, Issue 1) decides "may this relationship
     name this participant" the identical way."""
     draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
     return WorldEntityVisibility(
-        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access, connection),
         character_visibility=resolve_world_character_visibility(access),
         include_draft_events=access.has_capability(_GM_CAPABILITY),
         draft_event_allowed_ids=draft_allowed,
         draft_event_denied_ids=draft_denied,
     )
+
+
+def _status_fields(summary: EntityStatusSummary) -> dict[str, Any]:
+    return {
+        "canon_status": summary.canon_status,
+        "lifecycle_status": summary.lifecycle_status,
+        "superseded_by": (
+            None
+            if summary.superseded_by_entity_id is None
+            else SupersededByResponse(
+                entity_id=summary.superseded_by_entity_id, name=summary.superseded_by_name
+            )
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +187,8 @@ class WorldEntityCardResponse(BaseModel):
     entity_type_code: str
     name: str
     summary: str | None
+    canon_status: str
+    lifecycle_status: str
 
 
 class WorldEntitySearchResponse(BaseModel):
@@ -166,6 +206,11 @@ class RelationshipCardResponse(BaseModel):
 class RelationshipListResponse(BaseModel):
     items: list[RelationshipCardResponse]
     next_cursor: str | None
+
+
+class SupersededByResponse(BaseModel):
+    entity_id: uuid.UUID
+    name: str | None
 
 
 class LocationCrumbResponse(BaseModel):
@@ -188,6 +233,9 @@ class LocationDetailResponse(BaseModel):
     is_destroyed: bool | None
     alarm_level: int | None
     condition_notes: str | None
+    canon_status: str
+    lifecycle_status: str
+    superseded_by: "SupersededByResponse | None" = None
 
 
 class ReligionDetailResponse(BaseModel):
@@ -196,6 +244,9 @@ class ReligionDetailResponse(BaseModel):
     summary: str | None
     pantheon_structure: str | None
     serving_organization_ids: list[uuid.UUID]
+    canon_status: str
+    lifecycle_status: str
+    superseded_by: "SupersededByResponse | None" = None
 
 
 class ItemDetailResponse(BaseModel):
@@ -254,12 +305,16 @@ def search_world_entities_endpoint(
     q: Annotated[str | None, Query(max_length=_MAX_QUERY_LEN)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
+    include_noncanon: Annotated[bool, Query()] = False,
+    include_archived: Annotated[bool, Query()] = False,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
     repeated (`?category=location&category=item`); omitted means every
     category. `q` is a bounded case-insensitive substring match over name
-    and summary. An empty result — including for an authorized search with
+    and summary. By default only `canon`, active definitions are listed;
+    a `canon.edit` holder may add `include_noncanon` and/or `include_archived`
+    (GM preview) — for anyone else the flags are silently ignored. An empty result — including for an authorized search with
     no visible matches — returns `items: []`, never an existence hint."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
     type_codes: list[str] = []
@@ -278,7 +333,15 @@ def search_world_entities_endpoint(
         timeline_id=access.timeline_id,
         category_type_codes=type_codes,
         query_text=q,
-        campaign_view_denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        campaign_view_denied_entity_ids=_grant_denied_entity_ids(access)
+        | lifecycle_hidden_entity_ids(
+            connection,
+            world_id=timeline_world_id(connection, access.timeline_id),
+            mode="browse",
+            can_edit_canon=access.has_capability(_GM_CAPABILITY),
+            include_noncanon=include_noncanon,
+            include_archived=include_archived,
+        ),
         character_visibility=resolve_world_character_visibility(access),
         include_draft_events=access.has_capability(_GM_CAPABILITY),
         draft_event_allowed_ids=draft_allowed,
@@ -302,6 +365,8 @@ def search_world_entities_endpoint(
                 entity_type_code=card.entity_type_code,
                 name=card.name,
                 summary=card.summary,
+                canon_status=card.canon_status,
+                lifecycle_status=card.lifecycle_status,
             )
             for card in page.items
         ],
@@ -340,7 +405,7 @@ def list_world_relationships_endpoint(
         query_text=q,
         relationship_type_code=type,
         related_entity_id=related_entity_id,
-        visibility=resolve_world_entity_visibility(access),
+        visibility=resolve_world_entity_visibility(access, connection),
         limit=limit,
         after_relationship_id=after_relationship_id,
     )
@@ -375,12 +440,13 @@ def get_location_endpoint(
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> LocationDetailResponse:
+    denied = _campaign_view_denied_entity_ids(access, connection)
     view = get_location_view(
         connection,
         location_id=location_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        denied_entity_ids=denied,
     )
     return LocationDetailResponse(
         location_id=view.location_id,
@@ -401,6 +467,9 @@ def get_location_endpoint(
         is_destroyed=view.is_destroyed,
         alarm_level=view.alarm_level,
         condition_notes=view.condition_notes,
+        **_status_fields(
+            get_entity_status_summary(connection, entity_id=location_id, hidden_entity_ids=denied)
+        ),
     )
 
 
@@ -414,11 +483,12 @@ def get_religion_endpoint(
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> ReligionDetailResponse:
+    denied = _campaign_view_denied_entity_ids(access, connection)
     view = get_religion_view(
         connection,
         religion_id=religion_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        denied_entity_ids=denied,
     )
     return ReligionDetailResponse(
         religion_id=view.religion_id,
@@ -426,6 +496,9 @@ def get_religion_endpoint(
         summary=view.summary,
         pantheon_structure=view.pantheon_structure,
         serving_organization_ids=list(view.serving_organization_ids),
+        **_status_fields(
+            get_entity_status_summary(connection, entity_id=religion_id, hidden_entity_ids=denied)
+        ),
     )
 
 
@@ -439,12 +512,13 @@ def get_item_endpoint(
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> ItemDetailResponse:
+    denied = _campaign_view_denied_entity_ids(access, connection)
     view = get_item_view(
         connection,
         item_instance_id=item_instance_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        denied_entity_ids=denied,
     )
     return ItemDetailResponse(
         item_instance_id=view.item_instance_id,
@@ -471,13 +545,14 @@ def get_event_endpoint(
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> EventDetailResponse:
+    denied = _campaign_view_denied_entity_ids(access, connection)
     draft_denied, draft_allowed = access.resource_grant_targets(_GM_CAPABILITY, "event_id")
     view = get_event_view(
         connection,
         event_id=event_id,
         timeline_id=access.timeline_id,
         expected_world_id=timeline_world_id(connection, access.timeline_id),
-        denied_entity_ids=_campaign_view_denied_entity_ids(access),
+        denied_entity_ids=denied,
         include_draft=access.has_capability(_GM_CAPABILITY),
         draft_allowed=event_id in draft_allowed,
         draft_denied=event_id in draft_denied,

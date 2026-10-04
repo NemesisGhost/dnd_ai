@@ -175,7 +175,14 @@ def make_entity(
     world_id: uuid.UUID,
     entity_type_id: uuid.UUID,
     name: str = "Test Entity",
+    *,
+    canon_status_code: str = "canon",
+    lifecycle_status_code: str = "active",
 ) -> uuid.UUID:
+    """A bare `core.entities` root. Defaults to `canon` and `active` (Phase 14:
+    the World Explorer shows only published, active definitions of
+    lifecycle-managed types, so a fixture meant to be *seen* must be canon; pass
+    `canon_status_code="draft"` to test draft behavior)."""
     value = connection.execute(
         text("""
             INSERT INTO core.entities
@@ -187,8 +194,8 @@ def make_entity(
             "world": world_id,
             "etype": entity_type_id,
             "name": name,
-            "canon": status_id(connection, "canon_statuses", "draft"),
-            "lifecycle": status_id(connection, "lifecycle_statuses", "active"),
+            "canon": status_id(connection, "canon_statuses", canon_status_code),
+            "lifecycle": status_id(connection, "lifecycle_statuses", lifecycle_status_code),
         },
     ).scalar()
     assert isinstance(value, uuid.UUID)

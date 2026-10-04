@@ -322,6 +322,8 @@ World cards identify the entity's human-readable category/type, name, and author
 
 Detail pages display only sections the user may access. They use bounded panels for the authorized overview, current state, containment, relationships, known history, related resources, and provenance supplied by the detail response. Irrelevant or unavailable panels are omitted without suggesting that hidden sections exist. The page distinguishes established canon, knowledge in the current perspective, rumor/belief, uncertainty, and source provenance only where the current contract deliberately exposes those distinctions.
 
+**Draft versus published (Phase 14).** Players see only published, active definitions in lists and search; archived and superseded definitions stay reachable from history (detail pages, relationship and event links) but are not offered in browse. A game master with `canon.edit` additionally sees, on lifecycle-managed definitions (places, organizations, religions), a lifecycle badge (Draft, In review, Approved, Canon, Superseded, Rejected, Archived — text plus icon, never color alone), a "Show drafts and archived" toggle that is backed by the URL and hidden for players, and a lifecycle panel that renders only the actions the server reports as available, with the server's reason for each blocked action. Restore and delete-draft require a reason; supersede offers only replacement candidates the server returns. After any transition the detail refetches rather than trusting its previous content.
+
 ### 5.5 Character workspace
 
 The character selector shows every character related to the user for the active campaign and timeline. A user can have several characters; a character can have several users.

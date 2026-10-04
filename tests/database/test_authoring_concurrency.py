@@ -20,6 +20,7 @@ from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
 from dnd_ai.commands.campaigns import archive_campaign, create_campaign
+from dnd_ai.commands.entity_lifecycle import approve_entity
 from dnd_ai.commands.memberships import CampaignNotActiveError, add_campaign_member
 from dnd_ai.commands.timelines import (
     LatestPoint,
@@ -35,8 +36,8 @@ from dnd_ai.domain.authoring import (
     WorldArchivedError,
     WorldHasActiveCampaignsError,
 )
-from tests.builders import dnd5e_ids, make_authored_world
-from tests.factories import make_external_identity, make_user, oidc_principal
+from tests.builders import dnd5e_ids, make_authored_campaign, make_authored_world
+from tests.factories import make_external_identity, make_location, make_user, oidc_principal
 
 pytestmark = pytest.mark.database
 
@@ -82,6 +83,14 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
                 ),
                 {"w": world_id},
             )
+            cleanup.execute(
+                text(
+                    "DELETE FROM world.locations WHERE location_id IN "
+                    "(SELECT entity_id FROM core.entities WHERE world_id = :w)"
+                ),
+                {"w": world_id},
+            )
+            cleanup.execute(text("DELETE FROM core.entities WHERE world_id = :w"), {"w": world_id})
             cleanup.execute(
                 text("DELETE FROM security.world_memberships WHERE world_id = :w"), {"w": world_id}
             )
@@ -541,3 +550,69 @@ def test_adding_a_member_waits_for_an_in_flight_archive_and_is_then_refused(
         )
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         cleanup.execute(text("DELETE FROM security.users WHERE user_id = :u"), {"u": invitee})
+
+
+# --- Race 3: two approvals with the same expected version -------------------------------
+
+
+def test_two_approvals_with_the_same_expected_version_one_wins_one_is_stale(
+    postgres_engine: Engine, committed_owner: uuid.UUID
+) -> None:
+    world = _committed_world(postgres_engine, committed_owner)
+    with postgres_engine.begin() as setup:
+        campaign = make_authored_campaign(setup, world)
+        place = make_location(setup, world.world_id, name="Contested")
+        setup.execute(
+            text(
+                "UPDATE core.entities SET canon_status_id = (SELECT canon_status_id FROM "
+                "core.canon_statuses WHERE code = 'proposed') WHERE entity_id = :e"
+            ),
+            {"e": place},
+        )
+        version = setup.execute(
+            text("SELECT row_version FROM core.entities WHERE entity_id = :e"), {"e": place}
+        ).scalar()
+
+    first = postgres_engine.connect()
+    tx = first.begin()
+    approve_entity(
+        first,
+        campaign_id=campaign,
+        entity_id=place,
+        actor_user_id=committed_owner,
+        expected_row_version=version,
+    )
+    out: dict[str, object] = {}
+
+    def second() -> None:
+        with postgres_engine.begin() as connection:
+            try:
+                approve_entity(
+                    connection,
+                    campaign_id=campaign,
+                    entity_id=place,
+                    actor_user_id=committed_owner,
+                    expected_row_version=version,
+                )
+                out["result"] = "approved"
+            except StaleWriteError:
+                out["result"] = "stale"
+
+    thread = threading.Thread(target=second)
+    thread.start()
+    _wait_until_blocked(postgres_engine, "query LIKE '%FOR UPDATE OF e%'")
+    tx.commit()
+    first.close()
+    thread.join(timeout=15)
+
+    assert out["result"] == "stale"
+    with postgres_engine.connect() as verify:
+        row = verify.execute(
+            text(
+                "SELECT cs.code, e.row_version FROM core.entities e "
+                "JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id "
+                "WHERE e.entity_id = :e"
+            ),
+            {"e": place},
+        ).one()
+    assert (row.code, row.row_version) == ("approved", version + 1)
