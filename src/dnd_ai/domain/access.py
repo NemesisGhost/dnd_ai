@@ -194,6 +194,11 @@ class AccessContext:
     character_capabilities: dict[uuid.UUID, frozenset[str]]
     grant_effects: dict[_GrantKey, dict[str, str]] = field(repr=False)
     principal: "AuthenticatedPrincipal | None" = None
+    # The campaign's own lifecycle code at resolution time (Phase 14). The
+    # campaign-route dependency refuses `archived`/`deleted` campaigns
+    # (`dnd_ai.api.access`); `pending`/`inactive` still authorize because only
+    # fixtures produce them.
+    campaign_lifecycle_status: str = "active"
 
     def has_capability(
         self,
@@ -912,13 +917,19 @@ def resolve_access_context(
         return None
     membership_id = _as_uuid(membership_id)
 
-    campaign_timeline = connection.execute(
-        text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :campaign_id"),
+    campaign_row = connection.execute(
+        text("""
+            SELECT c.timeline_id, ls.code AS lifecycle_code
+            FROM campaign.campaigns c
+            JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
+            WHERE c.campaign_id = :campaign_id
+        """),
         {"campaign_id": campaign_id},
-    ).scalar()
-    if campaign_timeline is None:
+    ).one_or_none()
+    if campaign_row is None:
         raise ValueError(f"campaign {campaign_id} does not exist")
-    campaign_timeline_id = _as_uuid(campaign_timeline)
+    campaign_timeline_id = _as_uuid(campaign_row.timeline_id)
+    campaign_lifecycle_status = _as_str(campaign_row.lifecycle_code)
 
     if timeline_id is not None and timeline_id != campaign_timeline_id:
         raise UnauthorizedTimelineError(
@@ -1033,4 +1044,5 @@ def resolve_access_context(
             character_id: frozenset(codes) for character_id, codes in character_capabilities.items()
         },
         grant_effects=grant_effects,
+        campaign_lifecycle_status=campaign_lifecycle_status,
     )

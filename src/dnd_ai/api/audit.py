@@ -77,6 +77,8 @@ from sqlalchemy import Connection, text
 
 from dnd_ai.commands._shared import lookup_id
 
+_REASON_MAX_LENGTH = 1000
+
 
 def record_change_log(
     connection: Connection,
@@ -100,6 +102,8 @@ def record_change_log(
     acting_foundry_connection_id: uuid.UUID | None = None,
     acting_foundry_device_id: uuid.UUID | None = None,
     ai_proposal_id: uuid.UUID | None = None,
+    reason: str | None = None,
+    source_id: uuid.UUID | None = None,
 ) -> None:
     """Insert one `audit.change_log` row. Call once, after the command's
     own writes and before the route returns, on the same connection/
@@ -129,6 +133,14 @@ def record_change_log(
     name resolves to no user at all); every other call site in this
     codebase still passes `actor_user_id` exactly as before.
 
+    `reason`/`source_id` (Phase 14): a bounded free-text justification (at
+    most 1000 characters, enforced here so a caller gets a specific
+    `ValueError`) and the `core.sources` provenance row a change cites. Both
+    are pre-existing `audit.change_log` columns never previously wired
+    through this writer. `reason` is stored but never returned by any read
+    surface in Phase 14 (docs/AUDIT_HISTORY_API.md), and must never carry a
+    secret, token, or idempotency key.
+
     `previous_status`/`new_status` and `changed_fields` (Phase 13B blocker
     3): the first two are `audit.change_log`'s own pre-existing lifecycle-
     transition columns (revision 007, "previous_status/new_status ... when
@@ -148,6 +160,8 @@ def record_change_log(
     section (in `dnd_ai.api.local_auth`) enumerates."""
     if actor_user_id is None and actor_service is None:
         raise ValueError("record_change_log requires actor_user_id or actor_service")
+    if reason is not None and len(reason) > _REASON_MAX_LENGTH:
+        raise ValueError(f"record_change_log reason exceeds {_REASON_MAX_LENGTH} characters")
     change_action_id = lookup_id(
         connection, "audit", "change_actions", "change_action_id", change_action_code
     )
@@ -158,13 +172,14 @@ def record_change_log(
                  actor_user_id, actor_service, correlation_id, command_name, event_id,
                  previous_status, new_status, changed_fields,
                  acting_external_system_id, acting_foundry_actor_id,
-                 acting_foundry_connection_id, acting_foundry_device_id, ai_proposal_id)
+                 acting_foundry_connection_id, acting_foundry_device_id, ai_proposal_id,
+                 reason, source_id)
             VALUES
                 (:action, :schema, :table, :record, :entity, :world,
                  :actor, :actor_service, :correlation, :command, :event,
                  :previous_status, :new_status, :changed_fields, :acting_external_system,
                  :acting_foundry_actor, :acting_foundry_connection, :acting_foundry_device,
-                 :ai_proposal)
+                 :ai_proposal, :reason, :source)
         """),
         {
             "action": change_action_id,
@@ -186,5 +201,7 @@ def record_change_log(
             "acting_foundry_connection": acting_foundry_connection_id,
             "acting_foundry_device": acting_foundry_device_id,
             "ai_proposal": ai_proposal_id,
+            "reason": reason,
+            "source": source_id,
         },
     )

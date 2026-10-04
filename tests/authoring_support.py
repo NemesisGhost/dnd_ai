@@ -1,0 +1,171 @@
+"""HTTP test harness for the Phase 14 authoring routes.
+
+Real cookie sessions, real CSRF tokens, and real allowed-Origin checking —
+every `Actor` signs in through `/auth/activate` and `/auth/login` exactly as
+the portal does — but every request runs on **one shared, transactional
+connection** that the test's `db_connection` fixture rolls back, so nothing
+has to be cleaned up afterward.
+
+Each request still gets request-transaction semantics: the harness wraps it
+in a SAVEPOINT that is rolled back when the handler raises (so a failed
+command leaves no partial writes, which is exactly what the "no hidden
+half-objects" tests assert), and runs `SET CONSTRAINTS ALL IMMEDIATE`
+before releasing it, so deferred constraint triggers (owner retention,
+access-manager retention) are evaluated per request just as they would be at
+the real commit.
+
+Tests that need *real* concurrency across separate connections do not use
+this harness; they commit and clean up explicitly
+(`tests/database/test_authoring_concurrency.py`).
+"""
+
+import uuid
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
+from datetime import timedelta
+from typing import Any
+
+from fastapi.testclient import TestClient
+from httpx import Response
+from sqlalchemy import Connection, text
+
+from dnd_ai.api.app import create_app
+from dnd_ai.api.deps import get_connection
+from dnd_ai.api.local_auth import (
+    get_login_account_rate_limiter,
+    get_login_ip_rate_limiter,
+    get_token_consumption_rate_limiter,
+)
+from dnd_ai.commands.local_auth import _create_local_account_impl
+from dnd_ai.domain.rate_limit import RateLimiter
+from tests.factories import make_platform_administrator
+
+ORIGIN = "http://localhost:5173"
+PASSWORD = "a genuinely random passphrase 1"
+
+
+def _generous() -> RateLimiter:
+    return RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
+
+
+@dataclass
+class Actor:
+    """One signed-in human: a cookie-jar client plus the CSRF token."""
+
+    harness: "AuthoringHarness"
+    client: TestClient
+    csrf: str
+    user_id: uuid.UUID
+    name: str
+    _keys: int = field(default=0, repr=False)
+
+    def headers(self, *, key: str | None = None, csrf: bool = True, origin: bool = True) -> dict:
+        headers: dict[str, str] = {}
+        if origin:
+            headers["Origin"] = ORIGIN
+        if csrf:
+            headers["X-CSRF-Token"] = self.csrf
+        if key is not None:
+            headers["Idempotency-Key"] = key
+        return headers
+
+    def get(self, path: str, **params: Any) -> Response:
+        return self.client.get(path, params=params or None)
+
+    def post(
+        self,
+        path: str,
+        body: dict | None = None,
+        *,
+        key: str | None = None,
+        csrf: bool = True,
+        origin: bool = True,
+    ) -> Response:
+        return self.client.post(
+            path,
+            json=body if body is not None else {},
+            headers=self.headers(key=key, csrf=csrf, origin=origin),
+        )
+
+    def fresh_key(self) -> str:
+        self._keys += 1
+        return f"{self.name}-{uuid.uuid4().hex[:12]}-{self._keys}"
+
+
+class AuthoringHarness:
+    def __init__(self, connection: Connection) -> None:
+        self.connection = connection
+        self.admin_id = make_platform_administrator(connection, "Harness Admin")
+        self.app = create_app()
+        self.app.dependency_overrides[get_connection] = self._connection
+        self.app.dependency_overrides[get_login_ip_rate_limiter] = _generous
+        self.app.dependency_overrides[get_login_account_rate_limiter] = _generous
+        self.app.dependency_overrides[get_token_consumption_rate_limiter] = _generous
+        self._clients: list[TestClient] = []
+
+    def _connection(self) -> Iterator[Connection]:
+        savepoint = self.connection.begin_nested()
+        try:
+            yield self.connection
+            self.connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        except BaseException:
+            savepoint.rollback()
+            raise
+        else:
+            savepoint.commit()
+
+    def new_actor(self, name: str = "Author") -> Actor:
+        login_name = f"{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
+        issued = _create_local_account_impl(
+            self.connection,
+            created_by_user_id=self.admin_id,
+            login_name=login_name,
+            display_name=name,
+        )
+        client = TestClient(self.app, raise_server_exceptions=False)
+        client.__enter__()
+        self._clients.append(client)
+        activated = client.post(
+            "/auth/activate",
+            json={"token": issued.raw_token, "password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+        assert activated.status_code == 200, activated.text
+        login = client.post(
+            "/auth/login",
+            json={"login_name": login_name, "password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+        assert login.status_code == 200, login.text
+        return Actor(
+            harness=self,
+            client=client,
+            csrf=login.json()["csrf_token"],
+            user_id=issued.user_id,
+            name=name,
+        )
+
+    def anonymous_client(self) -> TestClient:
+        client = TestClient(self.app, raise_server_exceptions=False)
+        client.__enter__()
+        self._clients.append(client)
+        return client
+
+    def close(self) -> None:
+        for client in self._clients:
+            client.__exit__(None, None, None)
+
+
+def harness_fixture_factory() -> Callable[..., Iterator[AuthoringHarness]]:
+    """Returns the generator body of a pytest fixture; defined here so the
+    fixture itself can live in each test module's namespace via a one-line
+    wrapper and keep tests/conftest.py untouched."""
+
+    def _gen(db_connection: Connection) -> Iterator[AuthoringHarness]:
+        harness = AuthoringHarness(db_connection)
+        try:
+            yield harness
+        finally:
+            harness.close()
+
+    return _gen
