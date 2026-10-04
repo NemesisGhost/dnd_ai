@@ -55,6 +55,7 @@ from .ai_npc import router as ai_npc_router
 from .ai_synthesis import router as ai_synthesis_router
 from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
+from .cache_control import NoStoreMiddleware
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
 from .character_state import router as character_state_router
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Foundry-Actor-Id", "Idempotency-Key"],
     )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(NoStoreMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
     app.include_router(access_groups_router)
