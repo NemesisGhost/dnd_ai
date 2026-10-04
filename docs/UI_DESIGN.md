@@ -208,8 +208,8 @@ Preserve these authoritative behaviors:
 | `/worlds/:worldId` | World overview: details, rulesets, timeline lineage, managed campaigns, server-computed actions | Delivered (Phase 14) |
 | `/worlds/:worldId/edit` | Edit world name and description | Delivered (Phase 14) |
 | `/worlds/:worldId/timelines/new`, `/worlds/:worldId/timelines/:timelineId`, `…/edit`, `…/branch` | Timeline management and branching; the branch form offers a labeled "latest" point or a moment from the server-provided branch-point list, and explains when only "latest" exists | Delivered (Phase 14) |
-| `/campaigns/new?worldId&timelineId` | Three-step campaign setup | Phase 14 (later checkpoint) |
-| `/app/:campaignId/settings` | Campaign settings, archive; gated by `access.manage` | Phase 14 (later checkpoint) |
+| `/campaigns/new?worldId&timelineId` | Three-step campaign setup | Delivered (Phase 14) |
+| `/app/:campaignId/settings` | Campaign settings, archive; gated by `access.manage` | Delivered (Phase 14) |
 
 Retain the existing `/app/:campaignId` index replacement to its `home` child and all existing detail routes: `world/:category/:entityId`, `quests/:questId`, `sessions/:sessionId`, and `knowledge/:knowledgeItemId`. Preserve the public `/activate` and `/reset-password` browser pages and their fragment-token handling (links are `<portal-origin>/activate#token=<encoded-token>` and `<portal-origin>/reset-password#token=<encoded-token>`); they are deliberately kept off the proxied `/auth/*` prefix. Their mutations remain `POST /auth/activate` and `POST /auth/password-reset`, and `GET` of those paths stays `405`. Unknown paths retain not-found handling. These browser paths do not change backend API paths.
 

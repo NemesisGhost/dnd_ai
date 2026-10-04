@@ -24,9 +24,11 @@ export function AccessNavGroup({
 }: AccessNavGroupProps) {
   const location = useLocation()
   const accessBasePath = `${campaignPath}/access`
+  const settingsPath = `${campaignPath}/settings`
   const isAccessSectionActive =
     location.pathname === accessBasePath ||
-    location.pathname.startsWith(`${accessBasePath}/`)
+    location.pathname.startsWith(`${accessBasePath}/`) ||
+    location.pathname === settingsPath
 
   // Computed once, lazily, from whichever route is active on mount: a
   // direct load/refresh of a child route starts with the submenu
@@ -179,6 +181,15 @@ export function AccessNavGroup({
             onClick={handleChildActivated}
           >
             <span className="portal-sidebar__label">Audit History</span>
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            className={subLinkClassName}
+            to={settingsPath}
+            onClick={handleChildActivated}
+          >
+            <span className="portal-sidebar__label">Campaign Settings</span>
           </NavLink>
         </li>
       </ul>

@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- test support module: Fast Refresh does not apply to it. */
 import { render } from "@testing-library/react"
+import { useState } from "react"
 import type { ReactNode } from "react"
 import { Outlet, RouterProvider, createMemoryRouter } from "react-router"
 import type { RouteObject } from "react-router"
@@ -107,13 +108,29 @@ export function bootstrapWith(overrides: Partial<SessionBootstrap> = {}): Sessio
     }
 }
 
-function Shell({ bootstrap, reload }: { bootstrap: SessionBootstrap; reload: () => void }) {
+function Shell({
+    initial,
+    reload,
+    onRefresh,
+}: {
+    initial: SessionBootstrap
+    reload: () => void
+    onRefresh?: () => Promise<SessionBootstrap>
+}) {
+    const [bootstrap, setBootstrap] = useState(initial)
     return (
         <SessionContext.Provider
             value={{
                 state: { status: "authenticated", bootstrap },
                 reload,
-                refresh: vi.fn(async () => true),
+                // A refresh applies the authoritative bootstrap the test supplies,
+                // exactly as the real hook replaces it in place.
+                refresh: async () => {
+                    if (onRefresh !== undefined) {
+                        setBootstrap(await onRefresh())
+                    }
+                    return true
+                },
             }}
         >
             <AnnouncerProvider>
@@ -130,6 +147,7 @@ export interface RenderOptions {
     routes: { path: string; element: ReactNode }[]
     bootstrap?: SessionBootstrap
     reload?: () => void
+    onRefresh?: () => Promise<SessionBootstrap>
 }
 
 export function renderAuthoringRoutes({
@@ -137,10 +155,11 @@ export function renderAuthoringRoutes({
     routes,
     bootstrap = bootstrapWith(),
     reload = vi.fn(),
+    onRefresh,
 }: RenderOptions) {
     const objects: RouteObject[] = [
         {
-            element: <Shell bootstrap={bootstrap} reload={reload} />,
+            element: <Shell initial={bootstrap} reload={reload} onRefresh={onRefresh} />,
             children: [
                 ...routes,
                 { path: "*", element: <p>Unmatched route</p> },

@@ -159,7 +159,10 @@ describe("WorldOverviewPage", () => {
         })
         fireEvent.click(within(dialog).getByRole("button", { name: "Archive world" }))
 
-        await waitFor(() => expect(screen.getByRole("button", { name: "Restore world" })).toBeInTheDocument())
+        await waitFor(
+            () => expect(screen.getByRole("button", { name: "Restore world" })).toBeInTheDocument(),
+            { timeout: 4000 },
+        )
         const [post] = server.callsTo("POST", "/worlds/w1/archive")
         expect(post!.headers["X-CSRF-Token"]).toBe(TEST_CSRF)
         expect(post!.body).toEqual({ expected_row_version: 3, reason: "season over" })

@@ -4,7 +4,8 @@ import {
   within,
 } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { CampaignsPage } from "./CampaignsPage"
 
@@ -17,9 +18,25 @@ if (fixtureCampaign === undefined) {
   )
 }
 
+// The page now hosts "Archived campaigns you manage", which reads the session
+// and GET /campaigns/archived. These tests are about the campaign list, so the
+// archived list is simply empty.
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ items: [], next_cursor: null }), {
+          status: 200,
+        }),
+    ),
+  )
+})
+
 describe("CampaignsPage", () => {
   it("shows an empty state when the user has no campaigns", () => {
     render(
+      <SessionContext.Provider value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload: vi.fn(), refresh: vi.fn() }}>
       <MemoryRouter>
         <CampaignsPage
           bootstrap={{
@@ -34,7 +51,8 @@ describe("CampaignsPage", () => {
             campaigns: [],
           }}
         />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </SessionContext.Provider>,
     )
 
     expect(
@@ -56,11 +74,13 @@ describe("CampaignsPage", () => {
 
   it("lists an authorized campaign as a link", () => {
     render(
+      <SessionContext.Provider value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload: vi.fn(), refresh: vi.fn() }}>
       <MemoryRouter>
         <CampaignsPage
           bootstrap={sessionBootstrapFixture}
         />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </SessionContext.Provider>,
     )
 
     const link = screen.getByRole("link", {
@@ -94,6 +114,7 @@ describe("CampaignsPage", () => {
       campaign_name: "Second",
     }
     render(
+      <SessionContext.Provider value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload: vi.fn(), refresh: vi.fn() }}>
       <MemoryRouter>
         <CampaignsPage
           bootstrap={{
@@ -106,7 +127,8 @@ describe("CampaignsPage", () => {
             campaigns: [fixtureCampaign, second],
           }}
         />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </SessionContext.Provider>,
     )
 
     expect(
@@ -124,6 +146,7 @@ describe("CampaignsPage", () => {
 
   it("handles a campaign without a timeline", () => {
     render(
+      <SessionContext.Provider value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload: vi.fn(), refresh: vi.fn() }}>
       <MemoryRouter>
         <CampaignsPage
           bootstrap={{
@@ -144,7 +167,8 @@ describe("CampaignsPage", () => {
             ],
           }}
         />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </SessionContext.Provider>,
     )
 
     const link = screen.getByRole("link", {

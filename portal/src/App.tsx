@@ -32,6 +32,8 @@ import { WorldsPage } from "./pages/WorldsPage"
 import { CreateWorldPage } from "./pages/CreateWorldPage"
 import { WorldOverviewPage } from "./pages/WorldOverviewPage"
 import { EditWorldPage } from "./pages/EditWorldPage"
+import { CampaignSetupPage } from "./pages/CampaignSetupPage"
+import { CampaignSettingsPage } from "./pages/CampaignSettingsPage"
 import { CreateTimelinePage } from "./pages/CreateTimelinePage"
 import { TimelinePage } from "./pages/TimelinePage"
 import { EditTimelinePage } from "./pages/EditTimelinePage"
@@ -117,6 +119,11 @@ function App() {
           <Route
             path="/campaigns"
             element={<CampaignsRoute />}
+          />
+
+          <Route
+            path="/campaigns/new"
+            element={<CampaignSetupPage />}
           />
 
           <Route
@@ -237,6 +244,11 @@ function App() {
                   status="Unavailable until the Phase 12 AI features are verified."
                 />
               }
+            />
+
+            <Route
+              path="settings"
+              element={<CampaignSettingsPage />}
             />
 
             <Route
