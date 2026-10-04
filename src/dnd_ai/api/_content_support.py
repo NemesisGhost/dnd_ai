@@ -38,10 +38,10 @@ def audit_content_write(
     replay."""
     record_change_log(
         connection,
-        change_action_code="created" if result.created else "updated",
-        schema_name="core",
-        table_name="entities",
-        record_id=result.entity_id,
+        change_action_code=result.action or ("created" if result.created else "updated"),
+        schema_name=result.record_schema,
+        table_name=result.record_table,
+        record_id=result.record_id or result.entity_id,
         entity_id=result.entity_id,
         world_id=result.world_id,
         actor_user_id=access.user_id,

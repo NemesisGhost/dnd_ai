@@ -80,6 +80,14 @@ class ContentWriteResult:
     changed: bool
     changed_fields: dict[str, object] = field(default_factory=dict)
     source_id: uuid.UUID | None = None
+    # Audit identity of the record the command wrote. The default is the entity
+    # root; a child-record command (a quest stage, an objective) names its own
+    # table and row, with `entity_id` still the aggregate root so history groups
+    # by quest. `action` overrides created/updated (e.g. a child `deleted`).
+    record_schema: str = "core"
+    record_table: str = "entities"
+    record_id: uuid.UUID | None = None
+    action: str | None = None
 
 
 def lock_authoring_scope(

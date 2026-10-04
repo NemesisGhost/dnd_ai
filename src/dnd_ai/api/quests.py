@@ -141,6 +141,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.quests import _advance_objective_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.quest import get_quest_view, list_campaign_quests
 
 from ._shared import timeline_world_id
@@ -370,6 +371,17 @@ def resolve_quest_response(
     include_hidden = access.has_capability(_QUEST_MANAGE_CAPABILITY, quest_id=quest_id)
     is_gm = access.has_capability(_QUEST_MANAGE_CAPABILITY)
 
+    # Phase 15.1 draft/published separation: an unpublished quest definition is
+    # the same "not visible" answer for a caller without `canon.edit`; archived
+    # and superseded ones stay readable so history stays referenceable.
+    if quest_id in lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=is_gm,
+    ):
+        return None
+
     # A party perspective is skipped only for a baseline GM in good standing
     # for this quest (no quest-targeted canon.edit deny) — mirroring
     # list_quests_endpoint's "a GM never resolves a party perspective".
@@ -459,6 +471,12 @@ class QuestListItemResponse(BaseModel):
     quest_id: uuid.UUID
     name: str
     status_code: str | None
+    # Phase 15.1. `tracked` is false for an authored definition no party has
+    # started (listed for editors only); the lifecycle fields let an editor see a
+    # draft as a draft.
+    tracked: bool = True
+    canon_status: str | None = None
+    lifecycle_status: str | None = None
 
 
 @router.get(
@@ -507,15 +525,37 @@ def list_quests_endpoint(
         _QUEST_VIEW_CAPABILITY, field_name="quest_id"
     )
 
+    world_id = timeline_world_id(connection, access.timeline_id)
+    # Browse-mode lifecycle gating (Phase 15.1): everyone sees only published,
+    # active definitions; a `canon.edit` holder additionally sees unpublished
+    # ones, and authored definitions no party has started. Archived stay hidden
+    # from lists for everyone (they remain readable by id for history).
+    lifecycle_hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=world_id,
+        mode="browse",
+        can_edit_canon=is_gm,
+        include_noncanon=is_gm,
+        include_archived=False,
+    )
+
     items = list_campaign_quests(
         connection,
         timeline_id=access.timeline_id,
         party_id=authorized_party_id,
         include_all_parties=is_gm,
-        denied_quest_ids=denied_quest_ids,
+        denied_quest_ids=denied_quest_ids | lifecycle_hidden,
+        include_definitions_in_world=world_id if is_gm else None,
     )
 
     return [
-        QuestListItemResponse(quest_id=item.quest_id, name=item.name, status_code=item.status_code)
+        QuestListItemResponse(
+            quest_id=item.quest_id,
+            name=item.name,
+            status_code=item.status_code,
+            tracked=item.tracked,
+            canon_status=item.canon_status,
+            lifecycle_status=item.lifecycle_status,
+        )
         for item in items
     ]

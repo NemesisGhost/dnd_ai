@@ -318,6 +318,12 @@ class QuestListItemView:
     quest_id: uuid.UUID
     name: str
     status_code: str | None
+    # Phase 15.1: whether the quest is tracked on this timeline at all (an
+    # authored definition no party has started is listed for editors, untracked),
+    # and its definition lifecycle so an editor sees drafts as drafts.
+    tracked: bool = True
+    canon_status: str | None = None
+    lifecycle_status: str | None = None
 
 
 def list_campaign_quests(
@@ -327,6 +333,7 @@ def list_campaign_quests(
     party_id: uuid.UUID | None,
     include_all_parties: bool,
     denied_quest_ids: frozenset[uuid.UUID] = frozenset(),
+    include_definitions_in_world: uuid.UUID | None = None,
 ) -> tuple[QuestListItemView, ...]:
     """Every quest currently tracked on `timeline_id` — i.e. one with at
     least one `campaign.quest_state` row there — most recently defined by
@@ -407,11 +414,26 @@ def list_campaign_quests(
                 WHERE qst_audience.timeline_id = :timeline
                   AND {_QUEST_STATE_MATCHES_AUDIENCE.format(alias="qst_audience")}
                   AND NOT (qst_audience.quest_id = ANY(CAST(:denied AS uuid[])))
+            ),
+            listed AS (
+                SELECT quest_id FROM tracked
+                UNION
+                -- Editors also see authored definitions no party has started.
+                SELECT q.quest_id
+                FROM narrative.quests q
+                JOIN core.entities de ON de.entity_id = q.quest_id
+                WHERE CAST(:definitions_world AS uuid) IS NOT NULL
+                  AND de.world_id = CAST(:definitions_world AS uuid)
+                  AND NOT (q.quest_id = ANY(CAST(:denied AS uuid[])))
             )
             SELECT e.entity_id AS quest_id, e.canonical_name AS name,
-                   COALESCE(qs_party.code, qs_campaign.code) AS status_code
-            FROM tracked t
+                   COALESCE(qs_party.code, qs_campaign.code) AS status_code,
+                   (e.entity_id IN (SELECT quest_id FROM tracked)) AS is_tracked,
+                   ecs.code AS canon_status, els.code AS lifecycle_status
+            FROM listed t
             JOIN core.entities e ON e.entity_id = t.quest_id
+            JOIN core.canon_statuses ecs ON ecs.canon_status_id = e.canon_status_id
+            JOIN core.lifecycle_statuses els ON els.lifecycle_status_id = e.lifecycle_status_id
             LEFT JOIN campaign.quest_state qst_party
                    ON qst_party.timeline_id = :timeline AND qst_party.quest_id = t.quest_id
                   AND qst_party.party_id = :party
@@ -429,11 +451,17 @@ def list_campaign_quests(
             "party": party_id,
             "include_all_parties": include_all_parties,
             "denied": list(denied_quest_ids),
+            "definitions_world": include_definitions_in_world,
         },
     ).mappings()
     return tuple(
         QuestListItemView(
-            quest_id=row["quest_id"], name=row["name"], status_code=row["status_code"]
+            quest_id=row["quest_id"],
+            name=row["name"],
+            status_code=row["status_code"],
+            tracked=bool(row["is_tracked"]),
+            canon_status=row["canon_status"],
+            lifecycle_status=row["lifecycle_status"],
         )
         for row in rows
     )

@@ -208,7 +208,12 @@ def _advance_objective_impl(
 
     context = _quest_objective_context(connection, quest_objective_id)
     world_id = context.world_id
+    # The quest entity is locked FOR SHARE (see `require_state_targetable`), which
+    # serializes this first progress write against a structural edit of the
+    # definition (`commands.quest_definitions`, which takes it FOR UPDATE). If an
+    # edit removed the objective while this waited, it is gone now: re-read.
     require_state_targetable(connection, context.quest_id)
+    context = _quest_objective_context(connection, quest_objective_id)
     _lock_quest_objective(connection, quest_objective_id)
 
     existing = _lock_objective_state(

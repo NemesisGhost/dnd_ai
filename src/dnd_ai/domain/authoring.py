@@ -239,6 +239,34 @@ class CharacterHasUserRelationshipsError(SafeMessageError):
     safe_message = "A player or account is linked to this character."
 
 
+class QuestHasProgressError(SafeMessageError):
+    """The quest has recorded progress in some timeline, so this structural
+    change (removing or reordering stages, removing an objective, or changing the
+    meaning of an objective) is refused. Wording stays editable; structural change
+    after progress is supersession."""
+
+    safe_status_code = 409
+    safe_error_code = "quest_has_progress"
+    safe_message = "This quest already has progress recorded, so its structure cannot change."
+
+
+class QuestDefinitionIncompleteError(SafeMessageError):
+    """A quest needs at least one stage with at least one objective to publish."""
+
+    safe_status_code = 409
+    safe_error_code = "quest_definition_incomplete"
+    safe_message = "A quest needs at least one stage with an objective before it can be published."
+
+
+class ObjectiveTargetInvalidError(SafeMessageError):
+    """The objective's target is nonexistent, in another world, of a type an
+    objective cannot target, archived, rejected, or superseded -- one code."""
+
+    safe_status_code = 400
+    safe_error_code = "objective_target_invalid"
+    safe_message = "The selected objective target is not valid."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

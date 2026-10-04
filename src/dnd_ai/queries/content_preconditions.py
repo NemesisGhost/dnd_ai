@@ -21,6 +21,7 @@ from dnd_ai.domain.organization_authoring import ORGANIZATION_ENTITY_TYPE_CODES
 
 REFERENCE_NOT_PUBLISHED = "reference_not_published"
 CHARACTER_HAS_USER_RELATIONSHIPS = "character_has_user_relationships"
+QUEST_DEFINITION_INCOMPLETE = "quest_definition_incomplete"
 
 
 def publish_reference_ids(
@@ -43,6 +44,18 @@ def publish_reference_ids(
         ).scalar()
         if origin is not None:
             ids.append(origin)
+    elif entity_type_code == "quest":
+        ids.extend(
+            connection.execute(
+                text("""
+                    SELECT DISTINCT qo.target_entity_id
+                    FROM narrative.quest_stages qs
+                    JOIN narrative.quest_objectives qo ON qo.quest_stage_id = qs.quest_stage_id
+                    WHERE qs.quest_id = :e AND qo.target_entity_id IS NOT NULL
+                """),
+                {"e": entity_id},
+            ).scalars()
+        )
     elif entity_type_code in ORGANIZATION_ENTITY_TYPE_CODES:
         row = connection.execute(
             text("""
@@ -62,8 +75,23 @@ def publish_reference_ids(
 def publish_blocked_reason(
     connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
 ) -> str | None:
-    """`reference_not_published` while any referenced record is not `canon` and
-    `active`; otherwise `None`."""
+    """`quest_definition_incomplete` for a quest with no stage that has an
+    objective; otherwise `reference_not_published` while any referenced record is
+    not `canon` and `active`; otherwise `None`."""
+    if entity_type_code == "quest":
+        has_objective = connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM narrative.quest_stages qs
+                    JOIN narrative.quest_objectives qo ON qo.quest_stage_id = qs.quest_stage_id
+                    WHERE qs.quest_id = :e
+                )
+            """),
+            {"e": entity_id},
+        ).scalar()
+        if not has_objective:
+            return QUEST_DEFINITION_INCOMPLETE
     for reference_id in publish_reference_ids(
         connection, entity_id=entity_id, entity_type_code=entity_type_code
     ):

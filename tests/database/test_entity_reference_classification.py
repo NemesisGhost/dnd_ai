@@ -100,6 +100,11 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "character_languages",
         "character_movements",
         "character_senses",
+        # Phase 15.1: a quest's own definition rows.
+        "quests",
+        "quest_stages",
+        "quest_participants",
+        "quest_outcomes",
     }
     assert all(v in (OWNED_CASCADE, BLOCKING) for v in ENTITY_REFERENCE_CLASSIFICATION.values())
 

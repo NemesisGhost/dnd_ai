@@ -83,6 +83,26 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
                 ),
                 {"w": world_id},
             )
+            for statement in (
+                "DELETE FROM campaign.objective_state WHERE timeline_id IN "
+                "(SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)",
+                "DELETE FROM campaign.quest_state WHERE timeline_id IN "
+                "(SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)",
+                "DELETE FROM narrative.event_effects WHERE event_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM narrative.event_participants WHERE event_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM narrative.events WHERE event_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM narrative.quest_objectives WHERE quest_stage_id IN "
+                "(SELECT quest_stage_id FROM narrative.quest_stages WHERE quest_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w))",
+                "DELETE FROM narrative.quest_stages WHERE quest_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+                "DELETE FROM narrative.quests WHERE quest_id IN "
+                "(SELECT entity_id FROM core.entities WHERE world_id = :w)",
+            ):
+                cleanup.execute(text(statement), {"w": world_id})
             for subtype, column in (
                 ("governments", "government_id"),
                 ("businesses", "business_id"),

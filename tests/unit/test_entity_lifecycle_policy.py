@@ -75,12 +75,13 @@ def test_registry_excludes_every_documented_exclusion() -> None:
     assert not (
         el.ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES & set(el.ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES)
     )
-    for code in ("character", "player_character", "event", "quest", "knowledge_item"):
+    for code in ("character", "player_character", "event", "knowledge_item"):
         assert not el.is_lifecycle_eligible(code)
         with pytest.raises(LifecycleNotSupportedError):
             el.require_lifecycle_eligible(code)
     assert el.is_lifecycle_eligible("location")
     assert el.is_lifecycle_eligible("npc")
+    assert el.is_lifecycle_eligible("quest")
 
 
 def test_previews_use_the_same_policy_as_enforcement() -> None:

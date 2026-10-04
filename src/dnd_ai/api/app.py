@@ -80,6 +80,7 @@ from .movement import router as movement_router
 from .npc_authoring import router as npc_authoring_router
 from .organization_authoring import router as organization_authoring_router
 from .preview import router as preview_router
+from .quest_authoring import router as quest_authoring_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
@@ -175,6 +176,7 @@ def create_app() -> FastAPI:
     app.include_router(npc_authoring_router)
     app.include_router(organization_authoring_router)
     app.include_router(preview_router)
+    app.include_router(quest_authoring_router)
     app.include_router(quests_router)
     app.include_router(reference_corpus_router)
     app.include_router(relationships_router)

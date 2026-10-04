@@ -43,6 +43,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.domain.authoring import (
     CharacterHasUserRelationshipsError,
     EntityReferencedError,
+    QuestDefinitionIncompleteError,
     ReferenceNotPublishedError,
     StaleWriteError,
     SubtypeIncompleteError,
@@ -129,7 +130,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("narrative", "events", "event_id"): BLOCKING,
     ("narrative", "quest_objectives", "target_entity_id"): BLOCKING,
     ("narrative", "quest_participants", "participant_entity_id"): BLOCKING,
-    ("narrative", "quests", "quest_id"): BLOCKING,
     ("security", "resource_grants", "entity_id"): BLOCKING,
     ("world", "employment_relationships", "employee_entity_id"): BLOCKING,
     ("world", "employment_relationships", "employer_entity_id"): BLOCKING,
@@ -157,6 +157,15 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "organizations", "parent_organization_id"): BLOCKING,
     ("character", "character_religious_affiliations", "religion_id"): BLOCKING,
     ("world", "religious_organizations", "religion_id"): BLOCKING,
+    # --- Phase 15.1: quest definitions ----------------------------------------
+    # A quest's own definition rows go with a deleted draft; recorded progress,
+    # grants, and the objectives' event references block it.
+    ("narrative", "quests", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_stages", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_participants", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_outcomes", "quest_id"): OWNED_CASCADE,
+    ("campaign", "quest_state", "quest_id"): BLOCKING,
+    ("security", "resource_grants", "quest_id"): BLOCKING,
     # --- Phase 15.1: NPC identity (an NPC is a character) ----------------------
     # The NPC's own identity rows go with a deleted draft ...
     ("character", "characters", "character_id"): OWNED_CASCADE,
@@ -379,12 +388,12 @@ def _canon_transition(
     target = target_canon_status(action, entity.canon_status)
     assert target is not None
     if action == PUBLISH:
-        if (
-            publish_blocked_reason(
-                connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
-            )
-            is not None
-        ):
+        reason_code = publish_blocked_reason(
+            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+        )
+        if reason_code == "quest_definition_incomplete":
+            raise QuestDefinitionIncompleteError(f"quest {entity_id} has no objective")
+        if reason_code is not None:
             raise ReferenceNotPublishedError(f"entity {entity_id} refers to an unpublished record")
         _require_subtype_complete(
             connection, entity_id=entity_id, entity_type_id=entity.entity_type_id

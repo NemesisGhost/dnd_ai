@@ -29,6 +29,14 @@ from dnd_ai.commands.entity_lifecycle import (
 from dnd_ai.commands.locations import create_location, update_location
 from dnd_ai.commands.memberships import revoke_membership_role
 from dnd_ai.commands.organizations import create_organization, update_organization
+from dnd_ai.commands.quest_definitions import (
+    add_quest_objective,
+    add_quest_stage,
+    create_quest,
+    remove_quest_objective,
+    update_quest_stage,
+)
+from dnd_ai.commands.quests import _advance_objective_impl
 from dnd_ai.domain.authoring import (
     CampaignArchivedError,
     CampaignNotAuthorizedError,
@@ -37,6 +45,7 @@ from dnd_ai.domain.authoring import (
     LocationHierarchyCycleError,
     OrganizationHierarchyCycleError,
     ParentLocationInvalidError,
+    QuestHasProgressError,
     StaleWriteError,
 )
 from tests.builders import make_authored_campaign, make_authored_world
@@ -45,7 +54,7 @@ from tests.database.test_authoring_concurrency import (
     _purge_user_worlds,
     _wait_until_blocked,
 )
-from tests.factories import make_user
+from tests.factories import make_user, make_world_time
 
 pytestmark = pytest.mark.database
 
@@ -694,3 +703,137 @@ def test_an_organization_headquarters_archive_wins_over_a_waiting_assignment(fx:
     )
     assert isinstance(out["error"], HeadquartersLocationInvalidError)
     assert fx.count("SELECT count(*) FROM core.entities WHERE canonical_name = 'Garrison'") == 0
+
+
+# --- quests -----------------------------------------------------------------------------------------
+
+
+@dataclass
+class CommittedQuest:
+    quest_id: uuid.UUID
+    version: int
+    stage_id: uuid.UUID
+    objective_id: uuid.UUID
+    timeline_id: uuid.UUID
+    world_time_id: uuid.UUID
+
+
+def _published_quest(fx: Fixture) -> CommittedQuest:
+    with fx.engine.begin() as c:
+        quest = create_quest(
+            c, campaign_id=fx.campaign_id, actor_user_id=fx.owner, name="Race quest", summary=None
+        )
+        stage = add_quest_stage(
+            c,
+            campaign_id=fx.campaign_id,
+            quest_id=quest.entity_id,
+            actor_user_id=fx.owner,
+            expected_row_version=quest.row_version,
+            name="Stage",
+            description=None,
+            stage_type="sequential",
+        )
+        assert stage.record_id is not None
+        objective = add_quest_objective(
+            c,
+            campaign_id=fx.campaign_id,
+            quest_id=quest.entity_id,
+            quest_stage_id=stage.record_id,
+            actor_user_id=fx.owner,
+            expected_row_version=stage.row_version,
+            name="Objective",
+            description=None,
+            objective_type="other",
+            requirement_level="required",
+            completion_mode="automatic",
+            visibility_policy="visible",
+            quantity_required=None,
+            target_entity_id=None,
+        )
+        assert objective.record_id is not None
+        timeline = c.execute(
+            text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),
+            {"c": fx.campaign_id},
+        ).scalar()
+        when = make_world_time(c, fx.world_id, 10)
+    for command in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
+        with fx.engine.begin() as c:
+            command(
+                c,
+                campaign_id=fx.campaign_id,
+                entity_id=quest.entity_id,
+                actor_user_id=fx.owner,
+                expected_row_version=fx.version(quest.entity_id),
+            )
+    return CommittedQuest(
+        quest_id=quest.entity_id,
+        version=fx.version(quest.entity_id),
+        stage_id=stage.record_id,
+        objective_id=objective.record_id,
+        timeline_id=timeline,
+        world_time_id=when,
+    )
+
+
+def _advance(fx: Fixture, q: CommittedQuest) -> Callable[[Connection], Any]:
+    return lambda c: _advance_objective_impl(
+        c,
+        quest_objective_id=q.objective_id,
+        timeline_id=q.timeline_id,
+        world_time_id=q.world_time_id,
+        new_status_code="completed",
+        campaign_id=fx.campaign_id,
+    )
+
+
+def _remove_objective(fx: Fixture, q: CommittedQuest) -> Callable[[Connection], Any]:
+    return lambda c: remove_quest_objective(
+        c,
+        campaign_id=fx.campaign_id,
+        quest_id=q.quest_id,
+        quest_stage_id=q.stage_id,
+        quest_objective_id=q.objective_id,
+        actor_user_id=fx.owner,
+        expected_row_version=q.version,
+    )
+
+
+def test_a_structural_edit_waits_for_an_in_flight_first_progress_write_and_is_refused(
+    fx: Fixture,
+) -> None:
+    q = _published_quest(fx)
+    out = race(fx.engine, _advance(fx, q), _remove_objective(fx, q), ENTITY_LOCK)
+    assert isinstance(out["error"], QuestHasProgressError)
+    assert fx.count("SELECT count(*) FROM narrative.quest_objectives") == 1
+    assert fx.count("SELECT count(*) FROM campaign.objective_state") == 1
+
+
+def test_a_first_progress_write_waits_for_an_in_flight_structural_edit_and_finds_it_gone(
+    fx: Fixture,
+) -> None:
+    q = _published_quest(fx)
+    out = race(fx.engine, _remove_objective(fx, q), _advance(fx, q), ENTITY_LOCK)
+    assert isinstance(out["error"], ValueError)
+    assert "does not exist" in str(out["error"])
+    assert fx.count("SELECT count(*) FROM campaign.objective_state") == 0
+    assert fx.count("SELECT count(*) FROM narrative.events WHERE event_id IS NOT NULL") == 0
+
+
+def test_two_editors_of_the_same_quest_serialize_and_the_second_is_stale(fx: Fixture) -> None:
+    q = _published_quest(fx)
+
+    def rename(c: Connection) -> Any:
+        return update_quest_stage(
+            c,
+            campaign_id=fx.campaign_id,
+            quest_id=q.quest_id,
+            quest_stage_id=q.stage_id,
+            actor_user_id=fx.owner,
+            expected_row_version=q.version,
+            name="Renamed",
+            description=None,
+            stage_type="sequential",
+        )
+
+    out = race(fx.engine, rename, rename, ENTITY_LOCK)
+    assert isinstance(out["error"], StaleWriteError)
