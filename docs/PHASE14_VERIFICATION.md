@@ -32,10 +32,32 @@ Explained non-passes:
 - The downgrade-to-base test fails only when other shards run concurrently (cluster-global role changes); it passes alone.
 - `alembic check` against the developer's own `dnd_ai` database reports it is behind head; that database was deliberately not migrated. The same check passes on the throwaway database.
 
+## Navigation and hierarchy correction (2026-10-04)
+
+Manual acceptance found the sidebar and context hierarchy incoherent. Corrected on `phase14/authoring-kernel`; **no backend contract, schema, or authorization rule changed**.
+
+- **Contracts used:** `GET /worlds?status=all` (authorized worlds), `GET /worlds/{id}` (its authorized `timelines`, `available_actions`), `GET /worlds/{id}/timelines/{timelineId}` (detail; bound to the route world, non-disclosing 404). No timeline-list endpoint was needed.
+- **Sidebar:** one Worlds group — All worlds, New world, World overview, Timelines (`/worlds/:id/timelines`, the whole world), Timeline overview, Campaign world. Context-dependent entries are disabled in place, never removed.
+- **Routes:** added `/worlds/:worldId/timelines`; all `/worlds/*` routes now render under `WorldWorkspaceLayout`. Existing deep links are unchanged.
+- **Context panel:** `HierarchyContextPanel` (World, Timeline, Campaign, Character) rendered by `WorkspaceFrame` on World and Campaign pages; the pages inside no longer render their own `<main>`. Selection is route-derived via `WorkspaceHierarchyProvider`; nothing is persisted.
+- **Cascade:** selectors navigate; lower levels unmount with their routes; stale data is excluded because every request is keyed by its path.
+- **Character perspectives** stay Campaign-membership scoped; World-scoped characters are never selectable.
+
+Automated evidence (local, 2026-10-04): portal `npm test` 249 files / 1756 tests passed, `npm run lint` clean, `npm run build` OK, `git diff --check` clean. New or changed suites: `HierarchyContextPanel.test.tsx`, `TimelinesPage.test.tsx`, `App.worldWorkspace.test.tsx`, `PortalSidebar.test.tsx`, plus layout/App/perspective tests adapted to the hierarchy panel. This is automated evidence only.
+
+**Manual browser verification of this correction: not yet performed.** A source-level review of the CSS (existing grid: single column below 64rem, panel in the right column above it; sticky from 64rem; disabled-select styling) found no layout change, but it is not a substitute for checking 390 / 1280 / 2560 px.
+
+Accepted limitations of the correction:
+
+- An unconfirmed route world shows "No selection" until `GET /worlds/{id}` returns (no optimistic selection).
+- On a campaign page whose world the caller cannot read, the Timeline selector shows the campaign's own timeline but stays disabled.
+- The panel, sidebar, and world page share one hierarchy read, but the world page still issues its own `GET /worlds/{id}` (no shared cache).
+- The Campaign selector lists campaigns from the session bootstrap only; campaigns the caller does not belong to are never listed.
+
 ## Not verified locally
 
 - Final-head CI (the merge gate).
-- Manual browser verification at 390 / 1280 / 2560 px: not performed. Layout is covered by CSS and component tests only.
+- Manual browser verification at 390 / 1280 / 2560 px: not performed (including the navigation and hierarchy correction above). Layout is covered by CSS and component tests only.
 - Full `downgrade base` round trip beyond what the downgrade test covers.
 
 ## Deviations from the plan
