@@ -141,6 +141,8 @@ A world owns:
 
 A world does not directly contain mutable campaign state. Mutable state belongs to timelines.
 
+**World authority (Phase 14, [ADR 0014](adr/0014-world-authoring-authority.md)).** Who may *author* a world is a separate concept from campaign membership and from platform administration. A user holds the `world_owner` role on a world through an open, active `security.world_memberships` row; the closed set of world capabilities that role carries (`world.view`, `world.manage`, `timeline.manage`, `campaign.create`) lives in application code, not in `security.capabilities`. Any active human principal may create a world (global capability `world.create`) and becomes its first owner; Foundry device principals and machine principals never hold authority. World authority is never inferred from campaign roles, and owning a world grants no campaign membership or campaign reads. A world created before the ownership model has no owner and cannot be authored until an operator claims it. Worlds are archived and restored, never deleted; archiving is refused while any non-archived campaign exists on its timelines.
+
 ### 4.2 Entity
 
 An **Entity** is the universal identity record for a significant world object.

@@ -25,11 +25,13 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import Connection, text
 
 from dnd_ai.api.app import create_app
+from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_connection
 from dnd_ai.api.local_auth import (
     get_login_account_rate_limiter,
@@ -37,6 +39,7 @@ from dnd_ai.api.local_auth import (
     get_token_consumption_rate_limiter,
 )
 from dnd_ai.commands.local_auth import _create_local_account_impl
+from dnd_ai.domain.access import AuthenticatedPrincipal
 from dnd_ai.domain.rate_limit import RateLimiter
 from tests.factories import make_platform_administrator
 
@@ -96,12 +99,27 @@ class AuthoringHarness:
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
         self.admin_id = make_platform_administrator(connection, "Harness Admin")
-        self.app = create_app()
-        self.app.dependency_overrides[get_connection] = self._connection
-        self.app.dependency_overrides[get_login_ip_rate_limiter] = _generous
-        self.app.dependency_overrides[get_login_account_rate_limiter] = _generous
-        self.app.dependency_overrides[get_token_consumption_rate_limiter] = _generous
+        self.app = self._make_app()
         self._clients: list[TestClient] = []
+
+    def _make_app(self) -> FastAPI:
+        app = create_app()
+        app.dependency_overrides[get_connection] = self._connection
+        app.dependency_overrides[get_login_ip_rate_limiter] = _generous
+        app.dependency_overrides[get_login_account_rate_limiter] = _generous
+        app.dependency_overrides[get_token_consumption_rate_limiter] = _generous
+        return app
+
+    def principal_client(self, principal: AuthenticatedPrincipal) -> TestClient:
+        """A client whose every request authenticates as `principal` (an OIDC
+        bearer-style principal, or a Foundry device principal) with no cookie,
+        so CSRF/Origin do not apply -- exactly as for a real bearer caller."""
+        app = self._make_app()
+        app.dependency_overrides[get_authenticated_user_id] = lambda: principal
+        client = TestClient(app, raise_server_exceptions=False)
+        client.__enter__()
+        self._clients.append(client)
+        return client
 
     def _connection(self) -> Iterator[Connection]:
         savepoint = self.connection.begin_nested()

@@ -474,6 +474,23 @@ Every lifecycle transition should record:
 
 ## 21. Service commands
 
+### 21.1 Accepted Phase 14 commands
+
+Delivered commands (each intent-specific, `expected_row_version`-guarded, idempotent, and audited; see [SYSTEM_ARCHITECTURE.md §5.3](architecture/SYSTEM_ARCHITECTURE.md)). **Built** unless marked **Planned**:
+
+| Command | Status |
+|---|---|
+| `create_world` (world, allow-listed rulesets and default, owner membership, primary timeline — one transaction) | Built |
+| `update_world`, `archive_world`, `restore_world` | Built |
+| `claim_unowned_world` (trusted infrastructure only, never over HTTP) | Built |
+| `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Planned (Phase 14, later checkpoint) |
+| `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Planned (Phase 14, later checkpoint) |
+| `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Planned (Phase 14, later checkpoint) |
+
+Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared.
+
+### 21.2 Recommended lifecycle commands (design catalog)
+
 Recommended lifecycle commands:
 
 - `CreateEntity`

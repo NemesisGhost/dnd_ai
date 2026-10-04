@@ -52,6 +52,8 @@ Do not expose Uvicorn or PostgreSQL directly. Route all inbound HTTP/HTTPS throu
 
 After the first `migrate` run against a genuinely empty database, create the first platform administrator with `scripts/bootstrap_admin.py` (DB-direct, never over HTTP, and never exposed as an API endpoint — it fails closed once any `security.users` row already exists) before anyone can create further local accounts or issue activation tokens.
 
+**Claiming legacy worlds (Phase 14).** Worlds created before migration 110 have no owner, and nobody can author them in the portal until an operator claims them. List them with `uv run python scripts/claim_world_ownership.py --list-unowned`, preview a claim with `--world-slug <slug> --login-name <account>`, and apply it by adding `--apply`. The script is database-direct (never over HTTP), refuses any world that has or ever had an owner, and records an audit row naming the script as the actor. Worlds created through the portal after this phase need no claim: the creator is the first owner.
+
 Before production, define CPU and memory limits/reservations so D&D AI workers or AI requests cannot starve FoundryVTT. Monitor container health, restart counts, CPU, memory, database connections, filesystem capacity, backup age, certificate renewal, and No-IP update success. Configure Docker log rotation and disk-space alerts.
 
 Back up PostgreSQL with regular logical dumps (and volume-level protection only as a supplement), and back up uploaded/source files and deployment configuration needed to rebuild the service. Keep at least one encrypted offsite copy. Document retention, periodically restore into a disposable database, apply migrations, and verify application reads before declaring backups healthy. Foundry backups remain separate.
