@@ -1443,8 +1443,8 @@ This section is the delivery-status source of truth. Each phase distinguishes co
 | 11 | Foundation delivered; remaining work reassigned | Existing Foundry backend/module retained; live acceptance and portal UI move to Phase 21 |
 | 12 | Foundation delivered; remaining work reassigned | Existing AI/context/proposal foundation retained; product surfaces and real-provider acceptance move to Phase 20 |
 | 13 | Complete | Portal foundation, campaign reads, account/settings, invitations, and access management |
-| **14** | **In progress** | **Shared authoring kernel plus world/timeline/campaign setup** (design decisions: [ADR 0014](adr/0014-world-authoring-authority.md)) |
-| **15** | Planned | **Game Master world, campaign, and session authoring** |
+| 14 | Complete | Shared authoring kernel plus world/timeline/campaign setup (design decisions: [ADR 0014](adr/0014-world-authoring-authority.md); CI run `37227612984`) | Manual navigation check carried forward |
+| **15** | **15.1 in progress; 15.2 planned** | **15.1: GM world-content definitions** (locations, organizations/religions, NPC identity, quest and knowledge definitions; [ADR 0015](adr/0015-typed-world-content-authoring.md)) | **15.2: campaign operations** (sessions, events, state, progress, reveal, relationships, items) |
 | **16** | Planned | **Player character authoring, notes, theories, contributions, and collaboration** |
 | **17** | Planned | **Standalone-product acceptance and self-hosted production packaging** |
 | 18 | Planned | Session intelligence and controlled world/campaign import |
@@ -2006,7 +2006,7 @@ Exit criteria:
 
 ### Phase 14: Shared authoring kernel and campaign setup
 
-**Status: Implemented; local verification green, final-head CI pending** (branch `phase14/authoring-kernel`). Mark complete only after a green CI run. World authority is a per-world membership, not an inference from campaign roles — see [ADR 0014](adr/0014-world-authoring-authority.md). Delivery evidence: [PHASE14_VERIFICATION.md](PHASE14_VERIFICATION.md). A navigation/hierarchy correction (stable Worlds group, world-scoped Timelines collection, persistent hierarchy context panel) follows manual acceptance findings; its manual verification is still pending.
+**Status: Complete** (PR #64, merge `3046714`; final-head CI run `37227612984` green). World authority is a per-world membership, not an inference from campaign roles — see [ADR 0014](adr/0014-world-authoring-authority.md). Delivery evidence: [PHASE14_VERIFICATION.md](PHASE14_VERIFICATION.md). A navigation/hierarchy correction (stable Worlds group, world-scoped Timelines collection, persistent hierarchy context panel) follows manual acceptance findings; its manual verification is still pending.
 
 **Goal:** Establish the production write model and let a GM create the minimum viable campaign without SQL or seed scripts.
 
@@ -2091,6 +2091,8 @@ Phase 14 is complete when:
 ### Phase 15: Game Master authoring and campaign operations
 
 **Goal:** Let a GM create and operate the campaign's canonical content entirely in the web application.
+
+**Delivery split ([ADR 0015](adr/0015-typed-world-content-authoring.md)).** Phase 15 is delivered in two parts. **Phase 15.1 — GM world-content definitions** (branch `phase15/gm-authoring`, in progress) covers world-scoped definitions only: locations (ten non-dungeon categories), organizations (six types) and religions, NPC identity, quest definitions (stages and objectives), knowledge-item definitions, and their structural references. It adds one migration (`113_organization_hierarchy_cycle_guard`), the state-command target-eligibility guards, lifecycle-command campaign locking, and `no-store` authoring reads. It writes no timeline state, events, or per-knower rows. **Phase 15.2 — campaign operations** (separate later branch) owns sessions, events and corrections, world-time authoring, timeline state, quest activation and progress, knowledge reveal, `world.relationships` (after its lifecycle ADR), items and inventory, encounters, PC creation by the GM, and the 15.8 exit scenario. The 15.8 scenario and 15.9 exit criteria close only after 15.2. Dungeons, routes, and maps remain unscheduled 15A structural work.
 
 Implement in independently verifiable increments. Each increment includes commands, read models, portal workflows, authorization, audit, temporal behavior, and tests.
 

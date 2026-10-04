@@ -113,6 +113,10 @@ Canon lifecycle applies to `core.entities` *definitions* only, and only to the t
 
 **Adding a type to the registry is a reviewed change**: it must also extend read-side visibility gating (`dnd_ai.queries.entity_lifecycle.lifecycle_hidden_entity_ids` and the World Explorer) to every surface the type appears on, and its deletable-reference classification must be reviewed (§14). A catalog test fails when a new foreign key to a definition is unclassified.
 
+### 3.1a Editing a definition (Phase 15.1; [ADR 0015](adr/0015-typed-world-content-authoring.md))
+
+Type-specific `update_*` commands mutate a definition in place, **only while lifecycle is `active` and canon status is `draft` or `canon`**. `proposed` and `approved` records are not editable (return to draft first), so an approved record cannot change before publish; `rejected` and `superseded` report `wrong_canon_status`, and archived records report `entity_archived`. The check is the pure `content_edit_blocked_reason` policy that the read model's `update` action also uses. A real edit bumps `row_version` through the root UPDATE (even for subtype-only changes) and writes one `updated` audit row with bounded `{field: {from, to}}`; an identical resubmission is a no-op (`changed: false`, no version bump, no audit). Entity type is immutable after creation; a change of meaning on canon is a new draft that supersedes the old record. Type-specific **publish** and **archive** preconditions (a canon parent, origin, target or subject; the NPC user-relationship guard) are a hook consulted by both the commands and `blocked_actions`.
+
 ### 3.3 Read-side visibility
 
 A caller without `canon.edit` sees only published definitions in browse lists (`canon` and `active`); detail routes, relationship participants, and event participants/locations additionally resolve `superseded`, `deprecated`, and archived definitions so history stays referenceable. Drafts, proposals, approved-but-unpublished, and rejected definitions are the same 404 as a nonexistent record. A `canon.edit` caller sees everything (except deleted) in detail and may preview drafts and archived records in lists with `include_noncanon` / `include_archived`; those flags are ignored for everyone else.
@@ -452,6 +456,8 @@ Quest progression lifecycle is separate and timeline-scoped:
 
 A completed quest remains a canonical entity. Its timeline state changes; the quest definition is not archived merely because one party completed it.
 
+**Definition freeze (Phase 15.1).** Once any `campaign.quest_state` or `campaign.objective_state` row exists for a quest in any timeline, removing a stage or objective, reordering stages, and changing an objective's type, target, completion mode, requirement level, quantity, or completion rule are refused with `quest_has_progress`. Wording and visibility stay editable; structural change after progress is supersession.
+
 ## 17. Knowledge lifecycle
 
 Knowledge items represent claims and may evolve through versions.
@@ -474,6 +480,8 @@ Per-knower states may include:
 - forgotten
 
 Changing what a character believes does not change the claim's objective truth status.
+
+**Statement freeze (Phase 15.1).** Once any per-knower, party, discovery, public-knowledge, or information-transfer row references a knowledge item, changing its statement, knowledge type, or subject is refused with `knowledge_already_known`, because it would silently rewrite what knowers learned. `truth_status` stays editable and audited.
 
 ## 18. Concurrency and idempotency
 
@@ -534,6 +542,17 @@ Delivered commands (each intent-specific, `expected_row_version`-guarded, idempo
 | `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |
 | `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Built |
 | `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Built (eligible types only; see §3.2) |
+
+Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-authoring.md)); status is updated as each checkpoint lands:
+
+| Command | Status |
+|---|---|
+| `create_location`, `update_location` (ten place categories; reparent with cycle prevention) | Planned (CP1) |
+| `create_organization` family, `update_organization` family, `create_religion`, `update_religion` | Planned (CP3) |
+| `create_npc`, `update_npc` (identity only) | Planned (CP5) |
+| `create_quest`, `update_quest`, `add_quest_stage`, `update_quest_stage`, `reorder_quest_stages`, `remove_quest_stage`, `add_quest_objective`, `update_quest_objective`, `remove_quest_objective` | Planned (CP6) |
+| `create_knowledge_item`, `update_knowledge_item` | Planned (CP7) |
+| Campaign operations: sessions, events, timeline state, progress, reveal, relationships | Deferred to Phase 15.2 |
 
 Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.
 
