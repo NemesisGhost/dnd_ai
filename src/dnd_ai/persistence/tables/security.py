@@ -1,4 +1,4 @@
-"""Security tables — security schema (revisions 003, 080, 082, 087, 088, 109).
+"""Security tables — security schema (revisions 003, 080, 082, 087, 088, 109, 110, 112).
 
 Part of the src/dnd_ai/persistence/tables package. See
 src/dnd_ai/persistence/tables/__init__.py for the metadata-authority note
@@ -42,6 +42,16 @@ membership_statuses = _lookup_table(
     "membership_status_id",
     "Lifecycle of a security.campaign_memberships row: invited, active, "
     "suspended, revoked, departed (docs/architecture/DATABASE_MODEL.md §19.2).",
+)
+
+world_roles = _lookup_table(
+    "security",
+    "world_roles",
+    "world_role_id",
+    "Roles a user can hold on a world (currently world_owner). Capabilities are a "
+    "closed mapping in application code (dnd_ai.domain.world_authority), not rows in "
+    "security.capabilities, which is assignable to campaign roles "
+    "(docs/adr/0014-world-authoring-authority.md).",
 )
 
 character_relationship_types = _lookup_table(
@@ -1512,4 +1522,120 @@ Index(
     "ix_user_portal_preferences_last_visited_campaign_id",
     user_portal_preferences.c.last_visited_campaign_id,
     postgresql_where=user_portal_preferences.c.last_visited_campaign_id.isnot(None),
+)
+
+# ---------------------------------------------------------------------------
+# World authoring authority (revision 110)
+# ---------------------------------------------------------------------------
+
+world_memberships = Table(
+    "world_memberships",
+    metadata,
+    _uuid_pk("world_membership_id"),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "world_role_id",
+        UUID(),
+        ForeignKey("security.world_roles.world_role_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "membership_status_id",
+        UUID(),
+        ForeignKey("security.membership_statuses.membership_status_id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("joined_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("ended_at", TIMESTAMP(timezone=True)),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A user's authority over a world (docs/adr/0014-world-authoring-authority.md): "
+        "the root of world-level authoring authorization, separate from campaign "
+        "membership and from platform administration. Open rows (ended_at IS NULL) with "
+        "an active status and role authorize; closed rows are history and are never "
+        "deleted by commands. A world with no rows at all is an unclaimed legacy world "
+        "that nobody may author until trusted infrastructure claims it."
+    ),
+)
+
+Index("ix_world_memberships_world_id", world_memberships.c.world_id)
+Index("ix_world_memberships_user_id", world_memberships.c.user_id)
+Index("ix_world_memberships_world_role_id", world_memberships.c.world_role_id)
+Index("ix_world_memberships_membership_status_id", world_memberships.c.membership_status_id)
+Index(
+    "ux_world_memberships_open",
+    world_memberships.c.world_id,
+    world_memberships.c.user_id,
+    unique=True,
+    postgresql_where=world_memberships.c.ended_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# Actor-scoped idempotency (revision 112)
+# ---------------------------------------------------------------------------
+
+actor_idempotent_requests = Table(
+    "actor_idempotent_requests",
+    metadata,
+    _uuid_pk("actor_idempotent_request_id"),
+    Column(
+        "actor_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "idempotency_key",
+        Text(),
+        nullable=False,
+        comment=(
+            "Client-supplied Idempotency-Key header value, bounded and character-restricted "
+            "(dnd_ai.api.deps.get_idempotency_key) before it reaches this column or any log "
+            "line."
+        ),
+    ),
+    Column(
+        "request_fingerprint",
+        Text(),
+        nullable=False,
+        comment=(
+            "sha256 hex digest of the canonical (command_name, path parameters, request body) "
+            "tuple (dnd_ai.api.idempotency.compute_request_fingerprint). A replay whose "
+            "fingerprint does not match -- a different command or payload reusing the key -- "
+            "is rejected as a fixed, non-disclosing conflict rather than replayed."
+        ),
+    ),
+    Column("correlation_id", UUID()),
+    Column("response_status_code", SmallInteger()),
+    Column(
+        "response_body",
+        JSONB(),
+        comment=(
+            "The exact response body the command already returned to this same "
+            "authenticated caller for this key; replayed verbatim on a matching retry."
+        ),
+    ),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("completed_at", TIMESTAMP(timezone=True)),
+    UniqueConstraint("actor_user_id", "idempotency_key", name="ux_actor_idempotent_requests_scope"),
+    schema="security",
+    comment=(
+        "Durable actor-scoped Idempotency-Key store for commands with no campaign to "
+        "scope to (world and timeline authoring). One row reserves (actor_user_id, "
+        "idempotency_key) for the lifetime of the reserving transaction and is filled in "
+        "with the response before that transaction commits; a rolled-back or failed "
+        "command releases the key automatically. See src/dnd_ai/api/idempotency.py."
+    ),
 )

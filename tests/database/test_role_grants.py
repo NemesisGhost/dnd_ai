@@ -230,6 +230,11 @@ MANAGED_TABLES = [
     # Phase 13 navigation and settings redesign — user portal preferences
     # (migration 109)
     ("security", "user_portal_preferences"),
+    # Phase 14 — world authoring authority and actor-scoped idempotency
+    # (migrations 110, 112)
+    ("security", "world_roles"),
+    ("security", "world_memberships"),
+    ("security", "actor_idempotent_requests"),
 ]
 
 # audit.change_log is deliberately excluded from MANAGED_TABLES: it is

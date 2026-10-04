@@ -157,8 +157,9 @@ Key columns:
 - `lifecycle_status_id UUID FK`
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
+- `row_version BIGINT NOT NULL DEFAULT 1` — optimistic-concurrency token bumped by every UPDATE (Phase 14, revision 111; see DATABASE_CONVENTIONS §26.3)
 
-A world owns entity definitions, calendars, timelines, and world-specific configuration.
+A world owns entity definitions, calendars, timelines, and world-specific configuration. Who may *author* a world is not a column here: it is `security.world_memberships` (§19.2a, ADR 0014), so the definition row carries no owner. `slug` is server-generated (never client-supplied) so a globally unique slug cannot be used to probe for other users' worlds.
 
 ### 5.2 `core.entity_types`
 
@@ -193,6 +194,8 @@ Key columns:
 - `created_at TIMESTAMPTZ`
 - `updated_at TIMESTAMPTZ`
 - `archived_at TIMESTAMPTZ NULL`
+- `superseded_by_entity_id UUID FK NULL` — Phase 14 (revision 111), `ON DELETE RESTRICT`; the replacement for a superseded entity (ENTITY_LIFECYCLE §16.4). Write-once, only with `canon_status = superseded`, same world and entity type (`core.enforce_entity_supersession()`).
+- `row_version BIGINT NOT NULL DEFAULT 1` — optimistic-concurrency token (revision 111)
 
 Entity rows are definition records. Timeline-specific conditions do not belong here.
 
@@ -263,6 +266,9 @@ Key columns:
 - `branch_world_time_id UUID FK NULL`
 - `is_primary BOOLEAN`
 - `lifecycle_status_id UUID FK`
+- `row_version BIGINT NOT NULL DEFAULT 1` — optimistic-concurrency token (Phase 14, revision 111)
+
+**Lineage is immutable** (Phase 14, revision 111, `campaign.enforce_timeline_lineage_immutable()`): `parent_timeline_id` and `branch_world_time_id` never change after insert (NULL included) and `branch_event_id` may go NULL → value once. This makes parent-chain cycles structurally impossible and means a branch can never silently change which history it inherits.
 
 A branch inherits parent history only through its branch point. Effective-state queries must never include parent events after that point.
 
@@ -281,6 +287,7 @@ Key columns:
 - `lifecycle_status_id UUID FK`
 - `started_at TIMESTAMPTZ NULL`
 - `ended_at TIMESTAMPTZ NULL`
+- `row_version BIGINT NOT NULL DEFAULT 1` — optimistic-concurrency token (Phase 14, revision 111)
 
 `ruleset_version_id` must be allowed for the campaign's world (`rules.world_rulesets`, resolved through the pinned version's ruleset family) — enforced by trigger.
 
@@ -973,6 +980,28 @@ There is at most one open membership (`ended_at IS NULL`) per `(campaign_id, use
 
 The earlier sketch names `security.campaign_members`; the target name is **`security.campaign_memberships`** because each row is an authorization relationship with lifecycle and roles, not a user record.
 
+#### 19.2a World authoring authority
+
+Delivered by Phase 14 (revision 110; [ADR 0014](../adr/0014-world-authoring-authority.md)). **Built.** World-level authorization is deliberately separate from campaign membership and from platform administration.
+
+##### `security.world_roles`
+
+A standard lookup (conventions §11) seeded with `world_owner` (`database/seeds/security.world_roles.yaml`). Its *capabilities* are a closed mapping in `dnd_ai.domain.world_authority`, not rows in `security.capabilities` (which is assignable to campaign roles).
+
+##### `security.world_memberships`
+
+Key columns:
+
+- `world_membership_id UUID PK`
+- `world_id UUID FK -> core.worlds, ON DELETE CASCADE` — immutable
+- `user_id UUID FK -> security.users, ON DELETE RESTRICT` — immutable
+- `world_role_id UUID FK -> security.world_roles`
+- `membership_status_id UUID FK -> security.membership_statuses`
+- `joined_at TIMESTAMPTZ NOT NULL`, `ended_at TIMESTAMPTZ NULL` (`ended_at >= joined_at`)
+- `created_at`, `updated_at`
+
+At most one open row (`ended_at IS NULL`) per `(world_id, user_id)`. Open rows with an active status and role authorize; closed rows are history and are never deleted by commands. A **deferred constraint trigger** (`security.assert_world_retains_owner`, which locks the world row `FOR UPDATE`) rejects a commit that leaves a world that had an active owner with none. A world with **no rows of any status** is an unclaimed legacy world: nobody may author it until trusted infrastructure runs `claim_unowned_world` (`scripts/claim_world_ownership.py`), which succeeds only while the world has no membership rows at all.
+
 #### 19.3 Roles and capabilities
 
 Primary tables:
@@ -1132,6 +1161,10 @@ Key columns:
 Unique on `(actor_user_id, campaign_id, idempotency_key)`. A row is reserved (`INSERT ... ON CONFLICT DO NOTHING`) before the command runs and completed with its response before the same transaction commits — see `dnd_ai.api.idempotency`'s module docstring for the full concurrency argument (the unique index itself, not application-level locking, serializes concurrent requests for the same key) and for why a rolled-back or failed command never permanently consumes a key.
 
 Deliberately **not** under `audit`: `audit.*` tables are append-only to normal application roles (conventions §24.2) and outlive the records they describe, by design. This table is the opposite on both counts — reserved, updated once, and disposable cache state, not history — so it carries real `ON DELETE CASCADE` foreign keys rather than `audit.change_log`'s deliberately unconstrained columns.
+
+##### `security.actor_idempotent_requests`
+
+Delivered by Phase 14 (revision 112). The third idempotency store, actor-scoped for commands with no campaign to key against (world and timeline authoring). Same shape and completion-consistency CHECK as `security.idempotent_requests`, minus `campaign_id`; unique on `(actor_user_id, idempotency_key)`. Fingerprint covers the command name, path parameters, and body. Rows never expire (accepted limitation, shared with the other two stores).
 
 ##### `security.campaign_creation_reservations`
 

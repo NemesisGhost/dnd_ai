@@ -1,0 +1,9 @@
+# Roles a user can hold on a world (security.world_memberships). See
+# docs/adr/0014-world-authoring-authority.md. The capabilities each role
+# carries are a closed mapping in dnd_ai.domain.world_authority, not rows here.
+
+- code: world_owner
+  display_name: World owner
+  description: May update, archive, and restore the world, manage its timelines, and create campaigns on it.
+  sort_order: 10
+  is_active: true

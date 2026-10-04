@@ -8,6 +8,7 @@ exactly.
 """
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     ForeignKey,
@@ -88,6 +89,17 @@ timelines = Table(
             "Must belong to parent_timeline_id and occur at or before "
             "branch_world_time_id — enforced by campaign.enforce_timeline_branch() "
             "(docs/architecture/DATABASE_MODEL.md §6.1)."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
         ),
     ),
     schema="campaign",
@@ -276,6 +288,17 @@ campaigns = Table(
             "the ruleset family, so the campaign's rules configuration is reproducible. "
             "Must belong to a ruleset allowed for the campaign's world "
             "(rules.world_rulesets) — enforced by trigger."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
         ),
     ),
     schema="campaign",

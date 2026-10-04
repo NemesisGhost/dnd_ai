@@ -244,6 +244,7 @@ from .rules import (
 from .security import (
     access_group_memberships,
     access_groups,
+    actor_idempotent_requests,
     browser_sessions,
     campaign_creation_reservations,
     campaign_invitations,
@@ -267,6 +268,8 @@ from .security import (
     user_activation_tokens,
     user_portal_preferences,
     users,
+    world_memberships,
+    world_roles,
 )
 
 __all__ = [
@@ -278,6 +281,7 @@ __all__ = [
     "access_group_memberships",
     "access_groups",
     "actions",
+    "actor_idempotent_requests",
     "agent_assignments",
     "agent_roles",
     "agents",
@@ -475,6 +479,8 @@ __all__ = [
     "user_activation_tokens",
     "user_portal_preferences",
     "users",
+    "world_memberships",
+    "world_roles",
     "world_rulesets",
     "world_time_precisions",
     "world_times",
