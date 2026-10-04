@@ -1,5 +1,5 @@
 import { Link, Outlet, useParams } from "react-router"
-import { CampaignContextPanel } from "../components/CampaignContextPanel"
+import { WorkspaceFrame } from "../components/WorkspaceFrame"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { useRecordLastVisitedCampaign } from "../hooks/useRecordLastVisitedCampaign"
 import PlaceholderPage from "../pages/PlaceholderPage"
@@ -40,18 +40,14 @@ export function CampaignLayout({ bootstrap }: CampaignLayoutProps) {
   const selectedCharacterId = getSelectedCharacterId(activeCampaign.campaign_id)
 
   return (
-    <main className="app-main campaign-workspace">
-      <CampaignContextPanel
-        campaign={activeCampaign}
-        selectedCharacterId={selectedCharacterId}
-        onSelectCharacter={(characterId) =>
-          selectCharacter(activeCampaign.campaign_id, characterId)
-        }
-      />
-
-      <div className="campaign-workspace__content">
-        <Outlet />
-      </div>
-    </main>
+    <WorkspaceFrame
+      campaign={activeCampaign}
+      selectedCharacterId={selectedCharacterId}
+      onSelectCharacter={(characterId) =>
+        selectCharacter(activeCampaign.campaign_id, characterId)
+      }
+    >
+      <Outlet />
+    </WorkspaceFrame>
   )
 }

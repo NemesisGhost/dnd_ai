@@ -49,7 +49,7 @@ export function CreateWorldPage() {
     const canCreate = bootstrap.global_capabilities?.includes("world.create") === true
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
@@ -73,7 +73,7 @@ export function CreateWorldPage() {
                     <p role="alert">Rulesets could not be loaded. Try reloading the page.</p>
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

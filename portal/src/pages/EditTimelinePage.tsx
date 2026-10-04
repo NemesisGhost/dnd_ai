@@ -36,7 +36,7 @@ export function EditTimelinePage() {
     const [kept, setKept] = useState<Values | null>(null)
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
@@ -69,7 +69,7 @@ export function EditTimelinePage() {
                     />
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

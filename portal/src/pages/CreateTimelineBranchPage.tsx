@@ -45,7 +45,7 @@ export function CreateTimelineBranchPage() {
     const headingRef = usePageArrival(ready)
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
@@ -75,7 +75,7 @@ export function CreateTimelineBranchPage() {
                     />
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

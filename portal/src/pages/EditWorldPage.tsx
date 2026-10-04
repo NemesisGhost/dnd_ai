@@ -41,7 +41,7 @@ export function EditWorldPage() {
     )
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
@@ -77,7 +77,7 @@ export function EditWorldPage() {
                     />
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

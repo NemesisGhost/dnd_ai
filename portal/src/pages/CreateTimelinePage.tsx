@@ -27,7 +27,7 @@ export function CreateTimelinePage() {
     const headingRef = usePageArrival(state.kind !== "loading")
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <p className="authoring-page__breadcrumb">
                     <Link to="/worlds">Worlds</Link>
@@ -56,7 +56,7 @@ export function CreateTimelinePage() {
                     </>
                 )}
             </div>
-        </main>
+        </div>
     )
 }
 

@@ -34,7 +34,7 @@ export function WorldsPage() {
     const canCreate = bootstrap.global_capabilities?.includes("world.create") === true
 
     return (
-        <main className="app-main">
+        <div className="world-page">
             <div className="authoring-page">
                 <h1 ref={headingRef} tabIndex={-1}>
                     Worlds
@@ -103,6 +103,6 @@ export function WorldsPage() {
                     </>
                 )}
             </div>
-        </main>
+        </div>
     )
 }

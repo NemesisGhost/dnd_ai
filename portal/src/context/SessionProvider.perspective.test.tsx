@@ -11,13 +11,14 @@ import {
   it,
   vi,
 } from "vitest"
-import { CampaignContextPanel } from "../components/CampaignContextPanel"
+import { HierarchyContextPanel } from "../components/HierarchyContextPanel"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { useSessionBootstrap } from "../hooks/useSessionBootstrap"
 import { AuthenticatedSessionBoundary } from "../layouts/AuthenticatedSessionBoundary"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 import { usePerspective } from "./CharacterPerspectiveContext"
 import { SessionProvider } from "./SessionProvider"
+import { WorkspaceHierarchyProvider } from "./WorkspaceHierarchyProvider"
 
 vi.mock("../hooks/useSessionBootstrap", () => ({
   useSessionBootstrap: vi.fn(),
@@ -39,7 +40,7 @@ function ConnectedPanel({
   const { getSelectedCharacterId, selectCharacter } = usePerspective()
 
   return (
-    <CampaignContextPanel
+    <HierarchyContextPanel
       campaign={campaign}
       selectedCharacterId={getSelectedCharacterId(campaign.campaign_id)}
       onSelectCharacter={(characterId) =>
@@ -98,6 +99,7 @@ function TestPortal() {
   return (
     <MemoryRouter>
       <SessionProvider>
+        <WorkspaceHierarchyProvider>
         <AuthenticatedSessionBoundary>
           {(sessionBootstrap) => {
             const currentCampaign =
@@ -110,6 +112,7 @@ function TestPortal() {
               )
           }}
         </AuthenticatedSessionBoundary>
+        </WorkspaceHierarchyProvider>
       </SessionProvider>
     </MemoryRouter>
   )

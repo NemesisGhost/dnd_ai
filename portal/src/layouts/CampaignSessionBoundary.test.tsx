@@ -81,22 +81,22 @@ describe("CampaignSessionBoundary", () => {
 
     expect(
       within(main).getByText(
-        "Campaign context: Mundivita — Viewing as Ixamarra",
+        "Campaign context: Mundivita › Primary Timeline › Mundivita — Viewing as Ixamarra",
         { selector: "summary" },
       ),
     ).toBeInTheDocument()
 
     expect(
-      within(main).getByText("Primary Timeline"),
-    ).toBeInTheDocument()
+      within(main).getByRole("combobox", { name: "Timeline" }),
+    ).toHaveValue("timeline-primary")
 
     expect(
       within(main).getByRole("combobox", { name: "Character perspective" }),
     ).toHaveValue("character-ixamarra")
 
     expect(
-      within(main).queryByRole("combobox", { name: "Campaign" }),
-    ).not.toBeInTheDocument()
+      within(main).getByRole("combobox", { name: "Campaign" }),
+    ).toHaveValue("mundivita")
   })
 
   it("does not disclose campaign chrome for an unknown campaign", () => {

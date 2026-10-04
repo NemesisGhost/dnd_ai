@@ -10,6 +10,8 @@ import * as userPreferences from "../api/userPreferences"
 import { usePerspective } from "../context/CharacterPerspectiveContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import type { SessionBootstrap } from "../types/bootstrap"
+import { SessionContext } from "../context/SessionContext"
+import { WorkspaceHierarchyProvider } from "../context/WorkspaceHierarchyProvider"
 import { CampaignLayout } from "./CampaignLayout"
 
 vi.mock("../context/CharacterPerspectiveContext", () => ({
@@ -49,7 +51,15 @@ function LocationProbe() {
 
 function renderAt(pathname: string) {
   return render(
+    <SessionContext.Provider
+      value={{
+        state: { status: "authenticated", bootstrap },
+        reload: vi.fn(),
+        refresh: vi.fn(),
+      }}
+    >
     <MemoryRouter initialEntries={[pathname]}>
+      <WorkspaceHierarchyProvider>
       <Routes>
         <Route
           path="/app/:campaignId"
@@ -64,7 +74,9 @@ function renderAt(pathname: string) {
         </Route>
       </Routes>
       <LocationProbe />
-    </MemoryRouter>,
+      </WorkspaceHierarchyProvider>
+    </MemoryRouter>
+    </SessionContext.Provider>,
   )
 }
 
