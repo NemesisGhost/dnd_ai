@@ -1,6 +1,7 @@
 import type { WorldCategory, WorldEntityCard } from "../types/world"
 import { isWorldDetailCategory } from "../types/world"
 import { humanizeCode } from "../utils/humanize"
+import { LifecycleBadge } from "./authoring/feedback"
 import { EntityCard } from "./EntityCard"
 
 const categoryLabels: Record<WorldCategory, string> = {
@@ -34,6 +35,14 @@ interface WorldCardProps {
 // visually consistent card.
 export function WorldCard({ campaignId, entity }: WorldCardProps) {
     const eyebrow = describeEntity(entity)
+    // Only a canon.edit holder's preview ever returns a non-canon or archived
+    // row; the badge says so in text, never by color alone.
+    const hiddenStatus =
+        entity.lifecycle_status === "archived"
+            ? "archived"
+            : entity.canon_status !== undefined && entity.canon_status !== "canon"
+              ? entity.canon_status
+              : null
 
     const to = isWorldDetailCategory(entity.category)
         ? `/app/${encodeURIComponent(campaignId)}/world/${entity.category}/${encodeURIComponent(entity.entity_id)}`
@@ -45,7 +54,14 @@ export function WorldCard({ campaignId, entity }: WorldCardProps) {
             title={entity.name}
             summary={entity.summary}
             to={to}
-            linkLabel={`${entity.name}, ${eyebrow}`}
+            linkLabel={
+                hiddenStatus === null
+                    ? `${entity.name}, ${eyebrow}`
+                    : `${entity.name}, ${eyebrow}, ${hiddenStatus}`
+            }
+            metadata={
+                hiddenStatus === null ? undefined : [<LifecycleBadge key="status" status={hiddenStatus} />]
+            }
         />
     )
 }

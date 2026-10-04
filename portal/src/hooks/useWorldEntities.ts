@@ -46,6 +46,7 @@ interface WorldEntitiesSnapshot {
     category: WorldCategory | null
     query: string
     cursor: string | null
+    includeHidden: boolean
     requestVersion: number
     state: WorldEntitiesState
 }
@@ -68,6 +69,7 @@ export function useWorldEntities(
     category: WorldCategory | null,
     query: string,
     cursor: string | null = null,
+    includeHidden = false,
 ): UseWorldEntitiesResult {
     const { reload } = useSession()
 
@@ -80,6 +82,7 @@ export function useWorldEntities(
             category,
             query,
             cursor,
+            includeHidden,
             requestVersion: 0,
             state: initialState,
         }))
@@ -95,6 +98,7 @@ export function useWorldEntities(
         snapshot.category === category &&
         snapshot.query === query &&
         snapshot.cursor === cursor &&
+        snapshot.includeHidden === includeHidden &&
         snapshot.requestVersion === requestVersion
 
     // A campaign switch is a new authorization scope: never carry the
@@ -122,6 +126,7 @@ export function useWorldEntities(
                 category,
                 query,
                 cursor,
+                ...(includeHidden ? { includeHidden } : {}),
             },
             controller.signal,
         )
@@ -135,6 +140,7 @@ export function useWorldEntities(
                     category,
                     query,
                     cursor,
+                    includeHidden,
                     requestVersion,
                     state: {
                         status: "success",
@@ -166,6 +172,7 @@ export function useWorldEntities(
                         category,
                         query,
                         cursor,
+                        includeHidden,
                         requestVersion,
                         state: initialState,
                     })
@@ -183,6 +190,7 @@ export function useWorldEntities(
                         category,
                         query,
                         cursor,
+                        includeHidden,
                         requestVersion,
                         state: {
                             status: "unavailable",
@@ -196,6 +204,7 @@ export function useWorldEntities(
                     category,
                     query,
                     cursor,
+                    includeHidden,
                     requestVersion,
                     state: {
                         status: "error",
@@ -212,6 +221,7 @@ export function useWorldEntities(
         category,
         query,
         cursor,
+        includeHidden,
         reload,
         requestVersion,
     ])

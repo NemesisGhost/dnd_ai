@@ -110,6 +110,7 @@ describe("WorldEntitiesBoundary", () => {
             "location",
             "glass",
             "world-cursor",
+            false,
         )
     })
 

@@ -10,6 +10,7 @@ interface WorldEntitiesBoundaryProps {
     category: WorldCategory | null
     query: string
     cursor?: string | null
+    includeHidden?: boolean
     children: (
         page: WorldEntityPage,
         refreshing: boolean,
@@ -21,6 +22,7 @@ export function WorldEntitiesBoundary({
     category,
     query,
     cursor = null,
+    includeHidden = false,
     children,
 }: WorldEntitiesBoundaryProps) {
     const { state, retry } = useWorldEntities(
@@ -28,6 +30,7 @@ export function WorldEntitiesBoundary({
         category,
         query,
         cursor,
+        includeHidden,
     )
 
     // Rendered inside WorldPage, which already carries the page's <h1>, so

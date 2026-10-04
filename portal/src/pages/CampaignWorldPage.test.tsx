@@ -109,6 +109,7 @@ describe("CampaignWorldPage", () => {
             null,
             "",
             null,
+            false,
         )
 
         expect(
@@ -139,6 +140,7 @@ describe("CampaignWorldPage", () => {
             null,
             "",
             "next-cursor",
+            false,
         )
 
         fireEvent.change(
@@ -159,6 +161,7 @@ describe("CampaignWorldPage", () => {
             "event",
             "",
             null,
+            false,
         )
 
         typeInSearch("sundering")
@@ -170,6 +173,7 @@ describe("CampaignWorldPage", () => {
             "event",
             "sundering",
             null,
+            false,
         )
     })
 
@@ -332,6 +336,7 @@ describe("CampaignWorldPage", () => {
             null,
             "",
             null,
+            false,
         )
 
         act(() => {
@@ -345,6 +350,7 @@ describe("CampaignWorldPage", () => {
             null,
             "sun",
             null,
+            false,
         )
     })
 
@@ -398,6 +404,7 @@ describe("CampaignWorldPage", () => {
             null,
             "",
             null,
+            false,
         )
 
         expect(
@@ -415,6 +422,7 @@ describe("CampaignWorldPage", () => {
             null,
             "g",
             null,
+            false,
         )
 
         expect(
@@ -484,6 +492,7 @@ describe("CampaignWorldPage", () => {
             "event",
             "sundering",
             "next-cursor",
+            false,
         )
 
         fireEvent.click(
@@ -499,6 +508,7 @@ describe("CampaignWorldPage", () => {
             null,
             "",
             null,
+            false,
         )
 
         expect(

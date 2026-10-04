@@ -38,9 +38,13 @@ vi.mock("../api/character", async (importOriginal) => {
     }
 })
 
-vi.mock("../context/SessionContext", () => ({
-    useSession: () => ({ reload: vi.fn() }),
-}))
+vi.mock("../context/SessionContext", async () => {
+    const { createContext } = await import("react")
+    return {
+        SessionContext: createContext(null),
+        useSession: () => ({ reload: vi.fn() }),
+    }
+})
 
 const locationFixture: LocationDetail = {
     location_id: "location-a",

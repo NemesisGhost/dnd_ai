@@ -46,6 +46,11 @@ function buildWorldSearchPath(
         )
     }
 
+    if (parameters.includeHidden === true) {
+        searchParameters.set("include_noncanon", "true")
+        searchParameters.set("include_archived", "true")
+    }
+
     if (parameters.limit !== undefined) {
         searchParameters.set(
             "limit",

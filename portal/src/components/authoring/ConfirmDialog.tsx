@@ -25,6 +25,10 @@ interface ConfirmDialogProps {
     error?: ReactNode
     reason?: ConfirmReason
     cancelLabel?: string
+    // Extra content between the description and the reason (e.g. a chooser).
+    children?: ReactNode
+    // Disables the confirm button until something is chosen.
+    confirmDisabled?: boolean
 }
 
 // A modal confirmation built on the native <dialog>: showModal() supplies the
@@ -43,6 +47,8 @@ export function ConfirmDialog({
     error,
     reason,
     cancelLabel = "Cancel",
+    children,
+    confirmDisabled = false,
 }: ConfirmDialogProps) {
     const dialogRef = useRef<HTMLDialogElement>(null)
     const cancelRef = useRef<HTMLButtonElement>(null)
@@ -99,6 +105,7 @@ export function ConfirmDialog({
                 <div className="authoring-dialog__body">
                     <h2 id={titleId}>{title}</h2>
                     <p id={descriptionId}>{description}</p>
+                    {children}
                     {reason ? (
                         <TextAreaField
                             label={reason.label}
@@ -116,7 +123,7 @@ export function ConfirmDialog({
                             type="button"
                             className="authoring-button authoring-button--danger"
                             onClick={onConfirm}
-                            disabled={pending}
+                            disabled={pending || confirmDisabled}
                             aria-busy={pending}
                         >
                             {pending ? "Working…" : confirmLabel}
