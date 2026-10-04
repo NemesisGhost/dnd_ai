@@ -17,6 +17,7 @@ from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
     is_publish_reference_ready,
 )
+from dnd_ai.domain.organization_authoring import ORGANIZATION_ENTITY_TYPE_CODES
 
 REFERENCE_NOT_PUBLISHED = "reference_not_published"
 
@@ -34,6 +35,19 @@ def publish_reference_ids(
         ).scalar()
         if parent is not None:
             ids.append(parent)
+    elif entity_type_code in ORGANIZATION_ENTITY_TYPE_CODES:
+        row = connection.execute(
+            text("""
+                SELECT o.parent_organization_id, o.headquarters_location_id, ro.religion_id
+                FROM world.organizations o
+                LEFT JOIN world.religious_organizations ro
+                  ON ro.religious_organization_id = o.organization_id
+                WHERE o.organization_id = :e
+            """),
+            {"e": entity_id},
+        ).one_or_none()
+        if row is not None:
+            ids.extend(r for r in (row[0], row[1], row[2]) if r is not None)
     return ids
 
 

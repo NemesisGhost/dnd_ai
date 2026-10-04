@@ -25,31 +25,28 @@ import uuid
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import (
-    ContentNotEditableError,
     LocationHierarchyCycleError,
     ParentLocationInvalidError,
-    StaleWriteError,
     normalize_reason,
 )
 from dnd_ai.domain.content_authoring import (
     AUTHORABLE_LOCATION_CATEGORIES,
-    content_edit_blocked_reason,
     diff_fields,
     initial_fields,
-    is_reference_eligible,
     location_category,
     normalize_location_fields,
 )
 
 from ._content import (
     ContentWriteResult,
-    EntityNotFoundError,
     LockedContent,
+    editable_target,
     insert_draft_entity,
     insert_gm_source,
     lock_authoring_scope,
     lock_entities,
     touch_entity,
+    usable_reference,
 )
 
 
@@ -59,19 +56,20 @@ def _lock_parent(
     """Lock a proposed parent `FOR SHARE` and validate it. Every reason it can
     be unusable (absent, other world, wrong category, archived, rejected,
     superseded) is the same non-disclosing `ParentLocationInvalidError`."""
-    parent = lock_entities(connection, world_id=world_id, share_ids=[parent_location_id]).get(
-        parent_location_id
+    locked = lock_entities(connection, world_id=world_id, share_ids=[parent_location_id])
+    return _require_usable_parent(locked, parent_location_id)
+
+
+def _require_usable_parent(
+    locked: dict[uuid.UUID, LockedContent], parent_location_id: uuid.UUID
+) -> LockedContent:
+    parent = usable_reference(
+        locked,
+        parent_location_id,
+        type_codes=AUTHORABLE_LOCATION_CATEGORIES,
+        error=ParentLocationInvalidError,
     )
-    return _require_usable_parent(parent)
-
-
-def _require_usable_parent(parent: LockedContent | None) -> LockedContent:
-    if (
-        parent is None
-        or parent.entity_type_code not in AUTHORABLE_LOCATION_CATEGORIES
-        or not is_reference_eligible(parent.canon_status, parent.lifecycle_status)
-    ):
-        raise ParentLocationInvalidError("parent location is not usable")
+    assert parent is not None
     return parent
 
 
@@ -253,16 +251,12 @@ def update_location(
     locked = lock_entities(
         connection, world_id=scope.world_id, update_ids=[location_id], share_ids=share_ids
     )
-    target = locked.get(location_id)
-    if target is None or target.entity_type_code not in AUTHORABLE_LOCATION_CATEGORIES:
-        raise EntityNotFoundError(
-            f"location {location_id} is not in campaign {campaign_id}'s world"
-        )
-    if target.row_version != expected_row_version:
-        raise StaleWriteError(f"location {location_id} is at {target.row_version}")
-    reason = content_edit_blocked_reason(target.canon_status, target.lifecycle_status)
-    if reason is not None:
-        raise ContentNotEditableError(f"location {location_id} cannot be edited: {reason}")
+    target = editable_target(
+        locked,
+        entity_id=location_id,
+        type_codes=AUTHORABLE_LOCATION_CATEGORIES,
+        expected_row_version=expected_row_version,
+    )
 
     clean_name, clean_summary, clean_population, clean_use = normalize_location_fields(
         category_code=target.entity_type_code,
@@ -303,7 +297,7 @@ def update_location(
             locked.update(
                 lock_entities(connection, world_id=scope.world_id, share_ids=[parent_location_id])
             )
-        _require_usable_parent(locked.get(parent_location_id))
+        _require_usable_parent(locked, parent_location_id)
         if parent_location_id == location_id or _would_create_cycle(
             connection,
             world_id=scope.world_id,

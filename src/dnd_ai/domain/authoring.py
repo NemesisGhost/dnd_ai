@@ -186,6 +186,35 @@ class LocationHierarchyCycleError(SafeMessageError):
     safe_message = "That parent would place the location inside itself."
 
 
+class OrganizationParentInvalidError(SafeMessageError):
+    """The proposed parent organization is nonexistent, in another world, not an
+    organization, archived, rejected, or superseded -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "organization_parent_invalid"
+    safe_message = "The selected parent organization is not valid."
+
+
+class OrganizationHierarchyCycleError(SafeMessageError):
+    """Re-parenting would make an organization its own ancestor."""
+
+    safe_status_code = 409
+    safe_error_code = "organization_hierarchy_cycle"
+    safe_message = "That parent would place the organization inside itself."
+
+
+class HeadquartersLocationInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "headquarters_location_invalid"
+    safe_message = "The selected headquarters location is not valid."
+
+
+class ReligionInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "religion_invalid"
+    safe_message = "The selected religion is not valid."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

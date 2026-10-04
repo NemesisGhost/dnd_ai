@@ -77,6 +77,7 @@ from .local_auth import router as local_auth_router
 from .location_authoring import router as location_authoring_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
+from .organization_authoring import router as organization_authoring_router
 from .preview import router as preview_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
@@ -170,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(location_authoring_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)
+    app.include_router(organization_authoring_router)
     app.include_router(preview_router)
     app.include_router(quests_router)
     app.include_router(reference_corpus_router)

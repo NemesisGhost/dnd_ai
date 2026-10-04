@@ -28,10 +28,13 @@ from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.domain.authoring import (
     CampaignArchivedError,
     CampaignNotAuthorizedError,
+    ContentNotEditableError,
+    StaleWriteError,
     WorldArchivedError,
     WorldNotAuthorizedError,
 )
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.domain.content_authoring import content_edit_blocked_reason, is_reference_eligible
+from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
 from ._shared import lifecycle_code, lookup_id
 
@@ -278,3 +281,51 @@ def touch_entity(
     ).scalar()
     assert isinstance(version, int)
     return version
+
+
+def editable_target(
+    locked: dict[uuid.UUID, LockedContent],
+    *,
+    entity_id: uuid.UUID,
+    type_codes: frozenset[str],
+    expected_row_version: int,
+) -> LockedContent:
+    """The locked update target after the checks every typed `update_*` command
+    makes, in this order: it is in the campaign's world and of one of this
+    command's types (else `EntityNotFoundError`, the non-disclosing 404), its
+    `row_version` matches (`StaleWriteError`), and its canon status and lifecycle
+    allow editing (`ContentNotEditableError`). The version check precedes the
+    edit policy so an editor who lost a race learns "stale", not "locked"."""
+    target = locked.get(entity_id)
+    if target is None or target.entity_type_code not in type_codes:
+        raise EntityNotFoundError(f"entity {entity_id} is not an editable record in this world")
+    if target.row_version != expected_row_version:
+        raise StaleWriteError(f"entity {entity_id} is at {target.row_version}")
+    reason = content_edit_blocked_reason(target.canon_status, target.lifecycle_status)
+    if reason is not None:
+        raise ContentNotEditableError(f"entity {entity_id} cannot be edited: {reason}")
+    return target
+
+
+def usable_reference(
+    locked: dict[uuid.UUID, LockedContent],
+    entity_id: uuid.UUID | None,
+    *,
+    type_codes: frozenset[str],
+    error: type[SafeMessageError],
+) -> LockedContent | None:
+    """A *newly* referenced record, validated (`is_reference_eligible`: same
+    world, expected type, active, draft/proposed/approved/canon). `None` for no
+    reference. Every reason it can be unusable raises the same field-specific
+    `error` -- nonexistent, other world, wrong type, archived, rejected, and
+    superseded are indistinguishable to the caller."""
+    if entity_id is None:
+        return None
+    reference = locked.get(entity_id)
+    if (
+        reference is None
+        or reference.entity_type_code not in type_codes
+        or not is_reference_eligible(reference.canon_status, reference.lifecycle_status)
+    ):
+        raise error("reference is not usable")
+    return reference

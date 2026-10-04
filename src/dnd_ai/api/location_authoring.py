@@ -45,9 +45,9 @@ from ._authoring import (
     finish_campaign_idempotency,
     start_campaign_idempotency,
 )
+from ._content_support import audit_content_write, clean_note
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import InvalidCursorError, NotFoundError
@@ -217,7 +217,7 @@ def create_location_endpoint(
         population=body.population,
         building_use=body.building_use,
     )
-    _audit(
+    audit_content_write(
         connection,
         result=result,
         command_name=command_name,
@@ -276,46 +276,17 @@ def update_location_endpoint(
         change_note=body.change_note,
     )
     if result.changed:
-        _audit(
+        audit_content_write(
             connection,
             result=result,
             command_name=command_name,
             access=access,
             correlation_id=correlation_id,
-            reason=body.change_note.strip()
-            if body.change_note and body.change_note.strip()
-            else None,
+            reason=clean_note(body.change_note),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
     return response
-
-
-def _audit(
-    connection: Connection,
-    *,
-    result: ContentWriteResult,
-    command_name: str,
-    access: AccessContext,
-    correlation_id: str | None,
-    reason: str | None,
-) -> None:
-    record_change_log(
-        connection,
-        change_action_code="created" if result.created else "updated",
-        schema_name="core",
-        table_name="entities",
-        record_id=result.entity_id,
-        entity_id=result.entity_id,
-        world_id=result.world_id,
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=command_name,
-        event_id=None,
-        changed_fields=result.changed_fields or None,
-        reason=reason,
-        source_id=result.source_id,
-    )
 
 
 def _response(

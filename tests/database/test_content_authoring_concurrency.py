@@ -28,11 +28,14 @@ from dnd_ai.commands.entity_lifecycle import (
 )
 from dnd_ai.commands.locations import create_location, update_location
 from dnd_ai.commands.memberships import revoke_membership_role
+from dnd_ai.commands.organizations import create_organization, update_organization
 from dnd_ai.domain.authoring import (
     CampaignArchivedError,
     CampaignNotAuthorizedError,
     EntityReferencedError,
+    HeadquartersLocationInvalidError,
     LocationHierarchyCycleError,
+    OrganizationHierarchyCycleError,
     ParentLocationInvalidError,
     StaleWriteError,
 )
@@ -618,3 +621,76 @@ def test_creations_with_different_keys_and_the_same_name_both_succeed(fx: Fixtur
     with ThreadPoolExecutor(max_workers=2) as pool:
         ids = list(pool.map(create, range(2)))
     assert len(set(ids)) == 2
+
+
+# --- organizations --------------------------------------------------------------------------------
+
+
+def _organization(fx: Fixture, name: str, parent: uuid.UUID | None = None) -> tuple[uuid.UUID, int]:
+    with fx.engine.begin() as connection:
+        result = create_organization(
+            connection,
+            campaign_id=fx.campaign_id,
+            actor_user_id=fx.owner,
+            kind_code="government",
+            name=name,
+            summary=None,
+            parent_organization_id=parent,
+            typed_fields={},
+        )
+    return result.entity_id, result.row_version
+
+
+def _reparent_organization(
+    fx: Fixture, connection: Connection, org: uuid.UUID, version: int, parent: uuid.UUID
+) -> Any:
+    return update_organization(
+        connection,
+        campaign_id=fx.campaign_id,
+        organization_id=org,
+        actor_user_id=fx.owner,
+        expected_row_version=version,
+        name="Moved",
+        summary=None,
+        parent_organization_id=parent,
+        typed_fields={},
+    )
+
+
+def test_opposing_organization_reparents_serialize_and_the_second_is_a_cycle(fx: Fixture) -> None:
+    a, a_version = _organization(fx, "OA")
+    b, b_version = _organization(fx, "OB")
+    out = race(
+        fx.engine,
+        lambda c: _reparent_organization(fx, c, a, a_version, b),
+        lambda c: _reparent_organization(fx, c, b, b_version, a),
+        ENTITY_LOCK,
+    )
+    assert isinstance(out["error"], OrganizationHierarchyCycleError)
+
+
+def test_an_organization_headquarters_archive_wins_over_a_waiting_assignment(fx: Fixture) -> None:
+    hq, hq_version = fx.location("Keep", "building")
+    out = race(
+        fx.engine,
+        lambda c: archive_entity(
+            c,
+            campaign_id=fx.campaign_id,
+            entity_id=hq,
+            actor_user_id=fx.owner,
+            expected_row_version=hq_version,
+        ),
+        lambda c: create_organization(
+            c,
+            campaign_id=fx.campaign_id,
+            actor_user_id=fx.owner,
+            kind_code="government",
+            name="Garrison",
+            summary=None,
+            headquarters_location_id=hq,
+            typed_fields={},
+        ),
+        ENTITY_LOCK,
+    )
+    assert isinstance(out["error"], HeadquartersLocationInvalidError)
+    assert fx.count("SELECT count(*) FROM core.entities WHERE canonical_name = 'Garrison'") == 0

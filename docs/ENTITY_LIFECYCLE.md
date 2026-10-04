@@ -548,7 +548,7 @@ Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-autho
 | Command | Status |
 |---|---|
 | `create_location`, `update_location` (ten place categories; reparent with cycle prevention) | Built (backend) |
-| `create_organization` family, `update_organization` family, `create_religion`, `update_religion` | Planned (CP3) |
+| `create_organization` / `update_organization` (six kinds, parent/headquarters/religion references, hierarchy-cycle prevention), `create_religion`, `update_religion` | Built (backend) |
 | `create_npc`, `update_npc` (identity only) | Planned (CP5) |
 | `create_quest`, `update_quest`, `add_quest_stage`, `update_quest_stage`, `reorder_quest_stages`, `remove_quest_stage`, `add_quest_objective`, `update_quest_objective`, `remove_quest_objective` | Planned (CP6) |
 | `create_knowledge_item`, `update_knowledge_item` | Planned (CP7) |
