@@ -71,7 +71,7 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
   // World and timeline context come from the route-derived hierarchy, which
   // confirms them against server data (WorkspaceHierarchyProvider) — never a
   // raw route ID.
-  const { activeWorldId, activeTimelineId } = useWorkspaceHierarchy()
+  const { authoringWorldId, authoringTimelineId } = useWorkspaceHierarchy()
   const navigationRef = useRef<HTMLElement>(null)
   const { open: drawerOpen, closeAndFocusToggle, close } = drawer
 
@@ -218,8 +218,8 @@ export function PortalSidebar({ drawer }: PortalSidebarProps) {
               />
 
               <WorldsNavGroup
-                activeWorldId={activeWorldId}
-                activeTimelineId={activeTimelineId}
+                activeWorldId={authoringWorldId}
+                activeTimelineId={authoringTimelineId}
                 campaignWorldPath={
                   campaignPath === null ? null : `${campaignPath}/world`
                 }

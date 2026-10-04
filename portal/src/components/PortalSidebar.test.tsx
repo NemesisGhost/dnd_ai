@@ -781,12 +781,12 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
     })
 
-    it("nests the active world's overview and timeline routes on a campaign route", () => {
+    it("nests the active world's overview and timeline routes on a campaign route once the world read succeeds", async () => {
         renderSidebar("/app/campaign-a/home", withWorld())
         openWorlds()
 
         expect(
-            within(nav()).getByRole("link", { name: "World overview" }),
+            await within(nav()).findByRole("link", { name: "World overview" }),
         ).toHaveAttribute("href", "/worlds/world-a")
         expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
             "href",
@@ -1105,5 +1105,152 @@ describe("PortalSidebar stable navigation structure (Phase 14)", () => {
             "title",
             "Unavailable until Phase 12 is verified",
         )
+    })
+})
+
+describe("PortalSidebar World authoring navigation on a campaign route", () => {
+    const worldIds = ["world-a", "timeline-a", "World A", "Timeline A"]
+    const authoringLabels = ["World overview", "Timelines", "Timeline overview"]
+    const campaignState = () =>
+        authenticated(
+            makeBootstrap({
+                campaigns: [
+                    {
+                        ...first,
+                        world_id: "world-a",
+                        world_name: "World A",
+                        timeline_id: "timeline-a",
+                        timeline_name: "Timeline A",
+                    },
+                    second,
+                ],
+            }),
+        )
+
+    function expectDisabledAuthoring() {
+        for (const label of authoringLabels) {
+            const entry = disabledEntry(label)
+            expect(entry.tagName).not.toBe("A")
+            expect(entry).toHaveAttribute("aria-disabled", "true")
+            expect(entry).not.toHaveAttribute("href")
+            expect(entry).not.toHaveAttribute("aria-current")
+            expect(entry).not.toHaveClass("portal-sidebar__sublink--active")
+            expect(within(nav()).queryByRole("link", { name: label })).toBeNull()
+        }
+        for (const id of worldIds) {
+            expect(nav().innerHTML).not.toContain(id)
+        }
+    }
+
+    it.each([403, 404])(
+        "keeps World overview, Timelines and Timeline overview disabled when the world read returns %i",
+        async (status) => {
+            server.on("GET", "/worlds/world-a", { status, body: { detail: "no" } })
+            renderSidebar("/app/campaign-a/home", campaignState())
+            openWorlds()
+
+            await waitFor(() =>
+                expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0),
+            )
+            await waitFor(() => expectDisabledAuthoring())
+            // Ordinary campaign navigation and Campaign world still work.
+            expect(
+                within(nav()).getByRole("link", { name: "Campaign world" }),
+            ).toHaveAttribute("href", "/app/campaign-a/world")
+            expect(within(nav()).getByRole("link", { name: "Characters" })).toHaveAttribute(
+                "href",
+                "/app/campaign-a/characters",
+            )
+        },
+    )
+
+    it("stays disabled while the world read is loading and when it errors", async () => {
+        server.on("GET", "/worlds/world-a", () => new Promise(() => {}))
+        const { unmount } = renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+        expectDisabledAuthoring()
+        unmount()
+
+        server.on("GET", "/worlds/world-a", { status: 500, body: {} })
+        renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+        await waitFor(() =>
+            expect(server.callsTo("GET", "/worlds/world-a")).toHaveLength(2),
+        )
+        expectDisabledAuthoring()
+    })
+
+    const worldsGroupSlots = () =>
+        slotOrder().filter((label) =>
+            [
+                "All worlds",
+                "New world",
+                "World overview",
+                "Timelines",
+                "Timeline overview",
+                "Campaign world",
+            ].includes(label),
+        )
+
+    it("keeps the same Worlds slots in the same order when collapsed and in the open drawer", async () => {
+        server.on("GET", "/worlds/world-a", { status: 404 })
+        const expanded = renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+        await waitFor(() =>
+            expect(server.callsTo("GET", "/worlds/world-a")).not.toHaveLength(0),
+        )
+        const baseline = worldsGroupSlots()
+        expanded.unmount()
+
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
+        const collapsed = renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+        await waitFor(() => expectDisabledAuthoring())
+        expect(worldsGroupSlots()).toEqual(baseline)
+        collapsed.unmount()
+
+        window.localStorage.clear()
+        renderSidebar("/app/campaign-a/home", campaignState())
+        fireEvent.click(screen.getByRole("button", { name: "Header toggle" }))
+        openWorlds()
+        await waitFor(() => expectDisabledAuthoring())
+        expect(nav()).toHaveClass("portal-sidebar--mobile-open")
+        expect(worldsGroupSlots()).toEqual(baseline)
+    })
+
+    it("enables World overview and Timelines, and Timeline overview only for a listed timeline", async () => {
+        renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+
+        expect(
+            await within(nav()).findByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
+            "href",
+            "/worlds/world-a/timelines",
+        )
+        expect(
+            within(nav()).getByRole("link", { name: "Timeline overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
+        expect(within(nav()).getByRole("link", { name: "Campaign world" })).toHaveAttribute(
+            "href",
+            "/app/campaign-a/world",
+        )
+    })
+
+    it("keeps Timeline overview disabled when the world response does not list the campaign's timeline", async () => {
+        server.on("GET", "/worlds/world-a", {
+            body: {
+                ...worldDetail,
+                timelines: [{ timeline_id: "timeline-b", name: "Timeline B" }],
+            },
+        })
+        renderSidebar("/app/campaign-a/home", campaignState())
+        openWorlds()
+
+        await within(nav()).findByRole("link", { name: "World overview" })
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toBeInTheDocument()
+        expect(disabledEntry("Timeline overview")).toHaveAttribute("aria-disabled", "true")
+        expect(nav().innerHTML).not.toContain("timeline-a")
     })
 })

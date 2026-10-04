@@ -75,23 +75,39 @@ export function WorkspaceHierarchyProvider({ children }: { children: ReactNode }
         let activeWorldId: string | null = null
         let activeTimelineId: string | null = null
         if (campaignRoute) {
-            // Authorized by the bootstrap itself; no wait for the world read.
+            // Structured campaign context from the bootstrap itself.
             activeWorldId = routeCampaign.world_id
             activeTimelineId = routeCampaign.timeline_id
         } else if (worldReady && requestedWorldId !== null) {
             activeWorldId = requestedWorldId
-            activeTimelineId =
-                routeTimelineId !== null &&
-                worldState.data.timelines.some(
-                    (timeline) => timeline.timeline_id === routeTimelineId,
-                )
-                    ? routeTimelineId
-                    : null
+            activeTimelineId = routeTimelineId
+        }
+
+        // World-authoring navigation needs the world read to have succeeded.
+        const authoringWorldId =
+            worldState.kind === "ready" &&
+            activeWorldId !== null &&
+            activeWorldId === requestedWorldId
+                ? activeWorldId
+                : null
+        const authoringTimelineId =
+            worldState.kind === "ready" &&
+            authoringWorldId !== null &&
+            activeTimelineId !== null &&
+            worldState.data.timelines.some(
+                (timeline) => timeline.timeline_id === activeTimelineId,
+            )
+                ? activeTimelineId
+                : null
+        if (!campaignRoute) {
+            activeTimelineId = authoringTimelineId
         }
 
         return {
             activeWorldId,
             activeTimelineId,
+            authoringWorldId,
+            authoringTimelineId,
             world: requestedWorldId === null ? null : worldState,
             refetchWorld: refetch,
         }

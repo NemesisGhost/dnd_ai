@@ -13,6 +13,12 @@ export interface WorkspaceHierarchy {
     // The timeline the route selects, confirmed against the world's
     // authorized timelines (or the authorized route campaign's timeline).
     activeTimelineId: string | null
+    // The world / timeline World-authoring navigation may link to: set only
+    // after GET /worlds/{id} succeeds (and, for the timeline, lists it). A
+    // campaign's bootstrap membership never confers World authority (ADR 0014),
+    // so on a campaign route these stay null until the world read confirms.
+    authoringWorldId: string | null
+    authoringTimelineId: string | null
     // GET /worlds/{id} for the route's world, keyed by that path so a previous
     // world's response is never shown for the next one. `null` when the route
     // names no world.
