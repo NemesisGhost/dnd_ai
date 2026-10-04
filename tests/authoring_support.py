@@ -92,7 +92,8 @@ class Actor:
 
     def fresh_key(self) -> str:
         self._keys += 1
-        return f"{self.name}-{uuid.uuid4().hex[:12]}-{self._keys}"
+        slug = "".join(ch if ch.isalnum() else "-" for ch in self.name)
+        return f"{slug}-{uuid.uuid4().hex[:12]}-{self._keys}"
 
 
 class AuthoringHarness:
@@ -125,7 +126,12 @@ class AuthoringHarness:
         savepoint = self.connection.begin_nested()
         try:
             yield self.connection
+            # Evaluate deferred constraint triggers now (as the real commit would),
+            # then put them back to deferred: SET CONSTRAINTS IMMEDIATE persists
+            # for the rest of the transaction and would otherwise make the next
+            # request's multi-statement writes trip them mid-command.
             self.connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            self.connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
         except BaseException:
             savepoint.rollback()
             raise

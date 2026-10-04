@@ -495,7 +495,7 @@ Delivered commands (each intent-specific, `expected_row_version`-guarded, idempo
 | `update_world`, `archive_world`, `restore_world` | Built |
 | `claim_unowned_world` (trusted infrastructure only, never over HTTP) | Built |
 | `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |
-| `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Planned (Phase 14, later checkpoint) |
+| `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Built |
 | `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Planned (Phase 14, later checkpoint) |
 
 Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared.

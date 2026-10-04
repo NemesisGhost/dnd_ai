@@ -1134,6 +1134,8 @@ For every human request, application services resolve access in this order:
 8. Filter rows, sensitive fields, relationship edges, identifiers, counts, search results and AI context before returning or synthesizing an answer.
 9. Audit sensitive reads and all mutations.
 
+**Campaign lifecycle gate (Phase 14).** After step 2, a campaign whose lifecycle is `archived` or `deleted` resolves as not found for every campaign route, with exactly two exceptions that opt in explicitly (`allow_archived_campaign=True`): `GET /campaigns/{id}/settings` and `POST /campaigns/{id}/reactivate`. `pending` and `inactive` campaigns keep authorizing (only fixtures produce them). The set of opt-ins is pinned by a route-registry test. Invitation acceptance and onboarding refuse archived campaigns with the same non-disclosing error as any other unacceptable invitation.
+
 GM administrative visibility does not make a GM-controlled character an in-world knower. A user-character relationship does not expose all facts known by all of that user's characters simultaneously: the request identifies a viewing perspective, and the query layer evaluates that perspective. Inaccessible resources must be indistinguishable from nonexistent resources to unauthorized callers except where a deliberate, safe denial response is required.
 
 Clients—including the web portal, Foundry, imports and any future Discord integration—never determine their own authorization. PostgreSQL constraints preserve grant integrity, while the application query and command layers calculate and enforce effective access. Database row-level security may be added as defense in depth later, but it does not replace the application-level perspective and knowledge rules.

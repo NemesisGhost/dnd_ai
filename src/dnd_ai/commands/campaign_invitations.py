@@ -174,6 +174,27 @@ class RevokeCampaignInvitationResult:
     revoked: bool
 
 
+def _require_campaign_accepts_members(connection: Connection, *, campaign_id: uuid.UUID) -> None:
+    """Phase 14: an archived (or deleted) campaign accepts no invitation —
+    acceptance would silently re-activate access to a campaign that has been
+    taken out of service. Locks the campaign row `FOR SHARE`, so a concurrent
+    `archive_campaign` (which takes `FOR UPDATE`) either completes first (this
+    refuses) or waits for this acceptance to commit. The refusal is the same
+    non-disclosing `InvitationNotAcceptableError` as every other rejection."""
+    status_id = connection.execute(
+        text("SELECT lifecycle_status_id FROM campaign.campaigns WHERE campaign_id = :c FOR SHARE"),
+        {"c": campaign_id},
+    ).scalar()
+    if status_id is None:
+        raise InvitationNotAcceptableError(f"campaign {campaign_id} does not exist")
+    code = connection.execute(
+        text("SELECT code FROM core.lifecycle_statuses WHERE lifecycle_status_id = :s"),
+        {"s": status_id},
+    ).scalar()
+    if code in ("archived", "deleted"):
+        raise InvitationNotAcceptableError(f"campaign {campaign_id} is {code}")
+
+
 def _activate_or_create_membership(
     connection: Connection, *, campaign_id: uuid.UUID, user_id: uuid.UUID
 ) -> uuid.UUID:
@@ -258,6 +279,7 @@ def _accept_locked_invitation(
     invitation_onboarding`'s onboarding-session lock chain, without
     re-deriving `accept_campaign_invitation`'s own token-lookup and
     rejection logic."""
+    _require_campaign_accepts_members(connection, campaign_id=campaign_id)
     membership_id = _activate_or_create_membership(
         connection, campaign_id=campaign_id, user_id=accepting_user_id
     )
@@ -310,6 +332,7 @@ def accept_campaign_invitation(
                 f"invitation {invitation['campaign_invitation_id']} was already accepted by a "
                 "different user"
             )
+        _require_campaign_accepts_members(connection, campaign_id=invitation["campaign_id"])
         membership_id = connection.execute(
             text("""
                 SELECT campaign_membership_id FROM security.campaign_memberships

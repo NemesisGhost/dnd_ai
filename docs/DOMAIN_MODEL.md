@@ -261,6 +261,8 @@ Timelines are created and branched through authoring commands (Phase 14; [ENTITY
 
 A **Campaign** is an organized game running within one timeline.
 
+**Creation and lifecycle (Phase 14).** A campaign is created by (A) an active world owner (world capability `campaign.create`, no bootstrap grant), (B) a caller who already holds `access.manage` in a campaign on the same timeline, or (C) a caller holding a live bootstrap grant for an unclaimed timeline. Whatever the path, the creator becomes the campaign's first `campaign_owner`; a world owner receives no membership in campaigns they did not create. Creation is refused for an archived world or timeline, checked only *after* authorization so an unauthorized caller learns nothing about lifecycle. Settings (name, description) are edited with `update_campaign`. `archive_campaign` takes a campaign out of service: it stops authorizing every campaign route except reading its settings and reactivating it, drops out of the session bootstrap, and refuses invitation acceptance, while memberships, roles, grants, and invitations stay untouched. `reactivate_campaign` restores it exactly as it was, provided its world and timeline are active and a non-expiring `access.manage` holder survives.
+
 A campaign includes:
 
 - participants

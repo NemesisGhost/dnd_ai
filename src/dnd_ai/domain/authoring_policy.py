@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from .authoring import (
     CampaignAccessManagerRequiredError,
+    CampaignArchivedError,
     LifecycleTransitionNotAllowedError,
     PrimaryTimelineNotArchivableError,
     TimelineArchivedError,
@@ -169,5 +170,65 @@ def timeline_actions(
             timeline_status=timeline_status,
             is_primary=is_primary,
             has_blocking_campaigns=has_blocking_campaigns,
+        ),
+    )
+
+
+# --- Campaign -------------------------------------------------------------------
+
+CAMPAIGN_UPDATE = "update"
+CAMPAIGN_ARCHIVE = "archive"
+CAMPAIGN_REACTIVATE = "reactivate"
+CAMPAIGN_ACTIONS = (CAMPAIGN_UPDATE, CAMPAIGN_ARCHIVE, CAMPAIGN_REACTIVATE)
+
+CAMPAIGN_ARCHIVED = "campaign_archived"
+_ERRORS[CAMPAIGN_ARCHIVED] = CampaignArchivedError
+
+
+def campaign_blocked_reason(
+    action: str,
+    *,
+    campaign_status: str,
+    world_status: str,
+    timeline_status: str,
+    has_access_manager: bool,
+) -> str | None:
+    """Why `action` is not legal on this campaign, or `None`.
+
+    Update and archive need an active campaign. Reactivation needs an archived
+    campaign whose world and timeline are active and which still has a
+    non-expiring `access.manage` holder (the database enforces that last rule
+    at commit; pre-checking it here yields a classified 409 instead of an
+    unclassified integrity failure)."""
+    if action not in CAMPAIGN_ACTIONS:
+        raise ValueError(f"unknown campaign action {action!r}")
+    if action == CAMPAIGN_REACTIVATE:
+        if campaign_status != "archived":
+            return TRANSITION_NOT_ALLOWED
+        if world_status != "active":
+            return WORLD_ARCHIVED
+        if timeline_status != "active":
+            return TIMELINE_ARCHIVED
+        return None if has_access_manager else ACCESS_MANAGER_REQUIRED
+    if campaign_status == "archived":
+        return CAMPAIGN_ARCHIVED if action == CAMPAIGN_UPDATE else TRANSITION_NOT_ALLOWED
+    return None if campaign_status == "active" else TRANSITION_NOT_ALLOWED
+
+
+def campaign_actions(
+    *,
+    campaign_status: str,
+    world_status: str,
+    timeline_status: str,
+    has_access_manager: bool,
+) -> tuple[list[str], list[BlockedAction]]:
+    return _evaluate(
+        CAMPAIGN_ACTIONS,
+        lambda a: campaign_blocked_reason(
+            a,
+            campaign_status=campaign_status,
+            world_status=world_status,
+            timeline_status=timeline_status,
+            has_access_manager=has_access_manager,
         ),
     )

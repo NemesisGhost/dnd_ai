@@ -152,6 +152,12 @@ class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 
 
+class CampaignNotAuthorizedError(DomainAuthorizationError):
+    """No such campaign, or the caller no longer holds `access.manage` on it
+    — indistinguishable (fixed 404). Reached by a command only when authority
+    changed between the route's dependency and the command's locked re-check."""
+
+
 class TimelineNotFoundError(DomainAuthorizationError):
     """No such timeline *in this world* — a nonexistent timeline and one that
     belongs to a different world are indistinguishable (fixed 404)."""
