@@ -88,6 +88,10 @@ function CampaignWorldContent({
                               to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
                           },
                           {
+                              label: "New NPC",
+                              to: `/app/${encodeURIComponent(campaignId)}/characters/npc/new`,
+                          },
+                          {
                               label: "New religion",
                               to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
                           },

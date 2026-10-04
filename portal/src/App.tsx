@@ -23,6 +23,7 @@ import {
   CreateOrganizationPage,
   EditOrganizationPage,
 } from "./pages/OrganizationAuthoringPages"
+import { CreateNpcPage, EditNpcPage } from "./pages/NpcAuthoringPages"
 import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
@@ -249,6 +250,16 @@ function App() {
             <Route
               path="characters"
               element={<CampaignCharactersPage />}
+            />
+
+            <Route
+              path="characters/npc/new"
+              element={<CreateNpcPage />}
+            />
+
+            <Route
+              path="characters/:characterId/edit"
+              element={<EditNpcPage />}
             />
 
             <Route

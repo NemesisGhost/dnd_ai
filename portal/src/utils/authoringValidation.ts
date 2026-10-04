@@ -76,6 +76,8 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     organization_hierarchy_cycle: "org-parent",
     headquarters_location_invalid: "org-headquarters",
     religion_invalid: "org-religion",
+    species_not_available: "npc-species",
+    origin_location_invalid: "npc-origin",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -115,4 +117,8 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
         "That parent would place the organization inside itself. Choose a different parent.",
     headquarters_location_invalid: "The selected headquarters is not valid. Choose another.",
     religion_invalid: "The selected religion is not valid. Choose another.",
+    species_not_available: "The selected species is not available in this world. Choose another.",
+    origin_location_invalid: "The selected origin is not valid. Choose another.",
+    character_has_user_relationships:
+        "A player or account is linked to this character. Remove those links first.",
 }

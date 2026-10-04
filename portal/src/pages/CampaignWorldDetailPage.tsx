@@ -7,6 +7,7 @@ import {
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
+import { NpcAuthoringControls } from "../components/NpcAuthoringControls"
 import { WorldEntityDetailBoundary } from "../components/WorldEntityDetailBoundary"
 import { isWorldDetailCategory } from "../types/world"
 import { CharacterDetailPage } from "./CharacterDetailPage"
@@ -148,6 +149,7 @@ export function CampaignWorldDetailPage() {
                         </Link>
                     </p>
                     <CharacterDetailPage character={character} />
+                    <NpcAuthoringControls campaignId={campaignId} characterId={entityId} />
                 </div>
             )}
         </CharacterBoundary>
