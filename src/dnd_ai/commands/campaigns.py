@@ -438,11 +438,28 @@ def _authorize_timeline_reuse(
             bootstrap_grant_id=grant_id,
         )
 
+    # Path B: an `access.manage` holder in an existing campaign on the timeline.
+    # A campaign's lifecycle must be revalidated *under lock*: the campaigns are
+    # locked `FOR SHARE` (bare rows, in id order, after the world and timeline
+    # locks above — the global order), which waits for an in-flight archive
+    # (`FOR UPDATE`) and, under READ COMMITTED, makes the entitlement query
+    # below see its committed result. Archived/deleted campaigns retain their
+    # memberships and roles by design, so they must never authorize reuse.
+    connection.execute(
+        text(
+            "SELECT campaign_id FROM campaign.campaigns WHERE timeline_id = :timeline "
+            "ORDER BY campaign_id FOR SHARE"
+        ),
+        {"timeline": timeline_id},
+    ).all()
     is_entitled = connection.execute(
         text("""
             SELECT EXISTS (
                 SELECT 1
                 FROM campaign.campaigns c
+                JOIN core.lifecycle_statuses cls
+                    ON cls.lifecycle_status_id = c.lifecycle_status_id
+                   AND cls.code NOT IN ('archived', 'deleted')
                 JOIN security.campaign_memberships cm ON cm.campaign_id = c.campaign_id
                 JOIN security.membership_statuses ms
                     ON ms.membership_status_id = cm.membership_status_id

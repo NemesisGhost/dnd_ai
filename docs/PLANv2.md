@@ -2,8 +2,8 @@
 
 ## Authoring-First Roadmap Revision
 
-**Revision date:** 2026-10-03  
-**Status:** Proposed replacement for the future-delivery portion of `PLAN.md`  
+**Revision date:** 2026-10-03
+**Status:** Proposed replacement for the future-delivery portion of `PLAN.md`
 **Inputs:** Current implementation plan, Platform Review dated 2026-09-25, and AI D&D Campaign Intelligence Platform marketing and feature proposal
 
 ---
