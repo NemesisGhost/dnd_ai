@@ -254,6 +254,7 @@ def search_world_entities(
     limit: int,
     after_name: str | None,
     after_entity_id: uuid.UUID | None,
+    canon_status_codes: Sequence[str] | None = None,
 ) -> tuple[WorldEntityCard, ...]:
     """Up to `limit + 1` visible world entities of the requested categories,
     ordered `(lower(left(canonical_name, N)), entity_id)` — a bounded name
@@ -286,6 +287,7 @@ def search_world_entities(
         "after_name": after_name,
         "after_entity_id": after_entity_id,
         "has_cursor": after_name is not None and after_entity_id is not None,
+        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
     }
 
     rows = connection.execute(
@@ -308,6 +310,8 @@ def search_world_entities(
                     OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
                   )
               AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
+              AND (CAST(:canon_statuses AS text[]) IS NULL
+                   OR cs.code = ANY(CAST(:canon_statuses AS text[])))
               AND (
                 CASE
                   WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN

@@ -329,6 +329,10 @@ def search_world_entities_endpoint(
     cursor: Annotated[str | None, Query()] = None,
     include_noncanon: Annotated[bool, Query()] = False,
     include_archived: Annotated[bool, Query()] = False,
+    canon_status: Annotated[
+        list[Literal["draft", "proposed", "approved", "rejected", "canon", "superseded"]] | None,
+        Query(),
+    ] = None,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
@@ -336,7 +340,9 @@ def search_world_entities_endpoint(
     category. `q` is a bounded case-insensitive substring match over name
     and summary. By default only `canon`, active definitions are listed;
     a `canon.edit` holder may add `include_noncanon` and/or `include_archived`
-    (GM preview) — for anyone else the flags are silently ignored. An empty result — including for an authorized search with
+    (GM preview) — for anyone else the flags are silently ignored. `canon_status`
+    (repeatable) narrows the result to those statuses and is likewise
+    honoured only for a `canon.edit` holder. An empty result — including for an authorized search with
     no visible matches — returns `items: []`, never an existence hint."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
     type_codes: list[str] = []
@@ -371,6 +377,9 @@ def search_world_entities_endpoint(
         limit=limit,
         after_name=after_name,
         after_entity_id=after_entity_id,
+        canon_status_codes=(
+            list(canon_status) if canon_status and access.has_capability(_GM_CAPABILITY) else None
+        ),
     )
 
     page = build_page(
