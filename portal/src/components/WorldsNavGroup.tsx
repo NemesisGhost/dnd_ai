@@ -5,6 +5,8 @@ import type {
 } from "react"
 import { NavLink, useLocation } from "react-router"
 import { ChevronDown, Landmark } from "lucide-react"
+import { DisabledNavItem } from "./DisabledNavItem"
+import { SELECT_WORLD_FIRST } from "./navigationReasons"
 
 interface WorldsNavGroupProps {
   // The one world whose routes are nested, already verified against the
@@ -163,8 +165,8 @@ export function WorldsNavGroup({
             <span className="portal-sidebar__label">All worlds</span>
           </NavLink>
         </li>
-        {canCreateWorld && (
-          <li>
+        <li>
+          {canCreateWorld ? (
             <NavLink
               end
               className={subLinkClassName}
@@ -173,35 +175,53 @@ export function WorldsNavGroup({
             >
               <span className="portal-sidebar__label">New world</span>
             </NavLink>
-          </li>
-        )}
-        {worldPath !== null && (
-          <>
-            <li>
-              <NavLink
-                end
-                className={subLinkClassName}
-                to={worldPath}
-                onClick={handleChildActivated}
-              >
-                <span className="portal-sidebar__label">World overview</span>
-              </NavLink>
-            </li>
-            {activeTimelineId !== null && (
-              <li>
-                <NavLink
-                  className={subLinkClassName}
-                  to={`${worldPath}/timelines/${activeTimelineId}`}
-                  onClick={handleChildActivated}
-                >
-                  <span className="portal-sidebar__label">Timeline</span>
-                </NavLink>
-              </li>
-            )}
-          </>
-        )}
-        {campaignWorldPath !== null && (
-          <li>
+          ) : (
+            <DisabledNavItem
+              label="New world"
+              reason="Not available for your account"
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {worldPath !== null ? (
+            <NavLink
+              end
+              className={subLinkClassName}
+              to={worldPath}
+              onClick={handleChildActivated}
+            >
+              <span className="portal-sidebar__label">World overview</span>
+            </NavLink>
+          ) : (
+            <DisabledNavItem
+              label="World overview"
+              reason={SELECT_WORLD_FIRST}
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {worldPath !== null && activeTimelineId !== null ? (
+            <NavLink
+              className={subLinkClassName}
+              to={`${worldPath}/timelines/${activeTimelineId}`}
+              onClick={handleChildActivated}
+            >
+              <span className="portal-sidebar__label">Timelines</span>
+            </NavLink>
+          ) : (
+            <DisabledNavItem
+              label="Timelines"
+              reason={
+                worldPath === null ? SELECT_WORLD_FIRST : "No timeline available"
+              }
+              collapsed={collapsed}
+            />
+          )}
+        </li>
+        <li>
+          {campaignWorldPath !== null ? (
             <NavLink
               className={subLinkClassName}
               to={campaignWorldPath}
@@ -209,8 +229,14 @@ export function WorldsNavGroup({
             >
               <span className="portal-sidebar__label">Campaign world</span>
             </NavLink>
-          </li>
-        )}
+          ) : (
+            <DisabledNavItem
+              label="Campaign world"
+              reason="Select a campaign first"
+              collapsed={collapsed}
+            />
+          )}
+        </li>
       </ul>
     </li>
   )

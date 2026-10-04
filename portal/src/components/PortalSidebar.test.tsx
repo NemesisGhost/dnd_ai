@@ -235,16 +235,16 @@ describe("PortalSidebar campaign resolution", () => {
         ).toHaveAttribute("href", "/app/campaign-a/world")
     })
 
-    it("omits campaign-specific links and explains why with no resolvable campaign", () => {
+    it("keeps campaign destinations as disabled slots with no resolvable campaign", () => {
         renderSidebar("/campaigns")
 
-        expect(
-            within(nav()).queryByRole("link", { name: "Campaign world" }),
-        ).not.toBeInTheDocument()
-        expect(within(nav()).queryByText("Ask")).not.toBeInTheDocument()
-        expect(
-            within(nav()).getByText("Choose a campaign to see its pages."),
-        ).toBeInTheDocument()
+        for (const name of ["Campaign world", "Characters", "Ask"]) {
+            expect(
+                within(nav()).queryByRole("link", { name }),
+            ).not.toBeInTheDocument()
+        }
+        expect(disabledEntry("Ask")).toBeInTheDocument()
+        expect(disabledEntry("Characters")).toBeInTheDocument()
     })
 
     it("handles an account with no campaigns", () => {
@@ -254,15 +254,13 @@ describe("PortalSidebar campaign resolution", () => {
         )
 
         const group = within(nav()).getByRole("button", {
-            name: "Choose a campaign",
+            name: "Choose campaign",
         })
         expect(group).toBeInTheDocument()
+        expect(disabledEntry("Campaign Home")).toBeInTheDocument()
         expect(
             within(nav()).getByRole("link", { name: "View all campaigns" }),
         ).toHaveAttribute("href", "/campaigns")
-        expect(
-            within(nav()).getByText("Choose a campaign to see its pages."),
-        ).toBeInTheDocument()
     })
 })
 
@@ -272,7 +270,7 @@ describe("PortalSidebar campaign submenu", () => {
 
         const list = document.getElementById(
             within(nav())
-                .getByRole("button", { name: "Choose a campaign" })
+                .getByRole("button", { name: "Choose campaign" })
                 .getAttribute("aria-controls")!,
         )!
         const links = within(list).getAllByRole("link")
@@ -292,7 +290,7 @@ describe("PortalSidebar campaign submenu", () => {
     it("is open on /campaigns and closed elsewhere", () => {
         const { unmount } = renderSidebar("/campaigns")
         expect(
-            within(nav()).getByRole("button", { name: "Choose a campaign" }),
+            within(nav()).getByRole("button", { name: "Choose campaign" }),
         ).toHaveAttribute("aria-expanded", "true")
         unmount()
 
@@ -769,7 +767,7 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         expect(
             within(nav()).getByRole("link", { name: "World overview" }),
         ).toHaveAttribute("href", "/worlds/world-a")
-        expect(within(nav()).getByRole("link", { name: "Timeline" })).toHaveAttribute(
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
             "href",
             "/worlds/world-a/timelines/timeline-a",
         )
@@ -782,7 +780,7 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
             "aria-expanded",
             "true",
         )
-        expect(within(nav()).getByRole("link", { name: "Timeline" })).toHaveAttribute(
+        expect(within(nav()).getByRole("link", { name: "Timelines" })).toHaveAttribute(
             "aria-current",
             "page",
         )
@@ -805,7 +803,7 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         expect(nav().innerHTML).not.toContain("ghost-world")
         expect(nav().innerHTML).not.toContain("ghost-timeline")
         expect(within(nav()).queryByRole("link", { name: "World overview" })).toBeNull()
-        expect(within(nav()).queryByRole("link", { name: "Timeline" })).toBeNull()
+        expect(within(nav()).queryByRole("link", { name: "Timelines" })).toBeNull()
     })
 
     it("keeps an accessible name and tooltip on the collapsed icon", () => {
@@ -838,5 +836,209 @@ describe("PortalSidebar Worlds group (Phase 14)", () => {
         expect(
             within(nav()).getByRole("button", { name: "Choose campaign" }),
         ).toBeInTheDocument()
+    })
+})
+
+function disabledEntry(label: string): HTMLElement {
+    return within(nav())
+        .getByText(label, {
+            selector: "[aria-disabled='true'] .portal-sidebar__label",
+        })
+        .closest("[aria-disabled='true']") as HTMLElement
+}
+
+// Every entry label in document order, enabled or disabled, hidden submenus
+// included: the structure a route change must not alter.
+function slotOrder(): string[] {
+    return Array.from(
+        nav().querySelectorAll(".portal-sidebar__label"),
+        (element) => element.textContent ?? "",
+    )
+}
+
+describe("PortalSidebar stable navigation structure (Phase 14)", () => {
+    const world = { world_id: "world-a", timeline_id: "timeline-a" }
+    const withWorld = () =>
+        authenticated(
+            makeBootstrap({ campaigns: [{ ...first, ...world }, second] }),
+        )
+
+    const routes = [
+        "/worlds",
+        "/worlds/world-a",
+        "/worlds/world-a/timelines/timeline-a",
+        "/campaigns",
+        "/app/campaign-a/home",
+        "/app/campaign-a/quests",
+        "/worlds/ghost-world",
+        "/app/ghost-campaign/home",
+    ]
+
+    function orderFor(route: string): string[] {
+        const { unmount } = renderSidebar(route, withWorld())
+        const order = slotOrder()
+        unmount()
+        return order
+    }
+
+    it("keeps the same ordered slots across every context transition", () => {
+        const baseline = orderFor(routes[0]!)
+        expect(baseline).toContain("Timelines")
+        expect(baseline).toContain("Characters")
+        for (const route of routes.slice(1)) {
+            expect(orderFor(route), route).toEqual(baseline)
+        }
+    })
+
+    it("keeps the same ordered slots when collapsed", () => {
+        const expanded = orderFor("/worlds")
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
+        // Collapsed swaps the campaign disclosure for plain links, so compare
+        // only collapsed against collapsed.
+        const baseline = orderFor("/worlds")
+        expect(baseline).toContain("Campaign Home")
+        for (const route of routes.slice(1)) {
+            expect(orderFor(route), route).toEqual(baseline)
+        }
+        expect(expanded).toContain("Timelines")
+    })
+
+    it("keeps the same ordered slots in the open drawer", () => {
+        const baseline = orderFor("/worlds")
+        const { unmount } = renderSidebar("/app/campaign-a/home", withWorld())
+        fireEvent.click(screen.getByRole("button", { name: "Header toggle" }))
+        expect(nav()).toHaveClass("portal-sidebar--mobile-open")
+        expect(slotOrder()).toEqual(baseline)
+        unmount()
+    })
+
+    it("shows World overview and Timelines as disabled on All worlds, leaking nothing", () => {
+        renderSidebar("/worlds", withWorld())
+
+        for (const label of ["World overview", "Timelines"]) {
+            const entry = disabledEntry(label)
+            expect(entry.tagName).not.toBe("A")
+            expect(entry).toHaveAttribute("aria-disabled", "true")
+            expect(entry).not.toHaveAttribute("aria-current")
+            expect(entry).not.toHaveAttribute("href")
+            expect(entry).toHaveAccessibleDescription("Select a world first")
+            expect(within(nav()).queryByRole("link", { name: label })).toBeNull()
+        }
+        expect(within(nav()).getByRole("link", { name: "All worlds" })).toBeEnabled()
+        for (const secret of ["world-a", "timeline-a", "Mundivita", "Primary Timeline"]) {
+            expect(nav().innerHTML).not.toContain(secret)
+        }
+    })
+
+    it("enables World overview and Timelines for an authorized world", () => {
+        renderSidebar("/worlds/world-a", withWorld())
+
+        expect(
+            within(nav()).getByRole("link", { name: "World overview" }),
+        ).toHaveAttribute("href", "/worlds/world-a")
+        expect(
+            within(nav()).getByRole("link", { name: "Timelines" }),
+        ).toHaveAttribute("href", "/worlds/world-a/timelines/timeline-a")
+    })
+
+    it("keeps New world disabled without the server capability, never overriding it", () => {
+        renderSidebar(
+            "/worlds/world-a",
+            authenticated(
+                makeBootstrap({
+                    campaigns: [{ ...first, ...world }, second],
+                    global_capabilities: [],
+                }),
+            ),
+        )
+
+        expect(within(nav()).queryByRole("link", { name: "New world" })).toBeNull()
+        expect(disabledEntry("New world")).toHaveAttribute("aria-disabled", "true")
+    })
+
+    it("shows campaign destinations as disabled without an active campaign", () => {
+        renderSidebar("/campaigns", withWorld())
+
+        for (const label of [
+            "Campaign Home",
+            "Characters",
+            "Quests",
+            "Sessions",
+            "Knowledge",
+            "Ask",
+            "Access",
+            "Campaign world",
+        ]) {
+            if (label === "Campaign world") {
+                openWorlds()
+            }
+            const entry = disabledEntry(label)
+            expect(entry, label).toHaveAttribute("aria-disabled", "true")
+            expect(entry, label).not.toHaveAttribute("aria-current")
+            expect(entry, label).toHaveAccessibleDescription("Select a campaign first")
+            expect(within(nav()).queryByRole("link", { name: label }), label).toBeNull()
+        }
+        expect(nav().querySelector('a[href*="/quests"]')).toBeNull()
+    })
+
+    it("enables campaign destinations once an authorized campaign resolves", () => {
+        renderSidebar("/app/campaign-a/home", withWorld())
+
+        for (const [label, path] of [
+            ["Characters", "characters"],
+            ["Quests", "quests"],
+            ["Sessions", "sessions"],
+            ["Knowledge", "knowledge"],
+        ]) {
+            expect(within(nav()).getByRole("link", { name: label })).toHaveAttribute(
+                "href",
+                `/app/campaign-a/${path}`,
+            )
+        }
+    })
+
+    it("does not navigate when a disabled entry is activated", () => {
+        renderSidebar("/campaigns", withWorld())
+
+        fireEvent.click(disabledEntry("Characters"))
+        fireEvent.click(disabledEntry("Campaign Home"))
+
+        expect(screen.getByTestId("location")).toHaveTextContent("/campaigns")
+    })
+
+    it("does not enable or label contextual navigation from unknown route IDs", () => {
+        renderSidebar("/worlds/ghost-world/timelines/ghost-timeline", withWorld())
+        openWorlds()
+        expect(disabledEntry("World overview")).toBeInTheDocument()
+        expect(disabledEntry("Timelines")).toBeInTheDocument()
+        expect(disabledEntry("Characters")).toBeInTheDocument()
+        expect(nav().innerHTML).not.toContain("ghost")
+    })
+
+    it("does not enable campaign navigation from an unauthorized campaign route", () => {
+        renderSidebar("/app/ghost-campaign/quests", withWorld())
+
+        expect(disabledEntry("Quests")).toBeInTheDocument()
+        expect(disabledEntry("Campaign Home")).toBeInTheDocument()
+        expect(nav().innerHTML).not.toContain("ghost")
+    })
+
+    it("keeps accessible names and tooltips on collapsed disabled entries", () => {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true")
+        renderSidebar("/campaigns", withWorld())
+
+        const entry = disabledEntry("Characters")
+        expect(entry).toHaveAttribute("title", "Characters: Select a campaign first")
+        expect(entry).toHaveTextContent("Characters")
+        expect(entry).toHaveAccessibleDescription("Select a campaign first")
+    })
+
+    it("keeps feature-disabled Ask on its own server-provided reason", () => {
+        renderSidebar("/app/campaign-a/home", withWorld())
+
+        expect(disabledEntry("Ask")).toHaveAttribute(
+            "title",
+            "Unavailable until Phase 12 is verified",
+        )
     })
 })
