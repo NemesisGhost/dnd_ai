@@ -16,7 +16,6 @@ interface LocationFieldsProps {
     values: LocationFormValues
     onChange: (values: LocationFormValues) => void
     errorFor: (fieldId: string) => string | null
-    showChangeNote: boolean
 }
 
 // The typed Location fields. Only the fields the chosen category carries are
@@ -28,7 +27,6 @@ export function LocationFields({
     values,
     onChange,
     errorFor,
-    showChangeNote,
 }: LocationFieldsProps) {
     const category = categories.find((c) => c.code === values.category)
     const applicable = applicableFields(category)
@@ -121,17 +119,6 @@ export function LocationFields({
                     hint="What the building is used for, for example tavern or temple."
                     maxLength={200}
                     error={errorFor(FIELD_IDS.buildingUse)}
-                />
-            ) : null}
-            {showChangeNote ? (
-                <TextField
-                    id={FIELD_IDS.changeNote}
-                    label="Change note (optional)"
-                    hint="Recorded in the audit history with this change."
-                    value={values.changeNote}
-                    onChange={(changeNote) => onChange({ ...values, changeNote })}
-                    maxLength={1000}
-                    error={errorFor(FIELD_IDS.changeNote)}
                 />
             ) : null}
         </>

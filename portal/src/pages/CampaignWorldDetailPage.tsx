@@ -3,6 +3,7 @@ import {
     fetchEventDetail,
     fetchItemDetail,
     fetchLocationDetail,
+    fetchOrganizationDetail,
     fetchReligionDetail,
 } from "../api/world"
 import { CharacterBoundary } from "../components/CharacterBoundary"
@@ -13,14 +14,14 @@ import PlaceholderPage from "./PlaceholderPage"
 import { WorldEventDetailPage } from "./WorldEventDetailPage"
 import { WorldItemDetailPage } from "./WorldItemDetailPage"
 import { WorldLocationDetailPage } from "./WorldLocationDetailPage"
+import { WorldOrganizationDetailPage } from "./WorldOrganizationDetailPage"
 import { WorldReligionDetailPage } from "./WorldReligionDetailPage"
 
 // Route-based World detail dispatcher (UI_DESIGN.md §5.4,
 // UI_STYLE_GUIDE.md §10.2): /app/:campaignId/world/:category/:entityId.
 // `category` is validated against the categories with an independently
 // loadable detail contract and fails closed for anything else (including
-// "organization" and "relationship", which have none in this increment —
-// see docs/PHASE13D_BACKEND_READINESS.md §10.1/§10.8).
+// "relationship", which has none until Phase 15.2).
 export function CampaignWorldDetailPage() {
     const { campaignId, category, entityId } = useParams<{
         campaignId: string
@@ -54,6 +55,24 @@ export function CampaignWorldDetailPage() {
                     <WorldLocationDetailPage
                         campaignId={campaignId}
                         location={location}
+                    />
+                )}
+            </WorldEntityDetailBoundary>
+        )
+    }
+
+    if (category === "organization") {
+        return (
+            <WorldEntityDetailBoundary
+                campaignId={campaignId}
+                entityId={entityId}
+                fetchDetail={fetchOrganizationDetail}
+                resourceLabel="organization"
+            >
+                {(organization) => (
+                    <WorldOrganizationDetailPage
+                        campaignId={campaignId}
+                        organization={organization}
                     />
                 )}
             </WorldEntityDetailBoundary>

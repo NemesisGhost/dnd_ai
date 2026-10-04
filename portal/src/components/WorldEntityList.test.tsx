@@ -90,17 +90,12 @@ describe("WorldEntityList", () => {
         ).toHaveAttribute("href", "/app/campaign-a/world/event/event-1")
     })
 
-    it("renders an unsupported category (organization) as a non-interactive card", () => {
+    it("links an organization card to its detail", () => {
         renderList()
 
         expect(
-            screen.queryByRole("link", {
-                name: /The Cartographers' Guild/,
-            }),
-        ).not.toBeInTheDocument()
-        expect(
-            screen.getByText("The Cartographers' Guild"),
-        ).toBeInTheDocument()
+            screen.getByRole("link", { name: /The Cartographers' Guild/ }),
+        ).toHaveAttribute("href", "/app/campaign-a/world/organization/org-1")
     })
 
     it("renders an empty state without disclosing entities", () => {

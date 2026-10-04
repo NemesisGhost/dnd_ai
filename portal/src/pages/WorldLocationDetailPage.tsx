@@ -1,6 +1,7 @@
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
-import { LocationEditLink } from "../components/LocationEditLink"
+import { AuthoringEditLink } from "../components/AuthoringEditLink"
+import { locationAuthoringPath } from "../api/locationAuthoring"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { FactGrid } from "../components/FactGrid"
 import type { LocationDetail } from "../types/world"
@@ -41,9 +42,11 @@ export function WorldLocationDetailPage({
                 {location.name}
             </h1>
 
-            <LocationEditLink
+            <AuthoringEditLink
                 campaignId={campaignId}
-                locationId={location.location_id}
+                noun="location"
+                viewPath={locationAuthoringPath(campaignId, location.location_id)}
+                editPath={`/app/${encodeURIComponent(campaignId)}/world/location/${encodeURIComponent(location.location_id)}/edit`}
                 detail={location}
             />
 

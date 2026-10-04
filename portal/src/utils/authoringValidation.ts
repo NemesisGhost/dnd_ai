@@ -72,6 +72,10 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     supersession_target_invalid: "replacement",
     parent_location_invalid: "location-parent",
     location_hierarchy_cycle: "location-parent",
+    organization_parent_invalid: "org-parent",
+    organization_hierarchy_cycle: "org-parent",
+    headquarters_location_invalid: "org-headquarters",
+    religion_invalid: "org-religion",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -106,4 +110,9 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
     parent_location_invalid: "The selected parent location is not valid. Choose another.",
     location_hierarchy_cycle:
         "That parent would place the location inside itself. Choose a different parent.",
+    organization_parent_invalid: "The selected parent organization is not valid. Choose another.",
+    organization_hierarchy_cycle:
+        "That parent would place the organization inside itself. Choose a different parent.",
+    headquarters_location_invalid: "The selected headquarters is not valid. Choose another.",
+    religion_invalid: "The selected religion is not valid. Choose another.",
 }

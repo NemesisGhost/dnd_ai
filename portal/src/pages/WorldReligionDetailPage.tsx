@@ -1,5 +1,8 @@
 import { Link } from "react-router"
+import { religionAuthoringPath } from "../api/organizationAuthoring"
+import { AuthoringEditLink } from "../components/AuthoringEditLink"
 import { DetailPanel } from "../components/DetailPanel"
+import { usePageArrival } from "../hooks/usePageArrival"
 import { FactGrid } from "../components/FactGrid"
 import type { ReligionDetail } from "../types/world"
 
@@ -17,6 +20,7 @@ export function WorldReligionDetailPage({
     campaignId,
     religion,
 }: WorldReligionDetailPageProps) {
+    const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-religion-heading">
             <p>
@@ -26,7 +30,17 @@ export function WorldReligionDetailPage({
             </p>
 
             <p className="world-detail__eyebrow">Religion</p>
-            <h1 id="world-religion-heading">{religion.name}</h1>
+            <h1 id="world-religion-heading" ref={headingRef} tabIndex={-1}>
+                {religion.name}
+            </h1>
+
+            <AuthoringEditLink
+                campaignId={campaignId}
+                noun="religion"
+                viewPath={religionAuthoringPath(campaignId, religion.religion_id)}
+                editPath={`/app/${encodeURIComponent(campaignId)}/world/religion/${encodeURIComponent(religion.religion_id)}/edit`}
+                detail={religion}
+            />
 
             {religion.summary !== null && (
                 <p className="world-detail__summary">{religion.summary}</p>

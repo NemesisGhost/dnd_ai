@@ -83,6 +83,14 @@ function CampaignWorldContent({
                               label: "New location",
                               to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
                           },
+                          {
+                              label: "New organization",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
+                          },
+                          {
+                              label: "New religion",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
+                          },
                       ]
                     : []
             }

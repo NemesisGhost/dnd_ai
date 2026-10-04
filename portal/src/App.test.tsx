@@ -1020,7 +1020,7 @@ describe("portal routing", () => {
   })
 
   it("fails closed for an invalid World detail category", () => {
-    renderAppAt("/app/mundivita/world/organization/org-1")
+    renderAppAt("/app/mundivita/world/relationship/rel-1")
 
     expect(
       screen.getByText("World detail unavailable"),

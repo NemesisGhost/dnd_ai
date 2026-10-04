@@ -41,7 +41,7 @@ describe("WorldCard", () => {
         },
     )
 
-    it("renders organization as a non-interactive card", () => {
+    it("links an organization to its audience-safe detail", () => {
         renderCard({
             entity_id: "org-a",
             category: "organization",
@@ -50,7 +50,10 @@ describe("WorldCard", () => {
             summary: null,
         })
 
-        expect(screen.queryByRole("link")).not.toBeInTheDocument()
+        expect(screen.getByRole("link")).toHaveAttribute(
+            "href",
+            "/app/campaign-a/world/organization/org-a",
+        )
         expect(
             screen.getByText("The Cartographers' Guild"),
         ).toBeInTheDocument()

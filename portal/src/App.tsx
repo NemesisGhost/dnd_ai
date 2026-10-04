@@ -19,6 +19,11 @@ import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
 import { CreateLocationPage } from "./pages/CreateLocationPage"
 import { EditLocationPage } from "./pages/EditLocationPage"
+import {
+  CreateOrganizationPage,
+  EditOrganizationPage,
+} from "./pages/OrganizationAuthoringPages"
+import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
@@ -214,6 +219,26 @@ function App() {
             <Route
               path="world/location/:entityId/edit"
               element={<EditLocationPage />}
+            />
+
+            <Route
+              path="world/organization/new"
+              element={<CreateOrganizationPage />}
+            />
+
+            <Route
+              path="world/organization/:entityId/edit"
+              element={<EditOrganizationPage />}
+            />
+
+            <Route
+              path="world/religion/new"
+              element={<CreateReligionPage />}
+            />
+
+            <Route
+              path="world/religion/:entityId/edit"
+              element={<EditReligionPage />}
             />
 
             <Route

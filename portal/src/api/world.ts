@@ -2,6 +2,7 @@ import type {
     EventDetail,
     ItemDetail,
     LocationDetail,
+    OrganizationDetail,
     ReligionDetail,
     WorldEntityPage,
     WorldEntitySearchParameters,
@@ -120,6 +121,18 @@ export async function fetchLocationDetail(
     return fetchWorldDetail<LocationDetail>(
         `/api/campaigns/${encodeURIComponent(campaignId)}` +
             `/world/locations/${encodeURIComponent(locationId)}`,
+        signal,
+    )
+}
+
+export async function fetchOrganizationDetail(
+    campaignId: string,
+    organizationId: string,
+    signal?: AbortSignal,
+): Promise<OrganizationDetail> {
+    return fetchWorldDetail<OrganizationDetail>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/organizations/${encodeURIComponent(organizationId)}`,
         signal,
     )
 }

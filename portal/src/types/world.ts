@@ -33,12 +33,13 @@ export interface WorldEntitySearchParameters {
 }
 
 // World categories with an independently loadable, audience-safe detail
-// contract in this increment (UI_STYLE_GUIDE.md §10.2). "organization" and
-// "relationship" are deliberately excluded — see docs/PHASE13D_BACKEND_READINESS.md
-// §10.3: OrganizationResponse has no display name field yet.
+// contract (UI_STYLE_GUIDE.md §10.2). "organization" joined in Phase 15.1 with
+// the audience-safe World Explorer organization detail; "relationship" is still
+// excluded (no authored relationships until Phase 15.2).
 export type WorldDetailCategory =
     | "location"
     | "character"
+    | "organization"
     | "religion"
     | "item"
     | "event"
@@ -49,6 +50,7 @@ export function isWorldDetailCategory(
     return (
         value === "location" ||
         value === "character" ||
+        value === "organization" ||
         value === "religion" ||
         value === "item" ||
         value === "event"
@@ -75,6 +77,28 @@ export interface LocationDetail {
     is_destroyed: boolean | null
     alarm_level: number | null
     condition_notes: string | null
+}
+
+export interface OrganizationLink {
+    entity_id: string
+    name: string
+}
+
+// Audience-safe: never the GM-only notes, and a link is present only when the
+// caller may see the record it names.
+export interface OrganizationDetail {
+    organization_id: string
+    name: string
+    summary: string | null
+    kind_code: string
+    organization_type_code: string
+    public_description: string | null
+    parent: OrganizationLink | null
+    headquarters: OrganizationLink | null
+    religion: OrganizationLink | null
+    status_code: string | null
+    canon_status?: string
+    lifecycle_status?: string
 }
 
 export interface ReligionDetail {

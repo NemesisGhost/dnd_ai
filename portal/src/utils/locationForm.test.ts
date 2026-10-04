@@ -49,19 +49,17 @@ describe("validateLocationForm", () => {
         expect(validateLocationForm({ ...filled, population: "abc" }, region, { requireCategory: true })).toEqual([])
     })
 
-    it("bounds the summary, the use, and the change note", () => {
+    it("bounds the summary and the use", () => {
         expect(
-            validateLocationForm({ ...filled, summary: "x".repeat(4001) }, region, { requireCategory: true })[0]!
-                .message,
+            validateLocationForm({ ...filled, summary: "x".repeat(4001) }, region, {
+                requireCategory: true,
+            })[0]!.message,
         ).toMatch(/^Summary must be 4000/)
         expect(
-            validateLocationForm({ ...filled, buildingUse: "x".repeat(201) }, building, { requireCategory: true })[0]!
-                .fieldId,
+            validateLocationForm({ ...filled, buildingUse: "x".repeat(201) }, building, {
+                requireCategory: true,
+            })[0]!.fieldId,
         ).toBe("location-building-use")
-        expect(
-            validateLocationForm({ ...filled, changeNote: "x".repeat(1001) }, region, { requireCategory: true })[0]!
-                .message,
-        ).toMatch(/^Change note must be 1000/)
     })
 })
 
@@ -115,7 +113,6 @@ describe("form state helpers", () => {
             parent: { id: "p1", label: "Vale", detail: "Archived" },
             population: "10",
             buildingUse: "",
-            changeNote: "",
         })
     })
 

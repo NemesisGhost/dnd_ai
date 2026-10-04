@@ -5,7 +5,7 @@ import type {
     LocationCategoryOption,
     LocationFieldsBody,
 } from "../types/locationAuthoring"
-import { validateDescription, validateName, validateReason } from "./authoringValidation"
+import { validateDescription, validateName } from "./authoringValidation"
 
 // The editable Location form's values, held as the user typed them. Mirrors the
 // server's closed contract (docs/PLAN.md Phase 15.1, ADR 0015); the server stays
@@ -18,7 +18,6 @@ export interface LocationFormValues {
     parent: ReferenceOption | null
     population: string
     buildingUse: string
-    changeNote: string
 }
 
 export const EMPTY_LOCATION_FORM: LocationFormValues = {
@@ -28,7 +27,6 @@ export const EMPTY_LOCATION_FORM: LocationFormValues = {
     parent: null,
     population: "",
     buildingUse: "",
-    changeNote: "",
 }
 
 export const FIELD_IDS = {
@@ -38,7 +36,6 @@ export const FIELD_IDS = {
     parent: "location-parent",
     population: "location-population",
     buildingUse: "location-building-use",
-    changeNote: "location-change-note",
 } as const
 
 const BUILDING_USE_MAX = 200
@@ -68,7 +65,6 @@ export function valuesFromView(view: LocationAuthoringView): LocationFormValues 
                   },
         population: view.population === null ? "" : String(view.population),
         buildingUse: view.building_use ?? "",
-        changeNote: "",
     }
 }
 
@@ -79,8 +75,7 @@ export function sameValues(a: LocationFormValues, b: LocationFormValues): boolea
         a.summary.trim() === b.summary.trim() &&
         (a.parent?.id ?? null) === (b.parent?.id ?? null) &&
         a.population.trim() === b.population.trim() &&
-        a.buildingUse.trim() === b.buildingUse.trim() &&
-        a.changeNote.trim() === b.changeNote.trim()
+        a.buildingUse.trim() === b.buildingUse.trim()
     )
 }
 
@@ -121,13 +116,6 @@ export function validateLocationForm(
         errors.push({
             fieldId: FIELD_IDS.buildingUse,
             message: `Use must be ${BUILDING_USE_MAX} characters or fewer.`,
-        })
-    }
-    const noteError = validateReason(values.changeNote, false)
-    if (noteError) {
-        errors.push({
-            fieldId: FIELD_IDS.changeNote,
-            message: noteError.replace("Reason", "Change note"),
         })
     }
     return errors
