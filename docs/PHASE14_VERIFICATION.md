@@ -47,6 +47,12 @@ Automated evidence (local, 2026-10-04): portal `npm test` 249 files / 1756 tests
 
 **Manual browser verification of this correction: not yet performed.** A source-level review of the CSS (existing grid: single column below 64rem, panel in the right column above it; sticky from 64rem; disabled-select styling) found no layout change, but it is not a substitute for checking 390 / 1280 / 2560 px.
 
+Follow-up fixes (manual testing):
+
+- `/worlds/new` crashed with `Cannot destructure property 'bootstrap'` when the `/worlds/*` routes were nested under a layout that did not forward the shell's outlet context. `WorldWorkspaceLayout` forwards it, `useAuthenticatedSession` now throws a deliberate message when the context is missing, and `App.worldNew.test.tsx` renders the whole app under a data router (as `main.tsx` does) to cover direct render, no duplicate bootstrap request, no request on open, CSRF and same-origin credentials on submit, the missing-capability state, session expiry, and login return.
+- The post-login allowlist now accepts `/worlds` routes so an unauthenticated visit to `/worlds/new` returns there after sign-in (the destination still re-authorizes on arrival).
+- On campaign routes World overview, Timelines, and Timeline overview are enabled only after `GET /worlds/{id}` succeeds (ADR 0014).
+
 Accepted limitations of the correction:
 
 - An unconfirmed route world shows "No selection" until `GET /worlds/{id}` returns (no optimistic selection).

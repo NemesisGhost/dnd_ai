@@ -8,12 +8,13 @@
 const DEFAULT_DESTINATION = "/home"
 const MAX_FROM_LENGTH = 2048
 
-// home, campaigns, settings, account, platform/accounts, or any app/:campaignId
+// home, campaigns, settings, account, platform/accounts, any worlds route (the
+// world authoring pages re-authorize on arrival), or any app/:campaignId
 // route (including its subsections). Deliberately excludes /login and
 // every other public route, which would otherwise create a redirect
 // loop or leak a return path into an unrelated flow.
 const ALLOWED_PATH_PATTERN =
-    /^\/(home|campaigns|settings|account|platform\/accounts|app\/[^/]+(\/.*)?)$/
+    /^\/(home|campaigns|settings|account|platform\/accounts|worlds(\/.*)?|app\/[^/]+(\/.*)?)$/
 
 function hasControlCharacter(value: string): boolean {
     for (let index = 0; index < value.length; index += 1) {

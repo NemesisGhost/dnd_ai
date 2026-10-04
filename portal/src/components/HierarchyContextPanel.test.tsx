@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { MemoryRouter, Route, Routes, useLocation } from "react-router"
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CharacterPerspectiveContext } from "../context/CharacterPerspectiveContext"
 import { SessionContext } from "../context/SessionContext"
@@ -86,6 +86,8 @@ function renderAt(path: string, selectedCharacterId: string | null = null) {
         <MemoryRouter initialEntries={[path]}>
           <WorkspaceHierarchyProvider>
             <Routes>
+              {/* The shell supplies the authenticated outlet context. */}
+              <Route element={<Outlet context={{ bootstrap, reload: vi.fn() }} />}>
               <Route element={<WorldWorkspaceLayout />}>
                 <Route path="/worlds" element={<h1>All worlds page</h1>} />
                 <Route path="/worlds/:worldId" element={<h1>World page</h1>} />
@@ -94,6 +96,7 @@ function renderAt(path: string, selectedCharacterId: string | null = null) {
                   path="/worlds/:worldId/timelines/:timelineId"
                   element={<h1>Timeline page</h1>}
                 />
+              </Route>
               </Route>
               <Route path="/app/:campaignId" element={<CampaignLayout bootstrap={bootstrap} />}>
                 <Route path="home" element={<h1>Campaign home</h1>} />
