@@ -96,6 +96,8 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     # --- owned: the definition's own rows -----------------------------------
     ("core", "entity_names", "entity_id"): OWNED_CASCADE,
     ("core", "entity_tags", "entity_id"): OWNED_CASCADE,
+    # Canonical revision history (Phase 15, revision 117): removed with a deleted draft.
+    ("core", "entity_revisions", "entity_id"): OWNED_CASCADE,
     ("world", "locations", "location_id"): OWNED_CASCADE,
     ("world", "settlements", "settlement_id"): OWNED_CASCADE,
     ("world", "buildings", "building_id"): OWNED_CASCADE,

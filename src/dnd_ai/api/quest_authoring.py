@@ -219,6 +219,9 @@ def _run(
             access=access,
             correlation_id=correlation_id,
             reason=reason,
+            view_loader=lambda: get_quest_authoring(
+                connection, world_id=result.world_id, quest_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     status = 201 if created else 200

@@ -201,6 +201,9 @@ def create_knowledge_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
+        view_loader=lambda: get_knowledge_authoring(
+            connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+        ),
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
@@ -263,6 +266,9 @@ def update_knowledge_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
+            view_loader=lambda: get_knowledge_authoring(
+                connection, world_id=result.world_id, knowledge_item_id=result.entity_id
+            ),
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)

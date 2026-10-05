@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.types import Integer
 
 from ._shared import (
@@ -705,3 +705,69 @@ Index("ix_world_times_world_id", world_times.c.world_id)
 Index("ix_world_times_calendar_id", world_times.c.calendar_id)
 Index("ix_world_times_world_time_precision_id", world_times.c.world_time_precision_id)
 Index("ix_world_times_world_id_sort_key", world_times.c.world_id, world_times.c.sort_key)
+
+
+# ---------------------------------------------------------------------------
+# core — canonical definition revision history (revision 117, Phase 15)
+# ---------------------------------------------------------------------------
+
+entity_revisions = Table(
+    "entity_revisions",
+    metadata,
+    _uuid_pk("entity_revision_id"),
+    Column(
+        "entity_id",
+        UUID(),
+        ForeignKey("core.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "world_id",
+        UUID(),
+        ForeignKey("core.worlds.world_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        comment="The core.entities.row_version the entity had after this change; unique per entity.",
+    ),
+    Column(
+        "revision_kind",
+        Text(),
+        nullable=False,
+        comment=(
+            "created (initial snapshot), updated (content edit), or lifecycle (canon/archive "
+            "transition; snapshot holds the statuses)."
+        ),
+    ),
+    Column(
+        "snapshot",
+        JSONB(),
+        nullable=False,
+        comment="The authored fields (GM-only data included) as of this version.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+    ),
+    Column("correlation_id", UUID()),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    UniqueConstraint("entity_id", "row_version", name="ux_entity_revisions_entity_version"),
+    schema="core",
+    comment=(
+        "Canonical, append-only, GM-only revision history of a definition: one full "
+        "snapshot of the authored record per real change (Phase 15, ADR 0016). Built from "
+        "the authored record, never from audit.change_log. Never player-visible and never "
+        "readable by the reporting role."
+    ),
+)
+
+Index("ix_entity_revisions_world_id", entity_revisions.c.world_id)
+Index(
+    "ix_entity_revisions_created_by_user_id",
+    entity_revisions.c.created_by_user_id,
+    postgresql_where=entity_revisions.c.created_by_user_id.isnot(None),
+)

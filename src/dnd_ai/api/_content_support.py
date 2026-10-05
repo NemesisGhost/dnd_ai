@@ -14,6 +14,12 @@ from typing import Any
 from sqlalchemy import Connection
 
 from dnd_ai.commands._content import ContentWriteResult
+from dnd_ai.commands._revisions import (
+    REVISION_CREATED,
+    REVISION_UPDATED,
+    capture_revision,
+    snapshot_from_view,
+)
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.data_classification import content_receipt
 from dnd_ai.queries.reference_options import ReferenceOptionRow
@@ -31,6 +37,7 @@ def audit_content_write(
     access: AccessContext,
     correlation_id: str | None,
     reason: str | None,
+    view_loader: Callable[[], object] | None = None,
 ) -> None:
     """One `audit.change_log` row for a real change: `created` with the bounded
     initial values and the provenance source, or `updated` with the bounded
@@ -53,6 +60,25 @@ def audit_content_write(
         reason=reason,
         source_id=result.source_id,
     )
+    if view_loader is not None:
+        # Canonical revision history (15.2R): a full snapshot of the authored
+        # record, from the record itself and never from audit.
+        capture_revision(
+            connection,
+            entity_id=result.entity_id,
+            world_id=result.world_id,
+            row_version=result.row_version,
+            # A child record (a quest stage or objective) created inside an existing
+            # aggregate is an update of that aggregate, not its creation.
+            kind=(
+                REVISION_CREATED
+                if result.created and result.record_table == "entities"
+                else REVISION_UPDATED
+            ),
+            snapshot=snapshot_from_view(view_loader()),
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+        )
 
 
 def write_receipt(result: ContentWriteResult, id_field: str, *, changed: bool) -> dict[str, Any]:

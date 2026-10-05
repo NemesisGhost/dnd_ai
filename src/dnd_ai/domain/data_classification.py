@@ -139,6 +139,7 @@ COLUMN_CLASSES: dict[str, DataClass] = {
     ),
     **_table("core.entities", {"canonical_name": _P, "summary": _P}),
     **_table("core.entity_names", {"language": _S, "name": _P, "notes": _G}),
+    **_table("core.entity_revisions", {"revision_kind": _S, "snapshot": _G}),
     **_table(
         "core.entity_types",
         {

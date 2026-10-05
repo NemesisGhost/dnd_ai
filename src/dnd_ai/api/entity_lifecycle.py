@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection
 
+from dnd_ai.commands._revisions import REVISION_LIFECYCLE, capture_revision
 from dnd_ai.commands.entity_lifecycle import (
     EntityTransitionResult,
     approve_entity,
@@ -201,6 +202,21 @@ def _audit_transition(
         changed_fields=result.changed_fields or None,
         reason=reason,
     )
+    if not result.deleted:
+        # Canonical revision history (15.2R): the statuses as of this version.
+        capture_revision(
+            connection,
+            entity_id=result.entity_id,
+            world_id=result.world_id,
+            row_version=result.row_version,
+            kind=REVISION_LIFECYCLE,
+            snapshot={
+                "canon_status": result.canon_status,
+                "lifecycle_status": result.lifecycle_status,
+            },
+            actor_user_id=access.user_id,
+            correlation_id=correlation_id,
+        )
 
 
 def _run(

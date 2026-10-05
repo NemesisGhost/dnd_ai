@@ -105,6 +105,7 @@ from .core import (
     canon_statuses,
     entities,
     entity_names,
+    entity_revisions,
     entity_tags,
     entity_types,
     lifecycle_statuses,
@@ -484,5 +485,6 @@ __all__ = [
     "world_rulesets",
     "world_time_precisions",
     "world_times",
+    "entity_revisions",
     "worlds",
 ]
