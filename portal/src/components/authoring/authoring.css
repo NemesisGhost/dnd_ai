@@ -482,7 +482,7 @@
 .quest-stage-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.75rem;
+  grid-template-columns: minmax(0, 1fr) 5.75rem;
   gap: 0.5rem;
   align-items: start;
   padding-bottom: 1rem;
@@ -514,10 +514,12 @@
   box-shadow: 0 4px 0 0 var(--color-primary);
 }
 
+/* Side by side so the pair is never taller than the collapsed stage header. */
 .quest-stage-row__moves {
   display: flex;
-  flex-direction: column;
   gap: 0.25rem;
+  align-items: center;
+  min-height: 2.75rem;
 }
 
 .quest-stage-row__move {
@@ -638,7 +640,7 @@
 
 @media (max-width: 30rem) {
   .quest-stage-row {
-    grid-template-columns: minmax(0, 1fr) 2.75rem;
+    grid-template-columns: minmax(0, 1fr) 5.75rem;
     gap: 0.25rem;
   }
 }
