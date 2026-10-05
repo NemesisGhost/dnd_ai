@@ -36,6 +36,7 @@ buttons to render, so a preview can never drift from enforcement
    restore and delete-draft additionally requires lifecycle `active`.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .authoring import LifecycleNotSupportedError, LifecycleTransitionNotAllowedError
@@ -66,21 +67,34 @@ ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES: frozenset[str] = frozenset(
         "political_faction",
         # Beliefs
         "religion",
+        # Characters (Phase 15.1 NPC identity; player characters stay excluded)
+        "npc",
+        # Narrative definitions (Phase 15.1; progress is timeline state, never here)
+        "quest",
+        # Claims (Phase 15.1; who knows them is per-knower state, never here)
+        "knowledge_item",
     }
 )
 
 # Deliberately excluded, each for a model reason (docs/PLAN.md Phase 14, D5).
 ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES: dict[str, str] = {
-    "character": "archiving revokes relationship-derived capabilities; PC identity is Phase 16",
-    "npc": "NPC authoring is Phase 15C",
+    "character": "archiving revokes relationship-derived capabilities; PC identity is Phase 16 (an NPC archive is guarded instead)",
     "player_character": "PC identity and build approval are Phase 16",
     "event": "has its own draft/recorded/voided/corrected status machine (Phase 15E)",
-    "quest": "definition versus progress semantics (Phase 15D)",
-    "knowledge_item": "truth/knowledge semantics (Phase 15E)",
     "item_instance": "instance/state/inventory semantics (Phase 15F)",
     "dungeon": "structural-mutation guards and discovery state (Phase 15A)",
     "dungeon_area": "structural-mutation guards and discovery state (Phase 15A)",
 }
+
+
+# Entity types that state-changing campaign commands may target only while the
+# definition is published (`canon`) and operational (`active`). Phase 15.1 makes
+# drafts routine, so a draft or archived definition must not become reachable
+# through movement, reveal, advancement, transfer, or event participation. The
+# lifecycle-eligible types are included (that now includes `npc`, `quest`, and
+# `knowledge_item`), so the two sets are the same today. Kept as its own name so a
+# future eligible type that must stay targetable can be carved out explicitly.
+STATE_TARGET_GUARDED_TYPE_CODES: frozenset[str] = ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES
 
 
 def is_lifecycle_eligible(entity_type_code: str) -> bool:
@@ -193,18 +207,26 @@ def require_transition(action: str, canon_status: str, lifecycle_status: str) ->
 
 
 def evaluate_actions(
-    *, entity_type_code: str, canon_status: str, lifecycle_status: str
+    *,
+    entity_type_code: str,
+    canon_status: str,
+    lifecycle_status: str,
+    extra_blocked: Mapping[str, str] | None = None,
 ) -> tuple[list[str], list[BlockedAction]]:
     """`(available_actions, blocked_actions)` for the read model. Produced by
     the same `blocked_reason` the commands call, so a preview cannot disagree
     with enforcement. An ineligible type reports one blocked pseudo-action
-    `all`."""
+    `all`. `extra_blocked` (action -> reason) carries type-specific blocks such
+    as an unpublished parent blocking `publish`; it only ever blocks an action
+    the state table already allows."""
     if not is_lifecycle_eligible(entity_type_code):
         return [], [BlockedAction(action="all", reason=BLOCKED_NOT_SUPPORTED)]
     available: list[str] = []
     blocked: list[BlockedAction] = []
     for action in ALL_ACTIONS:
         reason = blocked_reason(action, canon_status, lifecycle_status)
+        if reason is None and extra_blocked and action in extra_blocked:
+            reason = extra_blocked[action]
         if reason is None:
             available.append(action)
         else:

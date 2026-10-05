@@ -1,6 +1,6 @@
 # Phase 14 Verification
 
-Evidence for Phase 14 (shared authoring kernel and campaign setup) on branch `phase14/authoring-kernel`, recorded against [PLAN.md Phase 14](PLAN.md) and [ADR 0014](adr/0014-world-authoring-authority.md). **Status: implemented and locally verified; final-head CI has not run, so Phase 14 is not yet marked complete** (the exit criteria require a green CI run).
+Evidence for Phase 14 (shared authoring kernel and campaign setup) on branch `phase14/authoring-kernel`, recorded against [PLAN.md Phase 14](PLAN.md) and [ADR 0014](adr/0014-world-authoring-authority.md). **Status: complete.** Merged as PR #64 (`3046714`); final-head CI run `37227612984` was green. Manual browser verification of the navigation/hierarchy correction is still pending and is carried into the Phase 15 manual matrix (not a Phase 15 gate).
 
 ## What was delivered
 

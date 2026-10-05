@@ -315,13 +315,17 @@ def test_only_tracked_quests_are_listed(
     with client_factory(f.gm_user_id) as client:
         response = client.get(_list_url(f))
     assert response.status_code == 200, response.text
-    quest_ids = {item["quest_id"] for item in response.json()}
-    assert quest_ids == {
+    items = {item["quest_id"]: item for item in response.json()}
+    # Phase 15.1: an editor also sees authored definitions no party has started,
+    # flagged untracked, so a draft quest can be found and edited.
+    assert set(items) == {
         str(f.tracked_quest_id),
         str(f.party_scoped_quest_id),
         str(f.party_only_quest_id),
+        str(f.untracked_quest_id),
     }
-    assert str(f.untracked_quest_id) not in quest_ids
+    assert items[str(f.untracked_quest_id)]["tracked"] is False
+    assert items[str(f.tracked_quest_id)]["tracked"] is True
 
 
 def test_without_a_party_perspective_the_campaign_wide_status_applies(
@@ -415,7 +419,11 @@ def test_a_targeted_deny_hides_the_quest_from_the_list_without_removing_others(
     assert str(f.tracked_quest_id) not in quest_ids
     # An unrelated denied quest does not remove other, otherwise-visible
     # quests from the response.
-    assert quest_ids == {str(f.party_scoped_quest_id), str(f.party_only_quest_id)}
+    assert quest_ids == {
+        str(f.party_scoped_quest_id),
+        str(f.party_only_quest_id),
+        str(f.untracked_quest_id),
+    }
 
 
 def test_a_targeted_deny_hides_the_quest_from_direct_detail_access(

@@ -40,14 +40,14 @@ from typing import Literal
 
 from sqlalchemy import Connection, text
 
-from dnd_ai.domain.access import resolve_access_context
 from dnd_ai.domain.authoring import (
-    CampaignNotAuthorizedError,
+    CharacterHasUserRelationshipsError,
     EntityReferencedError,
+    QuestDefinitionIncompleteError,
+    ReferenceNotPublishedError,
     StaleWriteError,
     SubtypeIncompleteError,
     SupersessionTargetInvalidError,
-    WorldNotAuthorizedError,
     normalize_reason,
 )
 from dnd_ai.domain.entity_lifecycle import (
@@ -66,11 +66,16 @@ from dnd_ai.domain.entity_lifecycle import (
     require_transition,
     target_canon_status,
 )
-from dnd_ai.domain.errors import DomainAuthorizationError
+from dnd_ai.queries.content_preconditions import (
+    archive_blocked_reason,
+    publish_blocked_reason,
+    publish_reference_ids,
+    replacement_publish_blocked_reason,
+)
 
-from ._shared import lifecycle_code
+from ._content import EntityNotFoundError as EntityNotFoundError
+from ._content import LockedContent, lock_authoring_scope, lock_entities
 
-_CANON_EDIT = "canon.edit"
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 OWNED_CASCADE: Literal["owned_cascade"] = "owned_cascade"
@@ -107,7 +112,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "item_ownership", "owner_entity_id"): BLOCKING,
     ("campaign", "party_memberships", "member_entity_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
-    ("character", "characters", "character_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
     ("integration", "sync_jobs", "target_entity_id"): BLOCKING,
     ("integration", "sync_state", "target_entity_id"): BLOCKING,
@@ -117,7 +121,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("knowledge", "entity_knowledge", "knower_entity_id"): BLOCKING,
     ("knowledge", "information_transfers", "recipient_entity_id"): BLOCKING,
     ("knowledge", "item_identification", "knower_entity_id"): BLOCKING,
-    ("knowledge", "knowledge_items", "knowledge_item_id"): BLOCKING,
     ("knowledge", "knowledge_items", "subject_entity_id"): BLOCKING,
     ("knowledge", "party_discoveries", "knower_entity_id"): BLOCKING,
     ("narrative", "encounter_participants", "participant_entity_id"): BLOCKING,
@@ -127,7 +130,6 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("narrative", "events", "event_id"): BLOCKING,
     ("narrative", "quest_objectives", "target_entity_id"): BLOCKING,
     ("narrative", "quest_participants", "participant_entity_id"): BLOCKING,
-    ("narrative", "quests", "quest_id"): BLOCKING,
     ("security", "resource_grants", "entity_id"): BLOCKING,
     ("world", "employment_relationships", "employee_entity_id"): BLOCKING,
     ("world", "employment_relationships", "employer_entity_id"): BLOCKING,
@@ -155,6 +157,49 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("world", "organizations", "parent_organization_id"): BLOCKING,
     ("character", "character_religious_affiliations", "religion_id"): BLOCKING,
     ("world", "religious_organizations", "religion_id"): BLOCKING,
+    # --- Phase 15.1: knowledge-item definitions -------------------------------
+    # The claim's own row goes with a deleted draft; anything that records who
+    # knows it, or refers to it from history, blocks the delete.
+    ("knowledge", "knowledge_items", "knowledge_item_id"): OWNED_CASCADE,
+    ("campaign", "party_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "entity_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "party_discoveries", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "public_knowledge", "knowledge_item_id"): BLOCKING,
+    ("knowledge", "knowledge_versions", "knowledge_item_id"): BLOCKING,
+    ("narrative", "event_effects", "target_knowledge_item_id"): BLOCKING,
+    ("narrative", "quest_rewards", "reward_knowledge_item_id"): BLOCKING,
+    ("security", "resource_grants", "knowledge_item_id"): BLOCKING,
+    # --- Phase 15.1: quest definitions ----------------------------------------
+    # A quest's own definition rows go with a deleted draft; recorded progress,
+    # grants, and the objectives' event references block it.
+    ("narrative", "quests", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_stages", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_participants", "quest_id"): OWNED_CASCADE,
+    ("narrative", "quest_outcomes", "quest_id"): OWNED_CASCADE,
+    ("campaign", "quest_state", "quest_id"): BLOCKING,
+    ("security", "resource_grants", "quest_id"): BLOCKING,
+    # --- Phase 15.1: NPC identity (an NPC is a character) ----------------------
+    # The NPC's own identity rows go with a deleted draft ...
+    ("character", "characters", "character_id"): OWNED_CASCADE,
+    ("character", "npcs", "npc_id"): OWNED_CASCADE,
+    ("character", "character_descriptions", "character_id"): OWNED_CASCADE,
+    ("character", "character_languages", "character_id"): OWNED_CASCADE,
+    ("character", "character_movements", "character_id"): OWNED_CASCADE,
+    ("character", "character_senses", "character_id"): OWNED_CASCADE,
+    # ... anything historical, mechanical, or access-granting blocks it.
+    ("ai", "context_requests", "requesting_character_id"): BLOCKING,
+    ("campaign", "character_conditions", "character_id"): BLOCKING,
+    ("campaign", "character_location_history", "character_id"): BLOCKING,
+    ("campaign", "character_resources", "character_id"): BLOCKING,
+    ("campaign", "character_state", "character_id"): BLOCKING,
+    ("campaign", "character_state", "transformed_into_id"): BLOCKING,
+    ("campaign", "item_attunements", "character_id"): BLOCKING,
+    ("character", "character_builds", "character_id"): BLOCKING,
+    ("character", "character_religious_affiliations", "character_id"): BLOCKING,
+    ("character", "player_characters", "player_character_id"): BLOCKING,
+    ("knowledge", "character_expertise", "character_id"): BLOCKING,
+    ("security", "membership_character_relationships", "character_id"): BLOCKING,
+    ("security", "resource_grants", "character_id"): BLOCKING,
 }
 
 for _schema, _table, _column in ENTITY_REFERENCE_CLASSIFICATION:
@@ -163,11 +208,6 @@ for _schema, _table, _column in ENTITY_REFERENCE_CLASSIFICATION:
 _BLOCKING_REFERENCES = tuple(
     key for key, kind in ENTITY_REFERENCE_CLASSIFICATION.items() if kind == BLOCKING
 )
-
-
-class EntityNotFoundError(DomainAuthorizationError):
-    """No such entity *in this campaign's world* — a nonexistent entity and one
-    belonging to another world are indistinguishable (fixed 404)."""
 
 
 @dataclass(frozen=True)
@@ -186,96 +226,22 @@ class EntityTransitionResult:
     replacement: "EntityTransitionResult | None" = None
 
 
-@dataclass(frozen=True)
-class _LockedEntity:
-    entity_id: uuid.UUID
-    world_id: uuid.UUID
-    entity_type_id: uuid.UUID
-    entity_type_code: str
-    canonical_name: str
-    canon_status: str
-    lifecycle_status: str
-    row_version: int
-
-
-def _entity_type_code(connection: Connection, entity_type_id: uuid.UUID) -> str:
-    code = connection.execute(
-        text("SELECT code FROM core.entity_types WHERE entity_type_id = :t"), {"t": entity_type_id}
-    ).scalar()
-    assert isinstance(code, str)
-    return code
-
-
-def _canon_code(connection: Connection, canon_status_id: uuid.UUID) -> str:
-    code = connection.execute(
-        text("SELECT code FROM core.canon_statuses WHERE canon_status_id = :s"),
-        {"s": canon_status_id},
-    ).scalar()
-    assert isinstance(code, str)
-    return code
-
-
-def _lock_world_for_campaign(connection: Connection, *, campaign_id: uuid.UUID) -> uuid.UUID:
-    """The campaign's world, locked `FOR SHARE` (head of the lock order)."""
-    world_id = connection.execute(
+def _publish_reference_ids(
+    connection: Connection, *, world_id: uuid.UUID, entity_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Records the entity must see published before it can be published, read
+    without a lock so they can be locked in `entity_id` order with the target."""
+    type_code = connection.execute(
         text("""
-            SELECT t.world_id FROM campaign.campaigns c
-            JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
-            WHERE c.campaign_id = :c
+            SELECT et.code FROM core.entities e
+            JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+            WHERE e.entity_id = :e AND e.world_id = :w
         """),
-        {"c": campaign_id},
+        {"e": entity_id, "w": world_id},
     ).scalar()
-    if world_id is None:
-        raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
-    locked = connection.execute(
-        text("SELECT world_id FROM core.worlds WHERE world_id = :w FOR SHARE"), {"w": world_id}
-    ).scalar()
-    if locked is None:
-        raise WorldNotAuthorizedError(f"world {world_id} does not exist")
-    assert isinstance(world_id, uuid.UUID)
-    return world_id
-
-
-def _lock_entities(
-    connection: Connection, *, entity_ids: list[uuid.UUID], world_id: uuid.UUID
-) -> dict[uuid.UUID, _LockedEntity]:
-    """Lock the rows in `entity_id` order (the global order) and return those
-    that exist **in `world_id`**; foreign-world rows are locked but not
-    returned."""
-    rows = connection.execute(
-        text("""
-            SELECT e.entity_id, e.world_id, e.entity_type_id, e.canonical_name,
-                   e.canon_status_id, e.lifecycle_status_id, e.row_version
-            FROM core.entities e
-            WHERE e.entity_id = ANY(CAST(:ids AS uuid[]))
-            ORDER BY e.entity_id
-            FOR UPDATE OF e
-        """),
-        {"ids": entity_ids},
-    ).all()
-    locked: dict[uuid.UUID, _LockedEntity] = {}
-    for row in rows:
-        if row.world_id != world_id:
-            continue
-        locked[row.entity_id] = _LockedEntity(
-            entity_id=row.entity_id,
-            world_id=row.world_id,
-            entity_type_id=row.entity_type_id,
-            entity_type_code=_entity_type_code(connection, row.entity_type_id),
-            canonical_name=str(row.canonical_name),
-            canon_status=_canon_code(connection, row.canon_status_id),
-            lifecycle_status=lifecycle_code(connection, row.lifecycle_status_id),
-            row_version=int(row.row_version),
-        )
-    return locked
-
-
-def _require_canon_edit(
-    connection: Connection, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
-) -> None:
-    access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
-    if access is None or not access.has_capability(_CANON_EDIT):
-        raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
+    if not isinstance(type_code, str):
+        return []
+    return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
 def _prepare(
@@ -285,15 +251,39 @@ def _prepare(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
-) -> tuple[uuid.UUID, _LockedEntity]:
-    world_id = _lock_world_for_campaign(connection, campaign_id=campaign_id)
-    entity = _lock_entities(connection, entity_ids=[entity_id], world_id=world_id).get(entity_id)
+    action: str | None = None,
+) -> tuple[uuid.UUID, LockedContent]:
+    """Lock and authorize (scope, then entities in `entity_id` order: the target
+    `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
+    target to the campaign's world, and compare the version."""
+    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    world_id = scope.world_id
+    reference_ids = (
+        _publish_reference_ids(connection, world_id=world_id, entity_id=entity_id)
+        if action == PUBLISH
+        else []
+    )
+    locked = lock_entities(
+        connection, world_id=world_id, update_ids=[entity_id], share_ids=reference_ids
+    )
+    entity = locked.get(entity_id)
     if entity is None:
         raise EntityNotFoundError(f"entity {entity_id} is not in campaign {campaign_id}'s world")
-    _require_canon_edit(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     require_lifecycle_eligible(entity.entity_type_code)
     if entity.row_version != expected_row_version:
         raise StaleWriteError(f"entity {entity_id} is at {entity.row_version}")
+    if action == PUBLISH:
+        # The target is locked, so its references are now stable; lock any the
+        # unlocked read missed (rare: the entity was edited in between).
+        missing = [
+            r
+            for r in publish_reference_ids(
+                connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+            )
+            if r not in locked
+        ]
+        if missing:
+            lock_entities(connection, world_id=world_id, share_ids=missing)
     return world_id, entity
 
 
@@ -353,7 +343,7 @@ def _has_blocking_references(connection: Connection, *, entity_id: uuid.UUID) ->
 
 
 def _result(
-    entity: _LockedEntity,
+    entity: LockedContent,
     *,
     canon_status: str,
     lifecycle_status: str,
@@ -404,11 +394,19 @@ def _canon_transition(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        action=action,
     )
     require_transition(action, entity.canon_status, entity.lifecycle_status)
     target = target_canon_status(action, entity.canon_status)
     assert target is not None
     if action == PUBLISH:
+        reason_code = publish_blocked_reason(
+            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+        )
+        if reason_code == "quest_definition_incomplete":
+            raise QuestDefinitionIncompleteError(f"quest {entity_id} has no objective")
+        if reason_code is not None:
+            raise ReferenceNotPublishedError(f"entity {entity_id} refers to an unpublished record")
         _require_subtype_complete(
             connection, entity_id=entity_id, entity_type_id=entity.entity_type_id
         )
@@ -536,13 +534,22 @@ def supersede_entity(
     Nonexistent, other-world, wrong-type, and wrong-status replacements are the
     same `SupersessionTargetInvalidError`. References to the old entity keep
     resolving: nothing is moved, deleted, or rewritten."""
-    world_id = _lock_world_for_campaign(connection, campaign_id=campaign_id)
-    ids = sorted({entity_id, replacement_entity_id})
-    locked = _lock_entities(connection, entity_ids=ids, world_id=world_id)
+    scope = lock_authoring_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    # The replacement may be published by this call, so the records it refers to
+    # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
+    # as an ordinary publish does (read unlocked first, then any the read missed).
+    reference_ids = _publish_reference_ids(
+        connection, world_id=scope.world_id, entity_id=replacement_entity_id
+    )
+    locked = lock_entities(
+        connection,
+        world_id=scope.world_id,
+        update_ids=sorted({entity_id, replacement_entity_id}),
+        share_ids=reference_ids,
+    )
     entity = locked.get(entity_id)
     if entity is None:
         raise EntityNotFoundError(f"entity {entity_id} is not in campaign {campaign_id}'s world")
-    _require_canon_edit(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
     require_lifecycle_eligible(entity.entity_type_code)
     if entity.row_version != expected_row_version:
         raise StaleWriteError(f"entity {entity_id} is at {entity.row_version}")
@@ -564,6 +571,30 @@ def supersede_entity(
 
     replacement_result: EntityTransitionResult | None = None
     if replacement.canon_status == CANON_APPROVED:
+        missing = [
+            r
+            for r in publish_reference_ids(
+                connection,
+                entity_id=replacement_entity_id,
+                entity_type_code=replacement.entity_type_code,
+            )
+            if r not in locked
+        ]
+        if missing:
+            lock_entities(connection, world_id=scope.world_id, share_ids=missing)
+        reason_code = replacement_publish_blocked_reason(
+            connection,
+            superseded_id=entity_id,
+            replacement_id=replacement_entity_id,
+            replacement_type_code=replacement.entity_type_code,
+            replacement_canon_status=replacement.canon_status,
+        )
+        if reason_code == "quest_definition_incomplete":
+            raise QuestDefinitionIncompleteError(f"quest {replacement_entity_id} has no objective")
+        if reason_code is not None:
+            raise ReferenceNotPublishedError(
+                f"replacement {replacement_entity_id} refers to an unpublished record"
+            )
         _require_subtype_complete(
             connection, entity_id=replacement.entity_id, entity_type_id=replacement.entity_type_id
         )
@@ -632,6 +663,13 @@ def archive_entity(
         expected_row_version=expected_row_version,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
+    if (
+        archive_blocked_reason(
+            connection, entity_id=entity_id, entity_type_code=entity.entity_type_code
+        )
+        is not None
+    ):
+        raise CharacterHasUserRelationshipsError(f"entity {entity_id} is linked to a user")
     new_version = _set_lifecycle(connection, entity_id, "archived", archived=True)
     return _result(
         entity,

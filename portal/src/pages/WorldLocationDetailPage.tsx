@@ -1,5 +1,8 @@
 import { Link } from "react-router"
 import { DetailPanel } from "../components/DetailPanel"
+import { AuthoringEditLink } from "../components/AuthoringEditLink"
+import { locationAuthoringPath } from "../api/locationAuthoring"
+import { usePageArrival } from "../hooks/usePageArrival"
 import { FactGrid } from "../components/FactGrid"
 import type { LocationDetail } from "../types/world"
 import { humanizeCode } from "../utils/humanize"
@@ -23,6 +26,7 @@ export function WorldLocationDetailPage({
     campaignId,
     location,
 }: WorldLocationDetailPageProps) {
+    const headingRef = usePageArrival(true)
     return (
         <section aria-labelledby="world-location-heading">
             <p>
@@ -34,7 +38,17 @@ export function WorldLocationDetailPage({
             <p className="world-detail__eyebrow">
                 {humanizeCode(location.location_type_code)}
             </p>
-            <h1 id="world-location-heading">{location.name}</h1>
+            <h1 id="world-location-heading" ref={headingRef} tabIndex={-1}>
+                {location.name}
+            </h1>
+
+            <AuthoringEditLink
+                campaignId={campaignId}
+                noun="location"
+                viewPath={locationAuthoringPath(campaignId, location.location_id)}
+                editPath={`/app/${encodeURIComponent(campaignId)}/world/location/${encodeURIComponent(location.location_id)}/edit`}
+                detail={location}
+            />
 
             {location.summary !== null && (
                 <p className="world-detail__summary">{location.summary}</p>

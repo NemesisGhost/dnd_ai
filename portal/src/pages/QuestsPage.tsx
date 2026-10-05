@@ -1,7 +1,9 @@
 import { useId, useState } from "react"
+import { Link } from "react-router"
 import { AudiencePreviewSection } from "../components/AudiencePreviewSection"
 import { CardGrid } from "../components/CardGrid"
 import { QuestCard } from "../components/QuestCard"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { CampaignQuestListItem } from "../types/quest"
 import { sortQuests } from "../utils/questSorting"
 import type { QuestSortColumn } from "../utils/questSorting"
@@ -21,12 +23,25 @@ export function QuestsPage({
 
     const sortColumnId = useId()
     const directionId = useId()
+    // Offered from the bootstrap's capability list; the server re-checks.
+    const canAuthor = useCampaignCapability(campaignId, "canon.edit")
 
     const sortedQuests = sortQuests(quests, sortColumn, direction)
 
     return (
         <section aria-labelledby="quests-heading">
             <h1 id="quests-heading">Quests</h1>
+
+            {canAuthor ? (
+                <p className="authoring-page__actions-row">
+                    <Link
+                        className="authoring-button"
+                        to={`/app/${encodeURIComponent(campaignId)}/quests/new`}
+                    >
+                        New quest
+                    </Link>
+                </p>
+            ) : null}
 
             <AudiencePreviewSection campaignId={campaignId} resourceType="quest" />
 

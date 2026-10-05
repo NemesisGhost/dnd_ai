@@ -254,6 +254,7 @@ def search_world_entities(
     limit: int,
     after_name: str | None,
     after_entity_id: uuid.UUID | None,
+    canon_status_codes: Sequence[str] | None = None,
 ) -> tuple[WorldEntityCard, ...]:
     """Up to `limit + 1` visible world entities of the requested categories,
     ordered `(lower(left(canonical_name, N)), entity_id)` — a bounded name
@@ -286,6 +287,7 @@ def search_world_entities(
         "after_name": after_name,
         "after_entity_id": after_entity_id,
         "has_cursor": after_name is not None and after_entity_id is not None,
+        "canon_statuses": list(canon_status_codes) if canon_status_codes else None,
     }
 
     rows = connection.execute(
@@ -308,6 +310,8 @@ def search_world_entities(
                     OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
                   )
               AND NOT (e.entity_id = ANY(CAST(:cv_denied AS uuid[])))
+              AND (CAST(:canon_statuses AS text[]) IS NULL
+                   OR cs.code = ANY(CAST(:canon_statuses AS text[])))
               AND (
                 CASE
                   WHEN et.code = ANY(CAST(:character_codes AS text[])) THEN
@@ -791,6 +795,103 @@ def get_religion_view(
         summary=row["summary"],
         pantheon_structure=row["pantheon_structure"],
         serving_organization_ids=serving,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Detail: organization (Phase 15.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OrganizationLink:
+    entity_id: uuid.UUID
+    name: str
+
+
+@dataclass(frozen=True)
+class OrganizationDetailView:
+    organization_id: uuid.UUID
+    name: str
+    summary: str | None
+    kind_code: str
+    organization_type_code: str
+    public_description: str | None
+    parent: OrganizationLink | None
+    headquarters: OrganizationLink | None
+    religion: OrganizationLink | None
+    status_code: str | None
+    """The organization's current operational status on the caller's
+    timeline (`campaign.organization_state`), if one is recorded."""
+
+
+def _visible_link(
+    connection: Connection, entity_id: uuid.UUID | None, denied: frozenset[uuid.UUID]
+) -> OrganizationLink | None:
+    """A named link to another record, only if the caller may see it: a draft
+    parent or an unseen headquarters is not named, so a published organization
+    never discloses an unpublished record through its own detail."""
+    if entity_id is None or entity_id in denied:
+        return None
+    name = connection.execute(
+        text("SELECT canonical_name FROM core.entities WHERE entity_id = :e"), {"e": entity_id}
+    ).scalar()
+    return None if name is None else OrganizationLink(entity_id=entity_id, name=str(name))
+
+
+def get_organization_detail_view(
+    connection: Connection,
+    *,
+    organization_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    expected_world_id: uuid.UUID,
+    denied_entity_ids: frozenset[uuid.UUID],
+) -> OrganizationDetailView:
+    """The audience-safe organization detail. `internal_description` is never
+    selected here: the GM-only text is returned only by the `canon.edit`
+    authoring read."""
+    if organization_id in denied_entity_ids:
+        raise WorldResourceNotFoundError(f"organization {organization_id} denied to caller")
+    row = (
+        connection.execute(
+            text("""
+                SELECT e.world_id, e.canonical_name, e.summary, et.code AS kind_code,
+                       ot.code AS organization_type_code, o.public_description,
+                       o.parent_organization_id, o.headquarters_location_id,
+                       ro.religion_id, os.code AS status_code
+                FROM world.organizations o
+                JOIN core.entities e ON e.entity_id = o.organization_id
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                JOIN world.organization_types ot
+                  ON ot.organization_type_id = o.organization_type_id
+                LEFT JOIN world.religious_organizations ro
+                  ON ro.religious_organization_id = o.organization_id
+                LEFT JOIN campaign.organization_state ost
+                  ON ost.timeline_id = :timeline AND ost.organization_id = o.organization_id
+                LEFT JOIN campaign.organization_statuses os
+                  ON os.organization_status_id = ost.organization_status_id
+                WHERE o.organization_id = :organization
+            """),
+            {"organization": organization_id, "timeline": timeline_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["world_id"] != expected_world_id:
+        raise WorldResourceNotFoundError(
+            f"organization {organization_id} not in world {expected_world_id}"
+        )
+    return OrganizationDetailView(
+        organization_id=organization_id,
+        name=row["canonical_name"],
+        summary=row["summary"],
+        kind_code=row["kind_code"],
+        organization_type_code=row["organization_type_code"],
+        public_description=row["public_description"],
+        parent=_visible_link(connection, row["parent_organization_id"], denied_entity_ids),
+        headquarters=_visible_link(connection, row["headquarters_location_id"], denied_entity_ids),
+        religion=_visible_link(connection, row["religion_id"], denied_entity_ids),
+        status_code=row["status_code"],
     )
 
 

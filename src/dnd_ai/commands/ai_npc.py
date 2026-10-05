@@ -52,6 +52,7 @@ from dnd_ai.domain.ai_provider import AiProvider, NpcTurnOutput
 from dnd_ai.domain.context_assembly import NpcConversationContext, assemble_npc_conversation_context
 from dnd_ai.domain.errors import DomainAuthorizationError
 
+from ._shared import require_state_targetable
 from .ai_proposals import _apply_proposal
 
 
@@ -111,6 +112,7 @@ def _record_request_and_context(
     timeline_id: uuid.UUID,
     expected_world_id: uuid.UUID,
 ) -> tuple[uuid.UUID, NpcConversationContext]:
+    require_state_targetable(connection, assignment.npc_entity_id)
     context = assemble_npc_conversation_context(
         connection,
         npc_entity_id=assignment.npc_entity_id,

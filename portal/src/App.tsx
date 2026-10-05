@@ -17,6 +17,16 @@ import { CampaignSessionsPage } from "./pages/CampaignSessionsPage"
 import { CampaignSessionDetailPage } from "./pages/CampaignSessionDetailPage"
 import { CampaignWorldPage, } from "./pages/CampaignWorldPage"
 import { CampaignWorldDetailPage } from "./pages/CampaignWorldDetailPage"
+import { CreateLocationPage } from "./pages/CreateLocationPage"
+import { EditLocationPage } from "./pages/EditLocationPage"
+import {
+  CreateOrganizationPage,
+  EditOrganizationPage,
+} from "./pages/OrganizationAuthoringPages"
+import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
+import { CreateNpcPage, EditNpcPage } from "./pages/NpcAuthoringPages"
+import { CreateQuestPage, EditQuestPage } from "./pages/QuestAuthoringPages"
+import { CreateReligionPage, EditReligionPage } from "./pages/ReligionAuthoringPages"
 import { CampaignKnowledgePage } from "./pages/CampaignKnowledgePage"
 import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage"
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
@@ -205,6 +215,36 @@ function App() {
             />
 
             <Route
+              path="world/location/new"
+              element={<CreateLocationPage />}
+            />
+
+            <Route
+              path="world/location/:entityId/edit"
+              element={<EditLocationPage />}
+            />
+
+            <Route
+              path="world/organization/new"
+              element={<CreateOrganizationPage />}
+            />
+
+            <Route
+              path="world/organization/:entityId/edit"
+              element={<EditOrganizationPage />}
+            />
+
+            <Route
+              path="world/religion/new"
+              element={<CreateReligionPage />}
+            />
+
+            <Route
+              path="world/religion/:entityId/edit"
+              element={<EditReligionPage />}
+            />
+
+            <Route
               path="world/:category/:entityId"
               element={<CampaignWorldDetailPage />}
             />
@@ -215,8 +255,28 @@ function App() {
             />
 
             <Route
+              path="characters/npc/new"
+              element={<CreateNpcPage />}
+            />
+
+            <Route
+              path="characters/:characterId/edit"
+              element={<EditNpcPage />}
+            />
+
+            <Route
               path="quests"
               element={<CampaignQuestsPage />}
+            />
+
+            <Route
+              path="quests/new"
+              element={<CreateQuestPage />}
+            />
+
+            <Route
+              path="quests/:questId/edit"
+              element={<EditQuestPage />}
             />
 
             <Route
@@ -240,8 +300,18 @@ function App() {
             />
 
             <Route
+              path="knowledge/new"
+              element={<CreateKnowledgePage />}
+            />
+
+            <Route
               path="knowledge/:knowledgeItemId"
               element={<CampaignKnowledgeDetailPage />}
+            />
+
+            <Route
+              path="knowledge/:knowledgeItemId/edit"
+              element={<EditKnowledgePage />}
             />
 
             <Route

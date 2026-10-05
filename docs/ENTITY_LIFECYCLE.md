@@ -100,7 +100,7 @@ The shared commands implement exactly this table (`dnd_ai.domain.entity_lifecycl
 | approved | publish | canon |
 | approved | return to draft | draft |
 | rejected | return to draft | draft |
-| canon | supersede (replacement `approved` or `canon`, same world and type) | superseded |
+| canon | supersede (replacement `approved` or `canon`, same world and type; an `approved` replacement is published by the call and must pass the same type-specific publish preconditions as ordinary publish, see §3.1a) | superseded |
 | any canon status except proposed/approved | archive | lifecycle `archived` (canon status unchanged) |
 | lifecycle `archived` | restore (reason required) | lifecycle `active` (canon status unchanged; a superseded entity restores to superseded) |
 | draft or rejected, unreferenced | delete draft (reason required) | physically deleted |
@@ -109,9 +109,13 @@ The shared commands implement exactly this table (`dnd_ai.domain.entity_lifecycl
 
 ### 3.2 Which records use canon lifecycle (eligibility registry)
 
-Canon lifecycle applies to `core.entities` *definitions* only, and only to the types in `ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES`: the place types (`location`, `settlement`, `building`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `realm`), the organization types (`organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`), and `religion`. Excluded types and why: characters and NPCs (archiving revokes relationship-derived capabilities; Phase 15C/16), events (own draft/recorded/voided/corrected machine; 15E), quests (definition vs progress; 15D), knowledge items (truth/knowledge semantics; 15E), item instances (instance/state; 15F), and dungeons/dungeon areas (structural-mutation guards; 15A). Worlds, timelines, and campaigns do **not** use canon lifecycle — they use only operational `active`/`archived`.
+Canon lifecycle applies to `core.entities` *definitions* only, and only to the types in `ENTITY_LIFECYCLE_ELIGIBLE_TYPE_CODES`: the place types (`location`, `settlement`, `building`, `plane`, `continent`, `nation`, `region`, `district`, `geographic_feature`, `realm`), the organization types (`organization`, `business`, `government`, `religious_organization`, `military_unit`, `political_faction`), `religion`, and, since Phase 15.1, `npc` (NPC identity, with an archive guard while a user is linked), `quest` (a definition lifecycle; progress stays timeline state), and `knowledge_item` (the claim; who knows it stays per-knower state). Excluded types (`ENTITY_LIFECYCLE_EXCLUDED_TYPE_CODES`) and why: bare `character` and `player_character` (archiving revokes relationship-derived capabilities; PC identity is Phase 16), `event` (own draft/recorded/voided/corrected machine; 15E), `item_instance` (instance/state; 15F), and `dungeon`/`dungeon_area` (structural-mutation guards; 15A). Worlds, timelines, and campaigns do **not** use canon lifecycle; they use only operational `active`/`archived`.
 
 **Adding a type to the registry is a reviewed change**: it must also extend read-side visibility gating (`dnd_ai.queries.entity_lifecycle.lifecycle_hidden_entity_ids` and the World Explorer) to every surface the type appears on, and its deletable-reference classification must be reviewed (§14). A catalog test fails when a new foreign key to a definition is unclassified.
+
+### 3.1a Editing a definition (Phase 15.1; [ADR 0015](adr/0015-typed-world-content-authoring.md))
+
+Type-specific `update_*` commands mutate a definition in place, **only while lifecycle is `active` and canon status is `draft` or `canon`**. `proposed` and `approved` records are not editable (return to draft first), so an approved record cannot change before publish; `rejected` and `superseded` report `wrong_canon_status`, and archived records report `entity_archived`. The check is the pure `content_edit_blocked_reason` policy that the read model's `update` action also uses. A real edit bumps `row_version` through the root UPDATE (even for subtype-only changes) and writes one `updated` audit row with bounded `{field: {from, to}}`; an identical resubmission is a no-op (`changed: false`, no version bump, no audit). Entity type is immutable after creation; a change of meaning on canon is a new draft that supersedes the old record. Type-specific **publish** and **archive** preconditions (a canon parent, origin, target or subject; the NPC user-relationship guard) are a hook consulted by both the commands and `blocked_actions`. **Supersession publishes an `approved` replacement, so it enforces the same hook** (`quest_definition_incomplete`, `reference_not_published`) after locking the replacement's references `FOR SHARE` in the same ascending-id pass as the pair, and refuses a replacement that depends on the record being superseded; a failure mutates nothing, writes no audit row, and leaves no idempotency reservation. A `canon` replacement is already published and is not re-validated (existing-reference policy). `replacement-candidates` omits an `approved` record that supersession would refuse.
 
 ### 3.3 Read-side visibility
 
@@ -452,6 +456,8 @@ Quest progression lifecycle is separate and timeline-scoped:
 
 A completed quest remains a canonical entity. Its timeline state changes; the quest definition is not archived merely because one party completed it.
 
+**Definition freeze (Phase 15.1).** Once any `campaign.quest_state` or `campaign.objective_state` row exists for a quest in any timeline, removing a stage or objective, reordering stages, and changing an objective's type, target, completion mode, requirement level, quantity, or completion rule are refused with `quest_has_progress`. Wording and visibility stay editable; structural change after progress is supersession.
+
 ## 17. Knowledge lifecycle
 
 Knowledge items represent claims and may evolve through versions.
@@ -464,6 +470,8 @@ Definition statuses may include:
 - superseded wording
 - rejected claim
 
+Phase 15.1 authors the *definition* (the claim) as a lifecycle-managed `knowledge_item` draft; publishing it makes it visible in audience-filtered reads, and an unpublished claim is the same non-disclosing "not found" to anyone without `canon.edit`. Who knows or believes it is per-knower state, written only by the reveal and belief commands (Phase 15.2), which take the claim's entity row `FOR SHARE` so they serialize against a statement edit.
+
 Per-knower states may include:
 
 - unaware
@@ -474,6 +482,8 @@ Per-knower states may include:
 - forgotten
 
 Changing what a character believes does not change the claim's objective truth status.
+
+**Statement freeze (Phase 15.1).** Once any per-knower, party, discovery, public-knowledge, or information-transfer row references a knowledge item, changing its statement, knowledge type, or subject is refused with `knowledge_already_known`, because it would silently rewrite what knowers learned. `truth_status` stays editable and audited.
 
 ## 18. Concurrency and idempotency
 
@@ -534,6 +544,17 @@ Delivered commands (each intent-specific, `expected_row_version`-guarded, idempo
 | `create_timeline`, `update_timeline`, `create_timeline_branch`, `archive_timeline`, `restore_timeline` | Built |
 | `update_campaign`, `archive_campaign`, `reactivate_campaign` (and `create_campaign` extended with world-owner authorization) | Built |
 | `submit_entity_for_review`, `return_entity_to_draft`, `approve_entity`, `reject_entity`, `publish_entity_as_canon`, `supersede_entity`, `archive_entity`, `restore_entity`, `delete_draft_entity` | Built (eligible types only; see §3.2) |
+
+Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-authoring.md)); status is updated as each checkpoint lands:
+
+| Command | Status |
+|---|---|
+| `create_location`, `update_location` (ten place categories; reparent with cycle prevention) | Built (backend) |
+| `create_organization` / `update_organization` (six kinds, parent/headquarters/religion references, hierarchy-cycle prevention), `create_religion`, `update_religion` | Built (backend) |
+| `create_npc`, `update_npc` (identity only; archive guarded while a user is linked) | Built (backend) |
+| `create_quest`, `update_quest`, `add_quest_stage`, `update_quest_stage`, `reorder_quest_stages`, `remove_quest_stage`, `add_quest_objective`, `update_quest_objective`, `remove_quest_objective` (definition aggregate; structure freezes once progress exists) | Built (backend) |
+| `create_knowledge_item`, `update_knowledge_item` (the claim only: statement, type, truth status, sensitivity, optional subject; statement, type, and subject freeze once any knower, party, discovery, public-knowledge, version, or event-effect row refers to the claim, with `knowledge_already_known`; truth status and sensitivity stay editable and audited) | Built |
+| Campaign operations: sessions, events, timeline state, progress, reveal, relationships | Deferred to Phase 15.2 |
 
 Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.
 

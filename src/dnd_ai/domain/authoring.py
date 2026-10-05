@@ -148,6 +148,145 @@ class SupersessionTargetInvalidError(SafeMessageError):
     safe_message = "The replacement is not valid for this record."
 
 
+class ContentNotEditableError(SafeMessageError):
+    """The definition's canon status or lifecycle does not allow editing
+    (`proposed`/`approved` records are under review, `rejected`/`superseded`
+    are closed, archived records are read-only). The specific reason is a
+    server-side detail; the portal gets it from `blocked_actions`."""
+
+    safe_status_code = 409
+    safe_error_code = "content_not_editable"
+    safe_message = "This record cannot be edited in its current state."
+
+
+class ReferenceNotPublishedError(SafeMessageError):
+    """A publish precondition failed: a record this definition refers to (its
+    parent, headquarters, origin, target, or subject) is not yet `canon`."""
+
+    safe_status_code = 409
+    safe_error_code = "reference_not_published"
+    safe_message = "A record this one depends on is not published yet."
+
+
+class ParentLocationInvalidError(SafeMessageError):
+    """The proposed parent location is nonexistent, in another world, not an
+    authorable place category, archived, rejected, or superseded -- all one
+    non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "parent_location_invalid"
+    safe_message = "The selected parent location is not valid."
+
+
+class LocationHierarchyCycleError(SafeMessageError):
+    """Re-parenting would make a location its own ancestor."""
+
+    safe_status_code = 409
+    safe_error_code = "location_hierarchy_cycle"
+    safe_message = "That parent would place the location inside itself."
+
+
+class OrganizationParentInvalidError(SafeMessageError):
+    """The proposed parent organization is nonexistent, in another world, not an
+    organization, archived, rejected, or superseded -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "organization_parent_invalid"
+    safe_message = "The selected parent organization is not valid."
+
+
+class OrganizationHierarchyCycleError(SafeMessageError):
+    """Re-parenting would make an organization its own ancestor."""
+
+    safe_status_code = 409
+    safe_error_code = "organization_hierarchy_cycle"
+    safe_message = "That parent would place the organization inside itself."
+
+
+class HeadquartersLocationInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "headquarters_location_invalid"
+    safe_message = "The selected headquarters location is not valid."
+
+
+class ReligionInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "religion_invalid"
+    safe_message = "The selected religion is not valid."
+
+
+class SpeciesNotAvailableError(SafeMessageError):
+    """The species is nonexistent, not canon, or drawn from a ruleset the world
+    does not allow -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "species_not_available"
+    safe_message = "The selected species is not available in this world."
+
+
+class OriginLocationInvalidError(SafeMessageError):
+    safe_status_code = 400
+    safe_error_code = "origin_location_invalid"
+    safe_message = "The selected origin location is not valid."
+
+
+class CharacterHasUserRelationshipsError(SafeMessageError):
+    """An NPC cannot be archived while a player or account is linked to it:
+    archiving would silently revoke the capabilities that link grants."""
+
+    safe_status_code = 409
+    safe_error_code = "character_has_user_relationships"
+    safe_message = "A player or account is linked to this character."
+
+
+class QuestHasProgressError(SafeMessageError):
+    """The quest has recorded progress in some timeline, so this structural
+    change (removing or reordering stages, removing an objective, or changing the
+    meaning of an objective) is refused. Wording stays editable; structural change
+    after progress is supersession."""
+
+    safe_status_code = 409
+    safe_error_code = "quest_has_progress"
+    safe_message = "This quest already has progress recorded, so its structure cannot change."
+
+
+class QuestDefinitionIncompleteError(SafeMessageError):
+    """A quest needs at least one stage with at least one objective to publish."""
+
+    safe_status_code = 409
+    safe_error_code = "quest_definition_incomplete"
+    safe_message = "A quest needs at least one stage with an objective before it can be published."
+
+
+class ObjectiveTargetInvalidError(SafeMessageError):
+    """The objective's target is nonexistent, in another world, of a type an
+    objective cannot target, archived, rejected, or superseded -- one code."""
+
+    safe_status_code = 400
+    safe_error_code = "objective_target_invalid"
+    safe_message = "The selected objective target is not valid."
+
+
+class KnowledgeAlreadyKnownError(SafeMessageError):
+    """Someone already knows, believes, or has discovered this claim, so its
+    statement, type, or subject cannot change: that would silently rewrite what
+    they learned. Truth status and sensitivity stay editable; a change of meaning
+    is a replacement claim."""
+
+    safe_status_code = 409
+    safe_error_code = "knowledge_already_known"
+    safe_message = "This claim is already known by someone, so its statement cannot change."
+
+
+class KnowledgeSubjectInvalidError(SafeMessageError):
+    """The subject is nonexistent, in another world, of a type a claim cannot be
+    about, archived, rejected, or superseded -- one non-disclosing code."""
+
+    safe_status_code = 400
+    safe_error_code = "knowledge_subject_invalid"
+    safe_message = "The selected subject is not valid."
+
+
 class WorldNotAuthorizedError(DomainAuthorizationError):
     """No world authority, or no such world — indistinguishable (fixed 404)."""
 

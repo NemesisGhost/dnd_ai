@@ -235,7 +235,10 @@ def test_an_organization_cannot_be_its_own_parent(db_connection: Connection, f: 
             ),
             {"id": organization_id},
         )
-    assert "ck_organizations_parent_not_self" in str(exc.value)
+    # The cycle-guard trigger fires before the CHECK; either is a refusal.
+    assert any(
+        name in str(exc.value) for name in ("ck_organizations_parent_not_self", "hierarchy cycle")
+    )
 
 
 def test_an_organizations_dissolved_time_requires_a_founded_time(

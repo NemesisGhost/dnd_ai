@@ -12,7 +12,8 @@ import type {
     ReplacementCandidate,
     SupersedeBody,
 } from "../types/entityLifecycle"
-import { ERROR_CODE_MESSAGE, validateReason } from "../utils/authoringValidation"
+import { validateReason } from "../utils/authoringValidation"
+import { describeBlockedReason } from "../utils/blockedReason"
 import { useAnnounce } from "./authoring/announcer"
 import { ConfirmDialog } from "./authoring/ConfirmDialog"
 import { LifecycleBadge, MutationStatusMessage } from "./authoring/feedback"
@@ -108,14 +109,6 @@ const ORDER = [
     "restore",
     "delete_draft",
 ]
-
-const BLOCKED_REASON: Readonly<Record<string, string>> = {
-    wrong_canon_status: "not available at this canon status.",
-    entity_archived: "the record is archived.",
-    entity_not_archived: "the record is not archived.",
-    review_in_progress: "it is awaiting review; return it to draft or finish the review first.",
-    lifecycle_not_supported: "this kind of record is not managed through lifecycle actions.",
-}
 
 const STATUS_LABEL: Readonly<Record<string, string>> = {
     draft: "Draft",
@@ -299,7 +292,7 @@ function Panel({ campaignId, view, refetch, onChanged }: PanelProps) {
                     {blocked.map((b) => (
                         <li key={b.action}>
                             {actionLabel(b.action)} unavailable:{" "}
-                            {BLOCKED_REASON[b.reason] ?? ERROR_CODE_MESSAGE[b.reason] ?? "not allowed right now."}
+                            {describeBlockedReason(b.reason)}
                         </li>
                     ))}
                 </ul>

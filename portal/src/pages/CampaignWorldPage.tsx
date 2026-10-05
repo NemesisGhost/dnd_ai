@@ -76,6 +76,28 @@ function CampaignWorldContent({
                 setShowHidden(value)
                 setCursor(null)
             }}
+            createLinks={
+                canPreviewHidden
+                    ? [
+                          {
+                              label: "New location",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/location/new`,
+                          },
+                          {
+                              label: "New organization",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/organization/new`,
+                          },
+                          {
+                              label: "New NPC",
+                              to: `/app/${encodeURIComponent(campaignId)}/characters/npc/new`,
+                          },
+                          {
+                              label: "New religion",
+                              to: `/app/${encodeURIComponent(campaignId)}/world/religion/new`,
+                          },
+                      ]
+                    : []
+            }
         >
             <WorldEntitiesBoundary
                 campaignId={campaignId}

@@ -38,6 +38,10 @@ from dnd_ai.domain.entity_lifecycle import (
     evaluate_actions,
     is_lifecycle_eligible,
 )
+from dnd_ai.queries.content_preconditions import (
+    replacement_publish_blocked_reason,
+    type_specific_blocks,
+)
 
 REFERENCE_VISIBLE_CANON_STATUSES = ("canon", "superseded", "deprecated")
 
@@ -132,10 +136,14 @@ def get_entity_lifecycle(
     ).one_or_none()
     if row is None:
         return None
+    extra_blocked = type_specific_blocks(
+        connection, entity_id=entity_id, entity_type_code=str(row.entity_type_code)
+    )
     available, blocked = evaluate_actions(
         entity_type_code=str(row.entity_type_code),
         canon_status=str(row.canon_status),
         lifecycle_status=str(row.lifecycle_status),
+        extra_blocked=extra_blocked or None,
     )
     return EntityLifecycleView(
         entity_id=row.entity_id,
@@ -159,6 +167,7 @@ class ReplacementCandidate:
     canon_status: str
     row_version: int
     name_sort: str
+    entity_type_code: str
 
 
 def list_replacement_candidates(
@@ -171,8 +180,48 @@ def list_replacement_candidates(
     after: tuple[str, uuid.UUID] | None,
 ) -> list[ReplacementCandidate]:
     """Entities that could replace `entity_id`: same world, same entity type,
-    `approved` or `canon`, active, excluding itself. Fetches `limit + 1` rows
-    ordered `(lower(name), entity_id)` for keyset paging."""
+    `approved` or `canon`, active, excluding itself, and (for an `approved` one,
+    which supersession publishes) passing the same publish preconditions the
+    command enforces. Fetches up to `limit + 1` rows ordered
+    `(lower(name), entity_id)` for keyset paging, scanning past unusable ones."""
+    usable: list[ReplacementCandidate] = []
+    cursor = after
+    while len(usable) <= limit:
+        batch = _candidate_batch(
+            connection,
+            world_id=world_id,
+            entity_id=entity_id,
+            query_text=query_text,
+            limit=limit,
+            after=cursor,
+        )
+        for candidate in batch:
+            if candidate.canon_status == "approved" and replacement_publish_blocked_reason(
+                connection,
+                superseded_id=entity_id,
+                replacement_id=candidate.entity_id,
+                replacement_type_code=candidate.entity_type_code,
+                replacement_canon_status="approved",
+            ):
+                continue
+            usable.append(candidate)
+            if len(usable) > limit:
+                break
+        if len(batch) <= limit or not batch:
+            break
+        cursor = (batch[-1].name_sort, batch[-1].entity_id)
+    return usable[: limit + 1]
+
+
+def _candidate_batch(
+    connection: Connection,
+    *,
+    world_id: uuid.UUID,
+    entity_id: uuid.UUID,
+    query_text: str | None,
+    limit: int,
+    after: tuple[str, uuid.UUID] | None,
+) -> list[ReplacementCandidate]:
     like = None
     if query_text:
         escaped = query_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -180,6 +229,8 @@ def list_replacement_candidates(
     rows = connection.execute(
         text("""
             SELECT c.entity_id, c.canonical_name, cs.code AS canon_status, c.row_version,
+                   (SELECT code FROM core.entity_types WHERE entity_type_id = c.entity_type_id)
+                       AS type_code,
                    lower(left(c.canonical_name, 200)) AS name_sort
             FROM core.entities self
             JOIN core.entities c ON c.world_id = self.world_id
@@ -214,6 +265,7 @@ def list_replacement_candidates(
             canon_status=str(row.canon_status),
             row_version=int(row.row_version),
             name_sort=str(row.name_sort),
+            entity_type_code=str(row.type_code),
         )
         for row in rows
     ]

@@ -70,6 +70,16 @@ export const ERROR_CODE_FIELD: Readonly<Record<string, string>> = {
     ruleset_not_available: "rulesets",
     branch_point_invalid: "branch-point",
     supersession_target_invalid: "replacement",
+    parent_location_invalid: "location-parent",
+    location_hierarchy_cycle: "location-parent",
+    organization_parent_invalid: "org-parent",
+    organization_hierarchy_cycle: "org-parent",
+    headquarters_location_invalid: "org-headquarters",
+    religion_invalid: "org-religion",
+    species_not_available: "npc-species",
+    origin_location_invalid: "npc-origin",
+    objective_target_invalid: "objective-target",
+    knowledge_subject_invalid: "knowledge-subject",
 }
 
 export function fieldForErrorCode(code: string | null): string | null {
@@ -99,4 +109,26 @@ export const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
         "This kind of record is not managed through lifecycle actions.",
     entity_referenced: "This record is referenced elsewhere and cannot be deleted.",
     subtype_incomplete: "This record is missing required details.",
+    content_not_editable: "This record cannot be edited in its current state.",
+    reference_not_published: "A record this one depends on is not published yet.",
+    parent_location_invalid: "The selected parent location is not valid. Choose another.",
+    location_hierarchy_cycle:
+        "That parent would place the location inside itself. Choose a different parent.",
+    organization_parent_invalid: "The selected parent organization is not valid. Choose another.",
+    organization_hierarchy_cycle:
+        "That parent would place the organization inside itself. Choose a different parent.",
+    headquarters_location_invalid: "The selected headquarters is not valid. Choose another.",
+    religion_invalid: "The selected religion is not valid. Choose another.",
+    species_not_available: "The selected species is not available in this world. Choose another.",
+    origin_location_invalid: "The selected origin is not valid. Choose another.",
+    character_has_user_relationships:
+        "A player or account is linked to this character. Remove those links first.",
+    objective_target_invalid: "The selected objective target is not valid. Choose another.",
+    knowledge_subject_invalid: "The selected subject is not valid. Choose another.",
+    knowledge_already_known:
+        "Someone already knows this claim, so its statement, type, and subject cannot change. Truth and sensitivity can still be edited; for a change in meaning, create a replacement claim.",
+    quest_has_progress:
+        "This quest already has progress recorded, so its structure cannot change. Wording can still be edited.",
+    quest_definition_incomplete:
+        "A quest needs at least one stage with an objective before it can be published.",
 }

@@ -46,7 +46,9 @@ from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.knowledge import get_knowledge_view
+from dnd_ai.queries.knowledge_authoring import knowledge_definition_states
 from dnd_ai.queries.knowledge_browse import (
     KNOWLEDGE_VIEWS,
     KNOWN_KEYSET,
@@ -116,6 +118,9 @@ class KnowledgeListItemResponse(BaseModel):
     source_event_id: uuid.UUID | None
     source_interaction_id: uuid.UUID | None
     subject_entity_id: uuid.UUID | None
+    # Authoring state, present only for `canon.edit` holders (Phase 15.1).
+    canon_status: str | None = None
+    lifecycle_status: str | None = None
 
 
 class KnowledgeListResponse(BaseModel):
@@ -291,6 +296,17 @@ def list_knowledge_endpoint(
             after_statement = cast(str, keyset[0])
 
     ground_truth_allowed, ground_truth_denied = _ground_truth_item_targets(access)
+    world_id = timeline_world_id(connection, access.timeline_id)
+    # Phase 15.1 draft/published separation: everyone sees only published, active
+    # claims in lists; a `canon.edit` holder also sees unpublished ones.
+    lifecycle_hidden = lifecycle_hidden_entity_ids(
+        connection,
+        world_id=world_id,
+        mode="browse",
+        can_edit_canon=include_ground_truth,
+        include_noncanon=include_ground_truth,
+        include_archived=False,
+    )
     items = list_knowledge(
         connection,
         view=view,
@@ -301,7 +317,7 @@ def list_knowledge_endpoint(
         authorized_knower_id=authorized_knower_id,
         query_text=q,
         knowledge_type_code=type,
-        denied_item_ids=_denied_item_ids(access),
+        denied_item_ids=_denied_item_ids(access) | lifecycle_hidden,
         ground_truth_allowed_item_ids=ground_truth_allowed,
         ground_truth_denied_item_ids=ground_truth_denied,
         limit=limit,
@@ -333,6 +349,15 @@ def list_knowledge_endpoint(
         world_id=timeline_world_id(connection, access.timeline_id),
     )
 
+    states = (
+        knowledge_definition_states(
+            connection,
+            world_id=world_id,
+            knowledge_item_ids=[item.knowledge_item_id for item in page.items],
+        )
+        if include_ground_truth
+        else {}
+    )
     return KnowledgeListResponse(
         items=[
             KnowledgeListItemResponse(
@@ -349,6 +374,8 @@ def list_knowledge_endpoint(
                 source_event_id=redaction.source_event(item),
                 source_interaction_id=redaction.source_interaction(item),
                 subject_entity_id=redaction.subject(item),
+                canon_status=states.get(item.knowledge_item_id, (None, None))[0],
+                lifecycle_status=states.get(item.knowledge_item_id, (None, None))[1],
             )
             for item in page.items
         ],
@@ -387,6 +414,15 @@ def resolve_knowledge_response(
         _KNOWLEDGE_GROUND_TRUTH_CAPABILITY,
         knowledge_item_id=knowledge_item_id,
     )
+    # Phase 15.1: an unpublished claim is the same "not visible" answer for a
+    # caller without `canon.edit`; archived and superseded stay readable by id.
+    if knowledge_item_id in lifecycle_hidden_entity_ids(
+        connection,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        mode="reference",
+        can_edit_canon=include_ground_truth,
+    ):
+        return None
     authorized_party_id = (
         None
         if include_ground_truth

@@ -148,8 +148,8 @@ describe("CampaignWorldDetailPage", () => {
         ).toHaveAttribute("href", "/app/campaign-a/world")
     })
 
-    it("fails closed for an unsupported category (organization)", () => {
-        renderAt("/app/campaign-a/world/organization/org-a")
+    it("fails closed for an unsupported category (relationship)", () => {
+        renderAt("/app/campaign-a/world/relationship/rel-a")
 
         expect(
             screen.getByText("World detail unavailable"),

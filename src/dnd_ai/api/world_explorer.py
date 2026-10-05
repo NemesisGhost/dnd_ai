@@ -44,6 +44,7 @@ from dnd_ai.queries.world_explorer import (
     get_event_view,
     get_item_view,
     get_location_view,
+    get_organization_detail_view,
     get_religion_view,
     list_world_relationships,
     search_world_entities,
@@ -249,6 +250,27 @@ class ReligionDetailResponse(BaseModel):
     superseded_by: "SupersededByResponse | None" = None
 
 
+class OrganizationLinkResponse(BaseModel):
+    entity_id: uuid.UUID
+    name: str
+
+
+class OrganizationDetailResponse(BaseModel):
+    organization_id: uuid.UUID
+    name: str
+    summary: str | None
+    kind_code: str
+    organization_type_code: str
+    public_description: str | None
+    parent: OrganizationLinkResponse | None
+    headquarters: OrganizationLinkResponse | None
+    religion: OrganizationLinkResponse | None
+    status_code: str | None
+    canon_status: str
+    lifecycle_status: str
+    superseded_by: "SupersededByResponse | None" = None
+
+
 class ItemDetailResponse(BaseModel):
     item_instance_id: uuid.UUID
     name: str
@@ -307,6 +329,10 @@ def search_world_entities_endpoint(
     cursor: Annotated[str | None, Query()] = None,
     include_noncanon: Annotated[bool, Query()] = False,
     include_archived: Annotated[bool, Query()] = False,
+    canon_status: Annotated[
+        list[Literal["draft", "proposed", "approved", "rejected", "canon", "superseded"]] | None,
+        Query(),
+    ] = None,
 ) -> WorldEntitySearchResponse:
     """Type-filtered, text-searchable, cursor-paginated browse over every
     authorized entity-rooted World Explorer category. `category` may be
@@ -314,7 +340,9 @@ def search_world_entities_endpoint(
     category. `q` is a bounded case-insensitive substring match over name
     and summary. By default only `canon`, active definitions are listed;
     a `canon.edit` holder may add `include_noncanon` and/or `include_archived`
-    (GM preview) — for anyone else the flags are silently ignored. An empty result — including for an authorized search with
+    (GM preview) — for anyone else the flags are silently ignored. `canon_status`
+    (repeatable) narrows the result to those statuses and is likewise
+    honoured only for a `canon.edit` holder. An empty result — including for an authorized search with
     no visible matches — returns `items: []`, never an existence hint."""
     categories = list(category) if category else list(WORLD_CATEGORY_TYPE_CODES)
     type_codes: list[str] = []
@@ -349,6 +377,9 @@ def search_world_entities_endpoint(
         limit=limit,
         after_name=after_name,
         after_entity_id=after_entity_id,
+        canon_status_codes=(
+            list(canon_status) if canon_status and access.has_capability(_GM_CAPABILITY) else None
+        ),
     )
 
     page = build_page(
@@ -498,6 +529,51 @@ def get_religion_endpoint(
         serving_organization_ids=list(view.serving_organization_ids),
         **_status_fields(
             get_entity_status_summary(connection, entity_id=religion_id, hidden_entity_ids=denied)
+        ),
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/world/organizations/{organization_id}",
+    response_model=OrganizationDetailResponse,
+    status_code=200,
+)
+def get_organization_detail_endpoint(
+    organization_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+) -> OrganizationDetailResponse:
+    denied = _campaign_view_denied_entity_ids(access, connection)
+    view = get_organization_detail_view(
+        connection,
+        organization_id=organization_id,
+        timeline_id=access.timeline_id,
+        expected_world_id=timeline_world_id(connection, access.timeline_id),
+        denied_entity_ids=denied,
+    )
+
+    def link(value: Any) -> OrganizationLinkResponse | None:
+        return (
+            None
+            if value is None
+            else OrganizationLinkResponse(entity_id=value.entity_id, name=value.name)
+        )
+
+    return OrganizationDetailResponse(
+        organization_id=view.organization_id,
+        name=view.name,
+        summary=view.summary,
+        kind_code=view.kind_code,
+        organization_type_code=view.organization_type_code,
+        public_description=view.public_description,
+        parent=link(view.parent),
+        headquarters=link(view.headquarters),
+        religion=link(view.religion),
+        status_code=view.status_code,
+        **_status_fields(
+            get_entity_status_summary(
+                connection, entity_id=organization_id, hidden_entity_ids=denied
+            )
         ),
     )
 

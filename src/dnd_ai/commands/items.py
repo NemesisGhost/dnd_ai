@@ -47,7 +47,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, Engine, text
 
-from ._shared import validate_session_campaign
+from ._shared import require_state_targetable, validate_session_campaign
 from .events import EventParticipant, _insert_event_row
 
 
@@ -152,6 +152,7 @@ def _transfer_item_possession_impl(
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
 
     world_id = _item_instance_world(connection, item_instance_id)
+    require_state_targetable(connection, holder_entity_id, location_id)
     _lock_item_instance(connection, item_instance_id)
 
     existing = _lock_inventory_entry(

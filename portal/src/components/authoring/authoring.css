@@ -370,12 +370,82 @@
   font-weight: 700;
 }
 
+.authoring-combobox {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.authoring-combobox .authoring-field__control {
+  flex: 1 1 14rem;
+  min-width: 0;
+  width: auto;
+}
+
+.authoring-combobox__clear {
+  flex: none;
+}
+
+.authoring-combobox__list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  width: 100%;
+  max-height: 16rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.25rem 1rem var(--color-shadow);
+}
+
+.authoring-combobox__list[hidden] {
+  display: none;
+}
+
+.authoring-combobox__option {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.authoring-combobox__option--active {
+  background-color: var(--color-surface-hover);
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.authoring-combobox__option[aria-selected="true"] {
+  font-weight: 700;
+}
+
+.authoring-combobox__detail {
+  color: var(--color-text-muted);
+}
+
+.authoring-page__actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin: 0.5rem 0 1rem;
+}
+
 @media (max-width: 40rem) {
   .authoring-actions {
     flex-direction: column;
   }
 
   .authoring-actions .authoring-button {
+    width: 100%;
+  }
+
+  .authoring-combobox__clear {
     width: 100%;
   }
 
@@ -394,5 +464,185 @@
 @media (min-width: 120rem) {
   .authoring-page {
     max-width: 96rem;
+  }
+}
+
+/* Quest stage list: one connected column of collapsible stage cards. Each row is
+   [Move up] [card] [Move down]; the buttons stay in place (disabled at the ends)
+   so every card aligns. */
+.quest-stage-list {
+  display: flex;
+  flex-direction: column;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-width: 64rem;
+}
+
+.quest-stage-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.75rem;
+  gap: 0.5rem;
+  align-items: start;
+  padding-bottom: 1rem;
+}
+
+.quest-stage-row:not(:last-child)::after {
+  /* the connector that reads the cards as one sequence */
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  height: 1rem;
+  border-left: 2px solid var(--color-border);
+}
+
+.quest-stage-row--static {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.quest-stage-row--dragging {
+  opacity: 0.6;
+}
+
+.quest-stage-row--drop-before > .quest-stage-card {
+  box-shadow: 0 -4px 0 0 var(--color-primary);
+}
+
+.quest-stage-row--drop-after > .quest-stage-card {
+  box-shadow: 0 4px 0 0 var(--color-primary);
+}
+
+/* Stacked, and together shorter than the collapsed header (min 3.75rem). Each
+   target stays at least 24px tall. */
+.quest-stage-row__moves {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.quest-stage-row__move {
+  min-width: 2.75rem;
+  min-height: 1.625rem;
+  padding: 0;
+  line-height: 1;
+  justify-content: center;
+}
+
+.quest-stage-card {
+  min-width: 0;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+}
+
+.quest-stage-card__header {
+  display: flex;
+  align-items: stretch;
+  user-select: none;
+}
+
+.quest-stage-card__handle {
+  display: flex;
+  align-items: center;
+  padding: 0 0.75rem;
+  color: var(--color-text-muted);
+  cursor: grab;
+}
+
+.quest-stage-card__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.quest-stage-card__toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.125rem 0.75rem;
+  width: 100%;
+  min-height: 3.75rem;
+  align-content: center;
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.quest-stage-card__toggle:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.quest-stage-card__toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.quest-stage-card__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.quest-stage-card__summary {
+  grid-column: 1;
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.quest-stage-card__chevron {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.quest-stage-card__body {
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+.quest-stage-card__body[hidden] {
+  display: none;
+}
+
+.quest-objective-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-width: 48rem;
+}
+
+.quest-objective-list__item {
+  padding: 0.5rem 0 0.5rem 0.75rem;
+  border-left: 3px solid var(--color-accent);
+}
+
+.quest-objective-list__item + .quest-objective-list__item {
+  margin-top: 0.5rem;
+}
+
+.quest-objective-list__item h5 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.quest-stage-card__status-line {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 30rem) {
+  .quest-stage-row {
+    grid-template-columns: minmax(0, 1fr) 2.75rem;
+    gap: 0.25rem;
   }
 }

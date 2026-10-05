@@ -55,6 +55,7 @@ from .ai_npc import router as ai_npc_router
 from .ai_synthesis import router as ai_synthesis_router
 from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
+from .cache_control import NoStoreMiddleware
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
 from .character_state import router as character_state_router
@@ -72,10 +73,15 @@ from .interactions import router as interactions_router
 from .invitation_onboarding import router as invitation_onboarding_router
 from .items import router as items_router
 from .knowledge import router as knowledge_router
+from .knowledge_authoring import router as knowledge_authoring_router
 from .local_auth import router as local_auth_router
+from .location_authoring import router as location_authoring_router
 from .memberships import router as memberships_router
 from .movement import router as movement_router
+from .npc_authoring import router as npc_authoring_router
+from .organization_authoring import router as organization_authoring_router
 from .preview import router as preview_router
+from .quest_authoring import router as quest_authoring_router
 from .quests import router as quests_router
 from .reference_corpus import router as reference_corpus_router
 from .relationships import router as relationships_router
@@ -142,6 +148,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Foundry-Actor-Id", "Idempotency-Key"],
     )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(NoStoreMiddleware)
     install_error_handlers(app)
     app.include_router(access_grants_router)
     app.include_router(access_groups_router)
@@ -164,9 +171,14 @@ def create_app() -> FastAPI:
     app.include_router(items_router)
     app.include_router(knowledge_router)
     app.include_router(local_auth_router)
+    app.include_router(location_authoring_router)
     app.include_router(memberships_router)
     app.include_router(movement_router)
+    app.include_router(npc_authoring_router)
+    app.include_router(knowledge_authoring_router)
+    app.include_router(organization_authoring_router)
     app.include_router(preview_router)
+    app.include_router(quest_authoring_router)
     app.include_router(quests_router)
     app.include_router(reference_corpus_router)
     app.include_router(relationships_router)

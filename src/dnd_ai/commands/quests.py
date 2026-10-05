@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, Engine, text
 
 from ._shared import PartyNotInCampaignError as PartyNotInCampaignError
-from ._shared import lookup_id
+from ._shared import lookup_id, require_state_targetable
 from ._shared import validate_campaign_party as _validate_campaign_party
 from ._shared import validate_session_campaign as _validate_session_campaign
 from .events import EventParticipant, _insert_event_row
@@ -208,6 +208,12 @@ def _advance_objective_impl(
 
     context = _quest_objective_context(connection, quest_objective_id)
     world_id = context.world_id
+    # The quest entity is locked FOR SHARE (see `require_state_targetable`), which
+    # serializes this first progress write against a structural edit of the
+    # definition (`commands.quest_definitions`, which takes it FOR UPDATE). If an
+    # edit removed the objective while this waited, it is gone now: re-read.
+    require_state_targetable(connection, context.quest_id)
+    context = _quest_objective_context(connection, quest_objective_id)
     _lock_quest_objective(connection, quest_objective_id)
 
     existing = _lock_objective_state(

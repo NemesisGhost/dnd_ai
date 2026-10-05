@@ -93,6 +93,20 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
         "political_factions",
         "religions",
         "religious_organizations",
+        # Phase 15.1: an NPC's own identity rows.
+        "characters",
+        "npcs",
+        "character_descriptions",
+        "character_languages",
+        "character_movements",
+        "character_senses",
+        # Phase 15.1: a quest's own definition rows.
+        "quests",
+        "quest_stages",
+        "quest_participants",
+        "quest_outcomes",
+        # Phase 15.1: a knowledge claim's own row.
+        "knowledge_items",
     }
     assert all(v in (OWNED_CASCADE, BLOCKING) for v in ENTITY_REFERENCE_CLASSIFICATION.values())
 
