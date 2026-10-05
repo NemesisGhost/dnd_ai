@@ -274,6 +274,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     )
     connection.execute(
         text("""
+            -- authored-content-direct-insert: allowed (throwaway smoke-test fixture)
             INSERT INTO campaign.party_memberships
                 (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
             VALUES (:timeline, :party, :member, :world_time)

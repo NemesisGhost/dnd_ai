@@ -37,7 +37,7 @@ class EffectiveClock:
     last_event_id: uuid.UUID | None
 
 
-def _time(connection: Connection, world_time_id: uuid.UUID) -> tuple[int, str]:
+def world_time_point(connection: Connection, world_time_id: uuid.UUID) -> tuple[int, str]:
     row = connection.execute(text(_ROW_SQL), {"t": world_time_id}).one()
     return int(row.sort_key), display_text(
         label=row.label,
@@ -59,7 +59,7 @@ def resolve_effective_clock(
         {"t": timeline_id},
     ).one_or_none()
     if own is not None:
-        sort_key, display = _time(connection, own.current_world_time_id)
+        sort_key, display = world_time_point(connection, own.current_world_time_id)
         return EffectiveClock(
             own.current_world_time_id,
             sort_key,
@@ -78,10 +78,10 @@ def resolve_effective_clock(
     if timeline is None or timeline.parent_timeline_id is None:
         return None
     parent = resolve_effective_clock(connection, timeline_id=timeline.parent_timeline_id)
-    branch_key, _ = _time(connection, timeline.branch_world_time_id)
+    branch_key, _ = world_time_point(connection, timeline.branch_world_time_id)
     if parent is None or parent.sort_key > branch_key:
         world_time_id = timeline.branch_world_time_id
     else:
         world_time_id = parent.world_time_id
-    sort_key, display = _time(connection, world_time_id)
+    sort_key, display = world_time_point(connection, world_time_id)
     return EffectiveClock(world_time_id, sort_key, display, False, 0, None)

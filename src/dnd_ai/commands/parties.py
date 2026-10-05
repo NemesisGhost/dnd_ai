@@ -43,16 +43,16 @@ class PartyResult:
 
 
 @dataclass(frozen=True)
-class _LockedParty:
+class LockedParty:
     name: str
     description: str | None
     row_version: int
     lifecycle_status: str
 
 
-def _lock_party(
+def lock_campaign_party(
     connection: Connection, *, campaign_id: uuid.UUID, party_id: uuid.UUID
-) -> _LockedParty:
+) -> LockedParty:
     row = connection.execute(
         text("""
             SELECT p.name, p.description, p.row_version, p.lifecycle_status_id
@@ -69,7 +69,7 @@ def _lock_party(
         text("SELECT code FROM core.lifecycle_statuses WHERE lifecycle_status_id = :s"),
         {"s": row.lifecycle_status_id},
     ).scalar()
-    return _LockedParty(
+    return LockedParty(
         name=str(row.name),
         description=row.description,
         row_version=int(row.row_version),
@@ -133,7 +133,7 @@ def update_party(
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
     scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
-    party = _lock_party(connection, campaign_id=campaign_id, party_id=party_id)
+    party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
     if party.lifecycle_status != PARTY_ACTIVE:
@@ -181,7 +181,7 @@ def _transition(
     to_status: str,
 ) -> PartyResult:
     scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
-    party = _lock_party(connection, campaign_id=campaign_id, party_id=party_id)
+    party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
     if to_status == PARTY_ARCHIVED and party.lifecycle_status != PARTY_ACTIVE:

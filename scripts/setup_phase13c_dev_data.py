@@ -429,6 +429,7 @@ from dnd_ai.commands.local_auth import (
 )
 from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
 from dnd_ai.commands.parties import create_party
+from dnd_ai.commands.party_members import add_party_member
 from dnd_ai.commands.player_characters import create_player_character
 from dnd_ai.commands.timelines import create_timeline
 from dnd_ai.commands.world_time import create_calendar, create_world_time
@@ -5299,6 +5300,7 @@ def _ensure_party_membership(
     connection: Connection,
     summary: _Summary,
     *,
+    campaign_id: uuid.UUID,
     timeline_id: uuid.UUID,
     party_id: uuid.UUID,
     member_entity_id: uuid.UUID,
@@ -5317,18 +5319,21 @@ def _ensure_party_membership(
     if existing is not None:
         summary.add(created=False, label=label, record_id=member_entity_id)
         return
-    connection.execute(
-        text("""
-            INSERT INTO campaign.party_memberships
-                (timeline_id, party_id, member_entity_id, effective_from_world_time_id)
-            VALUES (:t, :p, :m, :from_time)
-        """),
-        {
-            "t": timeline_id,
-            "p": party_id,
-            "m": member_entity_id,
-            "from_time": effective_from_world_time_id,
-        },
+    # Through the production command (Phase 15.2C-2): one join event per member,
+    # at the membership's own start time, acting as the world owner.
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    version = connection.execute(
+        text("SELECT row_version FROM campaign.parties WHERE party_id = :p"), {"p": party_id}
+    ).scalar()
+    assert isinstance(version, int)
+    add_party_member(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=_world_time_actor_user_id,
+        party_id=party_id,
+        character_id=member_entity_id,
+        effective_from_world_time_id=effective_from_world_time_id,
+        expected_party_row_version=version,
     )
     summary.add(created=True, label=label, record_id=member_entity_id)
 
@@ -5483,6 +5488,7 @@ def _ensure_world_and_knowledge_fixtures(
     _ensure_party_membership(
         connection,
         summary,
+        campaign_id=campaign_a_id,
         timeline_id=timeline_a_id,
         party_id=party_id,
         member_entity_id=character_a_id,
@@ -5492,6 +5498,7 @@ def _ensure_world_and_knowledge_fixtures(
     _ensure_party_membership(
         connection,
         summary,
+        campaign_id=campaign_a_id,
         timeline_id=timeline_a_id,
         party_id=party_id,
         member_entity_id=character_b_id,

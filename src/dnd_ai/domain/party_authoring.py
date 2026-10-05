@@ -30,9 +30,52 @@ class PartyNotArchivedError(SafeMessageError):
     safe_message = "This party is not archived."
 
 
+class PartyMembershipOverlapError(SafeMessageError):
+    """The character already belongs to this party during part of that period."""
+
+    safe_status_code = 409
+    safe_error_code = "party_membership_overlap"
+    safe_message = "That character is already a member of this party at that time."
+
+
+class PartyMemberInvalidError(SafeMessageError):
+    """The member is not a published, active NPC or player character of this world."""
+
+    safe_status_code = 400
+    safe_error_code = "party_member_invalid"
+    safe_message = "The selected character cannot join this party."
+
+
+class PartyMembershipNotOpenError(SafeMessageError):
+    """Only an open membership can be ended."""
+
+    safe_status_code = 409
+    safe_error_code = "party_membership_not_open"
+    safe_message = "That membership has already ended."
+
+
+class PartyMembershipEndInvalidError(SafeMessageError):
+    """A membership must end after it starts."""
+
+    safe_status_code = 409
+    safe_error_code = "party_membership_end_not_after_start"
+    safe_message = "The end time must be later than when the membership began."
+
+
+PARTY_MEMBER_JOINED = "party_member_joined"
+PARTY_MEMBER_LEFT = "party_member_left"
+PARTY_MEMBERSHIP_COMPONENT = "party_membership"
+
 __all__ = [
     "PARTY_ACTIVE",
     "PARTY_ARCHIVED",
+    "PARTY_MEMBERSHIP_COMPONENT",
+    "PARTY_MEMBER_JOINED",
+    "PARTY_MEMBER_LEFT",
+    "PartyMemberInvalidError",
+    "PartyMembershipEndInvalidError",
+    "PartyMembershipNotOpenError",
+    "PartyMembershipOverlapError",
     "PartyNotActiveError",
     "PartyNotArchivedError",
     "normalize_description",

@@ -261,6 +261,25 @@ party_memberships = Table(
     Column("joined_reason", Text()),
     Column("left_reason", Text()),
     *_timestamps(),
+    # Added by revision 121 (Phase 15 checkpoint 15.2C-2).
+    Column(
+        "joined_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The party_member_joined event that recorded this membership (same timeline); "
+            "NULL for rows created before revision 121."
+        ),
+    ),
+    Column(
+        "left_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The party_member_left event that ended this membership (same timeline); NULL while "
+            "open and for rows ended before revision 121."
+        ),
+    ),
     schema="campaign",
     comment=(
         "Timeline-scoped temporal record of a character belonging to a party. A character "
@@ -280,6 +299,16 @@ Index(
 )
 Index("ix_party_memberships_member_entity_id", party_memberships.c.member_entity_id)
 Index("ix_party_memberships_party_id", party_memberships.c.party_id)
+Index(
+    "ix_party_memberships_joined_event_id",
+    party_memberships.c.joined_event_id,
+    postgresql_where=party_memberships.c.joined_event_id.isnot(None),
+)
+Index(
+    "ix_party_memberships_left_event_id",
+    party_memberships.c.left_event_id,
+    postgresql_where=party_memberships.c.left_event_id.isnot(None),
+)
 Index(
     "ix_party_memberships_effective_from_world_time_id",
     party_memberships.c.effective_from_world_time_id,
