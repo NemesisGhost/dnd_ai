@@ -15,6 +15,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
   6  grant relationship, perspective          -- 15.2B-1 (invitations: later)
   7  party, member, party perspective        -- 15.2C-1, 15.2C-2
   9  advance (and correct) the clock          -- 15.2W-2
+ 10  schedule and edit a session             -- 15.2D-1
 """
 
 from collections.abc import Iterator
@@ -197,3 +198,24 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     )
     assert s.gm.get(members).json()["members"][0]["is_current"] is False
     assert s.player.get(members).status_code == 403
+
+    # --- Step 10 (15.2D-1): schedule a session, edit it, and see its derived status ----
+    sessions = f"/campaigns/{s.cid}/sessions"
+    session = write(sessions, {"title": "The Hollow Road", "scheduled_for": "2026-12-01T19:00:00Z"})
+    assert session["session_number"] == 1
+    write(
+        f"{sessions}/{session['session_id']}/update",
+        {
+            "expected_row_version": session["row_version"],
+            "title": "The Hollow Road, part one",
+            "scheduled_for": "2026-12-01T19:00:00Z",
+            "summary": "The party sets out.",
+        },
+        status=200,
+    )
+    listed_sessions = s.gm.get(sessions).json()
+    assert [(i["title"], i["play_status"]) for i in listed_sessions] == [
+        ("The Hollow Road, part one", "scheduled")
+    ]
+    assert s.player.get(sessions).json()[0]["row_version"] is None
+    assert s.player.post_raw(sessions, {"title": "x"}).status_code == 403
