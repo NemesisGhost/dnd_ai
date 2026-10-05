@@ -139,3 +139,12 @@ Commit on `phase15/completion`. **Status: implemented; local automated gates gre
 ### Not verified
 
 CI on the pushed head; manual browser checks. Idempotency rows written before this checkpoint still hold full views until checkpoint 15.2A-4. Decision recorded: world/timeline/campaign replay bodies (public or campaign-visible descriptions) were not changed.
+
+## Checkpoint 15.2A-5 — private-data policy foundation (Phase 16 prerequisite)
+
+Commit on `phase15/completion`. **Status: implemented; focused tests green.** Decision D-6 applied as proposed.
+
+- ADR 0016 (`docs/adr/0016-data-classification-and-private-data-handling.md`): the data classes, the handling matrix, retention/deletion/export/backup/log defaults, the host-administrator statement, and the Phase 16 obligations (classification, receipt-only mutations, no reporting grant, no preview adapter without a new decision). The existing-row scrub (D-2/D-28) is decided separately at 15.2A-4 and recorded as an addendum.
+- SYSTEM_ARCHITECTURE §19: what telemetry may contain.
+- `tests/unit/test_privacy_guards.py` (4): no column is `PLAYER_PRIVATE`/`SECRET`; any future private field would be redacted by every audit builder; no preview adapter can expose private data; a rejected request body is neither echoed nor logged.
+- Checks run: `uv run pytest tests/unit/test_privacy_guards.py` (4 passed); ruff clean. The full suite was not re-run (no production behaviour changed in this checkpoint).

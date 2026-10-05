@@ -561,6 +561,8 @@ Operational telemetry should include:
 - validation failures
 - import extraction and matching quality
 
+**What telemetry may contain (ADR 0016).** Logs, metrics, traces, and error responses carry identifiers, codes, durations, and outcomes only. They never carry request bodies, field values, narrative, statements, notes, or tokens, and never anything classified `PLAYER_PRIVATE` or `SECRET`. Error handlers log exception class, status, error code, correlation ID, and route template only; `tests/unit/test_privacy_guards.py` pins that a rejected request body is neither echoed nor logged.
+
 ## 20. Failure handling
 
 - Domain validation failures return structured errors without partial writes.
