@@ -106,6 +106,10 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
+// Stages start collapsed; open them all so their objectives can be reached.
+const expandAll = async () =>
+    fireEvent.click(await screen.findByRole("button", { name: "Expand all" }))
+
 function setupEdit(initial: object = quest()) {
     const server = installMockServer()
     let current: any = initial // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -198,6 +202,7 @@ describe("CreateQuestPage", () => {
 describe("EditQuestPage", () => {
     it("renders the aggregate by name, with one h1 and no identifiers", async () => {
         setupEdit()
+        await expandAll()
         await screen.findByRole("heading", { level: 3, name: /Opening/ })
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
         expect(screen.getByRole("heading", { level: 1, name: "Edit quest" })).toHaveFocus()
@@ -263,6 +268,7 @@ describe("EditQuestPage", () => {
 
     it("adds an objective with a chosen target and flattened typed fields", async () => {
         const { server, commit } = setupEdit()
+        await expandAll()
         server.on("POST", `${BASE}/q1/stages/s1/objectives`, () => commit(() => {}))
         fireEvent.click(await screen.findByRole("button", { name: /Add objective/ }))
         const panel = screen.getByRole("form", { name: "New objective" })
@@ -297,6 +303,7 @@ describe("EditQuestPage", () => {
 
     it("maps an invalid target onto the target field and keeps the panel's values", async () => {
         const { server } = setupEdit()
+        await expandAll()
         server.on("POST", `${BASE}/q1/stages/s1/objectives`, {
             status: 400,
             body: { error: { code: "objective_target_invalid", message: "m", correlation_id: "c" } },
@@ -364,6 +371,7 @@ describe("EditQuestPage", () => {
 
     it("confirms before removing a stage and states what goes with it", async () => {
         const { server, commit } = setupEdit()
+        await expandAll()
         server.on("POST", `${BASE}/q1/stages/s1/remove`, () => commit((d) => (d.stages = [])))
         fireEvent.click(await screen.findByRole("button", { name: /Remove stage Opening/ }))
         const dialog = await screen.findByRole("dialog", { name: "Remove this stage?" })
@@ -380,6 +388,7 @@ describe("EditQuestPage", () => {
 
     it("cancelling the removal sends nothing", async () => {
         const { server } = setupEdit()
+        await expandAll()
         fireEvent.click(await screen.findByRole("button", { name: /Remove objective Reach the ruin/ }))
         const dialog = await screen.findByRole("dialog", { name: "Remove this objective?" })
         fireEvent.click(within(dialog).getByRole("button", { name: "Keep it" }))
@@ -401,6 +410,7 @@ describe("EditQuestPage", () => {
                 ],
             }),
         )
+        await expandAll()
         expect(await screen.findByRole("note")).toHaveTextContent("already has progress recorded")
         expect(screen.queryByRole("button", { name: /Remove stage/ })).toBeNull()
         expect(screen.queryByRole("button", { name: /Remove objective/ })).toBeNull()
@@ -517,23 +527,38 @@ describe("Quest stage cards", () => {
         expect(last[last.length - 1]).toBeDisabled()
     })
 
-    it("collapses and expands each stage independently without any request", async () => {
+    it("starts collapsed and expands or collapses each stage independently without any request", async () => {
         const { server } = setupThree()
         await screen.findByRole("heading", { level: 3, name: /Opening/ })
         const opening = toggle(/^1\. Opening/)
         const secondToggle = toggle(/^2\. Second/)
+        expect(opening).toHaveAttribute("aria-expanded", "false")
+        expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin", hidden: true })).not.toBeVisible()
+        fireEvent.click(opening)
         expect(opening).toHaveAttribute("aria-expanded", "true")
-        expect(screen.getByRole("heading", { level: 5, name: "Optional detour" })).toBeInTheDocument()
-        fireEvent.click(secondToggle)
         expect(secondToggle).toHaveAttribute("aria-expanded", "false")
-        expect(opening).toHaveAttribute("aria-expanded", "true")
-        expect(screen.queryByRole("heading", { level: 5, name: "Optional detour" })).toBeNull()
-        expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
-        expect(secondToggle.getAttribute("aria-controls")).toBe(
-            document.getElementById(secondToggle.getAttribute("aria-controls")!)!.id,
-        )
-        fireEvent.click(secondToggle)
-        expect(secondToggle).toHaveAttribute("aria-expanded", "true")
+        expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeVisible()
+        expect(
+            document.getElementById(opening.getAttribute("aria-controls")!),
+        ).toContainElement(screen.getByRole("heading", { level: 5, name: "Reach the ruin" }))
+        fireEvent.click(opening)
+        expect(opening).toHaveAttribute("aria-expanded", "false")
+        expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("expands and collapses every stage with one button, sending no request", async () => {
+        const { server } = setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        fireEvent.click(toggle(/^2\. Second/))
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
+        for (const name of [/^1\. Opening/, /^2\. Second/, /^3\. Third/]) {
+            expect(toggle(name)).toHaveAttribute("aria-expanded", "true")
+        }
+        fireEvent.click(screen.getByRole("button", { name: "Collapse all" }))
+        for (const name of [/^1\. Opening/, /^2\. Second/, /^3\. Third/]) {
+            expect(toggle(name)).toHaveAttribute("aria-expanded", "false")
+        }
+        expect(screen.getByRole("button", { name: "Expand all" })).toBeInTheDocument()
         expect(server.callsTo("POST", /./)).toHaveLength(0)
     })
 
@@ -550,7 +575,8 @@ describe("Quest stage cards", () => {
 
     it("keeps a stage with an open form expanded", async () => {
         setupThree()
-        fireEvent.click(await screen.findByRole("button", { name: /Edit stage Second/ }))
+        fireEvent.click(await screen.findByRole("button", { name: "Expand all" }))
+        fireEvent.click(screen.getByRole("button", { name: /Edit stage Second/ }))
         const secondToggle = toggle(/^2\. Second/)
         fireEvent.click(secondToggle)
         expect(secondToggle).toHaveAttribute("aria-expanded", "true")
@@ -606,7 +632,7 @@ describe("Quest stage cards", () => {
             }),
         )
         await screen.findByRole("heading", { level: 3, name: /Opening/ })
-        fireEvent.click(toggle(/^2\. Second/))
+        fireEvent.click(toggle(/^1\. Opening/))
         fireEvent.click(screen.getByRole("button", { name: "Move down Opening" }))
         await waitFor(() => expect(screen.getByRole("button", { name: "Move down Opening" })).toBeDisabled())
         dragTo("Third", "Opening", 10)
@@ -619,6 +645,7 @@ describe("Quest stage cards", () => {
             ).toEqual([expect.stringMatching(/Third/), expect.stringMatching(/Second/), expect.stringMatching(/Opening/)]),
         )
         expect(screen.getByRole("button", { name: /Second/, expanded: false })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: /Opening/, expanded: true })).toBeInTheDocument()
         const openingRow = screen.getByRole("heading", { level: 3, name: /Opening/ }).closest("li")!
         expect(within(openingRow).getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
         expect(openingRow).toHaveTextContent("1 objective, 1 required")

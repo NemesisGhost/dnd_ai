@@ -231,9 +231,16 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
     const [removal, setRemoval] = useState<Removal | null>(null)
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
-    // Presentation only: which stages the author collapsed, and the drag in
-    // progress. Neither is persisted or sent to the server.
-    const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+    // Presentation only: which stages the author expanded (all start collapsed),
+    // and the drag in progress. Neither is persisted or sent to the server.
+    const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
+    const allOpen =
+        view.stages.length > 0 &&
+        view.stages.every(
+            (s) =>
+                opened.has(s.quest_stage_id) ||
+                (panel !== null && panel.stageId === s.quest_stage_id),
+        )
     const [drag, setDrag] = useState<{
         id: string
         overId: string | null
@@ -562,6 +569,18 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                         objective before it can be published.
                     </p>
                 ) : (
+                    <>
+                    <p>
+                        <button
+                            type="button"
+                            className="authoring-button"
+                            onClick={() =>
+                                setOpened(allOpen ? new Set() : new Set(view.stages.map((s) => s.quest_stage_id)))
+                            }
+                        >
+                            {allOpen ? "Collapse all" : "Expand all"}
+                        </button>
+                    </p>
                     <ol className="quest-stage-list">
                         {view.stages.map((stage, index) => {
                             const stageId = stage.quest_stage_id
@@ -569,7 +588,7 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                             // A stage holding an open form (and with it any validation or
                             // stale-write notice) is never collapsed out from under the author.
                             const hasPanel = panel !== null && panel.stageId === stageId
-                            const expanded = hasPanel || !collapsed.has(stageId)
+                            const expanded = hasPanel || opened.has(stageId)
                             const bodyId = `stage-body-${stageId}`
                             const requiredCount = stage.objectives.filter(
                                 (o) => o.requirement_level === "required",
@@ -659,7 +678,7 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                                     aria-controls={bodyId}
                                                     onClick={() => {
                                                         if (hasPanel) return
-                                                        setCollapsed((prev) => {
+                                                        setOpened((prev) => {
                                                             const next = new Set(prev)
                                                             if (next.has(stageId)) next.delete(stageId)
                                                             else next.add(stageId)
@@ -923,6 +942,7 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                             )
                         })}
                     </ol>
+                    </>
                 )}
                 {editable && can("add_stage") ? (
                     <>

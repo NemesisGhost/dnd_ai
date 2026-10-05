@@ -159,6 +159,7 @@ describe("QuestDetailPage", () => {
 
     it("counts only the shown objectives and never claims a whole-stage status", () => {
         renderQuestDetail(withStatuses(["completed"]))
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
 
         expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 1 complete")
         expect(screen.getByText("Shown objectives: 1 of 1 complete.")).toBeVisible()
@@ -184,14 +185,32 @@ describe("QuestDetailPage", () => {
         expect(screen.getByText("Active")).toBeInTheDocument()
         expect(screen.getByText("No status recorded")).toBeInTheDocument()
 
+        expect(stageButton()).toHaveAttribute("aria-expanded", "false")
+        fireEvent.click(stageButton())
+        expect(screen.getByText("Shown objectives: 1 of 4 complete.")).toBeVisible()
         fireEvent.click(stageButton())
         expect(stageButton()).toHaveAttribute("aria-expanded", "false")
         expect(screen.getByText("Shown objectives: 1 of 4 complete.")).not.toBeVisible()
         expect(stageButton()).toHaveTextContent("Shown objectives: 1 of 4 complete")
     })
 
+    it("starts collapsed and expands or collapses all stages with one button", () => {
+        renderQuestDetail(questFixture)
+
+        const toggles = screen.getAllByRole("button", { name: /^\d\. / })
+        expect(toggles).toHaveLength(2)
+        toggles.forEach((t) => expect(t).toHaveAttribute("aria-expanded", "false"))
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
+        toggles.forEach((t) => expect(t).toHaveAttribute("aria-expanded", "true"))
+        fireEvent.click(screen.getByRole("button", { name: "Collapse all" }))
+        toggles.forEach((t) => expect(t).toHaveAttribute("aria-expanded", "false"))
+        fireEvent.click(toggles[0]!)
+        expect(screen.getByRole("button", { name: "Expand all" })).toBeInTheDocument()
+    })
+
     it("says no objectives are shown when none are returned", () => {
         renderQuestDetail(withStatuses([]))
+        fireEvent.click(screen.getByRole("button", { name: "Expand all" }))
 
         expect(stageButton()).toHaveTextContent("No objectives shown")
         expect(screen.getByText("No objectives shown.")).toBeVisible()

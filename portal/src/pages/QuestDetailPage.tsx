@@ -66,8 +66,15 @@ function ObjectiveCard({ objective }: { objective: QuestObjective }) {
 
 // A collapsible stage card. The objective list is audience-filtered, so the count
 // describes only the objectives shown; it is never a whole-stage status.
-function StagePanel({ stage }: { stage: QuestStage }) {
-    const [expanded, setExpanded] = useState(true)
+function StagePanel({
+    stage,
+    expanded,
+    onToggle,
+}: {
+    stage: QuestStage
+    expanded: boolean
+    onToggle: () => void
+}) {
     const bodyId = `stage-body-${stage.quest_stage_id}`
     const total = stage.objectives.length
     const completed = stage.objectives.filter((o) => o.status_code === "completed").length
@@ -82,7 +89,7 @@ function StagePanel({ stage }: { stage: QuestStage }) {
                     className="quest-stage-card__toggle"
                     aria-expanded={expanded}
                     aria-controls={bodyId}
-                    onClick={() => setExpanded((open) => !open)}
+                    onClick={onToggle}
                 >
                     <span className="quest-stage-card__name">
                         <span className="quest-stage-card__number">{stage.sequence_number}.</span>{" "}
@@ -125,6 +132,16 @@ export function QuestDetailPage({
     quest,
 }: QuestDetailPageProps) {
     const stages = quest.stages
+    // Presentation only: stages start collapsed; nothing is persisted or sent.
+    const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
+    const allOpen = stages.length > 0 && stages.every((s) => opened.has(s.quest_stage_id))
+    const toggle = (id: string) =>
+        setOpened((prev) => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+        })
 
     return (
         <section aria-labelledby="quest-heading">
@@ -152,14 +169,29 @@ export function QuestDetailPage({
                 <h2 id="quest-stages-heading">Stages and Objectives</h2>
 
                 {stages.length > 0 ? (
-                    <div className="quest-detail__stage-list">
-                        {stages.map((stage) => (
-                            <StagePanel
-                                key={stage.quest_stage_id}
-                                stage={stage}
-                            />
-                        ))}
-                    </div>
+                    <>
+                        <p>
+                            <button
+                                type="button"
+                                className="authoring-button"
+                                onClick={() =>
+                                    setOpened(allOpen ? new Set() : new Set(stages.map((s) => s.quest_stage_id)))
+                                }
+                            >
+                                {allOpen ? "Collapse all" : "Expand all"}
+                            </button>
+                        </p>
+                        <div className="quest-detail__stage-list">
+                            {stages.map((stage) => (
+                                <StagePanel
+                                    key={stage.quest_stage_id}
+                                    stage={stage}
+                                    expanded={opened.has(stage.quest_stage_id)}
+                                    onToggle={() => toggle(stage.quest_stage_id)}
+                                />
+                            ))}
+                        </div>
+                    </>
                 ) : (
                     <p>No stages are available for this quest.</p>
                 )}
