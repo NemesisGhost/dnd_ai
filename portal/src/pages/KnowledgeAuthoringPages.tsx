@@ -20,6 +20,7 @@ import type {
     KnowledgeOptions,
 } from "../types/knowledgeAuthoring"
 import { statusDetail } from "../utils/locationForm"
+import type { KnowledgeReceipt } from "../types/contentAuthoring"
 
 interface KnowledgeFormValues {
     statement: string
@@ -199,7 +200,7 @@ const createConfig: ContentCreateConfig<
     KnowledgeOptions,
     KnowledgeFormValues,
     CreateKnowledgeBody,
-    KnowledgeAuthoringView
+    KnowledgeReceipt
 > = {
     noun: "knowledge claim",
     heading: "New knowledge claim",

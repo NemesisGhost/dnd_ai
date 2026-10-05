@@ -1,9 +1,5 @@
-import type {
-    CreateLocationBody,
-    LocationAuthoringView,
-    LocationParentOptionPage,
-    UpdateLocationBody,
-} from "../types/locationAuthoring"
+import type { LocationReceipt } from "../types/contentAuthoring"
+import type { CreateLocationBody, LocationParentOptionPage, UpdateLocationBody } from "../types/locationAuthoring"
 import { apiRequest } from "./http"
 import type { MutationContext } from "./worlds"
 
@@ -51,8 +47,8 @@ export function createLocation(
     campaignId: string,
     body: CreateLocationBody,
     ctx: MutationContext,
-): Promise<LocationAuthoringView> {
-    return apiRequest<LocationAuthoringView>("POST", base(campaignId), { body, ...ctx })
+): Promise<LocationReceipt> {
+    return apiRequest<LocationReceipt>("POST", base(campaignId), { body, ...ctx })
 }
 
 export function updateLocation(
@@ -60,8 +56,8 @@ export function updateLocation(
     locationId: string,
     body: UpdateLocationBody,
     ctx: MutationContext,
-): Promise<LocationAuthoringView> {
-    return apiRequest<LocationAuthoringView>(
+): Promise<LocationReceipt> {
+    return apiRequest<LocationReceipt>(
         "POST",
         `${locationAuthoringPath(campaignId, locationId)}/update`,
         { body, ...ctx },

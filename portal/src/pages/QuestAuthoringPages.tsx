@@ -16,6 +16,7 @@ import {
     validateName,
 } from "../utils/authoringValidation"
 import "../components/authoring/authoring.css"
+import type { QuestReceipt } from "../types/contentAuthoring"
 
 interface QuestFormValues {
     name: string
@@ -30,7 +31,7 @@ const createConfig: ContentCreateConfig<
     QuestOptions,
     QuestFormValues,
     CreateQuestBody,
-    QuestAuthoringView
+    QuestReceipt
 > = {
     noun: "quest",
     heading: "New quest",

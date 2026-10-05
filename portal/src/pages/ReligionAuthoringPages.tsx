@@ -22,6 +22,7 @@ import {
     validateDescription,
     validateName,
 } from "../utils/authoringValidation"
+import type { ReligionReceipt } from "../types/contentAuthoring"
 
 interface ReligionFormValues {
     name: string
@@ -114,7 +115,7 @@ const createConfig: ContentCreateConfig<
     ReligionOptions,
     ReligionFormValues,
     CreateReligionBody,
-    ReligionAuthoringView
+    ReligionReceipt
 > = {
     noun: "religion",
     heading: "New religion",

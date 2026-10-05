@@ -25,3 +25,32 @@ export interface AuthoringReadModel {
     // Present on mutation responses only.
     changed?: boolean
 }
+
+
+// Typed authoring writes answer with a receipt (ids, version, flags) and never
+// echo content; the portal refetches the authoritative view after a write.
+export interface WriteReceipt {
+    row_version: number
+    created: boolean
+    changed: boolean
+    // A child record (quest stage or objective) the command wrote.
+    record_id?: string
+}
+export interface LocationReceipt extends WriteReceipt {
+    location_id: string
+}
+export interface OrganizationReceipt extends WriteReceipt {
+    organization_id: string
+}
+export interface ReligionReceipt extends WriteReceipt {
+    religion_id: string
+}
+export interface NpcReceipt extends WriteReceipt {
+    npc_id: string
+}
+export interface KnowledgeReceipt extends WriteReceipt {
+    knowledge_item_id: string
+}
+export interface QuestReceipt extends WriteReceipt {
+    quest_id: string
+}

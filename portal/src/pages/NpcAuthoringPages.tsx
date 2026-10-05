@@ -21,6 +21,7 @@ import {
     validateName,
 } from "../utils/authoringValidation"
 import { statusDetail } from "../utils/locationForm"
+import type { NpcReceipt } from "../types/contentAuthoring"
 
 interface NpcFormValues {
     name: string
@@ -243,7 +244,7 @@ function Fields({
     )
 }
 
-const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody, NpcAuthoringView> = {
+const createConfig: ContentCreateConfig<NpcOptions, NpcFormValues, CreateNpcBody, NpcReceipt> = {
     noun: "NPC",
     heading: "New NPC",
     lead: "A new NPC is saved as a draft. Only people who can edit canon see it until it is published. This sets who the character is; stats, inventory, and behavior are managed elsewhere.",

@@ -51,7 +51,7 @@ export interface ContentEditConfig<TView extends EditableView, TOptions, TValues
         entityId: string,
         body: TBody & { expected_row_version: number; change_note: string | null },
         ctx: MutationContext,
-    ) => Promise<TView>
+    ) => Promise<unknown>
     renderFields: (
         props: FieldsRenderProps<TOptions, TValues> & { entityId: string; view: TView },
     ) => ReactNode
@@ -185,7 +185,7 @@ function EditForm<TView extends EditableView, TOptions, TValues, TBody>({
 
     const mutation = useAuthoringMutation<
         TBody & { expected_row_version: number; change_note: string | null },
-        TView
+        unknown
     >({
         scopeKey: `edit-${config.noun}:${entityId}:${view.row_version}`,
         request: (body, ctx) => config.update(campaignId, entityId, body, ctx),

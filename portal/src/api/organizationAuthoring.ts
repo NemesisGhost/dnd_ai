@@ -1,9 +1,8 @@
+import type { OrganizationReceipt, ReligionReceipt } from "../types/contentAuthoring"
 import type {
     CreateOrganizationBody,
     CreateReligionBody,
-    OrganizationAuthoringView,
     OrganizationParentOptionPage,
-    ReligionAuthoringView,
     ReligionReferenceOptionPage,
     UpdateOrganizationBody,
     UpdateReligionBody,
@@ -57,8 +56,8 @@ export function createOrganization(
     campaignId: string,
     body: CreateOrganizationBody,
     ctx: MutationContext,
-): Promise<OrganizationAuthoringView> {
-    return apiRequest<OrganizationAuthoringView>("POST", organizations(campaignId), {
+): Promise<OrganizationReceipt> {
+    return apiRequest<OrganizationReceipt>("POST", organizations(campaignId), {
         body,
         ...ctx,
     })
@@ -69,8 +68,8 @@ export function updateOrganization(
     organizationId: string,
     body: UpdateOrganizationBody,
     ctx: MutationContext,
-): Promise<OrganizationAuthoringView> {
-    return apiRequest<OrganizationAuthoringView>(
+): Promise<OrganizationReceipt> {
+    return apiRequest<OrganizationReceipt>(
         "POST",
         `${organizationAuthoringPath(campaignId, organizationId)}/update`,
         { body, ...ctx },
@@ -101,8 +100,8 @@ export function createReligion(
     campaignId: string,
     body: CreateReligionBody,
     ctx: MutationContext,
-): Promise<ReligionAuthoringView> {
-    return apiRequest<ReligionAuthoringView>("POST", religions(campaignId), { body, ...ctx })
+): Promise<ReligionReceipt> {
+    return apiRequest<ReligionReceipt>("POST", religions(campaignId), { body, ...ctx })
 }
 
 export function updateReligion(
@@ -110,8 +109,8 @@ export function updateReligion(
     religionId: string,
     body: UpdateReligionBody,
     ctx: MutationContext,
-): Promise<ReligionAuthoringView> {
-    return apiRequest<ReligionAuthoringView>(
+): Promise<ReligionReceipt> {
+    return apiRequest<ReligionReceipt>(
         "POST",
         `${religionAuthoringPath(campaignId, religionId)}/update`,
         { body, ...ctx },

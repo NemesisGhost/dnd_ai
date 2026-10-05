@@ -1,9 +1,5 @@
-import type {
-    CreateQuestBody,
-    QuestAuthoringView,
-    QuestCommand,
-    QuestTargetOptionPage,
-} from "../types/questAuthoring"
+import type { QuestReceipt } from "../types/contentAuthoring"
+import type { CreateQuestBody, QuestCommand, QuestTargetOptionPage } from "../types/questAuthoring"
 import { apiRequest } from "./http"
 import type { MutationContext } from "./worlds"
 
@@ -36,8 +32,8 @@ export function createQuest(
     campaignId: string,
     body: CreateQuestBody,
     ctx: MutationContext,
-): Promise<QuestAuthoringView> {
-    return apiRequest<QuestAuthoringView>("POST", base(campaignId), { body, ...ctx })
+): Promise<QuestReceipt> {
+    return apiRequest<QuestReceipt>("POST", base(campaignId), { body, ...ctx })
 }
 
 // Runs one quest command and returns the whole authoring view.
@@ -46,10 +42,10 @@ export function runQuestCommand(
     questId: string,
     command: QuestCommand,
     ctx: MutationContext,
-): Promise<QuestAuthoringView> {
+): Promise<QuestReceipt> {
     const quest = questAuthoringPath(campaignId, questId)
     const post = (path: string, body: unknown) =>
-        apiRequest<QuestAuthoringView>("POST", `${quest}${path}`, { body, ...ctx })
+        apiRequest<QuestReceipt>("POST", `${quest}${path}`, { body, ...ctx })
     switch (command.op) {
         case "update_quest":
             return post("/update", command.body)
