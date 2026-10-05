@@ -11,6 +11,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
   1  create a world (owner)                 -- Phase 14, via the shared setup
   2  create a campaign                      -- Phase 14, via the shared setup
   3  calendar and world times               -- 15.2W-1
+  9  advance (and correct) the clock          -- 15.2W-2
 """
 
 from collections.abc import Iterator
@@ -68,3 +69,34 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     # The player sees none of this authoring surface.
     assert s.player.get(times).status_code == 403
     assert s.player.post_raw(times, {"label": "x", "after_world_time_id": None}).status_code == 403
+
+    # --- Step 9 (15.2W-2): advance the campaign clock, then correct a mistake ----------
+    clock = f"/campaigns/{s.cid}/clock"
+    assert s.gm.get(clock).json()["current"] is None
+    advanced = write(
+        f"{clock}/advance",
+        {"world_time_id": siege["world_time_id"], "expected_row_version": 0},
+        status=200,
+    )
+    assert s.gm.get(clock).json()["current"]["display"] == "After the siege"
+    # A mistaken advance is corrected, not rewritten: the original event stays.
+    corrected = write(
+        f"{clock}/correct",
+        {
+            "world_time_id": opening["world_time_id"],
+            "expected_row_version": advanced["row_version"],
+            "corrects_event_id": advanced["event_id"],
+        },
+        status=200,
+    )
+    assert corrected["event_id"] != advanced["event_id"]
+    assert s.gm.get(clock).json()["current"]["world_time_id"] == opening["world_time_id"]
+    # Any member may read the clock; only an editor may change it.
+    assert s.player.get(clock).status_code == 200
+    assert (
+        s.player.post_raw(
+            f"{clock}/advance",
+            {"world_time_id": opening["world_time_id"], "expected_row_version": 2},
+        ).status_code
+        == 403
+    )
