@@ -78,6 +78,14 @@ def _purge_user_worlds(engine: Engine, user_id: uuid.UUID) -> None:
             )
             cleanup.execute(
                 text(
+                    "DELETE FROM campaign.session_participants WHERE session_id IN "
+                    f"(SELECT session_id FROM campaign.sessions WHERE {scoped})"
+                ),
+                {"w": world_id},
+            )
+            cleanup.execute(text(f"DELETE FROM campaign.sessions WHERE {scoped}"), {"w": world_id})
+            cleanup.execute(
+                text(
                     "DELETE FROM campaign.campaigns WHERE timeline_id IN "
                     "(SELECT timeline_id FROM campaign.timelines WHERE world_id = :w)"
                 ),

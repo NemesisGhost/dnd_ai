@@ -56,6 +56,7 @@ _TABLES = (
     "campaign.party_memberships",
     # Phase 15.2D-1 session definitions.
     "campaign.sessions",
+    "campaign.session_participants",
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",

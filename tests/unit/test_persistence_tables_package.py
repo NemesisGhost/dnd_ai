@@ -96,6 +96,7 @@ EXPECTED_TABLES = {
         "campaign.relationship_state",
         "campaign.timeline_clocks",
         "campaign.relationship_statuses",
+        "campaign.session_participants",
         "campaign.sessions",
         "campaign.timelines",
     ],

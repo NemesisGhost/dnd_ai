@@ -172,6 +172,8 @@ MANAGED_TABLES = [
     ("campaign", "relationship_state"),
     # Phase 15 checkpoint 15.2W-2 (revision 118): the campaign clock.
     ("campaign", "timeline_clocks"),
+    # Phase 15 checkpoint 15.2D-2 (revision 123): session participants.
+    ("campaign", "session_participants"),
     # Phase 9 — item domain
     ("rules", "item_categories"),
     ("rules", "item_definitions"),

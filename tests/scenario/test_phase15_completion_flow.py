@@ -16,6 +16,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
   7  party, member, party perspective        -- 15.2C-1, 15.2C-2
   9  advance (and correct) the clock          -- 15.2W-2
  10  schedule and edit a session             -- 15.2D-1
+ 11  participants, start, log, end           -- 15.2D-2
 """
 
 from collections.abc import Iterator
@@ -219,3 +220,40 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     ]
     assert s.player.get(sessions).json()[0]["row_version"] is None
     assert s.player.post_raw(sessions, {"title": "x"}).status_code == 403
+
+    # --- Step 11 (15.2D-2): run the session: participant, start, log, end ---------------
+    session_url = f"{sessions}/{session['session_id']}"
+
+    def session_version() -> int:
+        return int(s.gm.get(session_url).json()["row_version"])
+
+    write(
+        f"{session_url}/participants",
+        {
+            "expected_row_version": session_version(),
+            "character_id": pc_id,
+            "participation_role": "player_character",
+        },
+    )
+    write(f"{session_url}/start", {"expected_row_version": session_version()}, status=200)
+    logged = write(
+        f"{session_url}/log",
+        {"entry": "The party sets out.", "details": "GM only: the road is watched"},
+    )
+    assert logged["event_id"]
+    played = s.gm.get(session_url).json()
+    assert played["play_status"] == "in_progress"
+    assert [p["character_name"] for p in played["participants"]] == ["Aldric"]
+    seen_by_player = s.player.get(session_url).json()
+    assert seen_by_player["participants"] is None
+    assert [e["details"] for e in seen_by_player["events"]] == [None]
+    write(
+        f"{session_url}/end",
+        {
+            "expected_row_version": session_version(),
+            "end_world_time_id": siege["world_time_id"],
+            "summary": "A good start.",
+        },
+        status=200,
+    )
+    assert s.gm.get(session_url).json()["play_status"] == "completed"

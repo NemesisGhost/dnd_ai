@@ -104,8 +104,18 @@ def test_play_status_is_derived_never_stored(s: ContentSetup) -> None:
     assert by_number[2]["scheduled_for"] is not None
     assert detail(s, planned["session_id"])["play_status"] == "scheduled"
     # Editors get the version and the actions; players do not.
-    assert by_number[1]["available_actions"] == ["update", "archive"]
-    assert by_number[3]["available_actions"] == ["update"]  # cannot archive while played
+    assert by_number[1]["available_actions"] == [
+        "update",
+        "start",
+        "manage_participants",
+        "archive",
+    ]
+    assert by_number[3]["available_actions"] == [
+        "update",
+        "manage_participants",
+        "log",
+        "end",
+    ]  # cannot archive while played
     player_view = {i["session_number"]: i for i in s.player.get(sessions_url(s)).json()}
     assert player_view[1]["row_version"] is None and player_view[1]["available_actions"] is None
     assert str(playing) in {i["session_id"] for i in s.gm.get(sessions_url(s)).json()}
