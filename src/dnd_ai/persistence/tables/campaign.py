@@ -1411,3 +1411,60 @@ Index(
     unique=True,
     postgresql_where=relationship_state.c.perspective_holder_entity_id.isnot(None),
 )
+
+
+# ---------------------------------------------------------------------------
+# campaign — the campaign clock (revision 118, Phase 15)
+# ---------------------------------------------------------------------------
+
+timeline_clocks = Table(
+    "timeline_clocks",
+    metadata,
+    Column(
+        "timeline_id",
+        UUID(),
+        ForeignKey("campaign.timelines.timeline_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "current_world_time_id",
+        UUID(),
+        ForeignKey("core.world_times.world_time_id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="The timeline's current point in fictional time; must belong to the timeline's world.",
+    ),
+    Column(
+        "last_event_id",
+        UUID(),
+        ForeignKey("narrative.events.event_id", ondelete="SET NULL"),
+        comment=(
+            "The time_advanced or time_corrected event that set the current value "
+            "(same-timeline guard: campaign.enforce_state_event_timeline())."
+        ),
+    ),
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment="Optimistic-concurrency token, incremented by every UPDATE (core.bump_row_version()).",
+    ),
+    *_timestamps(),
+    schema="campaign",
+    comment=(
+        "The current world time of a timeline (Phase 15). One row per timeline; typed "
+        "timeline state changed only through the clock commands, each of which records a "
+        "causal event. A branch with no row inherits its parent's clock bounded by its "
+        "branch point (resolved on read)."
+    ),
+)
+
+Index(
+    "ix_timeline_clocks_current_world_time_id",
+    timeline_clocks.c.current_world_time_id,
+)
+Index(
+    "ix_timeline_clocks_last_event_id",
+    timeline_clocks.c.last_event_id,
+    postgresql_where=timeline_clocks.c.last_event_id.isnot(None),
+)

@@ -56,6 +56,7 @@ from .ai_synthesis import router as ai_synthesis_router
 from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
 from .cache_control import NoStoreMiddleware
+from .campaign_clock import router as campaign_clock_router
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
 from .character_state import router as character_state_router
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_synthesis_router)
     app.include_router(audit_history_router)
     app.include_router(campaign_invitations_router)
+    app.include_router(campaign_clock_router)
     app.include_router(campaigns_router)
     app.include_router(character_state_router)
     app.include_router(characters_router)

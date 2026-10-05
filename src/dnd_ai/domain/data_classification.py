@@ -306,6 +306,7 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "objectives_removed",
         "organization_type",
         "calendar_id",
+        "current_world_time_id",
         "year",
         "month_number",
         "day",

@@ -79,6 +79,7 @@ from .campaign import (
     relationship_state,
     relationship_statuses,
     sessions,
+    timeline_clocks,
     timelines,
 )
 from .characters import (
@@ -448,6 +449,7 @@ __all__ = [
     "relationship_participants",
     "relationship_perspectives",
     "relationship_state",
+    "timeline_clocks",
     "relationship_statuses",
     "relationship_types",
     "relationships",
