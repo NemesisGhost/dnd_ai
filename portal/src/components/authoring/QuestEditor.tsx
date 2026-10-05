@@ -636,17 +636,6 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                         dropStage(id, stageId, after)
                                     }}
                                 >
-                                    {reorderable ? (
-                                        <button
-                                            type="button"
-                                            className="authoring-button quest-stage-row__move"
-                                            disabled={busy || index === 0}
-                                            onClick={() => move(index, -1)}
-                                            aria-label={`Move up ${stage.name}`}
-                                        >
-                                            <span aria-hidden="true">▲</span> Up
-                                        </button>
-                                    ) : null}
                                     <div className="quest-stage-card">
                                         <div
                                             className="quest-stage-card__header"
@@ -928,15 +917,26 @@ export function QuestEditor({ campaignId, view, options, refreshing, refetch }: 
                                         </div>
                                     </div>
                                     {reorderable ? (
-                                        <button
-                                            type="button"
-                                            className="authoring-button quest-stage-row__move"
-                                            disabled={busy || index === view.stages.length - 1}
-                                            onClick={() => move(index, 1)}
-                                            aria-label={`Move down ${stage.name}`}
-                                        >
-                                            Down <span aria-hidden="true">▼</span>
-                                        </button>
+                                        <div className="quest-stage-row__moves">
+                                            <button
+                                                type="button"
+                                                className="authoring-button quest-stage-row__move"
+                                                disabled={busy || index === 0}
+                                                onClick={() => move(index, -1)}
+                                                aria-label={`Move up ${stage.name}`}
+                                            >
+                                                <span aria-hidden="true">▲</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="authoring-button quest-stage-row__move"
+                                                disabled={busy || index === view.stages.length - 1}
+                                                onClick={() => move(index, 1)}
+                                                aria-label={`Move down ${stage.name}`}
+                                            >
+                                                <span aria-hidden="true">▼</span>
+                                            </button>
+                                        </div>
                                     ) : null}
                                 </li>
                             )

@@ -509,7 +509,7 @@ describe("Quest stage cards", () => {
         fireEvent.drop(target)
     }
 
-    it("renders stages in order with Move up on the left and Move down on the right, disabled at the ends", async () => {
+    it("renders stages in order with arrow-only Move up and Move down on the right, disabled at the ends", async () => {
         setupThree()
         await screen.findByRole("heading", { level: 3, name: /Opening/ })
         const rows = screen.getAllByRole("listitem").filter((li) => li.classList.contains("quest-stage-row"))
@@ -517,14 +517,19 @@ describe("Quest stage cards", () => {
         const names = rows.map((r) => within(r).getByRole("heading", { level: 3 }).textContent)
         expect(names[0]).toMatch(/Opening/)
         expect(names[2]).toMatch(/Third/)
-        const first = within(rows[0]!).getAllByRole("button")
+        const first = within(rows[0]!).getAllByRole("button").slice(-2)
         expect(first[0]).toHaveAccessibleName("Move up Opening")
+        expect(first[0]).toHaveTextContent("▲")
         expect(first[0]).toBeDisabled()
-        expect(first[first.length - 1]).toHaveAccessibleName("Move down Opening")
-        const last = within(rows[2]!).getAllByRole("button")
+        expect(first[1]).toHaveAccessibleName("Move down Opening")
+        expect(first[1]).toHaveTextContent("▼")
+        expect(first[1]).toBeEnabled()
+        const last = within(rows[2]!).getAllByRole("button").slice(-2)
         expect(last[0]).toHaveAccessibleName("Move up Third")
-        expect(last[last.length - 1]).toHaveAccessibleName("Move down Third")
-        expect(last[last.length - 1]).toBeDisabled()
+        expect(last[0]).toBeEnabled()
+        expect(last[1]).toHaveAccessibleName("Move down Third")
+        expect(last[1]).toBeDisabled()
+        expect(within(rows[1]!).getByRole("button", { name: /Move up Second/ })).not.toHaveTextContent(/move|up/i)
     })
 
     it("starts collapsed and expands or collapses each stage independently without any request", async () => {
