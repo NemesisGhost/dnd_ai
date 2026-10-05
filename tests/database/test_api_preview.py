@@ -541,3 +541,123 @@ def test_the_gm_quest_preview_is_byte_identical_to_the_subjects_own_request(
 
     assert preview_response.status_code == direct_response.status_code == 200
     assert preview_response.json() == direct_response.json()
+
+
+# ---------------------------------------------------------------------------
+# Audit: metadata-only `sensitive_read` rows (checkpoint 15.2A-3)
+# ---------------------------------------------------------------------------
+
+
+def _preview_audit_rows(
+    engine: Engine, *, actor_user_id: uuid.UUID, command_name: str | None = None
+) -> list[dict]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT ca.code AS action, cl.command_name, cl.record_id, cl.entity_id,
+                       cl.actor_user_id, cl.correlation_id, cl.changed_fields, cl.reason
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE cl.actor_user_id = :u
+                  AND ca.code = 'sensitive_read'
+                  AND (CAST(:c AS text) IS NULL OR cl.command_name = :c)
+                ORDER BY cl.change_log_id
+            """),
+            {"u": actor_user_id, "c": command_name},
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+def test_a_shown_preview_writes_one_metadata_only_sensitive_read_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = client.get(
+            _quest_preview_url(f, f.gm_membership_id),
+            headers={"X-Correlation-Id": "preview-audit-shown-0001"},
+        )
+    assert response.status_code == 200
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_quest"
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["record_id"] == f.quest_id and row["entity_id"] == f.quest_id
+    assert row["changed_fields"] == {
+        "resource_kind": "quest",
+        "subject_membership_id": str(f.gm_membership_id),
+        "outcome": "shown",
+        "character_perspective_supplied": False,
+        "party_perspective_supplied": False,
+    }
+    # No projected response, narrative, or reason is ever stored.
+    stored = str(row)
+    assert "Secret GM note" not in stored and row["reason"] is None
+
+
+def test_a_refused_preview_is_still_audited_with_the_identical_404(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        refused = client.get(_knowledge_preview_url(f, f.denied_membership_id))
+        unknown = client.get(_knowledge_preview_url(f, uuid.uuid4()))
+    assert refused.status_code == 404 and unknown.status_code == 404
+    assert refused.json()["error"]["code"] == unknown.json()["error"]["code"]
+    assert refused.json()["error"]["message"] == unknown.json()["error"]["message"]
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_knowledge"
+    )
+    assert [r["changed_fields"]["outcome"] for r in rows] == ["refused", "refused"]
+    assert all(r["changed_fields"]["resource_kind"] == "knowledge_item" for r in rows)
+    # The 404 body never reveals why (and the audit row holds no reason either).
+    assert all(r["reason"] is None for r in rows)
+
+
+def test_perspective_parameters_are_recorded_only_as_booleans(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    character = uuid.uuid4()
+    party = uuid.uuid4()
+    with client_factory(f.actor_user_id) as client:
+        client.get(
+            _quest_preview_url(f, f.player_membership_id),
+            params={"character_id": str(character), "party_id": str(party)},
+        )
+    rows = _preview_audit_rows(
+        postgres_engine, actor_user_id=f.actor_user_id, command_name="preview_quest"
+    )
+    last = rows[-1]["changed_fields"]
+    assert last["character_perspective_supplied"] is True
+    assert last["party_perspective_supplied"] is True
+    assert str(character) not in str(last) and str(party) not in str(last)
+
+
+def test_an_unauthorized_actor_writes_no_preview_audit_row(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_quest_preview_url(f, f.player_membership_id)).status_code == 403
+    with client_factory(f.outsider_user_id) as client:
+        assert client.get(_quest_preview_url(f, f.player_membership_id)).status_code == 404
+    for user in (f.capless_user_id, f.outsider_user_id):
+        assert _preview_audit_rows(postgres_engine, actor_user_id=user) == []
+
+
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+def test_a_preview_path_accepts_only_get(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, method: str
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        response = getattr(client, method)(_quest_preview_url(f, f.gm_membership_id))
+    assert response.status_code == 405
+
+
+def test_an_unregistered_resource_cannot_be_previewed(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.actor_user_id) as client:
+        for kind in ("sessions", "characters", "items", "notes"):
+            response = client.get(
+                f"/campaigns/{f.campaign_id}/members/{f.gm_membership_id}/preview/{kind}/{uuid.uuid4()}"
+            )
+            assert response.status_code == 404

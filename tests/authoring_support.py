@@ -19,6 +19,7 @@ this harness; they commit and clean up explicitly
 (`tests/database/test_authoring_concurrency.py`).
 """
 
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -51,6 +52,17 @@ def _generous() -> RateLimiter:
     return RateLimiter(max_attempts=10_000, window=timedelta(minutes=15))
 
 
+# Receipt id field -> authoring GET route segment (see Actor.post).
+_RECEIPT_ROUTES = {
+    "location_id": "locations",
+    "organization_id": "organizations",
+    "religion_id": "religions",
+    "npc_id": "npcs",
+    "knowledge_item_id": "knowledge",
+    "quest_id": "quests",
+}
+
+
 @dataclass
 class Actor:
     """One signed-in human: a cookie-jar client plus the CSRF token."""
@@ -75,6 +87,23 @@ class Actor:
     def get(self, path: str, **params: Any) -> Response:
         return self.client.get(path, params=params or None)
 
+    def post_raw(
+        self,
+        path: str,
+        body: dict | None = None,
+        *,
+        key: str | None = None,
+        csrf: bool = True,
+        origin: bool = True,
+    ) -> Response:
+        """The response exactly as the server sent it (a typed authoring write
+        answers with a receipt: ids, `row_version`, `created`, `changed`)."""
+        return self.client.post(
+            path,
+            json=body if body is not None else {},
+            headers=self.headers(key=key, csrf=csrf, origin=origin),
+        )
+
     def post(
         self,
         path: str,
@@ -84,11 +113,34 @@ class Actor:
         csrf: bool = True,
         origin: bool = True,
     ) -> Response:
-        return self.client.post(
-            path,
-            json=body if body is not None else {},
-            headers=self.headers(key=key, csrf=csrf, origin=origin),
-        )
+        """Like `post_raw`, but a successful typed authoring write is followed by
+        the authoritative GET (as the portal does) and the response body becomes
+        that view plus the receipt's `changed` flag, so tests can assert on the
+        authored record. Tests of the receipt contract itself use `post_raw`."""
+        response = self.post_raw(path, body, key=key, csrf=csrf, origin=origin)
+        return self._hydrate(path, response)
+
+    def _hydrate(self, path: str, response: Response) -> Response:
+        if response.status_code not in (200, 201) or "/authoring/" not in path:
+            return response
+        try:
+            receipt = response.json()
+        except ValueError:
+            return response
+        if not isinstance(receipt, dict) or not {"row_version", "created", "changed"} <= set(
+            receipt
+        ):
+            return response
+        prefix = path.split("/authoring/")[0] + "/authoring/"
+        for id_field, route in _RECEIPT_ROUTES.items():
+            if id_field in receipt:
+                view = self.client.get(f"{prefix}{route}/{receipt[id_field]}")
+                assert view.status_code == 200, view.text
+                body = view.json()
+                body["changed"] = receipt["changed"]
+                response._content = json.dumps(body).encode()
+                return response
+        return response
 
     def fresh_key(self) -> str:
         self._keys += 1

@@ -218,7 +218,8 @@ def test_update_changes_the_claim_and_keeps_the_name_in_step(s: ContentSetup) ->
     ).scalar()
     assert name == "The duke is a lich."
     diff = s.audit("update_knowledge_item")[0].changed_fields
-    assert diff["statement"] == {"from": "The duke is a vampire.", "to": "The duke is a lich."}
+    assert diff["statement"] == {"from": {"redacted": True}, "to": {"redacted": True}}
+    assert "duke" not in str(diff)
     assert diff["truth_status"] == {"from": "true", "to": "false"}
 
 
