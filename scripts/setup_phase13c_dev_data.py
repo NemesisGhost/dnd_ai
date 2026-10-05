@@ -228,7 +228,7 @@ that environment variable is unset or fails the local password policy):
   `access.manage`) plus an `owner`-type character relationship to
   Character A (the same relationship type/capability seed this script
   already establishes for `--user-id`'s own perspectives — see
-  `_ensure_relationship_type_capabilities`). No membership in, or
+  the relationship-type capability defaults from migration 114). No membership in, or
   character relationship reaching, Campaign B.
 
   "Phase13E Dev Observer A" (`phase13e.observer_a`): a Campaign A member
@@ -378,25 +378,13 @@ what the task this script supports says not to do. Every inserted/
 reconciled row's shape mirrors tests/factories.py's `make_character_state`/
 `make_character_condition`/`make_character_resource` exactly.
 
-One notable, pre-existing gap this script works around rather than papers
-over: `security.character_relationship_type_capabilities` (the table
-`dnd_ai.domain.access.resolve_access_context`'s own character-capability
-join depends on) ships with **zero rows** in every environment — no
-migration or seed file populates it (confirmed: only
-`security.character_relationship_types`/`.capabilities` have seed files;
-grep across database/migrations/versions finds no INSERT into the
-capabilities join table). Without at least one row there, no character
-relationship of any type is ever selectable as a perspective, on any
-campaign, regardless of how it's granted — campaign ownership alone does
-not imply it either (`campaign_owner`'s own capabilities are
-`access.manage`/`campaign.view`/`canon.edit`, none of them `character.*`).
-This script seeds the `owner` relationship type with the full
-`character.*` capability set (all nine `security.capabilities` rows whose
-code starts with `character.`) the FIRST time it finds that join table
-completely empty, and leaves it untouched otherwise — global, one-time
-config, not per-fixture data, and exactly what the platform needs before
-*any* character perspective can work anywhere. Flagged in this script's own
-CLI output every time it runs so it is never silently assumed.
+Relationship-type capability defaults are **production reference data** (migration
+`114_relationship_defaults`, Phase 15 checkpoint 15.2A-1), not something this fixture
+supplies. `security.character_relationship_type_capabilities` must already be populated by
+`alembic upgrade head`; this script only checks that (`_require_relationship_type_capabilities`)
+and stops with a clear message on a database that has not been migrated. It never inserts
+into that table, and the unit guard `tests/unit/test_scripts_no_authored_content_direct_inserts.py`
+forbids doing so without exception.
 """
 
 from __future__ import annotations
@@ -1932,59 +1920,19 @@ def _get_or_create_timeline(
     return result.timeline_id
 
 
-def _ensure_relationship_type_capabilities(connection: Connection, summary: _Summary) -> None:
-    """One-time global seed for `security.character_relationship_type_
-    capabilities` — see this module's own docstring for why this table
-    ships empty and why that blocks every character perspective, not just
-    this fixture's. Only ever adds rows when the whole table is empty;
-    never touches it again once any row exists (even for an unrelated
-    relationship type), since that would mean some other process — a future
-    real seed migration — has since taken ownership of this configuration."""
-    already_configured = connection.execute(
+def _require_relationship_type_capabilities(connection: Connection) -> None:
+    """The mapping table is production reference data (migration
+    `114_relationship_defaults`). Fail fast on a database that has not been
+    migrated rather than supplying product security defaults from a fixture."""
+    configured = connection.execute(
         text("SELECT 1 FROM security.character_relationship_type_capabilities LIMIT 1")
     ).scalar()
-    if already_configured is not None:
-        summary.add(
-            created=False,
-            label="security.character_relationship_type_capabilities (global)",
-            record_id="already configured, left untouched",
+    if configured is None:
+        raise SystemExit(
+            "security.character_relationship_type_capabilities is empty: run "
+            "`alembic upgrade head` (migration 114_relationship_defaults) first. "
+            "This script no longer seeds relationship-capability defaults."
         )
-        return
-
-    relationship_type_id = lookup_id(
-        connection,
-        "security",
-        "character_relationship_types",
-        "character_relationship_type_id",
-        _RELATIONSHIP_TYPE_CODE,
-    )
-    capability_ids = (
-        connection.execute(
-            text(
-                "SELECT capability_id FROM security.capabilities WHERE code LIKE 'character.%' AND is_active"
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not capability_ids:
-        raise SystemExit("no active security.capabilities rows found with code LIKE 'character.%'.")
-    for capability_id in capability_ids:
-        connection.execute(
-            text(
-                "INSERT INTO security.character_relationship_type_capabilities "
-                "(character_relationship_type_id, capability_id) VALUES (:type, :capability)"
-            ),
-            {"type": relationship_type_id, "capability": capability_id},
-        )
-    summary.add(
-        created=True,
-        label=(
-            f"security.character_relationship_type_capabilities (global): all "
-            f"{len(capability_ids)} character.* capabilities -> '{_RELATIONSHIP_TYPE_CODE}'"
-        ),
-        record_id=relationship_type_id,
-    )
 
 
 def _get_or_create_campaign(
@@ -4284,10 +4232,8 @@ def _ensure_phase13e_character_relationship(
     (a GM's own membership, not the grantee's own — unlike `--user-id`'s
     self-owned Character A/B, a player does not grant their own
     relationship). Uses `_RELATIONSHIP_TYPE_CODE` ("owner"), the one
-    relationship type this script's `_ensure_relationship_type_
-    capabilities` seeds with the full `character.*` capability set — the
-    only relationship type currently capable of authorizing a character
-    perspective at all in a fresh environment."""
+    relationship type that, per migration 114's matrix, confers the perspective
+    capability (`character.view_knowledge`) together with the full read tier."""
     relationship_type_id = lookup_id(
         connection,
         "security",
@@ -6054,7 +6000,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         ruleset_id=ruleset_id,
         created_with_world=world_created,
     )
-    _ensure_relationship_type_capabilities(connection, summary)
+    _require_relationship_type_capabilities(connection)
 
     timeline_a_id = _get_or_create_timeline(
         connection, summary, world_id=world_id, name=_TIMELINE_A_NAME, user=user

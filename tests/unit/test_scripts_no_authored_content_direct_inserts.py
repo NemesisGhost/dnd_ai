@@ -41,6 +41,13 @@ _INSERT = re.compile(r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _TABL
 _MARKERS = ("phase14-direct-insert: allowed", "authored-content-direct-insert: allowed")
 _MARKER = _MARKERS[0]
 
+# Product security reference data (Phase 15 checkpoint 15.2A-1). These tables are
+# seeded by migrations only; no marker can excuse a script inserting into them.
+_NEVER_FROM_SCRIPTS = ("security.character_relationship_type_capabilities",)
+_FORBIDDEN_INSERT = re.compile(
+    r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _NEVER_FROM_SCRIPTS) + r")\b", re.I
+)
+
 
 def _violations(source: str) -> list[tuple[int, str]]:
     lines = source.splitlines()
@@ -88,3 +95,27 @@ def test_the_guard_detects_an_unmarked_insert_and_accepts_a_marked_one() -> None
         )
         == []
     )
+
+
+def test_no_script_ever_inserts_security_reference_data() -> None:
+    problems: dict[str, list[tuple[int, str]]] = {}
+    for path in sorted(_SCRIPTS.glob("*.py")):
+        hits = [
+            (index + 1, match.group(1))
+            for index, line in enumerate(path.read_text(encoding="utf-8").splitlines())
+            if (match := _FORBIDDEN_INSERT.search(line))
+        ]
+        if hits:
+            problems[path.name] = hits
+    assert not problems, (
+        "Relationship-capability defaults are production reference data seeded by "
+        f"migration 114_relationship_defaults; scripts may not insert them: {problems}"
+    )
+
+
+def test_the_security_reference_guard_accepts_no_marker_exception() -> None:
+    marked = (
+        "# phase14-direct-insert: allowed\n"
+        "INSERT INTO security.character_relationship_type_capabilities (a) VALUES (1)"
+    )
+    assert _FORBIDDEN_INSERT.search(marked) is not None
