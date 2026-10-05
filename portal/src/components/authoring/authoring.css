@@ -531,29 +531,6 @@
 }
 
 .quest-stage-card {
-  box-shadow: 0 -4px 0 0 var(--color-primary);
-}
-
-.quest-stage-row--drop-after > .quest-stage-card {
-  box-shadow: 0 4px 0 0 var(--color-primary);
-}
-
-/* Side by side so the pair is never taller than the collapsed stage header. */
-.quest-stage-row__moves {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  min-height: 2.75rem;
-}
-
-.quest-stage-row__move {
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  padding: 0;
-  justify-content: center;
-}
-
-.quest-stage-card {
   min-width: 0;
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
