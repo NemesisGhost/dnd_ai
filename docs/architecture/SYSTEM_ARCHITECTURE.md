@@ -298,6 +298,8 @@ External calls to AI providers, Discord or FoundryVTT should not normally occur 
 
 ### 7.1 Global lock order (Phase 14)
 
+Phase 15.2B-2 note: build and state commands (`create_character_build`, `initialize_character_state`, `activate_character_build`) take the operation scope, then the character's `core.entities` row `FOR SHARE`, then the character's `campaign.character_state` row `FOR UPDATE` (activation and initialization only).
+
 Commands that lock more than one row take locks in this order, so two commands that share rows can never deadlock on each other:
 
 ```text
