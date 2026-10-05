@@ -194,3 +194,21 @@ Commit on `phase15/completion`. **Status: implemented; local automated gates bel
 Commands run (local PostgreSQL 18): focused Python suites above green; portal `npm test` (272 files, 1979 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree: 5809 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 933 s.
 
 Known behaviours: clock events are ordinary recorded events and so appear in event lists; a later checkpoint (events, 15.2E-1) decides whether system events are filtered from player feeds. Not verified: CI; manual browser/accessibility; keyboard operation of the correction dialog.
+
+## Checkpoint 15.2B-1 — player-character identity and lifecycle
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decisions D-7 (PCs join the lifecycle registry; draft then publish; archive refused while a user is linked) and D-8 (`player_user_id` never set or read; authorization only through relationships) applied as recommended. No migration.
+
+| Area | Delivered |
+|---|---|
+| Registry | `player_character` is lifecycle-eligible (so every lifecycle-gated read surface, the state-target guard, and the draft-delete flow cover it); the registry text that deferred PC identity to Phase 16 is corrected; `character.player_characters` is owned (cascade) for an unreferenced draft. |
+| Access | A relationship confers capabilities only for a `canon` and `active` character (a draft PC grants no perspective even with a relationship in place). |
+| Commands | `create_player_character` / `update_player_character` are thin wrappers over the shared `create_character_identity` / `update_character_identity` (the NPC commands are wrappers over the same functions), so lock order, species and origin validation, descriptions, and the audit/revision shape are identical. |
+| API | `/campaigns/{id}/authoring/player-characters` (`GET options`, `POST`, `GET {id}`, `POST {id}/update`); each kind is a 404 at the other kind's route. |
+| Portal | Character kind chooser, PC create page, one edit route for both kinds, edit link and **Link a player** on the World detail (Access opens with the character preselected). |
+| Dev data | `setup_phase13c_dev_data.py` creates its player characters through the command and publishes them (no direct `character.player_characters` insert, `player_user_id` unset); the guard now covers `character.characters`, `character.player_characters` and `character.character_descriptions` (two fixture exceptions are marked). |
+| Tests | 11 API tests (draft PC and unset `player_user_id`, round trip with redacted audit and revisions, route isolation both ways and a bare character, authority, publish waits for origin, archive guard and revoke, draft delete removes identity rows, draft invisible on every character read then visible once published with no GM notes, perspective appears after publish and disappears after revoke/archive under the real policy, replay and conflict, atomic failure), 2 real-PostgreSQL races (archive vs grant, both orders), portal route/control tests. |
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (273 files, 1987 tests) / `npm run lint` / `npm run build` clean. Full Python suite: 5831 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1209 s. The tests added after that run started (atomic failure, the corrected replay count, both races, scenario steps 5-6, the dev-data guard) were rerun on their own: 18 passed. One mid-run caveat: a second pytest session ran against the same database during the full suite; no table-count test failed.
+
+Not verified: CI; manual browser/accessibility at 390/1280/2560 px (planned for B-1 and still owed); keyboard operation of the chooser and the preselected Access control; the dev-data script against a pre-existing developer database.

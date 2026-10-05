@@ -490,6 +490,8 @@ The PC subtype adds:
 
 It does not duplicate shared mechanics.
 
+Implementation note (Phase 15.2B-1): a PC's **identity** (name, species, size, origin, background, appearance, GM notes) is authored by the GM as a draft and published like any definition; the `player_character` type is lifecycle-eligible. The owning user is **not** stored on the character (`player_user_id` stays unset); ownership and control are `membership_character_relationships`, which confer a perspective only while the character is published and active.
+
 ### 8.6 NPC
 
 An **NPC** is a character with additional world-management and portrayal information.
