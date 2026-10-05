@@ -2832,6 +2832,9 @@ def _ensure_session(
     if existing is None:
         session_id = connection.execute(
             text("""
+                -- the fixture needs played sessions (start/end times), which only the
+                -- 15.2D-2 play commands can create; replaced there
+                -- authored-content-direct-insert: allowed
                 INSERT INTO campaign.sessions
                     (campaign_id, session_number, lifecycle_status_id, title, summary,
                      started_at, ended_at, start_world_time_id, end_world_time_id)

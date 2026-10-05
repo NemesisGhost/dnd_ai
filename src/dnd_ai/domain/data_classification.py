@@ -329,6 +329,7 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "feature_count",
         "spellcasting_count",
         "spell_count",
+        "scheduled_for",
         "party_id",
         "member_entity_id",
         "effective_from_world_time_id",

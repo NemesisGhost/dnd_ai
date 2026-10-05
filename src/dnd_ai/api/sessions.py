@@ -164,6 +164,12 @@ class SessionListItemResponse(BaseModel):
     status_code: str
     started_at: datetime | None
     ended_at: datetime | None
+    # Phase 15.2D-1: the planned start and the derived play status (D-13).
+    scheduled_for: datetime | None = None
+    play_status: str = "unscheduled"
+    # Editors only: the version to send back, and what they can do.
+    row_version: int | None = None
+    available_actions: list[str] | None = None
 
 
 class SessionEventResponse(BaseModel):
@@ -187,6 +193,21 @@ class SessionDetailResponse(BaseModel):
     start_world_time_id: uuid.UUID | None
     end_world_time_id: uuid.UUID | None
     events: list[SessionEventResponse]
+    scheduled_for: datetime | None = None
+    play_status: str = "unscheduled"
+    row_version: int | None = None
+    available_actions: list[str] | None = None
+
+
+def _actions(lifecycle_status: str, play_status: str) -> list[str]:
+    """What an editor can do with the session, by lifecycle and derived play
+    status (a session being played cannot be archived)."""
+    if lifecycle_status == "archived":
+        return ["restore"]
+    actions = ["update"]
+    if play_status != "in_progress":
+        actions.append("archive")
+    return actions
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +230,13 @@ def list_sessions_endpoint(
     denied_session_ids, _allowed_session_ids = access.resource_grant_targets(
         _SESSION_VIEW_CAPABILITY, field_name="session_id"
     )
+    editor = access.has_capability(_CANON_EDIT_CAPABILITY)
+    # An archived session is hidden from anyone who cannot edit canon (D-13).
     items = list_campaign_sessions(
-        connection, campaign_id=campaign_id, denied_session_ids=denied_session_ids
+        connection,
+        campaign_id=campaign_id,
+        denied_session_ids=denied_session_ids,
+        include_archived=editor,
     )
     return [
         SessionListItemResponse(
@@ -220,6 +246,10 @@ def list_sessions_endpoint(
             status_code=item.status_code,
             started_at=item.started_at,
             ended_at=item.ended_at,
+            scheduled_for=item.scheduled_for,
+            play_status=item.play_status,
+            row_version=item.row_version if editor else None,
+            available_actions=_actions(item.status_code, item.play_status) if editor else None,
         )
         for item in items
     ]
@@ -254,6 +284,7 @@ def get_session_endpoint(
         include_draft_events=access.has_capability(_DRAFT_EVENTS_CAPABILITY),
         denied_draft_event_ids=denied_draft_event_ids,
         allowed_draft_event_ids=allowed_draft_event_ids,
+        include_archived=access.has_capability(_CANON_EDIT_CAPABILITY),
     )
 
     return SessionDetailResponse(
@@ -266,6 +297,14 @@ def get_session_endpoint(
         summary=view.summary,
         start_world_time_id=view.start_world_time_id,
         end_world_time_id=view.end_world_time_id,
+        scheduled_for=view.scheduled_for,
+        play_status=view.play_status,
+        row_version=view.row_version if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
+        available_actions=(
+            _actions(view.status_code, view.play_status)
+            if access.has_capability(_CANON_EDIT_CAPABILITY)
+            else None
+        ),
         events=[
             SessionEventResponse(
                 event_id=e.event_id,

@@ -481,6 +481,41 @@ sessions = Table(
         ),
     ),
     *_timestamps(),
+    # Added by revision 122 (Phase 15 checkpoint 15.2D-1).
+    Column(
+        "row_version",
+        BigInteger(),
+        nullable=False,
+        server_default=text("1"),
+        comment=(
+            "Optimistic-concurrency token, incremented by every UPDATE "
+            "(core.bump_row_version()). Authoring commands require the caller's "
+            "expected_row_version to equal it under a row lock and reject a stale write."
+        ),
+    ),
+    Column(
+        "scheduled_for",
+        TIMESTAMP(timezone=True),
+        comment=(
+            "The planned real-world start of the session. A plan, not history: it may be "
+            "changed or cleared until the session starts. Play status is derived from this, "
+            "started_at, and ended_at."
+        ),
+    ),
+    Column(
+        "archived_at",
+        TIMESTAMP(timezone=True),
+        comment="When the session was archived; NULL while active.",
+    ),
+    Column(
+        "created_by_user_id",
+        UUID(),
+        ForeignKey("security.users.user_id", ondelete="SET NULL"),
+        comment=(
+            "The authenticated human who scheduled the session through the authoring command; "
+            "NULL for sessions created before revision 122 or by operator tooling."
+        ),
+    ),
     schema="campaign",
     comment=(
         "A single period of play within a campaign. Carries both real-world time "
@@ -496,6 +531,11 @@ Index(
     unique=True,
 )
 Index("ix_sessions_campaign_id", sessions.c.campaign_id)
+Index(
+    "ix_sessions_created_by_user_id",
+    sessions.c.created_by_user_id,
+    postgresql_where=sessions.c.created_by_user_id.isnot(None),
+)
 Index("ix_sessions_lifecycle_status_id", sessions.c.lifecycle_status_id)
 Index(
     "ix_sessions_start_world_time_id",
