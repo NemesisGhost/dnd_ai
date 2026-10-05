@@ -461,7 +461,9 @@ def make_relationship_type_capability(
     connection.execute(
         text(
             "INSERT INTO security.character_relationship_type_capabilities "
-            "(character_relationship_type_id, capability_id) VALUES (:rt, :c)"
+            "(character_relationship_type_id, capability_id) VALUES (:rt, :c) "
+            # The production matrix (migration 114) already seeds the built-in pairs.
+            "ON CONFLICT DO NOTHING"
         ),
         {"rt": character_relationship_type_id, "c": capability_id},
     )

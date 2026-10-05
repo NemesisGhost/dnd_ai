@@ -462,7 +462,10 @@ def test_the_vertical_slice_scenario(
     # players independently.
     for membership_id, relationship_type in (
         (player1_membership_id, "primary_controller"),
-        (player2_membership_id, "co_controller"),
+        # player2 is only a `viewer` of the shared character, so the direct
+        # view_knowledge grant below is their sole source of that capability
+        # (a co_controller holds it by production default, migration 114).
+        (player2_membership_id, "viewer"),
     ):
         relationship_response = gm.post(
             f"/campaigns/{campaign_id}/memberships/{membership_id}/character-relationships",

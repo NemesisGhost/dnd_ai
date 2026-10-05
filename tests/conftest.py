@@ -581,3 +581,71 @@ def db_connection(postgres_engine: Engine) -> Iterator[Connection]:
             yield connection
         finally:
             transaction.rollback()
+
+
+@pytest.fixture(autouse=True)
+def _legacy_permissive_relationship_policy(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Most access tests build arbitrary relationship types with arbitrary
+    capability mappings through the factories, which predates the Phase 15
+    default-deny relationship policy (checkpoint 15.2A-1). They exercise the
+    resolver's *mapping* mechanics, not the policy, so they run with the
+    code-side matrix check relaxed to "the database mapping decides".
+
+    Tests that exercise the real policy (the built-in matrix, default deny for
+    custom types, inactive types) opt out with
+    `@pytest.mark.real_relationship_policy`. Production code is never patched.
+    """
+    if request.node.get_closest_marker("real_relationship_policy") is not None:
+        return
+    monkeypatch.setattr(
+        "dnd_ai.domain.access.relationship_capability_permitted",
+        lambda type_code, capability_code: True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _restore_production_relationship_defaults(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Many access tests commit pairs into the shared session database and
+    delete them again by (type, capability), which would also delete the
+    production defaults seeded by migration 114 for the built-in types. After
+    any test that used the database, put the built-in types back to exactly the
+    approved matrix so later tests (and the clean-install assertions) see the
+    state a freshly migrated database has. Custom-type rows are left alone."""
+    yield
+    if "postgres_engine" not in request.fixturenames:
+        return
+    from dnd_ai.domain.access import BUILTIN_RELATIONSHIP_CAPABILITIES
+
+    engine: Engine = request.getfixturevalue("postgres_engine")
+    allowed = [
+        (type_code, capability)
+        for type_code, capabilities in BUILTIN_RELATIONSHIP_CAPABILITIES.items()
+        for capability in sorted(capabilities)
+    ]
+    builtin = sorted(BUILTIN_RELATIONSHIP_CAPABILITIES)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+                DELETE FROM security.character_relationship_type_capabilities rtc
+                USING security.character_relationship_types rt, security.capabilities cap
+                WHERE rt.character_relationship_type_id = rtc.character_relationship_type_id
+                  AND cap.capability_id = rtc.capability_id
+                  AND rt.code = ANY(CAST(:builtin AS text[]))
+                  AND NOT ((rt.code, cap.code) IN (SELECT * FROM unnest(CAST(:types AS text[]), CAST(:caps AS text[]))))
+            """),
+            {"builtin": builtin, "types": [t for t, _ in allowed], "caps": [c for _, c in allowed]},
+        )
+        connection.execute(
+            text("""
+                INSERT INTO security.character_relationship_type_capabilities
+                    (character_relationship_type_id, capability_id)
+                SELECT rt.character_relationship_type_id, cap.capability_id
+                FROM unnest(CAST(:types AS text[]), CAST(:caps AS text[])) AS allowed(type_code, cap_code)
+                JOIN security.character_relationship_types rt ON rt.code = allowed.type_code
+                JOIN security.capabilities cap ON cap.code = allowed.cap_code
+                ON CONFLICT DO NOTHING
+            """),
+            {"types": [t for t, _ in allowed], "caps": [c for _, c in allowed]},
+        )

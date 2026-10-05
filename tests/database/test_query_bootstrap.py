@@ -456,9 +456,8 @@ def test_an_open_ended_fictional_time_bounded_relationship_remains_selectable(
     campaign_id = make_campaign(db_connection, timeline_id, "Open Ended Relationship Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Open Ended")
-    relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
-    capability_id = _capability_id(db_connection, "character.view_summary")
-    make_relationship_type_capability(db_connection, relationship_type_id, capability_id)
+    # `owner` carries `character.view_knowledge` by production default (migration 114).
+    relationship_type_id = _character_relationship_type_id(db_connection, "owner")
     from_time = make_world_time(db_connection, world_id, 100)
     make_membership_character_relationship(
         db_connection,
@@ -591,22 +590,18 @@ def _view_knowledge_perspective(
     )
 
 
-def test_a_discover_only_character_advertises_no_party_perspectives(
+def test_a_discover_only_character_is_not_a_selectable_perspective(
     db_connection: Connection, world_id: uuid.UUID, timeline_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
-    """A character the user can only *discover* (a relationship mapped to
-    `character.discover`, not `character.view_knowledge`) still appears in
-    the perspective list — but `authorized_parties` is empty, because
-    `resolve_party_perspective` would reject any party for it."""
+    """A character the user can only *discover* or view in summary (a `viewer`
+    relationship: `character.discover`/`view_summary`, no `view_knowledge`) is
+    not a perspective candidate, so it is not listed and advertises no parties
+    (Phase 15 checkpoint 15.2A-1: only relationships holding
+    `character.view_knowledge` permit perspective selection)."""
     campaign_id = make_campaign(db_connection, timeline_id, "Discover Only Campaign")
     membership_id = make_campaign_membership(db_connection, campaign_id, user_id)
     character_id = make_character(db_connection, world_id, name="Barely Known")
     relationship_type_id = _character_relationship_type_id(db_connection, "viewer")
-    make_relationship_type_capability(
-        db_connection,
-        relationship_type_id,
-        _capability_id(db_connection, "character.discover"),
-    )
     make_membership_character_relationship(
         db_connection, membership_id, character_id, relationship_type_id
     )
@@ -615,11 +610,10 @@ def test_a_discover_only_character_advertises_no_party_perspectives(
     make_campaign_party(db_connection, campaign_id, party)
     make_party_membership(db_connection, timeline_id, party, character_id, wt)
 
-    (perspective,) = (
+    assert (
         get_session_bootstrap(db_connection, user_id=user_id).campaigns[0].character_perspectives
+        == ()
     )
-    assert perspective.character_id == character_id
-    assert perspective.authorized_parties == ()
 
 
 def test_revoking_character_view_knowledge_stops_advertising_parties_next_call(
