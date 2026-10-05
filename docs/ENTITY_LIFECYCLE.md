@@ -280,6 +280,8 @@ A historical correction does not erase the original event. Use one of:
 - superseding event
 - administrative state repair with explicit provenance
 
+Since Phase 15.2E-1 (decision D-15) the first two are implemented as `void_event` and `correct_event` over `narrative.event_corrections`. A correction records a *correcting event* (`administrative_correction`, at the original event's own world time, citing it as its cause) that carries a compensating `narrative.event_effects` row for every reversed effect, applies the reversals, optionally records a replacement event (a correction), links everything, and moves the original from `recorded` to `voided` / `corrected`, in one transaction (the deferred trigger refuses the status change without the link). The original is never edited or deleted, and `campaign.effective_events()` already ignores events that are not `recorded`. The compensation is applied only when the state the original effect produced is still there; otherwise the command refuses with `correction_not_reversible`. Reversals exist today for hit points (`current_hit_points`), the active build (`character_build_id`) and party membership (`party_membership`: a join is removed, a leave reopens the membership unless it would overlap); an event with any other effect kind (location, conditions, resources, the campaign clock, quest objectives, knowledge, relationships) refuses until its writer gains a reversal. A correction cannot itself be corrected, and an event is corrected at most once.
+
 Audit records must preserve both the erroneous and corrected records.
 
 ## 9. Branching timelines
@@ -425,6 +427,8 @@ Deletion constraints:
 
 ## 15. Event entity lifecycle
 
+Implementation note (Phase 15.2E-1): `void_event` and `correct_event` carry out the `recorded -> voided | corrected` transitions below; see §8.2 for the compensation rules and the supported effect kinds.
+
 Events are entities but follow stricter rules.
 
 Recommended statuses:
@@ -554,6 +558,7 @@ Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-autho
 | `create_location`, `update_location` (ten place categories; reparent with cycle prevention) | Built (backend) |
 | `create_organization` / `update_organization` (six kinds, parent/headquarters/religion references, hierarchy-cycle prevention), `create_religion`, `update_religion` | Built (backend) |
 | `create_npc`, `update_npc` (identity only; archive guarded while a user is linked) | Built (backend) |
+| `void_event`, `correct_event` (a correcting event with compensating effects, a link in `narrative.event_corrections`, and the original moved to `voided` / `corrected`, atomically; refused with `correction_not_reversible` when what the event changed has changed since or has no reversal yet), plus the read-only `assess_event` behind the correction preview; a recorded narrative event is recorded through the existing `POST /campaigns/{id}/events` | Built (Phase 15.2E-1) |
 | `start_session` (one in progress per campaign; the time is the caller's or the campaign clock's), `add_session_participant` / `remove_session_participant` (published, active characters; until the session ends), `record_session_log_entry` (a `session_narrative` event; entry campaign-visible, details GM-only; session must be in progress), `end_session` (hardened: needs the version and a session in progress, strictly later than its start) | Built (Phase 15.2D-2) |
 | `schedule_session` (server-assigned number), `update_session` (title, planned start, summary; the planned start is frozen once the session starts), `archive_session` (refused while in progress), `restore_session` (a reason is required) | Built (Phase 15.2D-1) |
 | `create_party` (creates the world-level party and attaches it to the campaign atomically), `update_party`, `archive_party`, `restore_party` (a reason is required; an archived party takes no new membership or knowledge writes) | Built (Phase 15.2C-1) |

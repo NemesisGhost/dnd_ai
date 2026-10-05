@@ -570,6 +570,8 @@ Examples:
 
 ## 12. Events and effects
 
+`narrative.event_corrections (event_correction_id, corrected_event_id UNIQUE, correcting_event_id, replacement_event_id NULL, correction_kind void|correct, reason GM-only, created_by_user_id, created_at)` (revision 124, Phase 15.2E-1) links a corrected or voided event to the correcting event that carries its compensating effects and, for a correction, the replacement event. The three events share one timeline (trigger), the table is append-only (trigger), and a deferred constraint trigger on `narrative.events` refuses a move to `voided` or `corrected` unless a matching correction row exists by commit, so a status never changes without its link.
+
 ```mermaid
 erDiagram
     CORE_ENTITIES ||--|| NARRATIVE_EVENTS : is
