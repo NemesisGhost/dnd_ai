@@ -20,6 +20,10 @@ _TABLES = (
     "campaign.campaigns",
     "security.world_memberships",
     "rules.world_rulesets",
+    # Phase 15 world time (checkpoint 15.2W-1).
+    "core.calendars",
+    "core.calendar_months",
+    "core.world_times",
     # Phase 15.1 authored content.
     "world.locations",
     "world.settlements",

@@ -418,6 +418,7 @@ from dnd_ai.commands.local_auth import (
 )
 from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
 from dnd_ai.commands.timelines import create_timeline
+from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
 from dnd_ai.domain.access import resolve_access_context
@@ -2933,6 +2934,79 @@ def _ensure_active_build_selection(
     summary.add(created=was_unset, changed=not was_unset, label=label, record_id=character_id)
 
 
+# World times are created through the production command (Phase 15, checkpoint
+# 15.2W-1). A fixture needs *exact* sort keys, and every non-negative key is a
+# calendar date on a one-month, 400-day calendar, so keys, ordering, and existing
+# rows are unchanged. The acting user is the world owner, who holds `canon.edit`
+# in the campaigns this script creates.
+_FIXTURE_CALENDAR_NAME = "Dev Fixture Reckoning"
+_FIXTURE_CALENDAR_DAYS = 400
+_world_time_actor_user_id: uuid.UUID | None = None
+
+
+def _fixture_calendar_id(
+    connection: Connection, *, world_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> uuid.UUID:
+    existing = connection.execute(
+        text("SELECT calendar_id FROM core.calendars WHERE world_id = :w AND display_name = :n"),
+        {"w": world_id, "n": _FIXTURE_CALENDAR_NAME},
+    ).scalar()
+    if isinstance(existing, uuid.UUID):
+        return existing
+    return create_calendar(
+        connection,
+        world_id=world_id,
+        actor_user_id=actor_user_id,
+        name=_FIXTURE_CALENDAR_NAME,
+        description=None,
+        days_per_week=None,
+        epoch_label=None,
+        months=[("Only", _FIXTURE_CALENDAR_DAYS)],
+    ).calendar_id
+
+
+def _create_fixture_world_time(
+    connection: Connection, *, world_id: uuid.UUID, label: str, sort_key: int
+) -> uuid.UUID:
+    assert _world_time_actor_user_id is not None, "the fixture user is set at the start of _run"
+    actor = _world_time_actor_user_id
+    campaign_id = connection.execute(
+        text("""
+            SELECT c.campaign_id
+            FROM campaign.campaigns c
+            JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+            JOIN security.campaign_memberships cm
+              ON cm.campaign_id = c.campaign_id AND cm.user_id = :u AND cm.ended_at IS NULL
+            WHERE t.world_id = :w
+            ORDER BY c.campaign_id
+            LIMIT 1
+        """),
+        {"w": world_id, "u": actor},
+    ).scalar()
+    if not isinstance(campaign_id, uuid.UUID):
+        raise SystemExit(
+            f"no campaign of world {world_id} has {actor} as a member, so a world time cannot "
+            "be recorded through the production command."
+        )
+    calendar_id = _fixture_calendar_id(connection, world_id=world_id, actor_user_id=actor)
+    minutes_per_year = _FIXTURE_CALENDAR_DAYS * 24 * 60
+    year, remainder = divmod(sort_key, minutes_per_year)
+    day, remainder = divmod(remainder, 24 * 60)
+    hour, minute = divmod(remainder, 60)
+    return create_world_time(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor,
+        calendar_id=calendar_id,
+        year=year,
+        month_number=1,
+        day=day + 1,
+        hour=hour,
+        minute=minute,
+        label=label,
+    ).world_time_id
+
+
 def _get_or_create_world_time(
     connection: Connection,
     summary: _Summary,
@@ -2953,11 +3027,14 @@ def _get_or_create_world_time(
     reads it."""
     existing = (
         connection.execute(
+            # `btrim`: the production command stores a stripped label, and a few
+            # fixture labels are cut mid-sentence and end in a space; rows created
+            # before the command was used keep that space.
             text(
                 "SELECT world_time_id, sort_key FROM core.world_times "
-                "WHERE world_id = :world AND label = :label"
+                "WHERE world_id = :world AND btrim(label) = :label"
             ),
-            {"world": world_id, "label": label},
+            {"world": world_id, "label": label.strip()},
         )
         .mappings()
         .one_or_none()
@@ -2965,25 +3042,9 @@ def _get_or_create_world_time(
     report_label = f"world time {label!r}"
 
     if existing is None:
-        precision_id = lookup_id(
-            connection, "core", "world_time_precisions", "world_time_precision_id", "exact"
+        world_time_id = _create_fixture_world_time(
+            connection, world_id=world_id, label=label, sort_key=sort_key
         )
-        world_time_id = connection.execute(
-            text("""
-                INSERT INTO core.world_times
-                    (world_id, world_time_precision_id, year, label, sort_key)
-                VALUES (:world, :precision, :year, :label, :sort_key)
-                RETURNING world_time_id
-            """),
-            {
-                "world": world_id,
-                "precision": precision_id,
-                "year": 1000 + (sort_key - _SESSION_SORT_KEY_BASE),
-                "label": label,
-                "sort_key": sort_key,
-            },
-        ).scalar()
-        assert isinstance(world_time_id, uuid.UUID)
         summary.add(created=True, label=report_label, record_id=world_time_id)
         return world_time_id
 
@@ -5983,6 +6044,8 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
     summary = _Summary()
 
     user = _resolve_user(connection, user_id)
+    global _world_time_actor_user_id
+    _world_time_actor_user_id = user.user_id
     print(
         f"Target account: user_id={user.user_id} display_name={user.display_name!r} "
         f"login_name={user.login_name!r} is_platform_administrator={user.is_platform_administrator}"

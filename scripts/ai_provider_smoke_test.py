@@ -155,6 +155,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
     assert isinstance(timeline_id, uuid.UUID)
 
     world_time_id = connection.execute(
+        # phase14-direct-insert: allowed (disposable smoke-test world, no acting user)
         text("""
             INSERT INTO core.world_times (world_id, world_time_precision_id, year, sort_key)
             VALUES (
