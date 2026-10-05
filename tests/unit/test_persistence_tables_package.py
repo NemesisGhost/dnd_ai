@@ -204,6 +204,7 @@ EXPECTED_TABLES = {
     ],
     "narrative": [
         "narrative.event_causes",
+        "narrative.event_corrections",
         "narrative.event_effects",
         "narrative.event_locations",
         "narrative.event_observations",

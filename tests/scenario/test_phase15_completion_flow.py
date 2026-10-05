@@ -17,6 +17,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
   9  advance (and correct) the clock          -- 15.2W-2
  10  schedule and edit a session             -- 15.2D-1
  11  participants, start, log, end           -- 15.2D-2
+ 12  record and correct an event             -- 15.2E-1
 """
 
 from collections.abc import Iterator
@@ -257,3 +258,28 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         status=200,
     )
     assert s.gm.get(session_url).json()["play_status"] == "completed"
+
+    # --- Step 12 (15.2E-1): record an event, then correct it without losing history ----
+    recorded = write(
+        f"/campaigns/{s.cid}/events",
+        {
+            "world_time_id": opening["world_time_id"],
+            "event_type_code": "other",
+            "name": "The gate is found locked",
+        },
+    )
+    event_url = f"/campaigns/{s.cid}/events/{recorded['event_id']}"
+    assert s.gm.get(f"{event_url}/correction-preview").json()["can_correct"] is True
+    corrected = write(
+        f"{event_url}/correct",
+        {
+            "reason": "The gate was only stuck.",
+            "replacement": {"event_type_code": "other", "name": "The gate is found stuck"},
+        },
+        status=200,
+    )
+    assert corrected["status"] == "corrected" and corrected["replacement_event_id"]
+    history = s.gm.get(event_url).json()
+    assert history["status"] == "corrected" and history["name"] == "The gate is found locked"
+    assert history["correction"]["replacement_event_id"] == corrected["replacement_event_id"]
+    assert s.player.get(f"{event_url}/correction-preview").status_code == 403

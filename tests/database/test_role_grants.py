@@ -116,6 +116,8 @@ MANAGED_TABLES = [
     ("narrative", "event_locations"),
     ("narrative", "event_causes"),
     ("narrative", "event_effects"),
+    # Phase 15 checkpoint 15.2E-1 (revision 124): event corrections.
+    ("narrative", "event_corrections"),
     ("narrative", "event_observations"),
     # Phase 6 — interactions
     ("interaction", "interaction_types"),
