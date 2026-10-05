@@ -59,6 +59,7 @@ from .cache_control import NoStoreMiddleware
 from .campaign_clock import router as campaign_clock_router
 from .campaign_invitations import router as campaign_invitations_router
 from .campaigns import router as campaigns_router
+from .character_builds import router as character_builds_router
 from .character_state import router as character_state_router
 from .characters import router as characters_router
 from .correlation import CorrelationIdMiddleware
@@ -162,6 +163,7 @@ def create_app() -> FastAPI:
     app.include_router(campaign_invitations_router)
     app.include_router(campaign_clock_router)
     app.include_router(campaigns_router)
+    app.include_router(character_builds_router)
     app.include_router(character_state_router)
     app.include_router(characters_router)
     app.include_router(dungeon_router)

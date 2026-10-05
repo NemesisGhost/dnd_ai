@@ -319,6 +319,16 @@ AUDIT_STRUCTURAL_FIELDS: frozenset[str] = frozenset(
         "operating_status",
         "reputation",
         "superseded_by_entity_id",
+        "ruleset_version_id",
+        "character_build_id",
+        "current_hit_points",
+        "maximum_hit_points",
+        "ability_count",
+        "class_level_count",
+        "proficiency_count",
+        "feature_count",
+        "spellcasting_count",
+        "spell_count",
     }
 )
 
