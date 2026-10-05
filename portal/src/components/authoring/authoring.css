@@ -482,7 +482,7 @@
 .quest-stage-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 5.75rem;
+  grid-template-columns: minmax(0, 1fr) 2.75rem;
   gap: 0.5rem;
   align-items: start;
   padding-bottom: 1rem;
@@ -507,6 +507,30 @@
 }
 
 .quest-stage-row--drop-before > .quest-stage-card {
+  box-shadow: 0 -4px 0 0 var(--color-primary);
+}
+
+.quest-stage-row--drop-after > .quest-stage-card {
+  box-shadow: 0 4px 0 0 var(--color-primary);
+}
+
+/* Stacked, and together shorter than the collapsed header (min 3.75rem). Each
+   target stays at least 24px tall. */
+.quest-stage-row__moves {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.quest-stage-row__move {
+  min-width: 2.75rem;
+  min-height: 1.625rem;
+  padding: 0;
+  line-height: 1;
+  justify-content: center;
+}
+
+.quest-stage-card {
   box-shadow: 0 -4px 0 0 var(--color-primary);
 }
 
@@ -562,7 +586,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.125rem 0.75rem;
   width: 100%;
-  min-height: 2.75rem;
+  min-height: 3.75rem;
+  align-content: center;
   padding: 0.625rem 0.75rem;
   font: inherit;
   color: inherit;
@@ -640,7 +665,7 @@
 
 @media (max-width: 30rem) {
   .quest-stage-row {
-    grid-template-columns: minmax(0, 1fr) 5.75rem;
+    grid-template-columns: minmax(0, 1fr) 2.75rem;
     gap: 0.25rem;
   }
 }
