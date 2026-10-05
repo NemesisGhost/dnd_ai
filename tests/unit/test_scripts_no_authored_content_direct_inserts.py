@@ -36,6 +36,10 @@ _TABLES = (
     "world.religious_organizations",
     "world.religions",
     "character.npcs",
+    # Phase 15.2B-1 player-character identity.
+    "character.characters",
+    "character.player_characters",
+    "character.character_descriptions",
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",

@@ -11,14 +11,17 @@ Steps implemented so far (numbering follows the plan's §11 table):
   1  create a world (owner)                 -- Phase 14, via the shared setup
   2  create a campaign                      -- Phase 14, via the shared setup
   3  calendar and world times               -- 15.2W-1
+  5  player character identity (builds: B-2) -- 15.2B-1
+  6  grant relationship, perspective          -- 15.2B-1 (invitations: later)
   9  advance (and correct) the clock          -- 15.2W-2
 """
 
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
+from dnd_ai.queries.bootstrap import get_session_bootstrap
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 
@@ -100,3 +103,35 @@ def test_a_gm_sets_up_and_runs_a_campaign(
         ).status_code
         == 403
     )
+
+    # --- Steps 5-6 (15.2B-1): a player character is authored, published, and linked ---
+    species = s.gm.get(f"/campaigns/{s.cid}/authoring/player-characters/options").json()["species"][
+        0
+    ]["species_id"]
+    pc = write(
+        f"/campaigns/{s.cid}/authoring/player-characters",
+        {"name": "Aldric", "species_id": species, "size_category": "medium"},
+    )
+    pc_id = pc["player_character_id"]
+    membership = db_connection.execute(
+        text(
+            "SELECT campaign_membership_id FROM security.campaign_memberships "
+            "WHERE campaign_id = :c AND user_id = :u"
+        ),
+        {"c": s.cid, "u": s.player.user_id},
+    ).scalar()
+    link = f"/campaigns/{s.cid}/memberships/{membership}/character-relationships"
+
+    def perspectives() -> list[str]:
+        bootstrap = get_session_bootstrap(db_connection, user_id=s.player.user_id)
+        campaign = next(c for c in bootstrap.campaigns if str(c.campaign_id) == s.cid)
+        return [str(p.character_id) for p in campaign.character_perspectives]
+
+    # A draft is invisible to the player, and linking a player to it confers nothing yet.
+    assert s.player.get(f"/campaigns/{s.cid}/characters/{pc_id}").status_code == 404
+    write(link, {"character_id": pc_id, "relationship_type_code": "owner"})
+    assert perspectives() == []
+    # Publishing makes the identity (without GM notes) and the perspective available.
+    s.publish(pc_id, pc["row_version"])
+    assert s.player.get(f"/campaigns/{s.cid}/characters/{pc_id}").status_code == 200
+    assert perspectives() == [pc_id]
