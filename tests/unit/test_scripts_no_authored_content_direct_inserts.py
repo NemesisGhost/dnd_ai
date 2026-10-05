@@ -53,6 +53,7 @@ _TABLES = (
     # Phase 15.2C-1 party definitions.
     "campaign.parties",
     "campaign.campaign_parties",
+    "campaign.party_memberships",
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",

@@ -13,6 +13,7 @@ Steps implemented so far (numbering follows the plan's §11 table):
   3  calendar and world times               -- 15.2W-1
   5  player character identity (builds: B-2) -- 15.2B-1
   6  grant relationship, perspective          -- 15.2B-1 (invitations: later)
+  7  party, member, party perspective        -- 15.2C-1, 15.2C-2
   9  advance (and correct) the clock          -- 15.2W-2
 """
 
@@ -163,3 +164,36 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert listing["active_build_id"] == build["character_build_id"]
     assert listing["state"]["current_hit_points"] == 12
     assert s.player.get(builds).status_code == 403
+
+    # --- Step 7 (15.2C-1, 15.2C-2): a party, a member, and the party perspective -------
+    party = write(f"/campaigns/{s.cid}/parties", {"name": "The Company"})
+    members = f"/campaigns/{s.cid}/parties/{party['party_id']}/members"
+    joined = write(
+        members,
+        {
+            "character_id": pc_id,
+            "effective_from_world_time_id": opening["world_time_id"],
+            "expected_party_row_version": party["row_version"],
+        },
+    )
+    assert [m["character_name"] for m in s.gm.get(members).json()["members"]] == ["Aldric"]
+    campaign_view = next(
+        c
+        for c in get_session_bootstrap(db_connection, user_id=s.player.user_id).campaigns
+        if str(c.campaign_id) == s.cid
+    )
+    assert [
+        str(p.party_id)
+        for pv in campaign_view.character_perspectives
+        for p in pv.authorized_parties
+    ] == [party["party_id"]]
+    write(
+        f"{members}/{joined['party_membership_id']}/end",
+        {
+            "effective_to_world_time_id": siege["world_time_id"],
+            "expected_party_row_version": joined["row_version"],
+        },
+        status=200,
+    )
+    assert s.gm.get(members).json()["members"][0]["is_current"] is False
+    assert s.player.get(members).status_code == 403
