@@ -177,3 +177,20 @@ Commit on `phase15/completion`. **Status: implemented; local automated gates bel
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (271 files, 1972 tests) / `npm run lint` / `npm run build` clean; the focused Python suites above and the dev-data tests (`test_setup_phase13c_dev_data.py`, `test_setup_phase15_world_content.py`) green. Full Python suite (once, on the final tree of this checkpoint): 5787 tests, 5786 passed, 1 failed (the known developer-`.env` origins test).
 
 Not verified: CI; manual browser/accessibility (keyboard operation of the picker and calendar form, narrow width); the dev-data script against a pre-existing developer database (the label lookup tolerates the trailing space older fixture rows kept, but this was exercised only on throwaway databases).
+
+## Checkpoint 15.2W-2 — campaign clock
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-10 (typed state `campaign.timeline_clocks`, branch-aware read) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `118_campaign_clock`: `campaign.timeline_clocks (timeline_id PK, current_world_time_id, last_event_id, row_version, …)` with `core.set_updated_at`, `core.bump_row_version`, the shared same-timeline event guard, and a world-agreement trigger; event types `time_advanced` and `time_corrected`. Metadata, table lists, and grants tests updated. |
+| Domain / queries | `domain/campaign_clock.py` (errors `clock_not_advanced`, `clock_not_set`, `clock_unchanged`); `queries/campaign_clock.py::resolve_effective_clock`: the timeline's own row, else its parent's effective clock bounded by the branch point, else the branch point itself. |
+| Commands | `advance_campaign_clock` (strictly later than the effective value; first write on a timeline creates its own row at `expected_row_version` 0) and `correct_campaign_clock` (own clock only; cites the event it corrects, which must still be the clock's last event; any different time). Each writes one event, one `current_world_time_id` effect, and the clock row atomically. A concurrent first write is classified as a stale write (`ON CONFLICT DO NOTHING`). Lock order recorded in SYSTEM_ARCHITECTURE §7.1 (operations section). |
+| API | `GET /campaigns/{id}/clock` (`campaign.view`), `POST …/clock/advance` and `…/clock/correct` (`canon.edit`, campaign idempotency, id-only receipts incl. `event_id`, one audit row citing the event, human principals only). |
+| Portal | `CampaignClockCard` on Campaign Home: current time for every member (branch carry-over labelled); editors advance or correct (confirmation for a correction); messages for a non-later time, an unavailable time, and a stale clock. |
+| Tests | 14 API tests (events, effects, chaining, refusals, stale, replay, correction and its cause, foreign ids, authority/CSRF/Origin/Foundry, archived campaign, branch inheritance, bounding and divergence, DB invariants), 2 real-PostgreSQL races (two advances at one version; two first advances), a migration round trip with `alembic check`, 7 portal tests, and scenario step 9. |
+
+Commands run (local PostgreSQL 18): focused Python suites above green; portal `npm test` (272 files, 1979 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree: 5809 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 933 s.
+
+Known behaviours: clock events are ordinary recorded events and so appear in event lists; a later checkpoint (events, 15.2E-1) decides whether system events are filtered from player feeds. Not verified: CI; manual browser/accessibility; keyboard operation of the correction dialog.
