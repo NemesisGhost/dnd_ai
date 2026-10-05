@@ -48,14 +48,15 @@ itself already performs per campaign:
   no capabilities at all (`security.character_relationship_type_
   capabilities` has no row for it) is not offered as a selectable
   perspective, since there would be nothing authorized to do through it;
-- `authorized_parties` under each character perspective: only populated
-  when the user holds `character.view_knowledge` for that character — the
-  capability `dnd_ai.api.access.resolve_party_perspective` itself requires
-  before it will authorize any party perspective. A character that is
-  merely discoverable (a relationship mapped to only `character.discover`,
-  say) still appears in the perspective list, but with `authorized_parties
-  = ()`, so the portal is never handed a `(character_id, party_id)` pair
-  the resolver would reject.
+- a character is listed as a perspective only when the user holds
+  `character.view_knowledge` for it (Phase 15 checkpoint 15.2A-1) — of the
+  built-in relationship types: owner, primary_controller, co_controller, and
+  portrayer. A viewer-type relationship (or a former_controller one) never makes
+  a character selectable;
+- `authorized_parties` under each character perspective: the user's current
+  parties for that character, which `dnd_ai.api.access.resolve_party_perspective`
+  will accept (it requires the same `character.view_knowledge`), so the portal
+  is never handed a `(character_id, party_id)` pair the resolver would reject.
 
 Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
 
@@ -323,8 +324,17 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             ).scalars()
         )
 
+        # A character is a selectable perspective only when the user holds
+        # `character.view_knowledge` for it (Phase 15 checkpoint 15.2A-1): of the
+        # built-in relationship types that is owner, primary_controller,
+        # co_controller, and portrayer; viewer-type relationships and
+        # former_controller grant visibility or nothing, never selection. The
+        # candidates are still characters with a relationship-derived capability.
         character_ids = [
-            character_id for character_id, codes in access.character_capabilities.items() if codes
+            character_id
+            for character_id, codes in access.character_capabilities.items()
+            if codes
+            and access.has_capability(_KNOWLEDGE_PERSPECTIVE_CAPABILITY, character_id=character_id)
         ]
         character_perspectives: tuple[CharacterPerspectiveView, ...] = ()
         if character_ids:
@@ -353,17 +363,11 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             # `resolve_party_perspective` additionally requires the caller
             # to hold `character.view_knowledge` for the named character
             # (requirement 1 of its own docstring); a character that is only
-            # *discoverable* — a relationship type mapped to, say, just
-            # `character.discover` — reaches this loop (it has *some*
-            # capability) but can never actually be used as a knowledge/
-            # quest perspective. Advertising its parties would hand the
-            # portal a `(character_id, party_id)` pair the resolver rejects
-            # with a fixed 404. So `authorized_parties` is populated only for
-            # characters this membership holds `character.view_knowledge`
-            # for; every other character still appears in the perspective
-            # list (its established contract is unchanged) but with no
-            # parties. A revoked capability or relationship affects the next
-            # bootstrap because `access` is re-resolved every call.
+            # *discoverable* is never listed (the perspective list above already
+            # requires `character.view_knowledge`), so every listed character can
+            # advertise parties. Kept as a re-check of the resolver's own gate.
+            # A revoked capability or relationship affects the next bootstrap
+            # because `access` is re-resolved every call.
             knowledge_perspective_ids = [
                 character_id
                 for character_id in character_ids
