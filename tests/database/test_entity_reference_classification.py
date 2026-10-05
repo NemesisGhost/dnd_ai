@@ -83,6 +83,8 @@ def test_only_the_reviewed_owned_rows_are_cascade_deleted(db_connection: Connect
     assert {t for _s, t, _c in owned} == {
         "entity_names",
         "entity_tags",
+        # Phase 15.2R: the definition's canonical revision history.
+        "entity_revisions",
         "locations",
         "settlements",
         "buildings",

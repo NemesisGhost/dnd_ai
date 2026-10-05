@@ -257,6 +257,10 @@ EXCLUDED_TABLES: dict[tuple[str, str], str] = {
         "append-only to application roles at the grant level (conventions §24.2) — "
         "narrower grants than the standard set, asserted in test_audit_change_log.py"
     ),
+    ("core", "entity_revisions"): (
+        "append-only revision history (Phase 15, revision 117): app roles hold SELECT/INSERT "
+        "only, and the reporting role holds nothing — asserted in test_entity_revisions.py"
+    ),
     ("core", "alembic_version"): (
         "Alembic's own migration-bookkeeping table, not project data — owned and used "
         "by migration_runner/migration_owner only, never by an application role"

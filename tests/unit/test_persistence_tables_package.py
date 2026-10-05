@@ -122,6 +122,7 @@ EXPECTED_TABLES = {
         "core.canon_statuses",
         "core.entities",
         "core.entity_names",
+        "core.entity_revisions",
         "core.entity_tags",
         "core.entity_types",
         "core.lifecycle_statuses",
