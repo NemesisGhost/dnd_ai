@@ -1,5 +1,7 @@
 # Persistent World Platform Implementation Plan
 
+> **Roadmap authority (2026-10-05):** [PLANv2.md](PLANv2.md) is the authoritative product roadmap and delivery order. Where this document's future-phase text differs from it, PLANv2 wins. This document remains the detailed architectural and historical record, and §24's Phase 15 section carries the completion checkpoint sequence.
+
 ## Table of Contents
 
 - [1. Purpose](#1-purpose)
@@ -2092,7 +2094,28 @@ Phase 14 is complete when:
 
 **Goal:** Let a GM create and operate the campaign's canonical content entirely in the web application.
 
-**Delivery split ([ADR 0015](adr/0015-typed-world-content-authoring.md)).** Phase 15 is delivered in two parts. **Phase 15.1 — GM world-content definitions** (branch `phase15/gm-authoring`; implementation complete and automated gates green, manual browser/accessibility verification pending, see [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md)) covers world-scoped definitions only: locations (ten non-dungeon categories), organizations (six types) and religions, NPC identity, quest definitions (stages and objectives), knowledge-item definitions, and their structural references. It adds one migration (`113_organization_hierarchy_cycle_guard`), the state-command target-eligibility guards, lifecycle-command campaign locking, and `no-store` authoring reads. It writes no timeline state, events, or per-knower rows. **Phase 15.2 — campaign operations** (separate later branch) owns sessions, events and corrections, world-time authoring, timeline state, quest activation and progress, knowledge reveal, `world.relationships` (after its lifecycle ADR), items and inventory, encounters, PC creation by the GM, and the 15.8 exit scenario. The 15.8 scenario and 15.9 exit criteria close only after 15.2. Dungeons, routes, and maps remain unscheduled 15A structural work.
+**Delivery split ([ADR 0015](adr/0015-typed-world-content-authoring.md)).** Phase 15 is **incomplete**. **Phase 15.1 — GM world-content definitions** is **merged** (PR #65, `60d5bc9`; manual browser/accessibility verification pending, see [PHASE15_VERIFICATION.md](PHASE15_VERIFICATION.md)) and is a subset of Phase 15: world-scoped definitions only — locations (ten non-dungeon categories), organizations (six types) and religions, NPC identity, quest definitions (stages and objectives), knowledge-item definitions, and their structural references. It added one migration (`113_organization_hierarchy_cycle_guard`), the state-command target-eligibility guards, lifecycle-command campaign locking, and `no-store` authoring reads, and writes no timeline state, events, or per-knower rows.
+
+**Completion checkpoints (supersede the earlier "Phase 15.2 as one later branch").** The remaining work is delivered as small checkpoints, each on its own short-lived branch and PR, merged strictly in this order (the 15.8 exit scenario and 15.9 exit criteria close only after the last):
+
+1. 15.2-0 status and roadmap reconciliation (documentation only)
+2. 15.2A-1 production relationship-capability defaults
+3. 15.2A-2 reporting-role (`app_read_only`) boundary
+4. 15.2A-3 stop narrative leakage into audit and idempotency storage; audited, closed audience preview
+5. 15.2A-5 private-data policy foundation (Phase 16 prerequisite)
+6. 15.2R canonical revision capture
+7. 15.2W-1 calendars and world-time points · 8. 15.2W-2 campaign clock
+9. 15.2B-1 player-character identity · 10. 15.2B-2 character builds and initial state
+11. 15.2C-1 party definition · 12. 15.2C-2 temporal party membership
+13. 15.2D-1 session definition and lifecycle · 14. 15.2D-2 participation, running a session, manual log
+15. 15.2E-1 event recording and correction · 16. 15.2E-2a quest definition completion · 17. 15.2E-2b quest runtime · 18. 15.2E-3 knowledge runtime
+19. 15.3A-1 dungeons · 20. 15.3A-2a relationship authoring kernel · 21. 15.3A-2b organization membership, offices, status · 22. 15.3A-2c routes and travel · 23. 15.3A-3 NPC portrayal and runtime
+24. 15.3B-1a item definitions · 25. 15.3B-1b item instances and custody · 26. 15.3B-2a encounter preparation · 27. 15.3B-2b encounter operation
+28. 15.3C-1 source attachment and provenance · 29. 15.3C-2 review queues and revision comparison
+30. 15.2A-4 existing-data scrub (owner-gated; requires a recorded decision before it can merge)
+31. 15.4 completion and acceptance (clean-database exit scenario, manual validation)
+
+Maps and images remain deferred (no storage contract). Phase 16 is blocked until checkpoint 31 closes.
 
 Implement in independently verifiable increments. Each increment includes commands, read models, portal workflows, authorization, audit, temporal behavior, and tests.
 

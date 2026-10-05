@@ -11,6 +11,15 @@ this file's own checkpoint sequence began). This file closes checkpoint 16:
 recording the delivered contract as true documentation, and the evidence
 this plan's own security invariants are traceable to a named test.
 
+> **Disclosed limitation (2026-10-05):** the claims below that character
+> relationships grant character perspectives and visibility were verified only
+> against databases whose `security.character_relationship_type_capabilities`
+> table was populated by test factories or the development-data script. A
+> **clean install ships that table empty**, so no relationship confers any
+> capability and no character is selectable as a perspective until Phase 15
+> checkpoint 15.2A-1 adds production defaults. This note is removed when that
+> checkpoint merges.
+
 ## Exit criteria
 
 From `PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md`'s own checkpoint sequence

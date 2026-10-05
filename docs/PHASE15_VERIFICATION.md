@@ -1,6 +1,8 @@
 # Phase 15.1 Verification
 
-Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete; automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.2 (campaign operations) is a separate later branch and is not claimed here.
+Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
+
+**Disclosed limitations (2026-10-05, until the named checkpoints ship):** audit rows written by the 15.1 commands copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields` (and `reason` stores the GM change note), and the 15.1 authoring routes store the full authoring view, including GM-only notes and background, in idempotency replay rows. New writes stop in checkpoint 15.2A-3; existing rows are handled by the owner-gated checkpoint 15.2A-4. Audience-preview reads are not audited until 15.2A-3.
 
 ## What was delivered
 
