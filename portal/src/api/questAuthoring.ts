@@ -69,6 +69,32 @@ export function runQuestCommand(
                 `/stages/${enc(command.stageId)}/objectives/${enc(command.objectiveId)}/update`,
                 command.body,
             )
+        case "add_dependency":
+            return post("/dependencies", command.body)
+        case "remove_dependency":
+            return post(`/dependencies/${enc(command.dependencyId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_participant":
+            return post("/participants", command.body)
+        case "remove_participant":
+            return post(`/participants/${enc(command.participantId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_outcome":
+            return post("/outcomes", command.body)
+        case "update_outcome":
+            return post(`/outcomes/${enc(command.outcomeId)}/update`, command.body)
+        case "remove_outcome":
+            return post(`/outcomes/${enc(command.outcomeId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
+        case "add_reward":
+            return post(`/outcomes/${enc(command.outcomeId)}/rewards`, command.body)
+        case "remove_reward":
+            return post(`/rewards/${enc(command.rewardId)}/remove`, {
+                expected_row_version: command.expected_row_version,
+            })
         case "remove_objective":
             return post(
                 `/stages/${enc(command.stageId)}/objectives/${enc(command.objectiveId)}/remove`,

@@ -16,10 +16,17 @@ export interface QuestOptions {
     requirement_levels: QuestChoice[]
     completion_modes: QuestChoice[]
     visibility_policies: QuestChoice[]
+    dependency_types: QuestChoice[]
+    participant_roles: QuestChoice[]
+    outcome_categories: QuestChoice[]
+    reward_types: QuestChoice[]
     limits: ContentLimits & {
         max_stages: number
         max_objectives_per_stage: number
         quantity_max: number
+        gm_notes_max_length: number
+        outcome_description_max_length: number
+        reward_description_max_length: number
     }
 }
 
@@ -46,12 +53,46 @@ export interface QuestStageView {
     objectives: QuestObjectiveView[]
 }
 
+export interface QuestDependencyView {
+    objective_dependency_id: string
+    objective_id: string
+    depends_on_objective_id: string
+    dependency_type: string
+}
+
+export interface QuestParticipantView {
+    quest_participant_id: string
+    participant_role: string
+    participant: EntityReferenceSummary | null
+}
+
+export interface QuestRewardView {
+    quest_reward_id: string
+    reward_type: string
+    description: string
+    knowledge: EntityReferenceSummary | null
+}
+
+export interface QuestOutcomeView {
+    quest_outcome_id: string
+    code: string
+    name: string
+    description: string | null
+    outcome_category: string
+    rewards: QuestRewardView[]
+}
+
 export interface QuestAuthoringView extends AuthoringReadModel {
     quest_id: string
     name: string
     summary: string | null
     stages: QuestStageView[]
     has_progress: boolean
+    // GM-only planning text, dependencies between objectives, participants, and outcomes.
+    gm_notes: string | null
+    dependencies: QuestDependencyView[]
+    participants: QuestParticipantView[]
+    outcomes: QuestOutcomeView[]
 }
 
 export interface QuestTargetOption {
@@ -74,6 +115,8 @@ export interface CreateQuestBody {
 export interface UpdateQuestBody extends CreateQuestBody {
     expected_row_version: number
     change_note?: string | null
+    // Omitted keeps the current notes; null clears them.
+    gm_notes?: string | null
 }
 
 export interface StageBody {
@@ -106,3 +149,50 @@ export type QuestCommand =
     | { op: "add_objective"; stageId: string; body: ObjectiveBody }
     | { op: "update_objective"; stageId: string; objectiveId: string; body: ObjectiveBody }
     | { op: "remove_objective"; stageId: string; objectiveId: string; expected_row_version: number }
+    | {
+          op: "add_dependency"
+          body: {
+              expected_row_version: number
+              objective_id: string
+              depends_on_objective_id: string
+              dependency_type: string
+          }
+      }
+    | { op: "remove_dependency"; dependencyId: string; expected_row_version: number }
+    | {
+          op: "add_participant"
+          body: { expected_row_version: number; participant_entity_id: string; participant_role: string }
+      }
+    | { op: "remove_participant"; participantId: string; expected_row_version: number }
+    | {
+          op: "add_outcome"
+          body: {
+              expected_row_version: number
+              code: string
+              name: string
+              description: string | null
+              outcome_category: string
+          }
+      }
+    | {
+          op: "update_outcome"
+          outcomeId: string
+          body: {
+              expected_row_version: number
+              name: string
+              description: string | null
+              outcome_category: string
+          }
+      }
+    | { op: "remove_outcome"; outcomeId: string; expected_row_version: number }
+    | {
+          op: "add_reward"
+          outcomeId: string
+          body: {
+              expected_row_version: number
+              reward_type: string
+              description: string
+              reward_knowledge_item_id: string | null
+          }
+      }
+    | { op: "remove_reward"; rewardId: string; expected_row_version: number }

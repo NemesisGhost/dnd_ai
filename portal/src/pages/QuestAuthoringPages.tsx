@@ -4,6 +4,7 @@ import { ContentCreatePage } from "../components/authoring/ContentCreatePage"
 import type { ContentCreateConfig } from "../components/authoring/ContentCreatePage"
 import type { FieldError } from "../components/authoring/feedback"
 import { TextAreaField, TextField } from "../components/authoring/fields"
+import { QuestCompletionEditor } from "../components/authoring/QuestCompletionEditor"
 import { QuestEditor } from "../components/authoring/QuestEditor"
 import { EntityLifecyclePanel } from "../components/EntityLifecyclePanel"
 import { useAuthoringResource } from "../hooks/useAuthoringResource"
@@ -128,6 +129,13 @@ export function EditQuestPage() {
                         view={state.data}
                         options={options.state.data}
                         refreshing={state.refreshing}
+                        refetch={refetch}
+                    />
+                    <QuestCompletionEditor
+                        key={state.data.row_version}
+                        campaignId={campaignId}
+                        view={state.data}
+                        options={options.state.data}
                         refetch={refetch}
                     />
                     <EntityLifecyclePanel
