@@ -410,6 +410,11 @@ from dnd_ai.commands.access_grants import (
     revoke_resource_grant,
 )
 from dnd_ai.commands.campaigns import create_campaign
+from dnd_ai.commands.entity_lifecycle import (
+    approve_entity,
+    publish_entity_as_canon,
+    submit_entity_for_review,
+)
 from dnd_ai.commands.local_auth import (
     _activate_local_account_impl,
     _create_local_account_impl,
@@ -417,6 +422,7 @@ from dnd_ai.commands.local_auth import (
     normalize_login_name,
 )
 from dnd_ai.commands.memberships import assign_membership_role, create_campaign_membership
+from dnd_ai.commands.player_characters import create_player_character
 from dnd_ai.commands.timelines import create_timeline
 from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
@@ -2013,6 +2019,7 @@ def _get_or_create_character(
     world_id: uuid.UUID,
     name: str,
     species_code: str,
+    campaign_id: uuid.UUID,
     ruleset_version_id: uuid.UUID,
     owner_user_id: uuid.UUID,
 ) -> uuid.UUID:
@@ -2039,47 +2046,27 @@ def _get_or_create_character(
             f"{ruleset_version_id} — none found. This script only reuses existing species content."
         )
 
-    player_character_type_id = lookup_id(
-        connection, "core", "entity_types", "entity_type_id", "player_character"
+    # The production commands own the entity, subtype, and marker rows (Phase 15.2B-1);
+    # `player_user_id` stays NULL (D-8) -- the access relationship below is the link.
+    created = create_player_character(
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=owner_user_id,
+        name=name,
+        summary=None,
+        species_id=species_id,
+        size_category=_CHARACTER_SIZE_CATEGORY,
     )
-    canon_status_id = lookup_id(connection, "core", "canon_statuses", "canon_status_id", "canon")
-    active_status_id = lookup_id(
-        connection, "core", "lifecycle_statuses", "lifecycle_status_id", "active"
-    )
-
-    entity_id = connection.execute(
-        text("""
-            INSERT INTO core.entities
-                (world_id, entity_type_id, canonical_name, canon_status_id, lifecycle_status_id,
-                 created_by_user_id)
-            VALUES (:world, :entity_type, :name, :canon, :lifecycle, :created_by)
-            RETURNING entity_id
-        """),
-        {
-            "world": world_id,
-            "entity_type": player_character_type_id,
-            "name": name,
-            "canon": canon_status_id,
-            "lifecycle": active_status_id,
-            "created_by": owner_user_id,
-        },
-    ).scalar()
-    assert isinstance(entity_id, uuid.UUID)
-
-    connection.execute(
-        text("""
-            INSERT INTO character.characters (character_id, species_id, size_category)
-            VALUES (:character, :species, :size)
-        """),
-        {"character": entity_id, "species": species_id, "size": _CHARACTER_SIZE_CATEGORY},
-    )
-    connection.execute(
-        text("""
-            INSERT INTO character.player_characters (player_character_id, player_user_id)
-            VALUES (:character, :player_user)
-        """),
-        {"character": entity_id, "player_user": owner_user_id},
-    )
+    entity_id = created.entity_id
+    version = created.row_version
+    for transition in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
+        version = transition(
+            connection,
+            campaign_id=campaign_id,
+            entity_id=entity_id,
+            actor_user_id=owner_user_id,
+            expected_row_version=version,
+        ).row_version
     summary.add(created=True, label=f"character {name!r} ({species_code})", record_id=entity_id)
     return entity_id
 
@@ -4957,6 +4944,7 @@ def _ensure_npc(
         entity_type_code="npc",
     )
     connection.execute(
+        # authored-content-direct-insert: allowed (Phase 13C NPC fixture; replaced with the NPC command later)
         text(
             "INSERT INTO character.characters (character_id, species_id, size_category) "
             "VALUES (:c, :s, :size)"
@@ -6093,6 +6081,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         connection,
         summary,
         world_id=world_id,
+        campaign_id=campaign_a_id,
         name=_CHARACTER_A_NAME,
         species_code=_CHARACTER_A_SPECIES_CODE,
         ruleset_version_id=ruleset_version_id,
@@ -6102,6 +6091,7 @@ def _run(connection: Connection, *, user_id: uuid.UUID, dev_password: str) -> _S
         connection,
         summary,
         world_id=world_id,
+        campaign_id=campaign_a_id,
         name=_CHARACTER_B_NAME,
         species_code=_CHARACTER_B_SPECIES_CODE,
         ruleset_version_id=ruleset_version_id,

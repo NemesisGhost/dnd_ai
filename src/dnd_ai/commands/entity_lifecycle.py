@@ -198,7 +198,8 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     ("campaign", "item_attunements", "character_id"): BLOCKING,
     ("character", "character_builds", "character_id"): BLOCKING,
     ("character", "character_religious_affiliations", "character_id"): BLOCKING,
-    ("character", "player_characters", "player_character_id"): BLOCKING,
+    # A player character's marker row is part of its identity (Phase 15.2B-1).
+    ("character", "player_characters", "player_character_id"): OWNED_CASCADE,
     ("knowledge", "character_expertise", "character_id"): BLOCKING,
     ("security", "membership_character_relationships", "character_id"): BLOCKING,
     ("security", "resource_grants", "character_id"): BLOCKING,

@@ -244,6 +244,7 @@ def _create_fixture(connection: Connection) -> _Fixture:
         assert isinstance(entity_id, uuid.UUID)
         connection.execute(
             text("""
+                -- authored-content-direct-insert: allowed (throwaway smoke-test fixture, not authored content)
                 INSERT INTO character.characters (character_id, species_id, size_category)
                 VALUES (:c, :s, 'medium')
             """),

@@ -1,14 +1,14 @@
-"""NPC identity authoring endpoints (Phase 15.1, ADR 0015).
+"""Player-character identity authoring endpoints (Phase 15.2B-1).
 
-    GET  /campaigns/{campaign_id}/authoring/npcs/options
-    POST /campaigns/{campaign_id}/authoring/npcs
-    GET  /campaigns/{campaign_id}/authoring/npcs/{npc_id}
-    POST /campaigns/{campaign_id}/authoring/npcs/{npc_id}/update
+    GET  /campaigns/{campaign_id}/authoring/player-characters/options
+    POST /campaigns/{campaign_id}/authoring/player-characters
+    GET  /campaigns/{campaign_id}/authoring/player-characters/{player_character_id}
+    POST /campaigns/{campaign_id}/authoring/player-characters/{player_character_id}/update
 
 Same contract as the other typed content routes (`dnd_ai.api.location_authoring`).
 The species list is the server's: canon species of the current version of each
 ruleset the world allows. Origin choices come from the Location parent-options
-list. Only NPCs are reachable here; a player character at this route is a 404.
+list. Only player characters are reachable here; an NPC at this route is a 404.
 """
 
 import uuid
@@ -20,11 +20,15 @@ from pydantic import Field
 from sqlalchemy import Connection
 
 from dnd_ai.commands._content import ContentWriteResult
-from dnd_ai.commands.npcs import create_npc, update_npc
+from dnd_ai.commands.player_characters import create_player_character, update_player_character
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
 from dnd_ai.domain.npc_authoring import NPC_TEXT_MAX_LENGTH, SIZE_CATEGORIES
-from dnd_ai.queries.npc_authoring import NpcAuthoringView, get_npc_authoring, list_species_options
+from dnd_ai.queries.npc_authoring import (
+    CharacterAuthoringView,
+    get_character_authoring,
+    list_species_options,
+)
 
 from ._authoring import (
     BaseAuthoringRequest,
@@ -38,9 +42,9 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 
-router = APIRouter(tags=["npc-authoring"])
+router = APIRouter(tags=["player-character-authoring"])
 
-_BASE = "/campaigns/{campaign_id}/authoring/npcs"
+_BASE = "/campaigns/{campaign_id}/authoring/player-characters"
 _CAPABILITY = "canon.edit"
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability(_CAPABILITY))]
@@ -49,7 +53,7 @@ _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
 
-class _NpcFields(BaseAuthoringRequest):
+class _PlayerCharacterFields(BaseAuthoringRequest):
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
     summary: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
     species_id: uuid.UUID
@@ -60,19 +64,19 @@ class _NpcFields(BaseAuthoringRequest):
     notes: str | None = Field(default=None, max_length=NPC_TEXT_MAX_LENGTH)
 
 
-class CreateNpcRequest(_NpcFields):
+class CreatePlayerCharacterRequest(_PlayerCharacterFields):
     pass
 
 
-class UpdateNpcRequest(_NpcFields):
+class UpdatePlayerCharacterRequest(_PlayerCharacterFields):
     expected_row_version: int = Field(ge=1)
     change_note: str | None = Field(default=None, max_length=REASON_MAX_LENGTH)
 
 
-def _view_json(view: NpcAuthoringView, *, changed: bool | None = None) -> dict[str, Any]:
+def _view_json(view: CharacterAuthoringView, *, changed: bool | None = None) -> dict[str, Any]:
     labels = dict(SIZE_CATEGORIES)
     body: dict[str, Any] = {
-        "npc_id": str(view.character_id),
+        "player_character_id": str(view.character_id),
         "name": view.name,
         "summary": view.summary,
         "species": {"species_id": str(view.species_id), "name": view.species_name},
@@ -106,11 +110,11 @@ def _response(
     connection: Connection, result: ContentWriteResult, *, changed: bool
 ) -> dict[str, Any]:
     del connection
-    return write_receipt(result, "npc_id", changed=changed)
+    return write_receipt(result, "player_character_id", changed=changed)
 
 
 @router.get(_BASE + "/options")
-def npc_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
+def player_character_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
     return {
         "can_create": True,
@@ -133,14 +137,14 @@ def npc_options_endpoint(access: _Access, connection: _Conn) -> dict[str, Any]:
 
 
 @router.post(_BASE, status_code=201)
-def create_npc_endpoint(
-    body: CreateNpcRequest,
+def create_player_character_endpoint(
+    body: CreatePlayerCharacterRequest,
     access: _Access,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
-    command_name = "create_npc"
+    command_name = "create_player_character"
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -152,7 +156,7 @@ def create_npc_endpoint(
     )
     if idem.replay is not None:
         return idem.replay
-    result = create_npc(
+    result = create_player_character(
         connection,
         campaign_id=access.campaign_id,
         actor_user_id=access.user_id,
@@ -172,8 +176,11 @@ def create_npc_endpoint(
         access=access,
         correlation_id=correlation_id,
         reason=None,
-        view_loader=lambda: get_npc_authoring(
-            connection, world_id=result.world_id, npc_id=result.entity_id
+        view_loader=lambda: get_character_authoring(
+            connection,
+            world_id=result.world_id,
+            character_id=result.entity_id,
+            kind="player_character",
         ),
     )
     response = _response(connection, result, changed=True)
@@ -181,42 +188,44 @@ def create_npc_endpoint(
     return JSONResponse(status_code=201, content=response)
 
 
-@router.get(_BASE + "/{npc_id}")
-def get_npc_authoring_endpoint(
-    npc_id: uuid.UUID, access: _Access, connection: _Conn
+@router.get(_BASE + "/{player_character_id}")
+def get_player_character_authoring_endpoint(
+    player_character_id: uuid.UUID, access: _Access, connection: _Conn
 ) -> dict[str, Any]:
     world_id = timeline_world_id(connection, access.timeline_id)
-    view = get_npc_authoring(connection, world_id=world_id, npc_id=npc_id)
+    view = get_character_authoring(
+        connection, world_id=world_id, character_id=player_character_id, kind="player_character"
+    )
     if view is None:
         raise NotFoundError()
     return _view_json(view)
 
 
-@router.post(_BASE + "/{npc_id}/update")
-def update_npc_endpoint(
-    npc_id: uuid.UUID,
-    body: UpdateNpcRequest,
+@router.post(_BASE + "/{player_character_id}/update")
+def update_player_character_endpoint(
+    player_character_id: uuid.UUID,
+    body: UpdatePlayerCharacterRequest,
     access: _Access,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
-    command_name = "update_npc"
+    command_name = "update_player_character"
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
         campaign_id=access.campaign_id,
         idempotency_key=idempotency_key,
         command_name=command_name,
-        payload={"npc_id": str(npc_id), **body.model_dump(mode="json")},
+        payload={"player_character_id": str(player_character_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
     )
     if idem.replay is not None:
         return idem.replay
-    result = update_npc(
+    result = update_player_character(
         connection,
         campaign_id=access.campaign_id,
-        npc_id=npc_id,
+        player_character_id=player_character_id,
         actor_user_id=access.user_id,
         expected_row_version=body.expected_row_version,
         name=body.name,
@@ -237,8 +246,11 @@ def update_npc_endpoint(
             access=access,
             correlation_id=correlation_id,
             reason=clean_note(body.change_note),
-            view_loader=lambda: get_npc_authoring(
-                connection, world_id=result.world_id, npc_id=result.entity_id
+            view_loader=lambda: get_character_authoring(
+                connection,
+                world_id=result.world_id,
+                character_id=result.entity_id,
+                kind="player_character",
             ),
         )
     response = _response(connection, result, changed=result.changed)

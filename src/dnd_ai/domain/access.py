@@ -1040,6 +1040,7 @@ def resolve_access_context(
             JOIN security.capabilities cap ON cap.capability_id = rtc.capability_id
             JOIN core.entities e ON e.entity_id = mcr.character_id
             JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+            JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
             WHERE mcr.campaign_membership_id = :membership_id
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
@@ -1048,6 +1049,8 @@ def resolve_access_context(
               AND crt.is_active
               AND cap.is_active
               AND cls.code = 'active'
+              -- A draft or unpublished character confers no perspective (Phase 15.2B-1).
+              AND ccs.code = 'canon'
         """),
         {"membership_id": membership_id, "timeline_id": campaign_timeline_id},
     ).mappings():

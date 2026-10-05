@@ -52,8 +52,8 @@ def list_species_options(connection: Connection, *, world_id: uuid.UUID) -> list
 
 
 @dataclass(frozen=True)
-class NpcAuthoringView:
-    npc_id: uuid.UUID
+class CharacterAuthoringView:
+    character_id: uuid.UUID
     name: str
     summary: str | None
     species_id: uuid.UUID
@@ -71,11 +71,23 @@ class NpcAuthoringView:
     field_locks: list[str] = field(default_factory=list)
 
 
+NpcAuthoringView = CharacterAuthoringView
+
+
 def get_npc_authoring(
     connection: Connection, *, world_id: uuid.UUID, npc_id: uuid.UUID
-) -> NpcAuthoringView | None:
+) -> CharacterAuthoringView | None:
     """The authoring view of an NPC in `world_id`, or `None` if it does not exist
     there or is not an NPC (a player character is not edited here)."""
+    return get_character_authoring(connection, world_id=world_id, character_id=npc_id, kind="npc")
+
+
+def get_character_authoring(
+    connection: Connection, *, world_id: uuid.UUID, character_id: uuid.UUID, kind: str
+) -> CharacterAuthoringView | None:
+    """The identity authoring view of a character of `kind` (`npc` or
+    `player_character`), or `None` when it does not exist in `world_id` or is a
+    different kind -- so each kind's route reaches only its own records."""
     row = connection.execute(
         text("""
             SELECT e.canonical_name, e.summary, e.row_version,
@@ -89,21 +101,21 @@ def get_npc_authoring(
             JOIN character.characters c ON c.character_id = e.entity_id
             JOIN rules.species sp ON sp.species_id = c.species_id
             LEFT JOIN character.character_descriptions d ON d.character_id = e.entity_id
-            WHERE e.entity_id = :n AND e.world_id = :w AND et.code = 'npc'
+            WHERE e.entity_id = :n AND e.world_id = :w AND et.code = :kind
         """),
-        {"n": npc_id, "w": world_id},
+        {"n": character_id, "w": world_id, "kind": kind},
     ).one_or_none()
     if row is None:
         return None
-    extra_blocked = type_specific_blocks(connection, entity_id=npc_id, entity_type_code="npc")
+    extra_blocked = type_specific_blocks(connection, entity_id=character_id, entity_type_code=kind)
     available, blocked = evaluate_content_actions(
-        entity_type_code="npc",
+        entity_type_code=kind,
         canon_status=str(row.canon_status),
         lifecycle_status=str(row.lifecycle_status),
         extra_blocked=extra_blocked or None,
     )
-    return NpcAuthoringView(
-        npc_id=npc_id,
+    return CharacterAuthoringView(
+        character_id=character_id,
         name=str(row.canonical_name),
         summary=row.summary,
         species_id=row.species_id,

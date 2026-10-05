@@ -23,6 +23,10 @@ REFERENCE_NOT_PUBLISHED = "reference_not_published"
 CHARACTER_HAS_USER_RELATIONSHIPS = "character_has_user_relationships"
 QUEST_DEFINITION_INCOMPLETE = "quest_definition_incomplete"
 
+# Characters whose identity is authored (NPC and player character): both reference an
+# origin location and both are guarded against archive while a user is linked.
+CHARACTER_IDENTITY_TYPE_CODES = frozenset({"npc", "player_character"})
+
 
 def publish_reference_ids(
     connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
@@ -37,7 +41,7 @@ def publish_reference_ids(
         ).scalar()
         if parent is not None:
             ids.append(parent)
-    elif entity_type_code == "npc":
+    elif entity_type_code in CHARACTER_IDENTITY_TYPE_CODES:
         origin = connection.execute(
             text("SELECT origin_location_id FROM character.characters WHERE character_id = :e"),
             {"e": entity_id},
@@ -153,11 +157,11 @@ def replacement_publish_blocked_reason(
 def archive_blocked_reason(
     connection: Connection, *, entity_id: uuid.UUID, entity_type_code: str
 ) -> str | None:
-    """Type-specific archive blocks. An NPC that a player or account is linked to
+    """Type-specific archive blocks. An NPC or player character that a player or account is linked to
     through a current `security.membership_character_relationships` row cannot be
     archived: `resolve_access_context` stops honoring a relationship to an archived
     character, so archiving would silently revoke what the link grants."""
-    if entity_type_code != "npc":
+    if entity_type_code not in CHARACTER_IDENTITY_TYPE_CODES:
         return None
     linked = connection.execute(
         text("""
