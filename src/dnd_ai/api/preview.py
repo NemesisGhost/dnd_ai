@@ -46,20 +46,42 @@ to the identical `NotFoundError` (404) `require_campaign_capability` already
 gives for the actor's own missing/insufficient access. A caller can never
 learn which case applied.
 
-**Audit.** A pure read: no idempotency key, no `audit.change_log` row.
-Viewing a preview is not acting as another user — no second session is
-created, and nothing here is mutable."""
+**Closed registry.** The only previewable resources are the entries of
+`PREVIEW_ADAPTERS` (`quests`, `knowledge`), each bound to one fixed GET route
+above. No path or query parameter selects an adapter, nothing dispatches to an
+arbitrary URL or endpoint, only GET is registered, and an adapter's declared
+`ceiling` (the data classes its projection may contain) can never include
+`PLAYER_PRIVATE` or `SECRET`. A future private resource is not previewable
+unless a reviewed adapter is added deliberately.
+
+**Audit (metadata only).** Viewing a preview is not acting as another user --
+no second session is created, nothing is mutable -- but it is a sensitive read,
+so every request that passes the actor's own `access.manage` authorization writes
+one `audit.change_log` row with action `sensitive_read`: actor, world, resource
+kind and id, subject membership id, outcome (`shown` or `refused`), whether a
+character/party perspective was supplied (booleans only), and the correlation
+id. Never the projected response, narrative, query-string values, credentials,
+or tokens. A refusal still raises the identical 404, and its audit row is
+committed before the error is raised (the request transaction would otherwise
+roll it back)."""
 
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Annotated
+from types import MappingProxyType
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.access import AccessContext, resolve_access_context
+from dnd_ai.domain.data_classification import DataClass
+from dnd_ai.domain.errors import SafeMessageError
 
+from ._shared import timeline_world_id
 from .access import require_campaign_capability
+from .audit import record_change_log
+from .correlation import get_request_correlation_id
 from .deps import get_connection
 from .errors import NotFoundError
 from .knowledge import KnowledgeResponse, resolve_knowledge_response
@@ -68,6 +90,136 @@ from .quests import QuestResponse, resolve_quest_response
 router = APIRouter(tags=["preview"])
 
 _ACCESS_MANAGE_CAPABILITY = "access.manage"
+
+_PREVIEW_ACTION = "sensitive_read"
+_FORBIDDEN_CEILING_CLASSES = frozenset({DataClass.PLAYER_PRIVATE, DataClass.SECRET})
+
+
+@dataclass(frozen=True)
+class PreviewAdapter:
+    """One previewable resource kind. `schema_name`/`table_name` identify the
+    audited record; `ceiling` is the closed set of data classes the adapter's
+    projection may contain, and may never include `PLAYER_PRIVATE`/`SECRET`."""
+
+    resource_kind: str
+    command_name: str
+    schema_name: str
+    table_name: str
+    ceiling: frozenset[DataClass]
+
+    def __post_init__(self) -> None:
+        if self.ceiling & _FORBIDDEN_CEILING_CLASSES:
+            raise ValueError(f"preview adapter {self.resource_kind!r} may not expose private data")
+
+
+# The closed registry. Adding a previewable resource means adding an entry here
+# deliberately (and a pinned-registry test updates with it); nothing else can
+# become previewable.
+_ADAPTER_CEILING = frozenset(
+    {
+        DataClass.PUBLIC_WORLD,
+        DataClass.CAMPAIGN_VISIBLE,
+        DataClass.CHARACTER_VISIBLE,
+        DataClass.PARTY_VISIBLE,
+        DataClass.STRUCTURAL,
+    }
+)
+PREVIEW_ADAPTERS: Mapping[str, PreviewAdapter] = MappingProxyType(
+    {
+        "quests": PreviewAdapter(
+            resource_kind="quest",
+            command_name="preview_quest",
+            schema_name="narrative",
+            table_name="quests",
+            ceiling=_ADAPTER_CEILING,
+        ),
+        "knowledge": PreviewAdapter(
+            resource_kind="knowledge_item",
+            command_name="preview_knowledge",
+            schema_name="knowledge",
+            table_name="knowledge_items",
+            ceiling=_ADAPTER_CEILING,
+        ),
+    }
+)
+
+
+def _resolve_or_refuse[T](
+    connection: Connection,
+    *,
+    adapter: PreviewAdapter,
+    actor: AccessContext,
+    campaign_membership_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    character_supplied: bool,
+    party_supplied: bool,
+    correlation_id: str | None,
+    subject: "PreviewSubjectContext | None",
+    resolve: Callable[[AccessContext], T | None],
+) -> T | None:
+    """Run the adapter's resolver for the subject. A resolver that refuses by
+    raising (an unauthorized character/party perspective, for example) is
+    audited as `refused` before the same error propagates, so every request that
+    passed the actor's own authorization leaves exactly one audit row."""
+    if subject is None:
+        return None
+    try:
+        return resolve(subject.access)
+    except SafeMessageError:
+        _audit_preview(
+            connection,
+            adapter=adapter,
+            actor=actor,
+            campaign_membership_id=campaign_membership_id,
+            resource_id=resource_id,
+            shown=False,
+            character_supplied=character_supplied,
+            party_supplied=party_supplied,
+            correlation_id=correlation_id,
+        )
+        raise
+
+
+def _audit_preview(
+    connection: Connection,
+    *,
+    adapter: PreviewAdapter,
+    actor: AccessContext,
+    campaign_membership_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    shown: bool,
+    character_supplied: bool,
+    party_supplied: bool,
+    correlation_id: str | None,
+) -> None:
+    """One metadata-only `sensitive_read` row. Never the response body, any
+    narrative, a query-string value, or a token."""
+    changed: dict[str, Any] = {
+        "resource_kind": adapter.resource_kind,
+        "subject_membership_id": str(campaign_membership_id),
+        "outcome": "shown" if shown else "refused",
+        "character_perspective_supplied": character_supplied,
+        "party_perspective_supplied": party_supplied,
+    }
+    record_change_log(
+        connection,
+        change_action_code=_PREVIEW_ACTION,
+        schema_name=adapter.schema_name,
+        table_name=adapter.table_name,
+        record_id=resource_id,
+        entity_id=resource_id,
+        world_id=timeline_world_id(connection, actor.timeline_id),
+        actor_user_id=actor.user_id,
+        correlation_id=correlation_id,
+        command_name=adapter.command_name,
+        event_id=None,
+        changed_fields=changed,
+    )
+    if not shown:
+        # The caller raises NotFoundError next, which rolls the request
+        # transaction back; commit now so a refused preview is still recorded
+        # (the same pattern as the failed-login audit row).
+        connection.commit()
 
 
 @dataclass(frozen=True)
@@ -170,25 +322,46 @@ def preview_quest_endpoint(
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> QuestResponse:
     """`character_id`/`party_id` are interpreted against the **subject**
     (`campaign_membership_id`), never the actor — see this module's own
     docstring."""
+    adapter = PREVIEW_ADAPTERS["quests"]
     subject = resolve_preview_subject(
         connection, actor=actor, campaign_membership_id=campaign_membership_id
     )
-    if subject is None:
-        raise NotFoundError()
-
-    response = resolve_quest_response(
+    response = _resolve_or_refuse(
         connection,
-        access=subject.access,
-        campaign_id=campaign_id,
-        quest_id=quest_id,
-        character_id=character_id,
-        party_id=party_id,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=quest_id,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
+        subject=subject,
+        resolve=lambda access: resolve_quest_response(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            quest_id=quest_id,
+            character_id=character_id,
+            party_id=party_id,
+        ),
+    )
+    _audit_preview(
+        connection,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=quest_id,
+        shown=response is not None,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
     )
     if response is None:
         raise NotFoundError()
@@ -208,25 +381,46 @@ def preview_knowledge_endpoint(
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
     connection: Annotated[Connection, Depends(get_connection)],
+    correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
     character_id: uuid.UUID | None = None,
     party_id: uuid.UUID | None = None,
 ) -> KnowledgeResponse:
     """`character_id`/`party_id` are interpreted against the **subject**
     (`campaign_membership_id`), never the actor — see this module's own
     docstring."""
+    adapter = PREVIEW_ADAPTERS["knowledge"]
     subject = resolve_preview_subject(
         connection, actor=actor, campaign_membership_id=campaign_membership_id
     )
-    if subject is None:
-        raise NotFoundError()
-
-    response = resolve_knowledge_response(
+    response = _resolve_or_refuse(
         connection,
-        access=subject.access,
-        campaign_id=campaign_id,
-        knowledge_item_id=knowledge_item_id,
-        character_id=character_id,
-        party_id=party_id,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=knowledge_item_id,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
+        subject=subject,
+        resolve=lambda access: resolve_knowledge_response(
+            connection,
+            access=access,
+            campaign_id=campaign_id,
+            knowledge_item_id=knowledge_item_id,
+            character_id=character_id,
+            party_id=party_id,
+        ),
+    )
+    _audit_preview(
+        connection,
+        adapter=adapter,
+        actor=actor,
+        campaign_membership_id=campaign_membership_id,
+        resource_id=knowledge_item_id,
+        shown=response is not None,
+        character_supplied=character_id is not None,
+        party_supplied=party_id is not None,
+        correlation_id=correlation_id,
     )
     if response is None:
         raise NotFoundError()

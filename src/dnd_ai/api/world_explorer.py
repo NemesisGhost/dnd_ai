@@ -497,7 +497,8 @@ def get_location_endpoint(
         is_searched=view.is_searched,
         is_destroyed=view.is_destroyed,
         alarm_level=view.alarm_level,
-        condition_notes=view.condition_notes,
+        # GM-only (D-3, data class GM_ONLY): never projected to a member without canon.edit.
+        condition_notes=view.condition_notes if access.has_capability(_GM_CAPABILITY) else None,
         **_status_fields(
             get_entity_status_summary(connection, entity_id=location_id, hidden_entity_ids=denied)
         ),
@@ -601,7 +602,8 @@ def get_item_endpoint(
         name=view.name,
         summary=view.summary,
         item_definition_id=view.item_definition_id,
-        origin_notes=view.origin_notes,
+        # GM-only (D-3, data class GM_ONLY).
+        origin_notes=view.origin_notes if access.has_capability(_GM_CAPABILITY) else None,
         quantity=view.quantity,
         condition_percentage=view.condition_percentage,
         charges_current=view.charges_current,
@@ -641,7 +643,8 @@ def get_event_endpoint(
         event_type_code=view.event_type_code,
         event_status_code=view.event_status_code,
         world_time_id=view.world_time_id,
-        details=view.details,
+        # GM-only (D-3, data class GM_ONLY): the free-form event record is not a recap.
+        details=view.details if access.has_capability(_GM_CAPABILITY) else None,
         session_id=view.session_id,
         participants=[
             EventParticipantResponse(entity_id=p.entity_id, role_code=p.role_code)

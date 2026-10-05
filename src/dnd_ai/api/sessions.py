@@ -274,7 +274,8 @@ def get_session_endpoint(
                 event_type_code=e.event_type_code,
                 event_status_code=e.event_status_code,
                 world_time_id=e.world_time_id,
-                details=e.details,
+                # GM-only (D-3, data class GM_ONLY).
+                details=e.details if access.has_capability(_CANON_EDIT_CAPABILITY) else None,
             )
             for e in view.events
         ],
