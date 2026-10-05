@@ -2,7 +2,7 @@
 
 Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 
-**Disclosed limitations (2026-10-05, until the named checkpoints ship):** audit rows written by the 15.1 commands copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields` (and `reason` stores the GM change note), and the 15.1 authoring routes store the full authoring view, including GM-only notes and background, in idempotency replay rows. New writes stop in checkpoint 15.2A-3; existing rows are handled by the owner-gated checkpoint 15.2A-4. Audience-preview reads are not audited until 15.2A-3.
+**Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows remain until the owner-gated checkpoint 15.2A-4. Audience-preview reads are audited as of 15.2A-3.
 
 ## What was delivered
 
@@ -112,3 +112,30 @@ The test count fell from 5838 to 5683 because the ≈190 parametrized blanket `a
 ### Not verified
 
 CI on the pushed head; the recovery script `verify` against a live restore (it only asserts the role exists and is unchanged by this migration).
+
+## Checkpoint 15.2A-3 — stop narrative leakage; audited, closed preview
+
+Commit on `phase15/completion`. **Status: implemented; local automated gates green; CI and manual checks not observed.** Owner decisions D-3, D-4, and D-27 were applied as the plan recommended (GM-only fields hidden from non-editors; `sensitive_read` action in `audit.change_log`; receipts-only responses and replay bodies).
+
+| Area | Delivered |
+|---|---|
+| Classification | `domain/data_classification.py`: `DataClass`, `COLUMN_CLASSES` (every TEXT/JSONB column of the authored and state tables; lookup/reference tables exempt), default-deny audit builders (`audit_change`/`audit_initial`/`audit_diff`; only `AUDIT_STRUCTURAL_FIELDS` keep values, everything else records `{"redacted": true}`), and `content_receipt`. `PLAYER_PRIVATE` is reserved and unused. |
+| Audit | 15.1 commands now write redacted diffs; world, timeline, and campaign `description` diffs are redacted too. `reason` (the GM change note) is kept, GM-only. |
+| Replay storage | Every 15.1 create/update/structural route (locations, organizations, religions, NPCs, knowledge, quests incl. stages/objectives) stores and returns a receipt: ids, `row_version`, `created`, `changed` (+ `record_id` for a quest child). Lifecycle routes already stored receipt-shaped bodies. |
+| Preview | `api/preview.py`: closed `PREVIEW_ADAPTERS` registry (`quests`, `knowledge`; read-only, fixed GET routes, no dispatch parameter, ceilings exclude `PLAYER_PRIVATE`/`SECRET`). Every request that passes the actor's `access.manage` writes one metadata-only `sensitive_read` row (actor, world, resource kind/id, subject membership id, `shown`/`refused`, perspective-supplied booleans, correlation id); refusals are committed before the identical 404, including refusals raised by the resolver. Preview rows are not in the audit-history allowlist. |
+| Migration | `116_sensitive_read_action`: seeds the `sensitive_read` action; conditional downgrade (refuses once referencing audit rows exist), like revision 103. |
+| Projection (D-3) | `item_instances.origin_notes`, `campaign.location_state.condition_notes`, and `narrative.events.details` (world-explorer event detail and session detail) are returned only to callers holding `canon.edit`. |
+| Portal | Write functions and `ContentCreate/EditPage`/`QuestEditor` types take receipts; the create flow navigates by the receipt id, edit/quest flows already refetched. |
+| Tests | New: `test_data_classification.py`, `test_preview_registry.py`, `test_data_classification_schema.py` (live-schema introspection), `test_private_data_not_stored.py` (sentinel proof across every route family incl. replay and conflict), `test_sensitive_read_action_migration.py`, preview audit tests, D-3 projection test. Harness: `Actor.post` follows a receipt with the authoritative GET (`post_raw` returns the raw receipt); existing audit assertions updated to the redacted contract. |
+
+### Commands run (local PostgreSQL 18)
+
+| Check | Result |
+|---|---|
+| `uv run ruff format --check .` / `ruff check .` / `mypy src` | clean |
+| `uv run pytest tests/unit tests/database tests/scenario` | one full run: 5719 tests, 5717 passed, 2 failed; the one real failure (`test_seeded_change_actions_cover_the_lifecycle`, which pins the action list) was fixed, and that file plus the new migration test were re-run green on their own (the full suite was not repeated after that one-line fix); the other failure is the known developer-`.env` origins test |
+| Portal `npm test` / `npm run lint` / `npm run build` | 268 files, 1950 tests passed / clean / build OK |
+
+### Not verified
+
+CI on the pushed head; manual browser checks. Idempotency rows written before this checkpoint still hold full views until checkpoint 15.2A-4. Decision recorded: world/timeline/campaign replay bodies (public or campaign-visible descriptions) were not changed.

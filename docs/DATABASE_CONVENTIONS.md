@@ -1186,6 +1186,11 @@ Audit:
 - imports
 - integration writes
 - destructive administrative operations
+- security-relevant reads that change no data (for example a GM audience preview), as `sensitive_read` rows with metadata only
+
+**Audit is an accountability record, never content history (Phase 15 checkpoint 15.2A-3).** `changed_fields` records *that* a field changed, never what narrative it held. Typed authoring commands build it with `dnd_ai.domain.data_classification.audit_change`/`audit_initial`, which are **default deny**: only fields named in `AUDIT_STRUCTURAL_FIELDS` (names, identifiers, enumerations, numbers) keep their values; every other field records `{"redacted": true}`. Every TEXT/JSONB column of an authored or state table carries a data class in `COLUMN_CLASSES` (a live-schema test fails on an unclassified new column); lookup and ruleset-reference tables are exempt. Canonical prior-version history is a separate store, not audit. The free-text `reason` column holds the GM's change note and is GM-only audit metadata, never projected to players.
+
+**Idempotency replay bodies are minimal receipts**: typed authoring writes store and return only ids, `row_version`, and `created`/`changed` flags (plus `record_id` for a quest stage or objective); the portal refetches the authoritative view. Existing rows written before this change are handled by the owner-gated scrub checkpoint (15.2A-4).
 
 ### 24.2 Audit immutability
 
