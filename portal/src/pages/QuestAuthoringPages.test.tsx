@@ -34,7 +34,23 @@ const OPTIONS = {
         ["visible", "Visible"],
         ["gm_only", "GM only"],
     ]),
+    dependency_types: CHOICES([["prerequisite", "Prerequisite"]]),
+    participant_roles: CHOICES([
+        ["giver", "Quest giver"],
+        ["involved", "Involved"],
+    ]),
+    outcome_categories: CHOICES([
+        ["success", "Success"],
+        ["failure", "Failure"],
+    ]),
+    reward_types: CHOICES([
+        ["other", "Other"],
+        ["knowledge", "Knowledge"],
+    ]),
     limits: {
+        gm_notes_max_length: 4000,
+        outcome_description_max_length: 4000,
+        reward_description_max_length: 1000,
         name_max_length: 200,
         summary_max_length: 4000,
         change_note_max_length: 1000,
@@ -79,6 +95,10 @@ function quest(overrides: object = {}) {
         name: "The Lost Amulet",
         summary: "Find it.",
         has_progress: false,
+        gm_notes: null,
+        dependencies: [],
+        participants: [],
+        outcomes: [],
         stages: [stage()],
         canon_status: "draft",
         lifecycle_status: "active",
@@ -101,6 +121,13 @@ function quest(overrides: object = {}) {
 }
 
 const BASE = "/campaigns/c1/authoring/quests"
+
+// The stage cards' headings, without the completion editor's subsection headings.
+const stageHeadings = () =>
+    screen
+        .getAllByRole("heading", { level: 3 })
+        .filter((h) => h.closest('[aria-labelledby="quest-completion-heading"]') === null)
+        .map((h) => h.textContent)
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -646,7 +673,7 @@ describe("Quest stage cards", () => {
         release()
         await waitFor(() =>
             expect(
-                screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+                stageHeadings(),
             ).toEqual([expect.stringMatching(/Third/), expect.stringMatching(/Second/), expect.stringMatching(/Opening/)]),
         )
         expect(screen.getByRole("button", { name: /Second/, expanded: false })).toBeInTheDocument()
@@ -665,7 +692,7 @@ describe("Quest stage cards", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Move down Opening" }))
         expect(await screen.findByRole("alert")).toBeInTheDocument()
         expect(
-            screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+            stageHeadings(),
         ).toEqual([expect.stringMatching(/Opening/), expect.stringMatching(/Second/), expect.stringMatching(/Third/)])
     })
 

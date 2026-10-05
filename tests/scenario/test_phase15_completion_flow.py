@@ -283,3 +283,61 @@ def test_a_gm_sets_up_and_runs_a_campaign(
     assert history["status"] == "corrected" and history["name"] == "The gate is found locked"
     assert history["correction"]["replacement_event_id"] == corrected["replacement_event_id"]
     assert s.player.get(f"{event_url}/correction-preview").status_code == 403
+
+    # --- Step 13 (15.2E-2a): a quest gets dependencies, an outcome, a reward and notes ----
+    quests = f"/campaigns/{s.cid}/authoring/quests"
+    quest = write(quests, {"name": "The Lost Amulet", "summary": "Find it."})
+    quest_url = f"{quests}/{quest['quest_id']}"
+
+    def quest_write(suffix: str, body: dict) -> dict:
+        version = int(s.gm.get(quest_url).json()["row_version"])
+        write(f"{quest_url}{suffix}", {"expected_row_version": version, **body}, status=200)
+        return dict(s.gm.get(quest_url).json())
+
+    view = quest_write(
+        "/stages", {"name": "Search", "description": None, "stage_type": "sequential"}
+    )
+    for name in ("Find the map", "Reach the ruin"):
+        view = quest_write(
+            f"/stages/{view['stages'][0]['quest_stage_id']}/objectives",
+            {
+                "name": name,
+                "description": None,
+                "objective_type": "other",
+                "requirement_level": "required",
+                "completion_mode": "automatic",
+                "visibility_policy": "visible",
+                "quantity_required": None,
+                "target_entity_id": None,
+            },
+        )
+    first, second = (o["quest_objective_id"] for o in view["stages"][0]["objectives"])
+    view = quest_write(
+        "/dependencies",
+        {
+            "objective_id": second,
+            "depends_on_objective_id": first,
+            "dependency_type": "prerequisite",
+        },
+    )
+    assert len(view["dependencies"]) == 1
+    view = quest_write(
+        "/outcomes",
+        {
+            "code": "saved",
+            "name": "The village is saved",
+            "description": None,
+            "outcome_category": "success",
+        },
+    )
+    outcome_id = view["outcomes"][0]["quest_outcome_id"]
+    view = quest_write(
+        f"/outcomes/{outcome_id}/rewards",
+        {"reward_type": "other", "description": "50 gold", "reward_knowledge_item_id": None},
+    )
+    assert view["outcomes"][0]["rewards"][0]["description"] == "50 gold"
+    view = quest_write(
+        "/update", {"name": view["name"], "summary": view["summary"], "gm_notes": "Twist"}
+    )
+    assert view["gm_notes"] == "Twist"
+    assert "gm_notes" not in s.player.get(f"/campaigns/{s.cid}/quests/{quest['quest_id']}").text

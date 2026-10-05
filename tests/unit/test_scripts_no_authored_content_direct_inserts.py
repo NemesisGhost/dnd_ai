@@ -64,6 +64,11 @@ _TABLES = (
     "narrative.quests",
     "narrative.quest_stages",
     "narrative.quest_objectives",
+    # Phase 15.2E-2a quest completion.
+    "narrative.quest_participants",
+    "narrative.quest_outcomes",
+    "narrative.quest_rewards",
+    "narrative.objective_dependencies",
     "knowledge.knowledge_items",
 )
 _INSERT = re.compile(r"INSERT\s+INTO\s+(" + "|".join(re.escape(t) for t in _TABLES) + r")\b", re.I)
