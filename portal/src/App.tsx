@@ -28,6 +28,7 @@ import {
 import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
 import { PartyMembersPage } from "./pages/PartyMembersPage"
+import { EventDetailPage, RecordEventPage } from "./pages/EventPages"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
   ChooseCharacterTypePage,
@@ -299,6 +300,16 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="events/new"
+              element={<RecordEventPage />}
+            />
+
+            <Route
+              path="events/:eventId"
+              element={<EventDetailPage />}
             />
 
             <Route

@@ -422,7 +422,11 @@ function LogSection({
                 <ol className="authoring-choice-list" aria-label="Session log">
                     {session.events.map((event) => (
                         <li key={event.event_id}>
-                            {event.name}
+                            <Link
+                                to={`${base(campaignId)}/events/${encodeURIComponent(event.event_id)}`}
+                            >
+                                {event.name}
+                            </Link>
                             {event.details !== null ? (
                                 <p className="authoring-note">GM notes: {event.details}</p>
                             ) : null}
