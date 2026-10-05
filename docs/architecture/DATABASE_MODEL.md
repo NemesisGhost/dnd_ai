@@ -303,7 +303,7 @@ Key columns:
 - `campaign.party_memberships`
 - `campaign.campaign_parties`
 
-`campaign.parties` holds a stable party identity within a world, including `party_id UUID PK` and `world_id UUID FK`. `campaign.campaign_parties` associates that identity with one or more campaigns. Membership is mutable timeline state rather than a property of the party definition, so `campaign.party_memberships` includes:
+`campaign.parties` holds a stable party identity within a world, including `party_id UUID PK` and `world_id UUID FK`. Since Phase 15.2C-1 (revision 120) it also carries `row_version` (optimistic concurrency), `lifecycle_status_id` (`active` / `archived`, decision D-30: an archived party stays in history, is hidden from pickers, and takes no new membership or knowledge writes), `archived_at`, and `created_by_user_id`; a `BEFORE INSERT` trigger starts a party with no stated status as `active`. A party is created and attached to its campaign in one command (`create_party`) and is reachable only through a campaign it is attached to. `campaign.campaign_parties` associates that identity with one or more campaigns. Membership is mutable timeline state rather than a property of the party definition, so `campaign.party_memberships` includes:
 
 - `party_membership_id UUID PK`
 - `timeline_id UUID FK`

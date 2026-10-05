@@ -232,3 +232,21 @@ Decisions I made that you may want to review (not owner decisions in the plan): 
 Not verified: CI; manual browser/accessibility (keyboard operation of the build form, narrow width).
 
 Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (274 files, 1995 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, run with no other database session active: 5854 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1077 s. The dev-data tests (`test_setup_phase13c_dev_data.py`, `test_setup_phase15_world_content.py`) are part of that run.
+
+## Checkpoint 15.2C-1 — party definition
+
+Commit(s) on `phase15/completion`. **Status: implemented; local automated gates below; CI and manual browser/accessibility checks not performed.** Decision D-30 (an archived party stays referenced by history, is hidden from pickers, and refuses new membership and knowledge writes) applied as recommended.
+
+| Area | Delivered |
+|---|---|
+| Migration | `120_party_definition`: `campaign.parties` gains `row_version` (bumped by `core.bump_row_version()`), `lifecycle_status_id` (backfilled `active`; a `BEFORE INSERT` trigger defaults it so pre-existing inserts keep working), `archived_at`, `created_by_user_id`, and indexes for the two foreign keys. Metadata, round trip with a populated party, and `alembic check` covered. |
+| Commands | `create_party` (party and campaign attachment in one transaction), `update_party`, `archive_party`, `restore_party`; lock order operation scope then the party row `FOR UPDATE`; a party is reachable only through a campaign it is attached to (any other id is the same non-disclosing 404). |
+| Shared check | `validate_campaign_party(..., require_active=True)` refuses an archived party; the knowledge reveal to a party uses it. Reads (perspective, quest progress) keep resolving an archived party, so history stays intact. Membership writes use it in 15.2C-2. |
+| API | `GET|POST /campaigns/{id}/parties`, `GET …/parties/{id}`, `POST …/update|archive|restore`; list and detail are `campaign.view` (archived parties only for an editor who asks), writes `canon.edit`, campaign idempotency, id-only receipts, redacted audit (name structural, description redacted). |
+| Portal | Parties list (show archived, archive/restore with confirmation), create form, edit form (stale-write handling), link from Game master tools. |
+| Dev data | `setup_phase13c_dev_data.py` creates and attaches its parties through `create_party`; a fixture party that pre-exists but is unattached is attached by a marked direct insert. The guard covers `campaign.parties` and `campaign.campaign_parties` (two throwaway smoke-test inserts are marked). |
+| Tests | 14 API tests (creation and attachment, validation, authority and read access, update/no-op/stale, archive and restore with audit codes, foreign and unattached parties indistinguishable from missing, replay, atomic failure, the shared active check, legacy parties start active), 2 real-PostgreSQL races (two edits; edit versus archive), a populated migration round trip, 7 portal tests. |
+
+Not verified: CI; manual browser/accessibility (list at narrow width, keyboard operation of the archive dialog).
+
+Commands run (local PostgreSQL 18): ruff format/check and mypy clean; portal `npm test` (275 files, 2002 tests) / `npm run lint` / `npm run build` clean. Full Python suite on the final tree, no other database session active: 5872 passed, 1 failed (the known developer-`.env` test `test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`), 1120 s.
