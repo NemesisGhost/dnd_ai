@@ -25,6 +25,7 @@ import {
 } from "./pages/OrganizationAuthoringPages"
 import { CreateKnowledgePage, EditKnowledgePage } from "./pages/KnowledgeAuthoringPages"
 import { CharacterBuildsPage, CreateCharacterBuildPage } from "./pages/CharacterBuildPages"
+import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
   ChooseCharacterTypePage,
   CreateNpcPage,
@@ -295,6 +296,21 @@ function App() {
             <Route
               path="characters/:characterId/edit"
               element={<EditCharacterPage />}
+            />
+
+            <Route
+              path="parties"
+              element={<PartiesPage />}
+            />
+
+            <Route
+              path="parties/new"
+              element={<CreatePartyPage />}
+            />
+
+            <Route
+              path="parties/:partyId/edit"
+              element={<EditPartyPage />}
             />
 
             <Route

@@ -16,6 +16,9 @@ export function GmToolsCard({ campaignId }: { campaignId: string }) {
                 <li>
                     <Link to={`${base}/world-times`}>World times</Link>
                 </li>
+                <li>
+                    <Link to={`${base}/parties`}>Parties</Link>
+                </li>
             </ul>
         </section>
     )
