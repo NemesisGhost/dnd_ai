@@ -321,6 +321,8 @@ Until `character.characters` exists in Phase 4, `member_entity_id` references `c
 
 `campaign.sessions` organizes a period of play and is not itself the owner of permanent world state.
 
+Since Phase 15.2D-1 (revision 122) a session also carries `row_version` (optimistic concurrency), `scheduled_for` (the planned real-world start: a plan, changeable until the session starts), `archived_at`, and `created_by_user_id`. Its **play status is derived, never stored** (decision D-13): `completed` once `ended_at` is set, `in_progress` once `started_at` is set, `scheduled` while `scheduled_for` is set, otherwise `unscheduled`; `lifecycle_status` carries only `active` / `archived`. The session number is assigned by the server under a per-campaign advisory lock (the unique `(campaign_id, session_number)` index is the backstop). A session that is being played cannot be archived, and an archived session is hidden from anyone who cannot edit canon.
+
 Key columns:
 
 - `session_id UUID PK`
