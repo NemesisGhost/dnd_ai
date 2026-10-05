@@ -234,6 +234,8 @@ or
 
 ### 5.6 Calendars and fictional time
 
+**Authoring (Phase 15, checkpoint 15.2W-1).** Calendars and points are created through commands (`create_calendar`, `create_world_time` in `dnd_ai.commands.world_time`). A calendar is created whole with its months (world authority `world.manage`; server-generated code); there is no calendar editing yet. A world-time point is a campaign operation (`canon.edit`) and is never edited. Its permanent `sort_key` follows decision D-11: for a calendar date, the **minutes since the start of year zero** (a year is the sum of the month lengths; a missing finer component counts as the start of its parent; a year may be negative); for a narrative point, a key the server allocates **strictly between** the anchor ("after X") and the nearest later point or "before Y", refusing with `world_time_no_gap` when no whole number fits, or one day (1440) after the anchor when nothing is later. Allocation runs under the per-world advisory lock `core.world_times.sort:<world>` (last in the lock order). Precision is derived: `exact` (a date to the day), `partial`, `approximate` (flagged), `narrative`.
+
 - `core.calendars`
 - `core.calendar_months`
 - `core.world_time_precisions`
