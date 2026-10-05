@@ -106,12 +106,23 @@ const editColumn: SortableTableColumn<CampaignSessionListItem> = {
     key: "session_actions",
     label: "Actions",
     compare: () => 0,
-    render: (session) =>
-        (session.available_actions ?? []).length > 0 ? (
-            <Link to={`${encodeURIComponent(session.session_id)}/edit`}>
-                Edit {session.title ?? `session ${session.session_number}`}
-            </Link>
-        ) : null,
+    render: (session) => {
+        const actions = session.available_actions ?? []
+        const name = session.title ?? `session ${session.session_number}`
+        if (actions.length === 0) return null
+        const runnable = actions.some((a) => a === "start" || a === "log" || a === "end")
+        return (
+            <>
+                <Link to={`${encodeURIComponent(session.session_id)}/edit`}>Edit {name}</Link>
+                {runnable ? (
+                    <>
+                        {" "}
+                        <Link to={`${encodeURIComponent(session.session_id)}/run`}>Run {name}</Link>
+                    </>
+                ) : null}
+            </>
+        )
+    },
 }
 
 export function SessionsPage({
