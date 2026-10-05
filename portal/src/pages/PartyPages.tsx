@@ -149,6 +149,12 @@ function PartyRow({
             {party.description !== null ? <p>{party.description}</p> : null}
             {actions.length > 0 ? (
                 <p className="authoring-actions">
+                    <Link
+                        className="authoring-button"
+                        to={`${base(campaignId)}/parties/${encodeURIComponent(party.party_id)}`}
+                    >
+                        Members of {party.name}
+                    </Link>
                     {actions.includes("update") ? (
                         <Link
                             className="authoring-button"

@@ -26,3 +26,29 @@ export interface PartyFieldsBody {
     name: string
     description: string | null
 }
+
+export interface PartyMember {
+    party_membership_id: string
+    character_id: string
+    character_name: string
+    joined_at: string
+    left_at: string | null
+    joined_reason: string | null
+    left_reason: string | null
+    is_current: boolean
+}
+
+export interface PartyMembers {
+    party: PartyItem
+    members: PartyMember[]
+}
+
+export interface MembershipReceipt {
+    party_id: string
+    party_membership_id: string
+    // The new row version of the party.
+    row_version: number
+    event_id: string
+    created: boolean
+    changed: boolean
+}

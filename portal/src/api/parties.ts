@@ -1,4 +1,4 @@
-import type { PartyFieldsBody, PartyReceipt } from "../types/parties"
+import type { MembershipReceipt, PartyFieldsBody, PartyReceipt } from "../types/parties"
 import { apiRequest } from "./http"
 import type { MutationContext } from "./worlds"
 
@@ -55,4 +55,42 @@ export function restoreParty(
         body,
         ...ctx,
     })
+}
+
+export const partyMembersPath = (campaignId: string, partyId: string): string =>
+    `${partyPath(campaignId, partyId)}/members`
+
+export function addPartyMember(
+    campaignId: string,
+    partyId: string,
+    body: {
+        character_id: string
+        effective_from_world_time_id: string
+        expected_party_row_version: number
+        reason: string | null
+    },
+    ctx: MutationContext,
+): Promise<MembershipReceipt> {
+    return apiRequest<MembershipReceipt>("POST", partyMembersPath(campaignId, partyId), {
+        body,
+        ...ctx,
+    })
+}
+
+export function endPartyMembership(
+    campaignId: string,
+    partyId: string,
+    membershipId: string,
+    body: {
+        effective_to_world_time_id: string
+        expected_party_row_version: number
+        reason: string | null
+    },
+    ctx: MutationContext,
+): Promise<MembershipReceipt> {
+    return apiRequest<MembershipReceipt>(
+        "POST",
+        `${partyMembersPath(campaignId, partyId)}/${enc(membershipId)}/end`,
+        { body, ...ctx },
+    )
 }
