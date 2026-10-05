@@ -123,25 +123,57 @@ describe("QuestDetailPage", () => {
     it("preserves the server-provided stage order rather than alphabetizing", () => {
         renderQuestDetail(questFixture)
 
-        const stageHeadings = screen.getAllByRole("heading", {
-            level: 2,
-        }).slice(1) // drop "Stages and Objectives"
+        const stageHeadings = screen.getAllByRole("heading", { level: 3 })
 
-        expect(stageHeadings.map((h) => h.textContent)).toEqual([
-            "2. Second Returned Stage",
-            "1. First Numbered Stage",
-        ])
+        expect(stageHeadings).toHaveLength(2)
+        expect(stageHeadings[0]).toHaveTextContent(/^2\. Second Returned Stage/)
+        expect(stageHeadings[1]).toHaveTextContent(/^1\. First Numbered Stage/)
     })
 
     it("shows stage type and description", () => {
         renderQuestDetail(questFixture)
 
-        expect(screen.getByText("Sequential")).toBeInTheDocument()
+        expect(screen.getAllByText(/Sequential/).length).toBeGreaterThan(0)
         expect(
             screen.getByText(
                 "This stage appears first in the authorized response.",
             ),
         ).toBeInTheDocument()
+    })
+
+    it("summarises stage status and objective progress, and collapses each stage on its own", () => {
+        renderQuestDetail({
+            ...questFixture,
+            stages: [
+                {
+                    ...questFixture.stages[0]!,
+                    objectives: [
+                        { ...questFixture.stages[0]!.objectives[0]!, status_code: "completed" },
+                        {
+                            ...questFixture.stages[0]!.objectives[0]!,
+                            quest_objective_id: "objective-b",
+                            name: "Second objective",
+                            status_code: "active",
+                        },
+                    ],
+                },
+                { ...questFixture.stages[1]!, objectives: [] },
+            ],
+        })
+
+        const first = screen.getByRole("button", { name: /^2\. Second Returned Stage/ })
+        expect(first).toHaveTextContent("In progress")
+        expect(first).toHaveTextContent("1 of 2 objectives complete")
+        const second = screen.getByRole("button", { name: /^1\. First Numbered Stage/ })
+        expect(second).toHaveTextContent("No objectives")
+        expect(first).toHaveAttribute("aria-expanded", "true")
+
+        fireEvent.click(first)
+        expect(first).toHaveAttribute("aria-expanded", "false")
+        expect(second).toHaveAttribute("aria-expanded", "true")
+        expect(screen.getByText("Align the lens pylons")).not.toBeVisible()
+        fireEvent.click(first)
+        expect(screen.getByText("Align the lens pylons")).toBeVisible()
     })
 
     it("renders objectives as expandable, keyboard-accessible disclosures", () => {

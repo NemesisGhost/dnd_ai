@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react"
+import { createEvent, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import {
@@ -198,7 +198,7 @@ describe("CreateQuestPage", () => {
 describe("EditQuestPage", () => {
     it("renders the aggregate by name, with one h1 and no identifiers", async () => {
         setupEdit()
-        await screen.findByRole("heading", { level: 3, name: "Opening" })
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
         expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
         expect(screen.getByRole("heading", { level: 1, name: "Edit quest" })).toHaveFocus()
         expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
@@ -238,7 +238,7 @@ describe("EditQuestPage", () => {
         })
         fireEvent.click(within(panel).getByRole("button", { name: "Add stage" }))
 
-        expect(await screen.findByRole("heading", { level: 3, name: "Second" })).toBeInTheDocument()
+        expect(await screen.findByRole("heading", { level: 3, name: /Second/ })).toBeInTheDocument()
         expect(screen.queryByRole("form", { name: "New stage" })).toBeNull()
         const [call] = server.callsTo("POST", `${BASE}/q1/stages`)
         expect(call!.body).toEqual({
@@ -352,7 +352,7 @@ describe("EditQuestPage", () => {
             commit((d) => d.stages.reverse()),
         )
         expect(await screen.findByRole("button", { name: /Move down Opening/ })).toBeInTheDocument()
-        expect(screen.queryByRole("button", { name: /Move up Opening/ })).toBeNull()
+        expect(screen.getByRole("button", { name: /Move up Opening/ })).toBeDisabled()
         fireEvent.click(screen.getByRole("button", { name: /Move down Opening/ }))
         await waitFor(() =>
             expect(server.callsTo("POST", `${BASE}/q1/stages/reorder`)[0]!.body).toEqual({
@@ -462,5 +462,202 @@ describe("EditQuestPage", () => {
         expect(await screen.findByRole("alert")).toHaveTextContent(
             "This quest does not exist, or you do not have access to it.",
         )
+    })
+})
+
+
+describe("Quest stage cards", () => {
+    const second = () =>
+        stage({
+            quest_stage_id: "s2",
+            name: "Second",
+            sequence_number: 2,
+            objectives: [
+                objective({ quest_objective_id: "o2", name: "Optional detour", requirement_level: "optional" }),
+            ],
+        })
+    const third = () =>
+        stage({ quest_stage_id: "s3", name: "Third", sequence_number: 3, objectives: [] })
+    const REORDER = `${BASE}/q1/stages/reorder`
+    const setupThree = () => {
+        const ctx = setupEdit(quest({ stages: [stage(), second(), third()] }))
+        ctx.server.on("POST", REORDER, () => ctx.commit(() => {}))
+        return ctx
+    }
+    const toggle = (name: RegExp) => screen.getByRole("button", { name })
+    // jsdom has no layout: give every row a 100px box at the same origin.
+    const dataTransfer = () => ({ effectAllowed: "", setData: vi.fn(), setDragImage: vi.fn() })
+    const dragTo = (from: string, to: string, clientY: number) => {
+        const source = screen.getByRole("heading", { level: 3, name: new RegExp(from) })
+        const target = screen.getByRole("heading", { level: 3, name: new RegExp(to) }).closest("li")!
+        vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ top: 0, height: 100 } as DOMRect)
+        fireEvent.dragStart(source.parentElement!, { dataTransfer: dataTransfer() })
+        // jsdom's generic drag events ignore clientY, so set it on the event itself.
+        const over = createEvent.dragOver(target)
+        Object.defineProperty(over, "clientY", { value: clientY })
+        fireEvent(target, over)
+        fireEvent.drop(target)
+    }
+
+    it("renders stages in order with Move up on the left and Move down on the right, disabled at the ends", async () => {
+        setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        const rows = screen.getAllByRole("listitem").filter((li) => li.classList.contains("quest-stage-row"))
+        expect(rows).toHaveLength(3)
+        const names = rows.map((r) => within(r).getByRole("heading", { level: 3 }).textContent)
+        expect(names[0]).toMatch(/Opening/)
+        expect(names[2]).toMatch(/Third/)
+        const first = within(rows[0]!).getAllByRole("button")
+        expect(first[0]).toHaveAccessibleName("Move up Opening")
+        expect(first[0]).toBeDisabled()
+        expect(first[first.length - 1]).toHaveAccessibleName("Move down Opening")
+        const last = within(rows[2]!).getAllByRole("button")
+        expect(last[0]).toHaveAccessibleName("Move up Third")
+        expect(last[last.length - 1]).toHaveAccessibleName("Move down Third")
+        expect(last[last.length - 1]).toBeDisabled()
+    })
+
+    it("collapses and expands each stage independently without any request", async () => {
+        const { server } = setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        const opening = toggle(/^1\. Opening/)
+        const secondToggle = toggle(/^2\. Second/)
+        expect(opening).toHaveAttribute("aria-expanded", "true")
+        expect(screen.getByRole("heading", { level: 5, name: "Optional detour" })).toBeInTheDocument()
+        fireEvent.click(secondToggle)
+        expect(secondToggle).toHaveAttribute("aria-expanded", "false")
+        expect(opening).toHaveAttribute("aria-expanded", "true")
+        expect(screen.queryByRole("heading", { level: 5, name: "Optional detour" })).toBeNull()
+        expect(screen.getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
+        expect(secondToggle.getAttribute("aria-controls")).toBe(
+            document.getElementById(secondToggle.getAttribute("aria-controls")!)!.id,
+        )
+        fireEvent.click(secondToggle)
+        expect(secondToggle).toHaveAttribute("aria-expanded", "true")
+        expect(server.callsTo("POST", /./)).toHaveLength(0)
+    })
+
+    it("summarises objectives collapsed and distinguishes required from optional in text", async () => {
+        setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        expect(toggle(/^1\. Opening/)).toHaveTextContent("1 objective, 1 required")
+        expect(toggle(/^2\. Second/)).toHaveTextContent("1 objective, 0 required")
+        expect(toggle(/^3\. Third/)).toHaveTextContent("No objectives yet")
+        expect(screen.getAllByText("Optional").length).toBeGreaterThan(0)
+        expect(screen.getAllByText("Required").length).toBeGreaterThan(0)
+        expect(screen.getAllByText("No objectives in this stage.")).toHaveLength(1)
+    })
+
+    it("keeps a stage with an open form expanded", async () => {
+        setupThree()
+        fireEvent.click(await screen.findByRole("button", { name: /Edit stage Second/ }))
+        const secondToggle = toggle(/^2\. Second/)
+        fireEvent.click(secondToggle)
+        expect(secondToggle).toHaveAttribute("aria-expanded", "true")
+        expect(screen.getByRole("form", { name: "Edit stage" })).toBeVisible()
+    })
+
+    it("sends the full new order for Move up and Move down", async () => {
+        const { server } = setupThree()
+        fireEvent.click(await screen.findByRole("button", { name: "Move up Second" }))
+        await waitFor(() => expect(server.callsTo("POST", REORDER)).toHaveLength(1))
+        expect(server.callsTo("POST", REORDER)[0]!.body).toEqual({
+            expected_row_version: 4,
+            stage_ids: ["s2", "s1", "s3"],
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Move down Opening" }))
+        await waitFor(() => expect(server.callsTo("POST", REORDER)).toHaveLength(2))
+        expect(server.callsTo("POST", REORDER)[1]!.body).toEqual({
+            expected_row_version: 5,
+            stage_ids: ["s2", "s1", "s3"],
+        })
+    })
+
+    it("sends the destination for a drag before or after another stage", async () => {
+        const { server } = setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        dragTo("Third", "Opening", 10)
+        await waitFor(() => expect(server.callsTo("POST", REORDER)).toHaveLength(1))
+        expect(server.callsTo("POST", REORDER)[0]!.body).toMatchObject({ stage_ids: ["s3", "s1", "s2"] })
+        await waitFor(() => expect(screen.getByRole("button", { name: "Move up Third" })).toBeEnabled())
+        dragTo("Opening", "Third", 90)
+        await waitFor(() => expect(server.callsTo("POST", REORDER)).toHaveLength(2))
+        expect(server.callsTo("POST", REORDER)[1]!.body).toMatchObject({ stage_ids: ["s2", "s3", "s1"] })
+    })
+
+    it("sends nothing when a stage is dropped where it already is", async () => {
+        const { server } = setupThree()
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        dragTo("Second", "Third", 10)
+        dragTo("Second", "Opening", 90)
+        fireEvent.dragStart(screen.getByRole("heading", { level: 3, name: /Second/ }).parentElement!, {
+            dataTransfer: dataTransfer(),
+        })
+        fireEvent.drop(screen.getByRole("heading", { level: 3, name: /Second/ }).closest("li")!)
+        expect(server.callsTo("POST", REORDER)).toHaveLength(0)
+    })
+
+    it("keeps expansion and objective membership across a reorder, and ignores a second drop while pending", async () => {
+        const ctx = setupEdit(quest({ stages: [stage(), second(), third()] }))
+        let release: () => void = () => {}
+        ctx.server.on("POST", REORDER, () =>
+            new Promise((resolve) => {
+                release = () => resolve(ctx.commit((d) => d.stages.reverse()))
+            }),
+        )
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        fireEvent.click(toggle(/^2\. Second/))
+        fireEvent.click(screen.getByRole("button", { name: "Move down Opening" }))
+        await waitFor(() => expect(screen.getByRole("button", { name: "Move down Opening" })).toBeDisabled())
+        dragTo("Third", "Opening", 10)
+        fireEvent.click(screen.getByRole("button", { name: "Move up Third" }))
+        expect(ctx.server.callsTo("POST", REORDER)).toHaveLength(1)
+        release()
+        await waitFor(() =>
+            expect(
+                screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+            ).toEqual([expect.stringMatching(/Third/), expect.stringMatching(/Second/), expect.stringMatching(/Opening/)]),
+        )
+        expect(screen.getByRole("button", { name: /Second/, expanded: false })).toBeInTheDocument()
+        const openingRow = screen.getByRole("heading", { level: 3, name: /Opening/ }).closest("li")!
+        expect(within(openingRow).getByRole("heading", { level: 5, name: "Reach the ruin" })).toBeInTheDocument()
+        expect(openingRow).toHaveTextContent("1 objective, 1 required")
+    })
+
+    it("announces a failed reorder and keeps the authoritative order", async () => {
+        const { server } = setupThree()
+        server.on("POST", REORDER, {
+            status: 500,
+            body: { error: { code: "internal_error", message: "m", correlation_id: "c" } },
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Move down Opening" }))
+        expect(await screen.findByRole("alert")).toBeInTheDocument()
+        expect(
+            screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+        ).toEqual([expect.stringMatching(/Opening/), expect.stringMatching(/Second/), expect.stringMatching(/Third/)])
+    })
+
+    it("follows the stale-write path when the order changed elsewhere", async () => {
+        const { server } = setupThree()
+        server.on("POST", REORDER, {
+            status: 409,
+            body: { error: { code: "stale_write", message: "m", correlation_id: "c" } },
+        })
+        fireEvent.click(await screen.findByRole("button", { name: "Move down Opening" }))
+        expect(await screen.findByRole("alert")).toHaveTextContent("Someone else changed this record")
+        expect(screen.getByRole("button", { name: "Load latest version" })).toBeInTheDocument()
+    })
+
+    it("gives a member without reorder authority no ordering controls and no drag", async () => {
+        setupEdit(
+            quest({
+                stages: [stage(), second()],
+                available_actions: ["update", "update_stage", "add_objective"],
+            }),
+        )
+        await screen.findByRole("heading", { level: 3, name: /Opening/ })
+        expect(screen.queryByRole("button", { name: /Move (up|down)/ })).toBeNull()
+        const header = screen.getByRole("heading", { level: 3, name: /Opening/ }).parentElement!
+        expect(header).not.toHaveAttribute("draggable", "true")
     })
 })

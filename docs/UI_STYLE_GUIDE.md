@@ -482,6 +482,16 @@ The quest detail surface should include:
 
 Stages and objectives are separate bounded panels or subregions. Do not reorder them alphabetically. Do not disclose hidden stages, hidden objectives, counts, or sequence gaps.
 
+### 12.3 Connected collapsible stage cards
+
+Stages render as one connected vertical column of collapsible cards, in server sequence order, on both the detail page and the definition editor.
+
+- **Disclosure.** Each stage title is an `<h3>` containing one button with `aria-expanded` and `aria-controls` pointing at the stage body. Stages expand and collapse independently; this is local presentation state, sends no request, and is not persisted. A stage with an open form (and so any validation or stale-write notice) stays expanded. Reordering, saving, or editing never collapses a stage.
+- **Collapsed summary.** Sequence number, name, stage type, a disclosure indicator in text (`Expand +` / `Collapse −`), and a summary line. The detail page shows a display-only roll-up (`Not started`, `In progress`, `Complete`, or `No objectives`) and `x of y objectives complete`, derived from the server's objective statuses (`completed` counts as complete; `completed` or `active` makes a stage in progress). The editor reads a definition, which carries no progress, so it shows the objective count and how many are required instead. The roll-up is text, never color alone.
+- **Objectives** are a restrained list inside the expanded body (a left rule, no nested cards). Requirement level is stated in words (**Required** / **Optional**).
+- **Editor ordering.** Each row is `[Move up] [card] [Move down]`. The buttons are the keyboard, touch, and assistive-technology path; they stay visible and are disabled at the first and last stage and while a reorder is pending. They exist only when the server lists `reorder_stages`. With that action, the card header (and its grip) is also draggable with the pointer; a bar on the target card shows the valid drop position. Both paths send one `reorder_stages` command carrying the full new `stage_ids` order and the loaded row version, and the page then shows the order the authoritative refetch returns. A drop that leaves the order unchanged sends nothing, and a failure or stale write leaves the server's order on screen with the usual recovery notice.
+- **Responsive.** Rows are capped at a readable width, the side controls narrow but remain at 390 px, summaries wrap, and nothing scrolls the page horizontally.
+
 Future related-NPC, location, discovery, dependency, outcome, or reward panels require corresponding audience-safe API fields.
 
 ## 13. State presentation
