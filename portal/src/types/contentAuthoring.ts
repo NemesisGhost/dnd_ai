@@ -45,6 +45,10 @@ export interface OrganizationReceipt extends WriteReceipt {
 export interface ReligionReceipt extends WriteReceipt {
     religion_id: string
 }
+export interface PlayerCharacterReceipt extends WriteReceipt {
+    player_character_id: string
+}
+
 export interface NpcReceipt extends WriteReceipt {
     npc_id: string
 }

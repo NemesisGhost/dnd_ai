@@ -59,6 +59,11 @@ beforeEach(() => {
   server = installCampaignShellMocks()
   server.on("GET", "/campaigns/mundivita/authoring/npcs/options", { body: OPTIONS })
   server.on("GET", "/campaigns/mundivita/authoring/npcs/n1", { body: VIEW })
+  // A player-character read is a 404 for an NPC.
+  server.on("GET", "/campaigns/mundivita/authoring/player-characters/n1", {
+    status: 404,
+    body: { error: { code: "not_found", message: "m", correlation_id: "c" } },
+  })
   server.on("GET", "/campaigns/mundivita/characters/n1", { body: CHARACTER })
   server.on("GET", "/campaigns/mundivita/entities/n1/lifecycle", {
     body: {
@@ -110,15 +115,15 @@ describe("NPC authoring routes", () => {
     expect(server.calls.some((c) => c.path.includes("/lifecycle"))).toBe(false)
   })
 
-  it("offers New NPC to editors only", async () => {
+  it("offers New character to editors only", async () => {
     const editor = openApp("/app/mundivita/world")
-    expect(await screen.findByRole("link", { name: "New NPC" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "New character" })).toHaveAttribute(
       "href",
-      "/app/mundivita/characters/npc/new",
+      "/app/mundivita/characters/new",
     )
     editor.unmount()
     openApp("/app/mundivita/world", ["campaign.view"])
     await screen.findByRole("heading", { level: 1, name: "World" })
-    expect(screen.queryByRole("link", { name: "New NPC" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "New character" })).toBeNull()
   })
 })

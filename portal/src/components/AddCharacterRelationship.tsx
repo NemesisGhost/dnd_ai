@@ -12,6 +12,8 @@ interface AddCharacterRelationshipProps {
     campaignMembershipId: string
     memberDisplayName: string
     assignableCharacters: AssignableCharacter[]
+    // A character to choose initially (from a link); ignored unless assignable.
+    preselectCharacterId?: string | null
     assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     existingRelationships: AccessCharacterRelationshipSummary[]
     onChanged: (message: string) => void
@@ -48,6 +50,7 @@ export function AddCharacterRelationship({
     campaignMembershipId,
     memberDisplayName,
     assignableCharacters,
+    preselectCharacterId = null,
     assignableRelationshipTypes,
     existingRelationships,
     onChanged,
@@ -57,9 +60,14 @@ export function AddCharacterRelationship({
     const typeSelectId = useId()
     const statusId = useId()
 
+    const preselected = assignableCharacters.some(
+        (character) => character.character_id === preselectCharacterId,
+    )
     const [isEditing, setIsEditing] = useState(false)
     const [selectedCharacterId, setSelectedCharacterId] = useState(
-        assignableCharacters[0]?.character_id ?? "",
+        preselected
+            ? (preselectCharacterId ?? "")
+            : (assignableCharacters[0]?.character_id ?? ""),
     )
     // Tracks its own "which character was this chosen for" alongside the
     // chosen code, purely so a character change can be detected and reset

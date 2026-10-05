@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useParams } from "react-router"
+import { useParams, useSearchParams } from "react-router"
 import { AccessOverviewBoundary } from "../components/AccessOverviewBoundary"
 import { AccessTabNav } from "../components/AccessTabNav"
 import { AudiencePreviewPanel } from "../components/AudiencePreviewPanel"
@@ -26,6 +26,10 @@ export function CampaignAccessPage() {
         useParams<{ campaignId: string }>()
 
     const { state: sessionState } = useSession()
+    // `?character=<id>` (a player character's "Link a player" link) starts the
+    // relationship control on that character.
+    const [searchParams] = useSearchParams()
+    const preselectCharacterId = searchParams.get("character")
 
     // Owned here, above AccessOverviewBoundary, so this live region
     // survives the overview's own transition to its loading state after a
@@ -113,6 +117,7 @@ export function CampaignAccessPage() {
                         <AccessPage
                             campaignId={activeCampaignId}
                             overview={overview}
+                            preselectCharacterId={preselectCharacterId}
                             onChanged={(message) =>
                                 handleRoleChanged(retry, message)
                             }
